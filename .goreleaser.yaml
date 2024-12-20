@@ -1,0 +1,89 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+project_name: 'MetaplayCLI'
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - binary: metaplay
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X "github.com/metaplay/cli/cmd.gitCommit={{.ShortCommit}}"
+      - -X "github.com/metaplay/cli/cmd.version={{.Version}}"
+      - -X "github.com/metaplay/cli/cmd.buildInfo={{.Timestamp}}"
+      - -X "github.com/metaplay/cli/cmd.osArch={{.Os}}/{{.Arch}}"
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+# TODO: Resolve appropriate UPX settings that work on all platforms.
+# upx:
+#   - enabled: true
+#     compress: best
+
+archives:
+  - format: tar.gz
+    # this name template makes the OS and Arch compatible with the results of `uname`.
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    # use zip for windows archives
+    format_overrides:
+      - goos: windows
+        format: zip
+
+nfpms:
+  - id: linux
+    vendor: "Metaplay, Inc."
+    homepage: "https://www.metaplay.io/"
+    maintainer: "info@metaplay.io"
+    description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    formats:
+      - apk
+      - deb
+      - rpm
+      - termux.deb
+      - archlinux
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/{{ .ProjectName }}/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/{{ .ProjectName }}/README.md
+
+brews:
+  - name: metaplay
+    description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    homepage: "https://www.metaplay.io/"
+    skip_upload: true # Remove this line when ready
+    repository:
+      owner: metaplay
+      name: homebrew-tap
+
+scoops:
+  - name: metaplay
+    commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
+    skip_upload: true # Remove this line when ready
+    repository:
+      owner: metaplay
+      name: scoop-bucket
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
