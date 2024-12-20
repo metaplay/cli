@@ -1,4 +1,4 @@
-# metaplay-auth
+# Metaplay CLI
 
 ## Description
 
