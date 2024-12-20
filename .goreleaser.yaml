@@ -31,6 +31,9 @@ builds:
 #   - enabled: true
 #     compress: best
 
+release:
+  draft: true # Remove when ready to publish
+
 archives:
   - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of `uname`.
@@ -48,7 +51,7 @@ archives:
 
 nfpms:
   - id: linux
-    vendor: "Metaplay, Inc."
+    vendor: "Metaplay"
     homepage: "https://www.metaplay.io/"
     maintainer: "info@metaplay.io"
     description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
