@@ -35,6 +35,7 @@ release:
   draft: false
   prerelease: '{{ .Env.NIGHTLY }}'
   replace_existing_artifacts: true
+  make_latest: false
 
   mode: >
     {{- if eq .Env.NIGHTLY "true" }}
