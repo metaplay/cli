@@ -1,18 +1,12 @@
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
 
+version: 2
 project_name: 'MetaplayCLI'
 
 before:
   hooks:
     - go mod tidy
-
-version: |
-  {{- if eq .Env.NIGHTLY "true" -}}
-    nightly
-  {{- else -}}
-    {{ .Tag }}
-  {{- end -}}
 
 builds:
   - binary: metaplay
@@ -40,21 +34,18 @@ builds:
 release:
   draft: false
   prerelease: '{{ .Env.NIGHTLY }}'
+  replace_existing_artifacts: true
 
-  # Overwrite the 'tag_name' if NIGHTLY=true => "nightly"
-  # Otherwise, use the actual git tag (e.g. "v1.2.3").
-  # Overwriting "nightly" means we blow away the old nightly release each time.
-  tag_name: >
+  mode: >
     {{- if eq .Env.NIGHTLY "true" }}
-      nightly
+      replace
     {{- else }}
-      {{ .Tag }}
+      keep-existing
     {{- end }}
 
-  # Similarly, choose a name for the release. You can adjust as you wish.
   name_template: >
     {{- if eq .Env.NIGHTLY "true" }}
-      Nightly Build
+      Development Build
     {{- else }}
       {{ .Tag }}
     {{- end }}
