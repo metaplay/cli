@@ -1,0 +1,51 @@
+name: Metaplay CLI Build Nightly
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  build-nightly:
+    runs-on: ubicloud-standard-8
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          show-progress: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Delete old "nightly" release
+        run: |
+          gh release delete nightly --repo metaplay/cli --yes || true
+
+      - name: Delete old "nightly" tag
+        run: |
+          git tag -d nightly || true
+          git push origin :refs/tags/nightly || true
+
+      - name: Create "nightly" tag
+        run: |
+          git tag nightly
+          git push origin nightly --force
+
+        # Nightly builds are not published to distribution channels, only available in Github
+      - name: Run GoReleaser (Nightly)
+        uses: goreleaser/goreleaser-action@v6
+        env:
+          NIGHTLY: 'true'
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          distribution: goreleaser
+          args: release --clean --rm-dist

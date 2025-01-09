@@ -8,6 +8,13 @@ before:
   hooks:
     - go mod tidy
 
+version: |
+  {{- if eq .Env.NIGHTLY "true" -}}
+    nightly
+  {{- else -}}
+    {{ .Tag }}
+  {{- end -}}
+
 builds:
   - binary: metaplay
     env:
@@ -32,7 +39,26 @@ builds:
 #     compress: best
 
 release:
-  draft: true # Remove when ready to publish
+  draft: false
+  prerelease: '{{ .Env.NIGHTLY }}'
+
+  # Overwrite the 'tag_name' if NIGHTLY=true => "nightly"
+  # Otherwise, use the actual git tag (e.g. "v1.2.3").
+  # Overwriting "nightly" means we blow away the old nightly release each time.
+  tag_name: >
+    {{- if eq .Env.NIGHTLY "true" }}
+      nightly
+    {{- else }}
+      {{ .Tag }}
+    {{- end }}
+
+  # Similarly, choose a name for the release. You can adjust as you wish.
+  name_template: >
+    {{- if eq .Env.NIGHTLY "true" }}
+      Nightly Build
+    {{- else }}
+      {{ .Tag }}
+    {{- end }}
 
 archives:
   - format: tar.gz
@@ -71,7 +97,7 @@ brews:
   - name: metaplay
     description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
     homepage: "https://www.metaplay.io/"
-    skip_upload: true # Remove this line when ready
+    skip_upload: '{{ .Env.NIGHTLY }}'
     repository:
       owner: metaplay
       name: homebrew-tap
@@ -79,7 +105,7 @@ brews:
 scoops:
   - name: metaplay
     commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
-    skip_upload: true # Remove this line when ready
+    skip_upload: '{{ .Env.NIGHTLY }}'
     repository:
       owner: metaplay
       name: scoop-bucket
