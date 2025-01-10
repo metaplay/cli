@@ -26,28 +26,8 @@ jobs:
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           distribution: goreleaser
           args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # - name: Upload artifacts
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: MetaplayCLI
-      #     path: MetaplayCLI/dist
-
-      # Notify Slack on failure
-      - name: Send notification to Slack
-        if: failure()
-        uses: 8398a7/action-slack@v3
-        with:
-          username: 'Github Bot'
-          author_name: ''
-          channel: '#spam_ci_sdk'
-          status: ${{ job.status }}
-          fields: repo,ref,commit,author # full set: repo,message,commit,author,action,eventName,ref,workflow,job,took
-          text: 'Github Action failed: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|*${{ github.workflow }}*> :rotating_light:'
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

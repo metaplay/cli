@@ -37,11 +37,10 @@ jobs:
           git push origin 0.0.0 --force
 
         # Dev builds are not published to distribution channels, only available in Github
-      - name: Run GoReleaser (Nightly)
+      - name: Run GoReleaser (Development Build)
         uses: goreleaser/goreleaser-action@v6
         env:
-          NIGHTLY: 'true'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           distribution: goreleaser
-          args: release --clean
+          args: release --config .goreleaser-dev.yaml --clean

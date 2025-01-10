@@ -26,10 +26,11 @@ builds:
       - -X "github.com/metaplay/cli/cmd.osArch={{.Os}}/{{.Arch}}"
     mod_timestamp: "{{ .CommitTimestamp }}"
 
-# TODO: Resolve appropriate UPX settings that work on all platforms.
-# upx:
-#   - enabled: true
-#     compress: best
+release:
+  prerelease: true
+  make_latest: false
+  replace_existing_artifacts: true
+  name_template: Development Build
 
 archives:
   - format: tar.gz
@@ -63,33 +64,6 @@ nfpms:
         dst: /usr/share/doc/{{ .ProjectName }}/LICENSE
       - src: README.md
         dst: /usr/share/doc/{{ .ProjectName }}/README.md
-
-brews:
-  - name: metaplay
-    description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
-    homepage: "https://www.metaplay.io/"
-    repository:
-      owner: metaplay
-      name: homebrew-tap
-    commit_author:
-      name: metaplay
-      email: info@metaplay.io
-    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
-    directory: Formula
-    test: |
-      system "#{bin}/metaplay --version"
-
-scoops:
-  - name: metaplay
-    commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
-    skip_upload: true
-    repository:
-      owner: metaplay
-      name: scoop-bucket
-
-# TODO: Publish with Chocolatey
-
-# TODO: Publish with Winget
 
 changelog:
   sort: asc
