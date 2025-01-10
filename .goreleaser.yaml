@@ -26,9 +26,6 @@ builds:
       - -X "github.com/metaplay/cli/cmd.osArch={{.Os}}/{{.Arch}}"
     mod_timestamp: "{{ .CommitTimestamp }}"
 
-release:
-  replace_existing_draft: true
-
 # TODO: Resolve appropriate UPX settings that work on all platforms.
 # upx:
 #   - enabled: true
