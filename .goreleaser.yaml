@@ -92,6 +92,13 @@ brews:
     repository:
       owner: metaplay
       name: homebrew-tap
+    commit_author:
+      name: metaplay
+      email: info@metaplay.io
+    commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
+    directory: Formula
+    test: |
+      system "#{bin}/metaplay --version"
 
 scoops:
   - name: metaplay
