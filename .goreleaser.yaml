@@ -71,8 +71,11 @@ brews:
     repository:
       owner: metaplay
       name: homebrew-tap
+    url_headers:
+      - "Accept: application/octet-stream"
+      - 'Authorization: bearer #{ENV["METAPLAYBOT_GITHUB_TOKEN"]}'
     commit_author:
-      name: metaplay
+      name: MetaplayBot
       email: info@metaplay.io
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
     directory: Formula
