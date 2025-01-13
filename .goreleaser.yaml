@@ -82,11 +82,16 @@ brews:
 
 scoops:
   - name: metaplay
+    commit_author:
+      name: MetaplayBot
+      email: info@metaplay.io
     commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
-    skip_upload: true
+    homepage: "https://www.metaplay.io/"
+    description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
     repository:
       owner: metaplay
       name: scoop-bucket
+      token: "{{ .Env.METAPLAYBOT_GITHUB_TOKEN }}"
 
 # TODO: Publish with Chocolatey
 
