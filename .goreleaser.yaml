@@ -93,9 +93,21 @@ scoops:
       name: scoop-bucket
       token: "{{ .Env.METAPLAYBOT_GITHUB_TOKEN }}"
 
-# TODO: Publish with Chocolatey
-
-# TODO: Publish with Winget
+chocolateys:
+  - name: metaplay
+    owners: Metaplay
+    project_url: "https://metaplay.io"
+    copyright: 2024-2025 Metaplay
+    project_source_url: https://github.com/metaplay/cli
+    docs_url: https://docs.metaplay.io/
+    bug_tracker_url: https://github.com/metaplay/cli/issues
+    summary: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    description: |
+      {{ .ProjectName }} installer package.
+      "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    release_notes: "https://github.com/metaplay/cli/releases/tag/{{ .Version }}"
+    api_key: "{{ .Env.METAPLAYBOT_CHOCO_API_KEY }}"
+    source_repo: "https://push.chocolatey.org"
 
 changelog:
   sort: asc
