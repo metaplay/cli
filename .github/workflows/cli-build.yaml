@@ -46,21 +46,37 @@ jobs:
           distribution: goreleaser
           args: release --clean
 
-      - name: Commit & Push Chocolatey Artifacts
+      # Install NuGet CLI so we can pack the .nuspec into a .nupkg
+      - name: Install NuGet CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nuget
+
+      - name: Pack Chocolatey .nuspec
+        run: |
+          nuget pack dist/metaplay.choco/metaplay.nuspec -OutputDirectory dist
+
+      # Push the newly built .nupkg to Chocolatey via NuGet
+      - name: Push package to Chocolatey
+        run: |
+          nuget push dist/*.nupkg \
+            -Source https://push.chocolatey.org/ \
+            -ApiKey "${{ steps.secrets.outputs.METAPLAYBOT_CHOCO_API_KEY }}"
+
+      # Save a copy of the Chocolatey package spec in the `choco-packages` repository
+      - name: Archive Chocolatey Artifacts
         env:
           CHOCOPKG_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
         run: |
           git config user.email "info@metaplay.io"
           git config user.name "MetaplayBot"
-
-          # Clone the choco-packages repository
           git clone "https://$CHOCOPKG_TOKEN@github.com/metaplay/choco-packages.git"
           cd choco-packages
 
           # Copy the GoReleaser outputs to choco-packages
           mkdir -p packages/metaplay/cli/
           cp -r ../dist/*.nupkg packages/metaplay/cli/  || true
-          cp -r ../dist/chocolatey/* packages/metaplay/cli/  || true
+          cp -r ../dist/metaplay.choco/* packages/metaplay/cli/  || true
 
           # Stage & commit changes
           git add --all
