@@ -95,9 +95,12 @@ scoops:
 
 chocolateys:
   - name: metaplay
+    package_source_url: https://github.com/metaplay/choco-packages # Currently private
     owners: Metaplay
+    authors: Metaplay
     project_url: "https://metaplay.io"
     copyright: 2024-2025 Metaplay
+    require_license_acceptance: false
     project_source_url: https://github.com/metaplay/cli
     docs_url: https://docs.metaplay.io/
     bug_tracker_url: https://github.com/metaplay/cli/issues
@@ -108,7 +111,6 @@ chocolateys:
     release_notes: "https://github.com/metaplay/cli/releases/tag/{{ .Version }}"
     api_key: "{{ .Env.METAPLAYBOT_CHOCO_API_KEY }}"
     source_repo: "https://push.chocolatey.org"
-    skip_publish: true # GoReleaser uses choco CLI which is a Windows-only app, so we push in the GH Action instead
 
 changelog:
   sort: asc

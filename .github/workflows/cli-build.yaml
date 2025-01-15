@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubicloud-standard-8
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -42,29 +42,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           METAPLAYBOT_GITHUB_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
+          METAPLAYBOT_CHOCO_API_KEY: ${{ steps.secrets.outputs.METAPLAYBOT_CHOCO_API_KEY }}
         with:
           distribution: goreleaser
           args: release --clean
 
-      # Install NuGet CLI so we can pack the .nuspec into a .nupkg
-      - name: Install NuGet CLI
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y nuget
-
-      - name: Pack Chocolatey .nuspec
-        run: |
-          nuget pack dist/metaplay.choco/metaplay.nuspec -OutputDirectory dist
-
-      # Push the newly built .nupkg to Chocolatey via NuGet
-      - name: Push package to Chocolatey
-        run: |
-          nuget push dist/*.nupkg \
-            -Source https://push.chocolatey.org/ \
-            -ApiKey "${{ steps.secrets.outputs.METAPLAYBOT_CHOCO_API_KEY }}"
-
-      # Save a copy of the Chocolatey package spec in the `choco-packages` repository
-      - name: Archive Chocolatey Artifacts
+        # GoReleaser publishes the .nupkg, but we archive a copy in our private `choco-packages` repo
+      - name: Archive Chocolatey artifacts
         env:
           CHOCOPKG_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
         run: |
@@ -72,17 +56,15 @@ jobs:
           git config user.name "MetaplayBot"
           git clone "https://$CHOCOPKG_TOKEN@github.com/metaplay/choco-packages.git"
           cd choco-packages
-
-          # Copy the GoReleaser outputs to choco-packages
           mkdir -p packages/metaplay/cli/
-          cp -r ../dist/*.nupkg packages/metaplay/cli/  || true
-          cp -r ../dist/metaplay.choco/* packages/metaplay/cli/  || true
+          copy ../dist\*.nupkg packages\metaplay\cli\  || echo "No .nupkg found"
+          if exist ../dist\metaplay.choco (
+            xcopy ../dist\metaplay.choco packages\metaplay\cli\ /E /I
+          )
 
           # Stage & commit changes
           git add --all
-          if git diff-index --quiet HEAD; then
-            echo "No changes to commit."
-          else
+          git diff-index --quiet HEAD || (
             git commit -m "Update metaplay choco artifacts for version ${GITHUB_REF##*/}"
             git push origin HEAD
-          fi
+          )
