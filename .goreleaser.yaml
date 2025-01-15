@@ -119,6 +119,7 @@ winget:
   - name: metaplay
     publisher: Metaplay
     short_description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    license: "Metaplay SDK License"
     publisher_url: "https://metaplay.io"
     publisher_support_url: "https://github.com/metaplay/cli/issues/new"
     commit_author:

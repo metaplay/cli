@@ -58,9 +58,9 @@ jobs:
           cd choco-packages
           mkdir -p packages/metaplay/cli/
           copy ../dist\*.nupkg packages\metaplay\cli\  || echo "No .nupkg found"
-          if exist ../dist\metaplay.choco (
-            xcopy ../dist\metaplay.choco packages\metaplay\cli\ /E /I
-          )
+          if (Test-Path ../dist/metaplay.choco) {
+              Copy-Item -Path ../dist/metaplay.choco -Destination packages/metaplay/cli/ -Recurse -Force
+          }
 
           # Stage & commit changes
           git add --all
