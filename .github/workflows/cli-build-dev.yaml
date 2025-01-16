@@ -26,12 +26,26 @@ jobs:
         with:
           go-version: '1.23'
 
-      - name: Delete old tag
+      - name: Clean up old development releases
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete any draft releases
+          gh api repos/${{ github.repository }}/releases --paginate | \
+            jq '.[] | select(.draft == true) | .id' | \
+            xargs -I {} gh api repos/${{ github.repository }}/releases/{} -X DELETE || true
+
+          # Delete any releases named "Development Build" or tagged 0.0.0
+          gh api repos/${{ github.repository }}/releases --paginate | \
+            jq '.[] | select(.name == "Development Build" or .tag_name == "0.0.0") | .id' | \
+            xargs -I {} gh api repos/${{ github.repository }}/releases/{} -X DELETE || true
+
+      - name: Delete old development tag
         run: |
           git tag -d 0.0.0 || true
           git push origin :refs/tags/0.0.0 || true
 
-      - name: Create new tag
+      - name: Create new development tag
         run: |
           git tag 0.0.0
           git push origin 0.0.0 --force
