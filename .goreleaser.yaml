@@ -114,6 +114,7 @@ chocolateys:
     release_notes: "https://github.com/metaplay/cli/releases/tag/{{ .Version }}"
     api_key: "{{ .Env.METAPLAYBOT_CHOCO_API_KEY }}"
     source_repo: "https://push.chocolatey.org"
+    skip_publish: true
 
 winget:
   - name: metaplay
