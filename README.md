@@ -86,4 +86,4 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 ## License
 
-This module and all files within are distributed under the Metaplay SDK Software License.
+This module and all files within are distributed under the Apache 2.0 license. See the LICENSE file for details.

@@ -67,6 +67,7 @@ nfpms:
 brews:
   - name: metaplay
     description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    license: "Apache 2.0"
     homepage: "https://www.metaplay.io/"
     repository:
       owner: metaplay
@@ -88,6 +89,7 @@ scoops:
     commit_msg_template: "Scoop update for {{ .ProjectName }} version {{ .Tag }}"
     homepage: "https://www.metaplay.io/"
     description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
+    license: "Apache 2.0"
     repository:
       owner: metaplay
       name: scoop-bucket
@@ -101,7 +103,7 @@ chocolateys:
     project_url: "https://metaplay.io"
     icon_url: "https://metaplay.io/hubfs/Branding/Monogram/Monogram%20-%20white%20on%20green%20512.png"
     copyright: 2024-2025 Metaplay
-    license_url: "https://github.com/metaplay/cli/?tab=License-1-ov-file#License-1-ov-file"
+    license_url: "https://github.com/metaplay/cli/blob/main/LICENSE"
     require_license_acceptance: false
     project_source_url: https://github.com/metaplay/cli
     docs_url: https://docs.metaplay.io/
@@ -120,7 +122,7 @@ winget:
   - name: metaplay
     publisher: Metaplay
     short_description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
-    license: "Metaplay SDK License"
+    license: "Apache 2.0"
     publisher_url: "https://metaplay.io"
     publisher_support_url: "https://github.com/metaplay/cli/issues/new"
     commit_author:
@@ -129,7 +131,7 @@ winget:
     commit_msg_template: "{{ .PackageIdentifier }}: {{ .Tag }}"
     homepage: "https://metaplay.io"
     description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
-    license_url: "https://github.com/metaplay/cli/?tab=License-1-ov-file#License-1-ov-file"
+    license_url: "https://github.com/metaplay/cli/blob/main/LICENSE"
     copyright: "2024-2025 Metaplay"
     release_notes: "{{ .Changelog }}"
     tags:
