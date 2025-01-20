@@ -78,7 +78,7 @@ brews:
     commit_msg_template: "Brew formula update for {{ .ProjectName }} version {{ .Tag }}"
     directory: Formula
     test: |
-      system "#{bin}/metaplay --version"
+      system "#{bin}/metaplay version"
 
 scoops:
   - name: metaplay
