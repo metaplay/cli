@@ -36,19 +36,22 @@ jobs:
           secrets: |
             metaplay/data/ci/metaplaybot-github metaplay_cli_release | METAPLAYBOT_GITHUB_TOKEN;
             metaplay/data/ci/metaplaybot-github chocolatey_api_key | METAPLAYBOT_CHOCO_API_KEY;
+            metaplay/data/ci/metaplaybot-github metaplay_cli_release_public_repo_prs | METAPLAYBOT_PUBLIC_REPO_PR_TOKEN;
 
-      - name: Sync WinGet fork with upstream
-        env:
-          GITHUB_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
-        run: |
-          git clone "https://${GITHUB_TOKEN}@github.com/metaplay/winget-pkgs.git"
-          cd winget-pkgs
-          git remote add upstream https://github.com/microsoft/winget-pkgs.git
-          git fetch upstream
-          git checkout master
-          git merge upstream/master
-          git push origin master
-          cd ..
+      # - name: Sync WinGet fork with upstream
+      #   env:
+      #     GITHUB_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
+      #   run: |
+      #     git config user.email "info@metaplay.io"
+      #     git config user.name "MetaplayBot"
+      #     git clone "https://${GITHUB_TOKEN}@github.com/metaplay/winget-pkgs.git"
+      #     cd winget-pkgs
+      #     git remote add upstream https://github.com/microsoft/winget-pkgs.git
+      #     git fetch upstream
+      #     git checkout master
+      #     git merge upstream/master
+      #     git push https://{GITHUB_TOKEN}@github.com/metaplay/winget-pkgs:master
+      #     cd ..
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -56,6 +59,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           METAPLAYBOT_GITHUB_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}
           METAPLAYBOT_CHOCO_API_KEY: ${{ steps.secrets.outputs.METAPLAYBOT_CHOCO_API_KEY }}
+          METAPLAYBOT_PUBLIC_REPO_PR_TOKEN: ${{ steps.secrets.outputs.METAPLAYBOT_PUBLIC_REPO_PR_TOKEN }}
         with:
           distribution: goreleaser
           args: release --clean

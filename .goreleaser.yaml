@@ -139,7 +139,7 @@ winget:
       owner: metaplay
       name: winget-pkgs
       branch: "metaplay-{{ .Version }}"
-      token: "{{ .Env.METAPLAYBOT_GITHUB_TOKEN }}"
+      token: "{{ .Env.METAPLAYBOT_PUBLIC_REPO_PR_TOKEN }}"
       pull_request:
         enabled: true
         base:
