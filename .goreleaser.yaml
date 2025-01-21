@@ -23,10 +23,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X "github.com/metaplay/cli/cmd.gitCommit={{.ShortCommit}}"
-      - -X "github.com/metaplay/cli/cmd.version={{.Version}}"
-      - -X "github.com/metaplay/cli/cmd.buildInfo={{.Timestamp}}"
-      - -X "github.com/metaplay/cli/cmd.osArch={{.Os}}/{{.Arch}}"
+      - -X "github.com/metaplay/cli/cmd.Version={{.Version}}"
+      - -X "github.com/metaplay/cli/cmd.GitCommit={{.ShortCommit}}"
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 # TODO: Resolve appropriate UPX settings that work on all platforms.
