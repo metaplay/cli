@@ -116,37 +116,6 @@ chocolateys:
     source_repo: "https://push.chocolatey.org"
     skip_publish: true
 
-winget:
-  - name: metaplay
-    publisher: Metaplay
-    short_description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
-    license: "Metaplay SDK License"
-    publisher_url: "https://metaplay.io"
-    publisher_support_url: "https://github.com/metaplay/cli/issues/new"
-    commit_author:
-      name: MetaplayBot
-      email: info@metaplay.io
-    commit_msg_template: "{{ .PackageIdentifier }}: {{ .Tag }}"
-    homepage: "https://metaplay.io"
-    description: "CLI tool to manage the Metaplay SDK in game projects, make cloud deployments, and more."
-    license_url: "https://github.com/metaplay/cli/?tab=License-1-ov-file#License-1-ov-file"
-    copyright: "2024-2025 Metaplay"
-    release_notes: "{{ .Changelog }}"
-    tags:
-      - golang
-      - cli
-    repository:
-      owner: metaplay
-      name: winget-pkgs
-      branch: "metaplay-{{ .Version }}"
-      token: "{{ .Env.METAPLAYBOT_PUBLIC_REPO_PR_TOKEN }}"
-      pull_request:
-        enabled: true
-        base:
-          owner: microsoft
-          name: winget-pkgs
-          branch: master
-
 changelog:
   sort: asc
   filters:
