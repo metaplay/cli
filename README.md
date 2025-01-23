@@ -6,7 +6,42 @@ The `metaplay` command-line tool is used to manage projects using Metaplay, to b
 
 ## Installation
 
-\todo Describe installation steps when we know them.
+### Direct Download
+
+You can find the latest release on our [Github releases page](https://github.com/metaplay/cli/releases/latest).
+
+* We provide 64-bit builds for Linux, macOS (both Intel and Apple Silicon), and Windows.
+
+* Download the correct archive for your OS and CPU architecture as indicated on the filename (e.g. `MetaplayCLI_0.1.0_Linux_x86_64.tar.gz`).
+
+* Unpack the contents into a directory that is included in your `PATH` environment variable, or create a new directory and add it to your `PATH`.
+
+* Now you can run the `metaplay` executable in your terminal and it will output further instructions.
+
+### Using Homebrew
+
+```bash
+brew tap metaplay/homebrew-tap
+brew install metaplay
+```
+
+### Using Scoop
+
+```bash
+scoop install metaplay
+```
+
+### Using Chocolatey
+
+```bash
+choco install metaplay
+```
+
+### Development Build
+
+We do continuously update the latest development build from the `metaplay/cli` repository `main` branch and it can be found on the [releases page](https://github.com/metaplay/cli/releases/tag/0.0.0), but there are no quality guarantees whatsoever associated with it. The development build is primarily intended for our internal use and is made available for Github CI runners to run automated tests on (and with) without the need to always build from scratch.
+
+Development builds do not currently perform any version checks (for the purpose of new release notifications), and the CLI `update` command is disabled on development builds as well.
 
 ## Usage
 
