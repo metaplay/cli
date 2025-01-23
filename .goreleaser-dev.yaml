@@ -23,8 +23,8 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X "github.com/metaplay/cli/cmd.Version={{.Version}}"
-      - -X "github.com/metaplay/cli/cmd.GitCommit={{.ShortCommit}}"
+      - -X "github.com/metaplay/cli/internal/version.AppVersion={{.Version}}"
+      - -X "github.com/metaplay/cli/internal/version.GitCommit={{.ShortCommit}}"
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 release:
