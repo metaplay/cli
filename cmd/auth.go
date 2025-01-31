@@ -1,9 +1,13 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
 	"github.com/spf13/cobra"
 )
 
+// authCmd represents the auth command
 var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "Authenticate to Metaplay cloud",

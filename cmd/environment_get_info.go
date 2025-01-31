@@ -1,52 +1,73 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
 	"encoding/json"
-	"os"
+	"fmt"
 
-	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-// environmentGetInfoCmd represents the environmentGetInfo command
-var environmentGetInfoCmd = &cobra.Command{
-	Use:   "get-info",
-	Short: "Get information about a specific environment",
-	Run:   runGetInfoCmd,
+type GetInfoOpts struct {
+	argEnvironment string
 }
 
 func init() {
-	environmentCmd.AddCommand(environmentGetInfoCmd)
+	o := GetInfoOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "get-info ENVIRONMENT [flags]",
+		Short: "Get information about a specific environment",
+		Run:   runCommand(&o),
+	}
+
+	environmentCmd.AddCommand(cmd)
 }
 
-func runGetInfoCmd(cmd *cobra.Command, args []string) {
-	// Ensure we have fresh tokens.
-	tokenSet, err := auth.EnsureValidTokenSet()
-	if err != nil {
-		log.Error().Msgf("Failed to get credentials: %v", err)
-		os.Exit(1)
+func (o *GetInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
 
-	// Resolve target environment.
-	targetEnv, err := resolveTargetEnvironment(tokenSet)
+	// Store target environment.
+	o.argEnvironment = args[0]
+
+	return nil
+}
+
+func (o *GetInfoOpts) Run(cmd *cobra.Command) error {
+	// Ensure the user is logged in
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
-		log.Error().Msgf("Failed to resolve environment: %v", err)
-		os.Exit(1)
+		return err
 	}
+
+	// Resolve environment.
+	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	if err != nil {
+		return err
+	}
+
+	// Create TargetEnvironment.
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Fetch the information from the environment via StackAPI.
 	envInfo, err := targetEnv.GetDetails()
 	if err != nil {
-		log.Error().Msgf("Failed to get environment details: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Pretty-print as JSON.
 	envInfoJson, err := json.MarshalIndent(envInfo, "", "  ")
 	if err != nil {
-		log.Error().Msgf("Failed to serialize as JSON: %v", err)
-		os.Exit(1)
+		return err
 	}
+
 	log.Info().Msg(string(envInfoJson))
+	return nil
 }

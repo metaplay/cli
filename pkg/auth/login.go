@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package auth
 
 import (
@@ -18,6 +21,7 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/pkg/common"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
 	"github.com/rs/zerolog/log"
 )
@@ -58,11 +62,7 @@ func findAvailableCallbackPort() (net.Listener, int, error) {
 	return nil, 0, fmt.Errorf("no available ports between 5000-5004")
 }
 
-func LoginWithBrowser() error {
-	// Create a context for controlling the server.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func LoginWithBrowser(ctx context.Context) error {
 	// Set up a local server on a random port.
 	listener, port, err := findAvailableCallbackPort()
 	if err != nil {
@@ -127,7 +127,7 @@ func LoginWithBrowser() error {
 	}
 
 	// Start the server in a separate goroutine.
-	log.Info().Msgf("Listening for callback from Metaplay Auth on http://localhost:%d/", port)
+	log.Debug().Msgf("Listening for callback from Metaplay Auth on http://localhost:%d/", port)
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Error().Msgf("HTTP server error: %v", err)
@@ -145,15 +145,15 @@ func LoginWithBrowser() error {
 		url.QueryEscape(state))
 
 	// Log the authorization URL for manual fallback
-	log.Info().Msgf("Opening a browser to log in. If a browser did not open up, you can copy-paste the following URL to authenticate:\n\n%s", authURL)
+	log.Info().Msgf("Opening a browser to log in. If a browser did not open up, you can copy-paste the following URL to authenticate: %s", styles.RenderMuted(authURL))
 	browser.OpenURL(authURL)
 
 	// Wait for authentication to complete or timeout.
 	select {
 	case <-done:
-		log.Info().Msg("Authentication successful!")
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderSuccess("✅ Authentication successful!"))
 	case <-time.After(5 * time.Minute):
-		cancel()
 		return fmt.Errorf("timeout during authentication")
 	}
 

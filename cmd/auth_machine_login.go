@@ -1,6 +1,10 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"strings"
 
@@ -9,25 +13,38 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var flagCredentials string
-
-var machineLoginCmd = &cobra.Command{
-	Use:   "machine-login",
-	Short: "Sign in to Metaplay cloud using a machine account",
-	Run:   runMachineLoginCmd,
+type MachineLoginOpts struct {
+	flagCredentials string
 }
 
 func init() {
-	authCmd.AddCommand(machineLoginCmd)
-	machineLoginCmd.Flags().StringVar(&flagCredentials, "dev-credentials", "", "Machine login credentials (prefer passing credentials via the environment variable METAPLAY_CREDENTIALS for better security)")
+	o := MachineLoginOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "machine-login [flags]",
+		Short: "Sign in to Metaplay cloud using a machine account",
+		Run:   runCommand(&o),
+	}
+	authCmd.AddCommand(cmd)
+
+	flags := cmd.Flags()
+	flags.StringVar(&o.flagCredentials, "dev-credentials", "", "Machine login credentials (prefer passing credentials via the environment variable METAPLAY_CREDENTIALS for better security)")
 }
 
-func runMachineLoginCmd(cmd *cobra.Command, args []string) {
-	var credentials string
+func (o *MachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("expecting no arguments, got %d", len(args))
+	}
 
-	if flagCredentials != "" {
+	return nil
+}
+
+func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
+	// Resolve credentials to use.
+	var credentials string
+	if o.flagCredentials != "" {
 		log.Debug().Msg("Using command line credentials for machine login")
-		credentials = flagCredentials
+		credentials = o.flagCredentials
 	} else {
 		log.Debug().Msg("Using environment variable METAPLAY_CREDENTIALS for machine login")
 		if envCredentials, ok := os.LookupEnv("METAPLAY_CREDENTIALS"); !ok {
@@ -48,4 +65,6 @@ func runMachineLoginCmd(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 	}
+
+	return nil
 }

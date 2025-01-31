@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package auth
 
 import (
@@ -14,9 +17,8 @@ type MetaplayIDToken struct {
 	MetaplayRoles []string `json:"https://schemas.metaplay.io/roles"` // Roles in Metaplay environments.
 }
 
-func ResolveMetaplayIDToken(idTokenStr string) (MetaplayIDToken, error) {
+func ResolveMetaplayIDToken(ctx context.Context, idTokenStr string) (MetaplayIDToken, error) {
 	// Create a new OpenID Connect provider
-	ctx := context.Background()
 	provider, err := oidc.NewProvider(ctx, authIssuer)
 	if err != nil {
 		log.Fatal().Msgf("Failed to create OIDC provider: %v", err)

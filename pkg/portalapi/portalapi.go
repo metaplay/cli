@@ -1,67 +1,112 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package portalapi
 
 import (
 	"fmt"
+	"math/rand/v2"
+	"path/filepath"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
+	"github.com/metaplay/cli/pkg/metahttp"
+	"github.com/rs/zerolog/log"
 )
 
-// PortalEnvironmentInfo represents information about an environment received from the portal.
-type PortalEnvironmentInfo struct {
-	UID         string  `json:"id"`           // UUID of the environment
-	ProjectUID  string  `json:"project_id"`   // UUID of the project that this environment belongs to
-	Name        string  `json:"name"`         // User-provided name for the environment (can change)
-	URL         string  `json:"url"`          // TODO: What is this URL?
-	Slug        string  `json:"slug"`         // Slug for the environment (simplified version of name)
-	CreatedAt   string  `json:"created_at"`   // Creation time of the environment (ISO8601 string)
-	Type        string  `json:"type"`         // Type of the environment (e.g., 'development' or 'production')
-	HumanID     string  `json:"human_id"`     // Immutable human-readable identifier, eg, 'tiny-squids'
-	EnvDomain   *string `json:"env_domain"`   // Domain that the environment uses (optional)
-	StackDomain *string `json:"stack_domain"` // Domain of the infra stack (optional)
+// NewClient creates a new Portal API client with the given auth token set.
+func NewClient(tokenSet *auth.TokenSet) *Client {
+	return &Client{
+		httpClient: metahttp.NewClient(tokenSet, common.PortalBaseURL),
+		baseURL:    common.PortalBaseURL,
+		tokenSet:   tokenSet,
+	}
 }
 
-// FetchInfoBySlugs fetches information about an environment from the Metaplay portal using the environments slugs.
-func FetchInfoBySlugs(tokenSet *auth.TokenSet, organizationSlug, projectSlug, environmentSlug string) (*PortalEnvironmentInfo, error) {
-	// Make the request
-	url := fmt.Sprintf(
-		"%s/api/v1/environments/with-slugs?organization_slug=%s&project_slug=%s&environment_slug=%s",
-		common.PortalBaseURL, organizationSlug, projectSlug, environmentSlug,
-	)
-	var envInfo PortalEnvironmentInfo
-	resp, err := resty.New().R().
-		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
-		SetResult(&envInfo).                // Unmarshal response into the struct
-		Get(url)
+// DownloadLatestSdk downloads the latest SDK to the specified target directory.
+func (c *Client) DownloadLatestSdk(targetDir string) (string, error) {
+	// Download the SDK to a temp file.
+	path := fmt.Sprintf("/download/sdk")
+	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
+	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
+	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to download SDK: %w", err)
+	}
 
+	// Handle server errors.
+	if resp.IsError() {
+		if resp.StatusCode() == 403 {
+			return "", fmt.Errorf("you must sign the SDK terms and conditions in https://portal.metaplay.dev first")
+		}
+		return "", fmt.Errorf("failed to download the Metaplay SDK from the portal with status code %d: %s", resp.StatusCode(), string(resp.Body()))
+	}
+
+	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
+	return tmpSdkZipPath, nil
+}
+
+func (c *Client) FetchAllOrganizations() ([]PortalOrganizationInfo, error) {
+	url := fmt.Sprintf("/api/v1/organizations")
+	organizations, err := metahttp.Get[[]PortalOrganizationInfo](c.httpClient, url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list organizations: %w", err)
+	}
+
+	return organizations, nil
+}
+
+func (c *Client) FetchAllProjects() ([]PortalProjectInfo, error) {
+	url := fmt.Sprintf("/api/v1/projects")
+	projects, err := metahttp.Get[[]PortalProjectInfo](c.httpClient, url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	// \todo Filling in dummy humanIDs as we don't yet have them
+	for ndx, proj := range projects {
+		projects[ndx].HumanID = fmt.Sprintf("dummy-%s", proj.Slug)
+	}
+
+	return projects, nil
+}
+
+// FetchProjectInfo fetches information about a project using its human ID.
+func (c *Client) FetchProjectInfo(projectHumanID string) (*PortalProjectInfo, error) {
+	url := fmt.Sprintf("/api/v1/projects?human_id=%s", projectHumanID)
+	projectInfos, err := metahttp.Get[[]PortalProjectInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
 	}
 
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: %s", resp.Status())
+	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)
+	if len(projectInfos) == 0 {
+		return nil, fmt.Errorf("portal did not return any projects")
+	} else if len(projectInfos) > 2 {
+		return nil, fmt.Errorf("portal returned %d matching projects, expecting only one", len(projectInfos))
 	}
 
-	return &envInfo, nil
+	return &projectInfos[0], nil
 }
 
-// FetchInfoBySlugs fetches information about an environment from the Metaplay portal using the environment's humanID.
-func FetchInfoByHumanID(tokenSet *auth.TokenSet, humanID string) (*PortalEnvironmentInfo, error) {
-	// Make the request
-	url := fmt.Sprintf("%s/api/v1/environments?human_id=%s", common.PortalBaseURL, humanID)
-	var envInfos []PortalEnvironmentInfo
-	resp, err := resty.New().R().
-		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
-		SetResult(&envInfos).               // Unmarshal response into the struct
-		Get(url)
-
+// FetchProjectEnvironments fetches all environments for the given project.
+func (c *Client) FetchProjectEnvironments(projectUUID string) ([]PortalEnvironmentInfo, error) {
+	url := fmt.Sprintf("/api/v1/environments?projectId=%s", projectUUID)
+	environmentInfos, err := metahttp.Get[[]PortalEnvironmentInfo](c.httpClient, url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)
+		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
 	}
 
-	if resp.IsError() {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: %s", resp.Status())
+	log.Debug().Msgf("Environments info response from portal:\n%+v\n", environmentInfos)
+	return environmentInfos, nil
+}
+
+// FetchEnvironmentInfoByHumanID fetches information about an environment using its human ID.
+func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*PortalEnvironmentInfo, error) {
+	url := fmt.Sprintf("/api/v1/environments?human_id=%s", humanID)
+	envInfos, err := metahttp.Get[[]PortalEnvironmentInfo](c.httpClient, url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)
 	}
 
 	if len(envInfos) == 0 {
@@ -74,50 +119,3 @@ func FetchInfoByHumanID(tokenSet *auth.TokenSet, humanID string) (*PortalEnviron
 
 	return &envInfos[0], nil
 }
-
-/*
-// ResolveTargetEnvironmentFromSlugs resolves the target environment based on organization, project, and environment slugs.
-func ResolveTargetEnvironmentFromSlugs(tokens *auth.TokenSet, organization, project, environment string) (*TargetEnvironment, error) {
-	portalEnvInfo, err := FetchInfoBySlugs(tokens, organization, project, environment)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch environment info: %w", err)
-	}
-
-	if portalEnvInfo.StackDomain == nil || *portalEnvInfo.StackDomain == "" {
-		return nil, errors.New("the environment has not been provisioned to any infra stack (stack_domain is empty)")
-	}
-
-	stackAPIURL := fmt.Sprintf("https://infra.%s/stackapi", *portalEnvInfo.StackDomain)
-	return &TargetEnvironment{
-		AccessToken: tokens.AccessToken,
-		HumanID:     portalEnvInfo.HumanID,
-		StackAPIURL: stackAPIURL,
-	}, nil
-}
-
-// ResolveTargetEnvironmentHumanID resolves the target environment based on its HumanID.
-func ResolveTargetEnvironmentHumanID(tokens *auth.TokenSet, humanID string, stackAPIBaseURLOverride *string) (*TargetEnvironment, error) {
-	var stackAPIBaseURL string
-
-	if stackAPIBaseURLOverride != nil && *stackAPIBaseURLOverride != "" {
-		stackAPIBaseURL = *stackAPIBaseURLOverride
-	} else {
-		portalEnvInfo, err := FetchInfoByHumanID(tokens, humanID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch environment info: %w", err)
-		}
-
-		if portalEnvInfo.StackDomain == nil || *portalEnvInfo.StackDomain == "" {
-			return nil, errors.New("the environment has not been provisioned to any infra stack (stack_domain is empty)")
-		}
-
-		stackAPIBaseURL = fmt.Sprintf("https://infra.%s/stackapi", *portalEnvInfo.StackDomain)
-	}
-
-	return &TargetEnvironment{
-		AccessToken: tokens.AccessToken,
-		HumanID:     humanID,
-		StackAPIURL: stackAPIBaseURL,
-	}, nil
-}
-*/

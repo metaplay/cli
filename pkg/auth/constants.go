@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package auth
 
 // OAuth2 client configuration.

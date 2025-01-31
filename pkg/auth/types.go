@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package auth
 
 // Type for Metaplay Auth. Get this using OAuth2 code exchange with

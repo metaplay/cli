@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package helmutil
 
 import (
@@ -8,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -126,7 +130,7 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 		}
 	}
 
-	log.Debug().Msgf("Satisfying versions: %v", satisfyingVersions)
+	log.Debug().Msgf("Version satisfying constraint: %v", satisfyingVersions)
 
 	// If no versions satisfy the range, return an error
 	if len(satisfyingVersions) == 0 {
@@ -138,4 +142,31 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 
 	// Return the highest version
 	return satisfyingVersions[0].String(), nil
+}
+
+// Find the best matching Helm chart version from a remote chart repository.
+// The returned version is the latest of the charts satisfying the rules:
+// a) have the specified the chart name, b) be newer than the legacy version
+// cutoff, c) match the version constraint.
+// The Helm chart path is returned.
+func FetchBestMatchingHelmChart(helmChartRepo, chartName string, legacyVersionCutoff *version.Version, versionConstraints version.Constraints) (string, error) {
+	// Fetch recent Helm chart versions (ignore all legacy version already here).
+	helmChartRepo = strings.TrimSuffix(helmChartRepo, "/")
+	availableChartVersions, err := FetchHelmChartVersions(helmChartRepo, chartName, legacyVersionCutoff)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch Helm chart versions from the repository: %v", err)
+	}
+	log.Debug().Msgf("Available Helm chart versions in repository: %v", strings.Join(availableChartVersions, ", "))
+
+	// Find the best version match that is the latest one from the versions satisfying the requested version(s).
+	useChartVersion, err := ResolveBestMatchingVersion(availableChartVersions, versionConstraints)
+	if err != nil {
+		return "", fmt.Errorf("failed to find a matching Helm chart version: %v", err)
+	}
+	// \todo hoist to caller
+	log.Info().Msgf("Helm chart version %s", styles.RenderTechnical(useChartVersion))
+
+	// Construct path to the remote Helm chart.
+	helmChartPath := fmt.Sprintf("%s/%s-%s.tgz", helmChartRepo, chartName, useChartVersion)
+	return helmChartPath, nil
 }

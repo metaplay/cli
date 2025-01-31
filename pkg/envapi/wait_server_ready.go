@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package envapi
 
 import (
@@ -11,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,9 +72,9 @@ func (targetEnv *TargetEnvironment) NewKubernetesClientSet() (*kubernetes.Client
 	return clientset, nil
 }
 
-// fetchGameServerPods retrieves pods with a specific label selector in a namespace.
-func fetchGameServerPods(clientset *kubernetes.Clientset, namespace string) ([]v1.Pod, error) {
-	log.Debug().Msgf("Fetching game server pods in namespace: %s", namespace)
+// FetchGameServerPods retrieves pods with a specific label selector in a namespace.
+func FetchGameServerPods(clientset *kubernetes.Clientset, namespace string) ([]v1.Pod, error) {
+	log.Debug().Msgf("Fetch game server pods in namespace: %s", namespace)
 	pods, err := clientset.CoreV1().Pods(namespace).List(context.TODO(), metav1.ListOptions{
 		LabelSelector: "app=metaplay-server",
 	})
@@ -149,11 +153,17 @@ func findShardServerContainer(pod v1.Pod) *v1.ContainerStatus {
 func waitForPodsReady(clientset *kubernetes.Clientset, namespace string, timeout time.Duration) error {
 	startTime := time.Now()
 	for time.Since(startTime) < timeout {
-		pods, err := fetchGameServerPods(clientset, namespace)
+		pods, err := FetchGameServerPods(clientset, namespace)
 		if err != nil {
 			return err
 		}
 
+		// If no pods exist, bail out.
+		if len(pods) == 0 {
+			return fmt.Errorf("no matching pods found in the environment")
+		}
+
+		// Try to find any pods that are not yet ready.
 		allReady := true
 		for _, pod := range pods {
 			status := resolvePodStatus(pod)
@@ -216,7 +226,7 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 		}
 
 		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
-			log.Info().Msgf("Waiting for domain name %s to propagate... This can take up to 15 minutes on the first deploy.", hostname)
+			log.Info().Msgf("Waiting for domain name %s to propagate... This can take up to 15 minutes on the first deploy.", styles.RenderTechnical(hostname))
 		} else {
 			log.Debug().Msgf("Failed to resolve %s: %v. Retrying...", hostname, err)
 		}
@@ -227,10 +237,7 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 }
 
 // waitForGameServerClientEndpointToBeReady waits until a game server client endpoint is ready by performing a TLS handshake.
-func waitForGameServerClientEndpointToBeReady(hostname string, port int, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname string, port int, timeout time.Duration) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -277,10 +284,7 @@ func attemptTLSConnection(hostname string, port int) error {
 }
 
 // waitForHTTPServerToRespond pings a target URL until it returns a success status code or a timeout occurs.
-func waitForHTTPServerToRespond(url string, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
+func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Duration) error {
 	client := &http.Client{
 		Timeout: 5 * time.Second, // Per-request timeout
 	}
@@ -307,7 +311,11 @@ func waitForHTTPServerToRespond(url string, timeout time.Duration) error {
 	}
 }
 
-func (targetEnv *TargetEnvironment) WaitForServerToBeReady() error {
+func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context) error {
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Check Server Status"))
+	log.Info().Msg("")
+
 	// Initialize a Kubernetes clientset against the environment
 	clientset, err := targetEnv.NewKubernetesClientSet()
 	if err != nil {
@@ -320,13 +328,15 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady() error {
 		return err
 	}
 
-	// Wait for the pods to be ready
+	// Wait for the pods to be ready.
+	// Only wait for a few minutes as pods generally become healthy fairly
+	// soon as we want to display the logs from errors early.
 	log.Info().Msgf("Waiting for all Kubernetes pods to be ready...")
-	err = waitForPodsReady(clientset, envDetails.Deployment.KubernetesNamespace, 15*time.Minute)
+	err = waitForPodsReady(clientset, targetEnv.HumanId, 3*time.Minute)
 	if err != nil {
 		return err
 	}
-	log.Info().Msgf("Game server pods are healthy and ready")
+	log.Info().Msg(styles.RenderSuccess(" ✓ Game server pods are healthy and ready"))
 
 	// CHECK CLIENT-FACING NETWORKING
 
@@ -340,31 +350,33 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady() error {
 	}
 
 	// Wait for server to respond to client traffic.
-	err = waitForGameServerClientEndpointToBeReady(serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
+	err = waitForGameServerClientEndpointToBeReady(ctx, serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Game server is serving client traffic properly")
+	log.Info().Msg(styles.RenderSuccess(" ✓ Game server is serving client traffic properly"))
 
 	// CHECK ADMIN INTERFACE
 
 	log.Info().Msgf("Checking the game server LiveOps Dashboard...")
 
 	// Wait for the admin domain name to resolve to an IP address.
-	serverAdminAddress := strings.Replace(envDetails.Deployment.ServerHostname, ".", "-admin.", 1) // \todo huge hack
-	err = waitForDomainResolution(serverAdminAddress, 15*time.Minute)
+	err = waitForDomainResolution(envDetails.Deployment.AdminHostname, 15*time.Minute)
 	if err != nil {
 		return err
 	}
 
 	// Wait for admin API to successfully respond to an HTTP request.
-	err = waitForHTTPServerToRespond("https://"+serverAdminAddress, 2*time.Minute)
+	err = waitForHTTPServerToRespond(ctx, "https://"+envDetails.Deployment.AdminHostname, 2*time.Minute)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Game server LiveOps Dashboard is ready")
+	log.Info().Msg(styles.RenderSuccess(" ✓ Game server LiveOps Dashboard is ready"))
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderSuccess("✅ All checks passed"))
 
 	// Success
 	return nil

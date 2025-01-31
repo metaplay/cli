@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
@@ -13,59 +16,92 @@ import (
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-var flagImageName string
-
 // Push the (already built) docker image to the remote docker registry.
-var environmentPushImageCmd = &cobra.Command{
-	Use:   "push-image",
-	Short: "Push a built server docker image to the environment's docker image registry",
-	Run:   runPushImageCmd,
+type PushImageOptions struct {
+	argEnvironment string
+	argImageName   string
 }
 
 func init() {
-	environmentCmd.AddCommand(environmentPushImageCmd)
+	o := PushImageOptions{}
 
-	environmentPushImageCmd.Flags().StringVar(&flagImageName, "image-tag", "", "Full name of the docker image, e.g., 'mygame:<sha>'")
+	cmd := &cobra.Command{
+		Use:   "push-image ENVIRONMENT IMAGE:TAG",
+		Short: "Push a built server docker image to the environment's docker image registry",
+		Run:   runCommand(&o),
+		Long: trimIndent(`
+			Push a built game server docker image to the target environment's image registry.
 
-	environmentPushImageCmd.MarkFlagRequired("image-tag")
+			Arguments:
+			- ENVIRONMENT must be one that is declared in the environments list in metaplay-project.yaml.
+			- IMAGE:TAG must be a fully-formed docker image name and tag, e.g., 'mygame:1a27c25753'.
+
+			Related commands:
+			- The docker image can be built with 'metaplay build docker-image ...'.
+			- After pushing, the image can be deployed into the environment using 'metaplay env deploy-server ...'.
+		`),
+		Example: trimIndent(`
+			# Push the docker image 'mygame:1a27c25753' into environment 'tough-falcons'.
+			metaplay environment push-image tough-falcons mygame:1a27c25753
+		`),
+	}
+	environmentCmd.AddCommand(cmd)
 }
 
-func runPushImageCmd(cmd *cobra.Command, args []string) {
-	// Ensure we have fresh tokens.
-	tokenSet, err := auth.EnsureValidTokenSet()
-	if err != nil {
-		log.Error().Msgf("Failed to get credentials: %v", err)
-		os.Exit(1)
+func (o *PushImageOptions) Prepare(cmd *cobra.Command, args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
 	}
 
-	// Resolve target environment.
-	targetEnv, err := resolveTargetEnvironment(tokenSet)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve environment: %v", err)
-		os.Exit(1)
-	}
+	// Environment.
+	o.argEnvironment = args[0]
 
 	// Validate docker image name: must be a repository:tag pair.
-	if flagImageName == "" {
-		log.Error().Msg("Must provide a docker image name with --image-tag=<name>:<tag>")
-		os.Exit(2)
+	o.argImageName = args[1]
+	if o.argImageName == "" {
+		return fmt.Errorf("IMAGE must be non-empty")
+		// log.Error().Msg("Must provide a docker image name with --image-tag=<name>:<tag>")
+		// os.Exit(2)
 	}
-	if !strings.Contains(flagImageName, ":") {
-		log.Error().Msg("Must provide a full docker image name with --image-tag=<name>:<tag>")
-		os.Exit(2)
+	if !strings.Contains(o.argImageName, ":") {
+		return fmt.Errorf("IMAGE must be a full docker image name 'REPOSITORY:TAG', got '%s'", o.argImageName)
+		// log.Error().Msg("Must provide a full docker image name with --image-tag=<name>:<tag>")
+		// os.Exit(2)
 	}
+
+	return nil
+}
+
+func (o *PushImageOptions) Run(cmd *cobra.Command) error {
+	// Ensure the user is logged in
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	if err != nil {
+		return err
+	}
+
+	// Resolve environment.
+	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	if err != nil {
+		return err
+	}
+
+	// Create TargetEnvironment.
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Resolve image tag.
-	imageTag, err := resolveImageTag(flagImageName)
+	imageTag, err := resolveImageTag(o.argImageName)
+	if err != nil {
+		return err
+	}
 
 	// Log attempt
-	log.Info().Msgf("Pushing docker image %s to target environment %s...", flagImageName, targetEnv.HumanId)
+	log.Info().Msgf("Push docker image %s to environment %s...", o.argImageName, targetEnv.HumanId)
 
 	// Get environment details.
 	log.Debug().Msg("Get environment details")
@@ -84,13 +120,14 @@ func runPushImageCmd(cmd *cobra.Command, args []string) {
 	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
 	// Push the image.
-	err = pushDockerImage(flagImageName, imageTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+	err = pushDockerImage(cmd.Context(), o.argImageName, imageTag, envDetails.Deployment.EcrRepo, dockerCredentials)
 	if err != nil {
 		log.Error().Msgf("Failed to push docker image: %v", err)
 		os.Exit(1)
 	}
 
 	log.Info().Msgf("Successfully pushed image!")
+	return nil
 }
 
 func resolveImageTag(imageName string) (string, error) {
@@ -109,9 +146,7 @@ func resolveImageTag(imageName string) (string, error) {
 	return srcImageParts[1], nil
 }
 
-func pushDockerImage(imageName string, imageTag string, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
-	ctx := context.Background()
-
+func pushDockerImage(ctx context.Context, imageName string, imageTag string, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
 	// Create a Docker client
 	// \todo This has been observed to fail on Tuomo's Mac with: "Cannot connect to the Docker daemon
 	// at unix:///var/run/docker.sock. Is the docker daemon running?"

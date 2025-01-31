@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package auth
 
 import (
@@ -35,17 +38,20 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("failed to parse claims")
 }
 
-// Extend the current tokenSet if expired. Otherwise, just return the current ones.
-func EnsureValidTokenSet() (*TokenSet, error) {
+// Load the current token set. If not logged in, just return empty tokens.
+// If logged in and tokens have expired, refresh the tokens. If the refresh
+// fails, we just return an error.
+// \todo Forget the tokens if the refresh fails (due to keys already used)
+func LoadAndRefreshTokenSet() (*TokenSet, error) {
 	// Get current credentials.
 	tokenSet, err := LoadTokenSet()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
 	}
 
-	// Check for missing tokens (ie, not logged in).
+	// If no tokens, we're logged in -- just return empty token set.
 	if tokenSet == nil {
-		return nil, errors.New("not logged in")
+		return nil, nil
 	}
 
 	// Resolve when access token expires.

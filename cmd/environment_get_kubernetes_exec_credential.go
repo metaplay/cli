@@ -1,45 +1,65 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
-	"os"
+	"fmt"
+	"strings"
 
-	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-var environmentGetKubernetesExecCredentialCmd = &cobra.Command{
-	Use:   "get-kubernetes-execcredential",
-	Short: "[internal] Get kubernetes credentials in execcredential format (used from the generated kubeconfigs)",
-	Run:   runGetKubernetesExecCredentialCmd,
+type GetKubernetesExecCredentialOpts struct {
+	environmentHumanId string
+	stackApiBaseURL    string
 }
 
 func init() {
-	environmentGetKubernetesExecCredentialCmd.Hidden = true
-	environmentCmd.AddCommand(environmentGetKubernetesExecCredentialCmd)
+	o := GetKubernetesExecCredentialOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "get-kubernetes-execcredential ENVIRONMENT_HUMAN_ID STACK_API_BASE_URL",
+		Short: "[internal] Get kubernetes credentials in execcredential format (used from the generated kubeconfigs)",
+		Run:   runCommand(&o),
+	}
+	cmd.Hidden = true
+	environmentCmd.AddCommand(cmd)
 }
 
-func runGetKubernetesExecCredentialCmd(cmd *cobra.Command, args []string) {
-	// Ensure we have fresh tokens.
-	tokenSet, err := auth.EnsureValidTokenSet()
-	if err != nil {
-		log.Error().Msgf("Failed to get credentials: %v", err)
-		os.Exit(1)
+func (o *GetKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if len(args) != 2 {
+		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
 	}
 
-	// Resolve target environment.
-	targetEnv, err := resolveTargetEnvironment(tokenSet)
+	o.environmentHumanId = args[0]
+	o.stackApiBaseURL = args[1]
+
+	return nil
+}
+
+func (o *GetKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
+	// Ensure the user is logged in
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
-		log.Error().Msgf("Failed to resolve environment: %v", err)
-		os.Exit(1)
+		return err
 	}
+
+	// \todo Fix stack domain hack
+	stackDomain := strings.Replace(strings.Replace(o.stackApiBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.environmentHumanId)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()
 	if err != nil {
-		log.Error().Msgf("Failed to get environment k8s execcredential: %v", err)
-		os.Exit(1)
+		return err
+		// log.Error().Msgf("Failed to get environment k8s execcredential: %v", err)
+		// os.Exit(1)
 	}
 
 	log.Info().Msg(*credential)
+	return nil
 }

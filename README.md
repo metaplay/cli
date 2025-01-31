@@ -71,30 +71,26 @@ metaplay auth logout
 
 ### Build and Deploy Server to Cloud
 
-1. Build server docker image:
+You must run the steps in the same directory as your `metaplay-project.yaml` project config file
+is located. If you wish to run in another directory, provide the path to the project
+directory with `-p <pathToProject>`.
 
-    When running in the directory that has the `.metaplay.yaml` project config file:
-
-    ```bash
-    metaplay project build-image --image-tag=<fullImageName>
-    ```
-
-    When running in another directory:
+1. Build server docker image.
 
     ```bash
-    metaplay project -p <pathToProject> build-image --image-tag=<fullImageTag>
+    metaplay build docker-image <image>:<tag>
     ```
 
 2. Push docker image to environment's docker image repository:
 
     ```bash
-    metaplay environment -e <environmentID> push-image --image-tag=<fullImageName>
+    metaplay environment push-image <environment> <image>:<tag>
     ```
 
-3. Deploy the game server with the pushed image:
+3. Deploy the game server with the pushed image (only image tag is needed):
 
     ```bash
-    metaplay environment -e <environmentID> deploy-server --image-tag=<imageTagOnly>
+    metaplay environment deploy-server <environment> <tag>
     ```
 
 ### Kubernetes Access
@@ -103,7 +99,7 @@ To access the Kubernetes control plane for your environment, you can do the foll
 
 ```bash
 # Get the kubeconfig file for the environment.
-metaplay environment -e <environmentID> get-kubeconfig -o <pathToKubeconfig>
+metaplay environment get-kubeconfig <environment> -o <pathToKubeconfig>
 # Configure kubectl to use the kubeconfig file.
 export KUBECONFIG=<pathToKubeconfig>
 # Check the status of your pods.
@@ -118,7 +114,11 @@ For detailed instructions on how to set up your CI system, see the [Getting Star
 
 ### Troubleshooting
 
-If you have any issues running a command, give it the `--verbose` flag to get more detailed output on what is happening.
+If you have any issues running a command, give it the `--verbose` flag to get more detailed output on what is happening, e.g.:
+
+```bash
+metaplay env push-image <environment> <image>:<tag> --verbose
+```
 
 If you have a paid support contract with Metaplay, you can open a ticket on the [Metaplay portal's support page](https://portal.metaplay.dev/orgs/metaplay/support).
 

@@ -1,3 +1,6 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
@@ -9,38 +12,47 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// showTokensCmd represents the showTokens command
-var showTokensCmd = &cobra.Command{
-	Use:   "show-tokens",
-	Short: "Print the active tokens as JSON to stdout",
-	Long:  `Print the currently active authentication tokens to stdout.`,
-	Run:   runShowTokensCmd,
+type ShowTokensOpts struct {
 }
 
 func init() {
-	showTokensCmd.Hidden = true
-	authCmd.AddCommand(showTokensCmd)
+	o := ShowTokensOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "show-tokens",
+		Short: "Print the active tokens as JSON to stdout",
+		Long:  `Print the currently active authentication tokens to stdout.`,
+		Run:   runCommand(&o),
+	}
+
+	cmd.Hidden = true
+	authCmd.AddCommand(cmd)
 }
 
-func runShowTokensCmd(cmd *cobra.Command, args []string) {
-	// Load tokenSet from keyring.
-	tokenSet, err := auth.LoadTokenSet()
+func (o *ShowTokensOpts) Prepare(cmd *cobra.Command, args []string) error {
+	return nil
+}
+
+func (o *ShowTokensOpts) Run(cmd *cobra.Command) error {
+	// Load tokenSet from keyring & refresh if needed.
+	tokenSet, err := auth.LoadAndRefreshTokenSet()
 	if err != nil {
-		log.Panic().Msgf("Failed to load tokens: %v", err)
+		return err
 	}
 
-	// Handle valid tokenSet
-	if tokenSet != nil {
-		// Marshal tokenSet to JSON.
-		bytes, err := json.MarshalIndent(tokenSet, "", "  ")
-		if err != nil {
-			log.Panic().Msgf("failed to serialize tokens into JSON: %v", err)
-		}
-
-		// Print as string.
-		log.Info().Msg(string(bytes))
-	} else {
-		log.Info().Msg("Not logged in! Sign in first with 'metaplay auth login' or 'metaplay auth machine-login'")
+	// Handle missing tokens (not logged in).
+	if tokenSet == nil {
+		log.Warn().Msg("Not logged in! Sign in first with 'metaplay auth login' or 'metaplay auth machine-login'")
 		os.Exit(1)
 	}
+
+	// Marshal tokenSet to JSON.
+	bytes, err := json.MarshalIndent(tokenSet, "", "  ")
+	if err != nil {
+		log.Panic().Msgf("failed to serialize tokens into JSON: %v", err)
+	}
+
+	// Print as string.
+	log.Info().Msg(string(bytes))
+	return nil
 }

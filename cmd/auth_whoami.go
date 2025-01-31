@@ -1,42 +1,56 @@
+/*
+ * Copyright Metaplay. All rights reserved.
+ */
 package cmd
 
 import (
 	"encoding/json"
-	"os"
+	"fmt"
 
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-// whoamiCmd displays information about the logged in user
-var whoamiCmd = &cobra.Command{
-	Use:   "whoami",
-	Short: "Show information about the signed in user",
-	Run:   runWhoamiCmd,
+// Display information about the logged in user.
+type WhoamiOpts struct {
 }
 
 func init() {
-	authCmd.AddCommand(whoamiCmd)
+	o := WhoamiOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "whoami",
+		Short: "Show information about the signed in user",
+		Run:   runCommand(&o),
+	}
+
+	authCmd.AddCommand(cmd)
 }
 
-func runWhoamiCmd(cmd *cobra.Command, args []string) {
-	// Ensure we have fresh tokens.
-	// \todo handle not-logged-in more gracefully? this now errors out
-	tokenSet, err := auth.EnsureValidTokenSet()
+func (o *WhoamiOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("expecting no arguments, got %d", len(args))
+	}
+
+	return nil
+}
+
+func (o *WhoamiOpts) Run(cmd *cobra.Command) error {
+	// Load (and refresh) tokens, if any.
+	tokenSet, err := auth.LoadAndRefreshTokenSet()
 	if err != nil {
-		log.Error().Msgf("Failed to get credentials: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Handle valid tokenSet
 	if tokenSet == nil {
-		log.Error().Msg("not logged in! sign in first with 'metaplay auth login' or 'metaplay auth machine-login'")
-		os.Exit(1)
+		log.Info().Msg("Not logged in! You can sign in with 'metaplay auth login' or 'metaplay auth machine-login'")
+		return nil
 	}
 
 	// Convert to MetaplayIDToken and print info to console.
-	idToken, err := auth.ResolveMetaplayIDToken(tokenSet.IDToken)
+	idToken, err := auth.ResolveMetaplayIDToken(cmd.Context(), tokenSet.IDToken)
 	if err != nil {
 		log.Panic().Msgf("Failed to resolve ID token: %v", err)
 	}
@@ -60,4 +74,6 @@ func runWhoamiCmd(cmd *cobra.Command, args []string) {
 
 	// Print user info as JSON.
 	log.Info().Msgf("User info: %s", userInfoJSON)
+
+	return nil
 }
