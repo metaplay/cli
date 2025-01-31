@@ -28,6 +28,7 @@ brew install metaplay
 ### Using Scoop
 
 ```bash
+scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
 ```
 
