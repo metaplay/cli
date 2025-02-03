@@ -17,7 +17,7 @@ import (
 )
 
 // Build docker image for the project.
-type BuildImageOpts struct {
+type buildDockerImageOpts struct {
 	flagBuildEngine  string
 	flagArchitecture string
 	flagCommitID     string
@@ -28,44 +28,43 @@ type BuildImageOpts struct {
 }
 
 func init() {
-	o := BuildImageOpts{}
+	o := buildDockerImageOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "docker-image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
-		Short: "Build docker image of your game server",
+		Short: "Build a deployable Docker image for the cloud",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
-			Build a docker image of your game server for running in the cloud.
+			Build a Docker image of your project to be deployed in the cloud.
 			The built image contains both the game server (C# project) and the LiveOps
 			Dashboard.
 
 			Arguments:
-			- IMAGE:TAG (optional) is the fully-qualified docker image, e.g., 'mygame:1a27c25753'.
-			  Defaults to <projectID>:<timestamp> if not specified.
-			- EXTRA_ARGS are passed to the docker build as-is.
+			- IMAGE:TAG (optional) is the fully-qualified Docker image, e.g., 'mygame:1a27c25753' (default: '<projectID>:<timestamp>').
+			- EXTRA_ARGS are passed to the Docker build as-is.
 
 			Related commands:
-			- 'metaplay env push-image ...' to push the built image into a target environment's registry.
-			- 'metaplay env deploy-server ...' to deploy the game server image into a cloud environment.
+			- 'metaplay deploy game-server ...' to push and deploy the game server image into a cloud environment.
+			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: trimIndent(`
-			# Build docker image locally to test that it builds.
-			metaplay build docker-image mygame:test
+			# Build Docker image locally to test that it builds.
+			metaplay build docker-image mygame:364cff09
 
 			# Build a project from another directory.
-			metaplay -p ../MyProject build docker-image mygame:test
+			metaplay -p ../MyProject build docker-image mygame:364cff09
 
 			# Build docker image with commit ID and build number specified.
-			metaplay build docker-image mygame:test --commit-id=1a27c25753 --build-number=123
+			metaplay build docker-image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
 
-			# Build using docker's BuildKit engine (some environments don't support buildx).
-			metaplay build docker-image mygame:test --engine=buildkit
+			# Build using docker's BuildKit engine (in case buildx isn't available).
+			metaplay build docker-image mygame:364cff09 --engine=buildkit
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build docker-image mygame:test --platform=arm64
+			metaplay build docker-image mygame:364cff09 --platform=arm64
 
 			# Pass extra arguments to the docker build.
-			metaplay build docker-image mygame:test -- --build-arg FOO=BAR
+			metaplay build docker-image mygame:364cff09 -- --build-arg FOO=BAR
 		`),
 	}
 
@@ -79,7 +78,7 @@ func init() {
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
 }
 
-func (o *BuildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle image name.
 	if len(args) == 0 {
 		o.argImageName = "<projectID>:<timestamp>"
@@ -95,7 +94,7 @@ func (o *BuildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *BuildImageOpts) Run(cmd *cobra.Command) error {
+func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Build Docker Image"))
 	log.Info().Msg("")
@@ -111,8 +110,6 @@ func (o *BuildImageOpts) Run(cmd *cobra.Command) error {
 	imageName := strings.Replace(o.argImageName, "<timestamp>", fmt.Sprintf("%d", time.Now().Unix()), -1)
 	imageName = strings.Replace(imageName, "<projectID>", project.config.ProjectHumanID, -1)
 
-	log.Info().Msgf("%s %s", "Image name:", styles.RenderTechnical(imageName))
-
 	if strings.HasSuffix(imageName, ":latest") {
 		log.Error().Msg("Building docker image with 'latest' tag is not allowed. Use a commit hash or timestamp instead.")
 		os.Exit(1)
@@ -120,8 +117,11 @@ func (o *BuildImageOpts) Run(cmd *cobra.Command) error {
 
 	// Log extra arguments.
 	if len(o.extraArgs) > 0 {
-		log.Info().Msgf("Extra args to docker: %s", strings.Join(o.extraArgs, " "))
+		log.Debug().Msgf("Extra args to docker: %s", strings.Join(o.extraArgs, " "))
 	}
+
+	log.Info().Msgf("Project ID: %s", styles.RenderTechnical(project.config.ProjectHumanID))
+	log.Info().Msgf("Image name: %s", styles.RenderTechnical(imageName))
 
 	// Auto-detect git commit ID
 	commitId := o.flagCommitID
@@ -275,6 +275,7 @@ func (o *BuildImageOpts) Run(cmd *cobra.Command) error {
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
 			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),
 			"--build-arg", "DOTNET_VERSION=" + projectDotnetVersion,
+			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitId),
 		}...,
@@ -295,9 +296,7 @@ func (o *BuildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("✅ %s %s", styles.RenderSuccess("Successfully built docker image"), styles.RenderTechnical(imageName))
 	log.Info().Msg("")
 	log.Info().Msg("You can deploy the image to a cloud environment using:")
-	log.Info().Msgf(styles.RenderTechnical("  metaplay env push-image ENVIRONMENT %s"), imageName)
-	imageTag := strings.Split(imageName, ":")[1]
-	log.Info().Msgf(styles.RenderTechnical("  metaplay env deploy-server ENVIRONMENT %s"), imageTag)
+	log.Info().Msgf(styles.RenderTechnical("  metaplay deploy game-server ENVIRONMENT %s"), imageName)
 
 	envsIDs := []string{}
 	for _, env := range project.config.Environments {

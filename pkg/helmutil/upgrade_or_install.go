@@ -16,8 +16,8 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 )
 
-// HelmUpgradeInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
-func HelmUpgradeInstall(
+// HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
+func HelmUpgradeOrInstall(
 	actionConfig *action.Configuration,
 	existingRelease *release.Release,
 	namespace, releaseName, chartURL string,
@@ -39,7 +39,7 @@ func HelmUpgradeInstall(
 		installCmd.Timeout = timeout
 		chartPathOptions = &installCmd.ChartPathOptions
 
-		log.Info().Msgf("Deploy new Helm release %s...", releaseName)
+		log.Debug().Msgf("Install new Helm release...")
 	} else {
 		// Create Helm release upgrade action
 		upgradeCmd = action.NewUpgrade(actionConfig)
@@ -49,7 +49,7 @@ func HelmUpgradeInstall(
 		upgradeCmd.Timeout = timeout
 		chartPathOptions = &upgradeCmd.ChartPathOptions
 
-		log.Info().Msgf("Update existing Helm release %s...", existingRelease.Name)
+		log.Debug().Msgf("Upgrade existing Helm release...")
 		if existingRelease.Name != releaseName {
 			log.Warn().Msgf("Mismatched Helm release name: existing release is named '%s', updating with name '%s'", existingRelease.Name, releaseName)
 		}
@@ -88,6 +88,7 @@ func HelmUpgradeInstall(
 			return nil, fmt.Errorf("failed to install the Helm chart: %w", err)
 		}
 
+		log.Debug().Msg("Helm install success")
 		return release, nil
 	} else {
 		release, err := upgradeCmd.Run(releaseName, loadedChart, finalValueMap)
@@ -95,6 +96,7 @@ func HelmUpgradeInstall(
 			return nil, fmt.Errorf("failed to upgrade an existing Helm release: %w", err)
 		}
 
+		log.Debug().Msg("Helm upgrade success")
 		return release, nil
 	}
 }

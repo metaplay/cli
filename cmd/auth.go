@@ -10,8 +10,8 @@ import (
 // authCmd represents the auth command
 var authCmd = &cobra.Command{
 	Use:   "auth",
-	Short: "Authenticate to Metaplay cloud",
-	Long: `Commands related to authenticating with Metaplay cloud.
+	Short: "Authenticate to Metaplay Cloud",
+	Long: `Commands related to authenticating with Metaplay Cloud.
 Supports sign in via a browser for human users and using a secret for machine users.`,
 }
 

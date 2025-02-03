@@ -13,23 +13,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type GetInfoOpts struct {
+type getEnvironmentInfoOpts struct {
 	argEnvironment string
 }
 
 func init() {
-	o := GetInfoOpts{}
+	o := getEnvironmentInfoOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "get-info ENVIRONMENT [flags]",
-		Short: "Get information about a specific environment",
-		Run:   runCommand(&o),
+		Use:     "environment-info ENVIRONMENT [flags]",
+		Aliases: []string{"env-info"},
+		Short:   "Get information about the target environment",
+		Run:     runCommand(&o),
 	}
 
-	environmentCmd.AddCommand(cmd)
+	getCmd.AddCommand(cmd)
 }
 
-func (o *GetInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *getEnvironmentInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -40,7 +41,7 @@ func (o *GetInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *GetInfoOpts) Run(cmd *cobra.Command) error {
+func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {

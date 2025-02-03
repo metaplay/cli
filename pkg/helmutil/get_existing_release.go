@@ -26,7 +26,7 @@ func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*
 
 	// Handle multiple found releases.
 	if len(releases) > 1 {
-		return nil, fmt.Errorf("multiple Helm releases found! Remove them first using the matching 'metaplay environment uninstall-*' command.")
+		return nil, fmt.Errorf("multiple Helm releases found! Remove them first using the matching 'metaplay deploy remove-*' command.")
 	}
 
 	// Handle single release.

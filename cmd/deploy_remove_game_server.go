@@ -14,24 +14,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Uninstall the Metaplay game server deployment from target environment.
-type UninstallServerOpts struct {
+// Remove the Metaplay game server deployment from target environment.
+type removeGameServerOpts struct {
 	argEnvironment string
 }
 
 func init() {
-	o := UninstallServerOpts{}
+	o := removeGameServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "uninstall-server ENVIRONMENT [flags]",
-		Short: "Uninstall the server from the target environment",
+		Use:   "remove-game-server ENVIRONMENT [flags]",
+		Short: "Remove the game server deployment from the target environment",
 		Run:   runCommand(&o),
 	}
 
-	environmentCmd.AddCommand(cmd)
+	deployCmd.AddCommand(cmd)
 }
 
-func (o *UninstallServerOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *removeGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -40,7 +40,7 @@ func (o *UninstallServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *UninstallServerOpts) Run(cmd *cobra.Command) error {
+func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
@@ -76,7 +76,7 @@ func (o *UninstallServerOpts) Run(cmd *cobra.Command) error {
 
 	// Uninstall all Helm releases (multiple releases should not happen but are possible).
 	for _, release := range helmReleases {
-		log.Info().Msgf("Uninstall release %s...", release.Name)
+		log.Info().Msgf("Remove release %s...", release.Name)
 
 		err := helmutil.UninstallRelease(actionConfig, release)
 		if err != nil {
@@ -85,6 +85,6 @@ func (o *UninstallServerOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	log.Info().Msgf("Successfully uninstalled server deployment")
+	log.Info().Msgf("Successfully removed game server deployment")
 	return nil
 }

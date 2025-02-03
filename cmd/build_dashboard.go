@@ -18,7 +18,7 @@ func init() {
 
 	var buildDashboardCmd = &cobra.Command{
 		Use:   "dashboard [flags]",
-		Short: "Build the Vue.js LiveOps Dashboard locally",
+		Short: "Build the Vue.js LiveOps Dashboard",
 		Run:   runCommand(&o),
 	}
 

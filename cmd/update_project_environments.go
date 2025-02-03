@@ -19,38 +19,37 @@ import (
 
 // Command for updating the 'environments' section in the 'metaplay-project.yaml'. The environments
 // infos are fetched from the portal using the projectID (human ID) specified in the YAML file.
-type projectUpdateEnvironments struct {
+type updateProjectEnvironments struct {
 }
 
 func init() {
-	o := &projectUpdateEnvironments{}
+	o := &updateProjectEnvironments{}
 
 	cmd := &cobra.Command{
-		Use:     "update-environments [flags]",
-		Aliases: []string{"update-env"},
-		Short:   "Update the environments in the metaplay-project.yaml",
+		Use:     "project-environments [flags]",
+		Aliases: []string{"project-envs"},
+		Short:   "Update the project's environments in the metaplay-project.yaml",
 		Run:     runCommand(o),
 		Long: trimIndent(`
-			Update the environments in the metaplay-project.yaml from the Metaplay portal.
+			Update the environments in the metaplay-project.yaml from the Metaplay Portal.
 
 			Related commands:
-			- 'metaplay env deploy-server' ...
+			- 'metaplay deploy game-server' ...
 		`),
 		Example: trimIndent(`
-			# Update the environments from the portal.
-			metaplay project update-environments
+			# Update the project environments from the portal.
+			metaplay update project-environments
 		`),
 	}
 
-	// Register as a subcommand of 'project'
-	projectCmd.AddCommand(cmd)
+	updateCmd.AddCommand(cmd)
 }
 
-func (o *projectUpdateEnvironments) Prepare(cmd *cobra.Command, args []string) error {
+func (o *updateProjectEnvironments) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *projectUpdateEnvironments) Run(cmd *cobra.Command) error {
+func (o *updateProjectEnvironments) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
@@ -96,7 +95,7 @@ func (o *projectUpdateEnvironments) Run(cmd *cobra.Command) error {
 // Update the metaplay-project.yaml to be up-to-date with newEnvironments.
 // Use goccy/go-yaml for minimally editing the file, i.e., to retain ordering, comments,
 // and whitespace in the untouched parts of the file.
-func (o *projectUpdateEnvironments) updateProjectConfigEnvironments(project *MetaplayProject, newPortalEnvironments []portalapi.PortalEnvironmentInfo) error {
+func (o *updateProjectEnvironments) updateProjectConfigEnvironments(project *MetaplayProject, newPortalEnvironments []portalapi.PortalEnvironmentInfo) error {
 	// Load the existing YAML file
 	projectConfigFilePath := filepath.Join(project.relativeDir, projectConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)

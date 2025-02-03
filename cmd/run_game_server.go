@@ -19,7 +19,7 @@ func init() {
 	o := RunServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "server [flags] [-- EXTRA_ARGS]",
+		Use:   "game-server [flags] [-- EXTRA_ARGS]",
 		Short: "Run the .NET game server locally",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -34,11 +34,11 @@ func init() {
 			- EXTRA_ARGS is passed directly to 'dotnet run'.
 		`),
 		Example: trimIndent(`
-			# Run the server normally (until terminated).
-			metaplay run server
+			# Run the server until stopped.
+			metaplay run game-server
 
 			# Pass additional arguments to the game server (dotnet run).
-			metaplay run server -- -ExitAfter=00:00:30
+			metaplay run game-server -- -ExitAfter=00:00:30
 		`),
 	}
 

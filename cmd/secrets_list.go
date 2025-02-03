@@ -33,7 +33,7 @@ func init() {
 		Long: trimIndent(`
 			WARNING: This command is experimental and subject to change!
 
-			Show all used-created secrets in the target environment.
+			Show all user-created secrets in the target environment.
 
 			In the default output mode, the secrets are sanitized to avoid accidentally showing
 			them. Use --show-values flag to show the secrets. When using --json, the secret values

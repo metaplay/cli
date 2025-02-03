@@ -23,22 +23,22 @@ func init() {
 	o := UninstallBotsOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "uninstall-bots ENVIRONMENT [flags]",
-		Short: "[experimental] Uninstall bots from the target environment",
+		Use:   "remove-bots ENVIRONMENT [flags]",
+		Short: "[experimental] Remove the bot deployment from the target environment",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
 			WARNING: This command is experimental and subject to change! It also still lacks some
 			key functionality.
 
-			Uninstall bots from the target cloud environment.
+			Remove the bot deployment from the target environment.
 		`),
 		Example: trimIndent(`
 			# Remove bots from environment tough-falcons.
-			metaplay env uninstall-bots tough-falcons
+			metaplay deploy remove-bots tough-falcons
 		`),
 	}
 
-	environmentCmd.AddCommand(cmd)
+	deployCmd.AddCommand(cmd)
 }
 
 func (o *UninstallBotsOpts) Prepare(cmd *cobra.Command, args []string) error {

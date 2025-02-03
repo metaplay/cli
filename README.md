@@ -6,6 +6,46 @@ The `metaplay` command-line tool is used to manage projects using Metaplay, to b
 
 ## Installation
 
+The installation is easiest using any of the supported package managers or install scripts.
+
+### On macOS
+
+Using Homebrew:
+
+```bash
+brew tap metaplay/homebrew-tap
+brew install metaplay
+```
+
+Using install script:
+
+```bash
+bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+```
+
+### On Windows
+
+Using Chocolatey
+
+```bash
+choco install metaplay
+```
+
+Using Scoop:
+
+```bash
+scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
+scoop install metaplay
+```
+
+### On Linux
+
+Using install script:
+
+```bash
+bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+```
+
 ### Direct Download
 
 You can find the latest release on our [Github releases page](https://github.com/metaplay/cli/releases/latest).
@@ -17,26 +57,6 @@ You can find the latest release on our [Github releases page](https://github.com
 * Unpack the contents into a directory that is included in your `PATH` environment variable, or create a new directory and add it to your `PATH`.
 
 * Now you can run the `metaplay` executable in your terminal and it will output further instructions. See section [Usage](https://github.com/metaplay/cli?tab=readme-ov-file#usage) for details.
-
-### Using Homebrew
-
-```bash
-brew tap metaplay/homebrew-tap
-brew install metaplay
-```
-
-### Using Scoop
-
-```bash
-scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
-scoop install metaplay
-```
-
-### Using Chocolatey
-
-```bash
-choco install metaplay
-```
 
 ### Development Build
 
@@ -75,23 +95,19 @@ You must run the steps in the same directory as your `metaplay-project.yaml` pro
 is located. If you wish to run in another directory, provide the path to the project
 directory with `-p <pathToProject>`.
 
-1. Build server docker image.
+1. Build the game server docker image.
 
     ```bash
     metaplay build docker-image <image>:<tag>
     ```
 
-2. Push docker image to environment's docker image repository:
+2. Deploy the game server to an environment:
 
     ```bash
-    metaplay environment push-image <environment> <image>:<tag>
+    metaplay deploy game-server <environment> <image>:<tag>
     ```
 
-3. Deploy the game server with the pushed image (only image tag is needed):
-
-    ```bash
-    metaplay environment deploy-server <environment> <tag>
-    ```
+    The command also pushes the docker image to the environment's registry.
 
 ### Kubernetes Access
 
@@ -99,7 +115,7 @@ To access the Kubernetes control plane for your environment, you can do the foll
 
 ```bash
 # Get the kubeconfig file for the environment.
-metaplay environment get-kubeconfig <environment> -o <pathToKubeconfig>
+metaplay get kubeconfig <environment> -o <pathToKubeconfig>
 # Configure kubectl to use the kubeconfig file.
 export KUBECONFIG=<pathToKubeconfig>
 # Check the status of your pods.
@@ -117,7 +133,7 @@ For detailed instructions on how to set up your CI system, see the [Getting Star
 If you have any issues running a command, give it the `--verbose` flag to get more detailed output on what is happening, e.g.:
 
 ```bash
-metaplay env push-image <environment> <image>:<tag> --verbose
+metaplay deploy game-server <environment> <image>:<tag> --verbose
 ```
 
 If you have a paid support contract with Metaplay, you can open a ticket on the [Metaplay portal's support page](https://portal.metaplay.dev/orgs/metaplay/support).

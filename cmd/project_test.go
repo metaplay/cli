@@ -94,11 +94,12 @@ func TestValidateEnvironmentID(t *testing.T) {
 		{"test-env-prod-dev", true}, // realistic 4-segment name
 
 		// Invalid cases: numbers not allowed
-		{"env-123", false},
-		{"env-abc-123", false},
-		{"123-456", false},
-		{"abc-123-def", false},
-		{"foo-bar-baz-123", false},
+		// TODO: Numbers are allowed for now (because of legacy Idler environments)
+		{"env-123", true},
+		{"env-abc-123", true},
+		{"123-456", true},
+		{"abc-123-def", true},
+		{"foo-bar-baz-123", true},
 
 		// Invalid cases: wrong structure
 		{"", false},
@@ -129,11 +130,12 @@ func TestValidateEnvironmentID(t *testing.T) {
 		{"env--123--abc", false}, // multiple double dashes
 
 		// Invalid cases: numbers
-		{"a1-b2-c3", false},          // alphanumeric parts
-		{"abc-123", false},           // numbers
-		{"123-456-789", false},       // all numbers
-		{"a1-b2-c3-d4", false},       // 4 segments with numbers
-		{"test-env-prod-001", false}, // numbers in name
+		// TODO: Numbers are allowed for now (because of legacy Idler environments)
+		{"a1-b2-c3", true},          // alphanumeric parts
+		{"abc-123", true},           // numbers
+		{"123-456-789", true},       // all numbers
+		{"a1-b2-c3-d4", true},       // 4 segments with numbers
+		{"test-env-prod-001", true}, // numbers in name
 
 		// Invalid cases: uppercase or mixed case
 		{"abc-DEF", false},           // uppercase letters

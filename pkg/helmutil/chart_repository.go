@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
-	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -146,10 +145,9 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 
 // Find the best matching Helm chart version from a remote chart repository.
 // The returned version is the latest of the charts satisfying the rules:
-// a) have the specified the chart name, b) be newer than the legacy version
-// cutoff, c) match the version constraint.
-// The Helm chart path is returned.
-func FetchBestMatchingHelmChart(helmChartRepo, chartName string, legacyVersionCutoff *version.Version, versionConstraints version.Constraints) (string, error) {
+// a) has the specified chart name, b) is newer than the legacy version cut-off,
+// c) matches the version constraint.
+func ResolveBestMatchingHelmVersion(helmChartRepo, chartName string, legacyVersionCutoff *version.Version, versionConstraints version.Constraints) (string, error) {
 	// Fetch recent Helm chart versions (ignore all legacy version already here).
 	helmChartRepo = strings.TrimSuffix(helmChartRepo, "/")
 	availableChartVersions, err := FetchHelmChartVersions(helmChartRepo, chartName, legacyVersionCutoff)
@@ -163,10 +161,12 @@ func FetchBestMatchingHelmChart(helmChartRepo, chartName string, legacyVersionCu
 	if err != nil {
 		return "", fmt.Errorf("failed to find a matching Helm chart version: %v", err)
 	}
-	// \todo hoist to caller
-	log.Info().Msgf("Helm chart version %s", styles.RenderTechnical(useChartVersion))
 
-	// Construct path to the remote Helm chart.
-	helmChartPath := fmt.Sprintf("%s/%s-%s.tgz", helmChartRepo, chartName, useChartVersion)
-	return helmChartPath, nil
+	return useChartVersion, nil
+}
+
+// Construct final Helm chart path for a remote chart.
+func GetHelmChartPath(helmChartRepo, chartName, chartVersion string) string {
+	helmChartRepo = strings.TrimSuffix(helmChartRepo, "/")
+	return fmt.Sprintf("%s/%s-%s.tgz", helmChartRepo, chartName, chartVersion)
 }

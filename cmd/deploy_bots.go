@@ -4,7 +4,7 @@
 package cmd
 
 // \todo More configurability: number of replicas, number of bots, etc.
-// \todo Add checks that the deployment/pods are running as expected (equivalent of check-server-status)
+// \todo Add checks that the deployment/pods are running as expected
 
 import (
 	"fmt"
@@ -26,7 +26,7 @@ const metaplayLoadTestChartName = "metaplay-loadtest"
 
 // Deploy bots to the target environment with specified docker image version.
 type DeployBotsOpts struct {
-	flagDeploymentName      string
+	flagHelmReleaseName     string
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
@@ -41,7 +41,7 @@ func init() {
 	o := DeployBotsOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "deploy-bots ENVIRONMENT IMAGE_TAG [flags] [-- EXTRA_ARGS]",
+		Use:   "bots ENVIRONMENT IMAGE_TAG [flags] [-- EXTRA_ARGS]",
 		Short: "[experimental] Deploy load testing bots into the target environment",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -52,20 +52,19 @@ func init() {
 
 			Related commands:
 			- 'metaplay build docker-image ...' to build the docker image.
-			- 'metaplay env check-server-status ...' to check the status of a deployed server.
-			- 'metaplay env push-image ...' to push the built image to the environment.
-			- 'metaplay env server-logs ...' to view logs from the deployed server.
-			- 'metaplay env debug-server ...' to debug a running server pod.
+			- 'metaplay image push ...' to push the built image to the environment.
+			- 'metaplay debug logs ...' to view logs from the deployed server.
+			- 'metaplay debug run-shell ...' to debug a running server pod.
 		`),
 		Example: trimIndent(`
 			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
-			metaplay env deploy-bots tough-falcons 364cff09
+			metaplay deploy bots tough-falcons 364cff09
 		`),
 	}
-	environmentCmd.AddCommand(cmd)
+	deployCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagDeploymentName, "deployment-name", "loadtest", "Name to use for the Helm deployment") // \todo default value?
+	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "loadtest", "Helm release name to use for the bot deployment") // \todo default value?
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
@@ -90,8 +89,8 @@ func (o *DeployBotsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	}
 
 	// Validate deployment name.
-	if o.flagDeploymentName == "" {
-		return fmt.Errorf("an empty Helm deployment name was given with '--deployment-name=<name>'")
+	if o.flagHelmReleaseName == "" {
+		return fmt.Errorf("an empty Helm deployment name was given with '--helm-release-name=<name>'")
 	}
 
 	return nil
@@ -152,14 +151,17 @@ func (o *DeployBotsOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve path to Helm chart (local or remote).
 	var helmChartPath string
+	var useHelmChartVersion string
 	if o.flagHelmChartLocalPath != "" {
 		// Use local Helm chart directly.
 		helmChartPath = o.flagHelmChartLocalPath
+		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
 		helmChartRepo := coalesceString(project.config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
 		minChartVersion, _ := version.NewVersion("0.4.0")
-		helmChartPath, err = helmutil.FetchBestMatchingHelmChart(helmChartRepo, metaplayLoadTestChartName, minChartVersion, chartVersionConstraints)
+		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayLoadTestChartName, minChartVersion, chartVersionConstraints)
+		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayLoadTestChartName, useHelmChartVersion)
 		if err != nil {
 			return err
 		}
@@ -208,27 +210,32 @@ func (o *DeployBotsOpts) Run(cmd *cobra.Command) error {
 		},
 	}
 
-	// Install or upgrade the Helm chart.
-	log.Info().Msgf("Deployment name: %s", o.flagDeploymentName)
-	log.Info().Msgf("Helm chart path: %s", helmChartPath)
-	log.Info().Msgf("Helm values files: %s", valuesFiles)
-	log.Info().Msgf("Image tag: %s", o.argImageTag)
+	// Show info.
+	log.Info().Msgf("Environment ID:     %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("Environment name:   %s", styles.RenderTechnical(envConfig.Name))
+	log.Info().Msgf("Environment type:   %s", styles.RenderTechnical(string(envConfig.Type)))
+	log.Info().Msgf("Docker image tag:   %s", o.argImageTag)
+	log.Info().Msgf("Helm chart version: %s", useHelmChartVersion)
+	log.Info().Msgf("Helm chart path:    %s", helmChartPath)
+	log.Info().Msgf("Helm release name:  %s", o.flagHelmReleaseName)
+	log.Info().Msgf("Helm values files:  %s", valuesFiles)
 	log.Info().Msg("")
-	_, err = helmutil.HelmUpgradeInstall(
-		actionConfig,
-		existingRelease,
-		envConfig.getKubernetesNamespace(),
-		o.flagDeploymentName,
-		helmChartPath,
-		helmValues,
-		valuesFiles,
-		5*time.Minute)
-	if err != nil {
-		return err
-	}
 
-	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderSuccess("✅ Successfully deployed bots"))
+	taskRunner := tui.NewTaskRunner()
+
+	// Install or upgrade the Helm chart.
+	taskRunner.AddTask("Deploy loadtest Helm chart", func() error {
+		_, err = helmutil.HelmUpgradeOrInstall(
+			actionConfig,
+			existingRelease,
+			envConfig.getKubernetesNamespace(),
+			o.flagHelmReleaseName,
+			helmChartPath,
+			helmValues,
+			valuesFiles,
+			5*time.Minute)
+		return err
+	})
 
 	// Validate the bots status.
 	// log.Info().Msgf("Check bot status...")
@@ -236,6 +243,13 @@ func (o *DeployBotsOpts) Run(cmd *cobra.Command) error {
 	// if err != nil {
 	// 	return fmt.Errorf("deployed server failed to start: %v", err)
 	// }
+
+	// Run all tasks.
+	if err = taskRunner.Run(); err != nil {
+		return err
+	}
+
+	log.Info().Msg(styles.RenderSuccess("✅ Successfully deployed bots"))
 
 	return nil
 }

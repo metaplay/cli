@@ -13,7 +13,7 @@ import (
 // secrets is a group of commands to manage Kubernetes secrets.
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
-	Short: "[experimental] Manage Kubernetes secrets",
+	Short: "[experimental] Manage Kubernetes secrets of an environment",
 }
 
 func init() {

@@ -189,8 +189,8 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential() (*string, err
 					Exec: KubeConfigUserDataExec{
 						Command: "metaplay",
 						Args: []string{
-							"environment",
-							"get-kubernetes-execcredential",
+							"get",
+							"kubernetes-execcredential",
 							target.HumanId,
 							target.StackApiBaseURL,
 						},

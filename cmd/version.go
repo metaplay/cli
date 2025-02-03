@@ -17,19 +17,19 @@ type VersionOpts struct {
 	flagJsonOutput bool
 }
 
+var versionOpts = VersionOpts{}
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version information of this CLI",
+	Run:   runCommand(&versionOpts),
+}
+
 func init() {
-	o := VersionOpts{}
+	rootCmd.AddCommand(versionCmd)
 
-	var cmd = &cobra.Command{
-		Use:   "version",
-		Short: "Print the version information of this CLI.",
-		Run:   runCommand(&o),
-	}
-
-	rootCmd.AddCommand(cmd)
-
-	flags := cmd.Flags()
-	flags.BoolVar(&o.flagJsonOutput, "json", false, "Output the version information as JSON")
+	flags := versionCmd.Flags()
+	flags.BoolVar(&versionOpts.flagJsonOutput, "json", false, "Output the version information as JSON")
 }
 
 func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {

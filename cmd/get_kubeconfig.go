@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type GetKubeConfigOpts struct {
+type getKubeConfigOpts struct {
 	flagCredentialsType string
 	flagOutput          string
 
@@ -21,21 +21,21 @@ type GetKubeConfigOpts struct {
 }
 
 func init() {
-	o := GetKubeConfigOpts{}
+	o := getKubeConfigOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "get-kubeconfig ENVIRONMENT [flags]",
+		Use:   "kubeconfig ENVIRONMENT [flags]",
 		Short: "Get the Kubernetes KubeConfig for the target environment",
 		Run:   runCommand(&o),
 	}
-	environmentCmd.AddCommand(cmd)
+	getCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
 	flags.StringVarP(&o.flagCredentialsType, "type", "t", "", "Type of credentials handling in kubeconfig, static or dynamic")
 	flags.StringVarP(&o.flagOutput, "output", "o", "", "Path of the output file where to write kubeconfig (written to stdout if not specified)")
 }
 
-func (o *GetKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *getKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -44,7 +44,7 @@ func (o *GetKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *GetKubeConfigOpts) Run(cmd *cobra.Command) error {
+func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {

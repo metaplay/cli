@@ -31,13 +31,7 @@ var skipAppVersionCheck bool     // Skip check for a new version of the CLI (--s
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "metaplay",
-	Short: "Metaplay CLI: manage your projects and cloud deployments",
-	Long: trimIndent(`
-		This CLI allows you to manage projects using Metaplay. You can
-		integrate the Metaplay SDK to your project and manage the SDK versions.
-		It also helps you build your backend and deploy it into the cloud.
-	`),
+	Use: "metaplay",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Determine if colors can be used
 		hasTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
@@ -126,11 +120,42 @@ func Execute() {
 }
 
 func init() {
+	// Register global flags.
 	flags := rootCmd.PersistentFlags()
 	flags.BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging, useful for troubleshooting")
 	flags.StringVarP(&flagProjectConfigPath, "project", "p", "", "Path to the to project directory (where metaplay-project.yaml is located)")
 	flags.BoolVar(&skipAppVersionCheck, "skip-version-check", false, "Skip the check for a new CLI version being available")
 	flags.StringVar(&flagColorMode, "color", "auto", "Should the output be colored (yes/no/auto)?")
+
+	// Add command groups to root.
+	coreGroup := &cobra.Group{
+		ID:    "core",
+		Title: "Core Commands",
+	}
+	manageGroup := &cobra.Group{
+		ID:    "manage",
+		Title: "Management Commands",
+	}
+	otherGroup := &cobra.Group{
+		ID:    "other",
+		Title: "Other Commands",
+	}
+	rootCmd.AddGroup(coreGroup, manageGroup, otherGroup)
+
+	authCmd.GroupID = "core"
+	deployCmd.GroupID = "core"
+	buildCmd.GroupID = "core"
+	runCmd.GroupID = "core"
+	debugCmd.GroupID = "core"
+
+	getCmd.GroupID = "manage"
+	imageCmd.GroupID = "manage"
+	secretsCmd.GroupID = "manage"
+	updateCmd.GroupID = "manage"
+
+	versionCmd.GroupID = "other"
+	rootCmd.SetHelpCommandGroupID("other")
+	rootCmd.SetCompletionCommandGroupID("other")
 }
 
 // Customer version of zerolog's ConsoleWriter that writes out the full

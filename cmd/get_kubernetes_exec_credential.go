@@ -13,24 +13,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type GetKubernetesExecCredentialOpts struct {
+type getKubernetesExecCredentialOpts struct {
 	environmentHumanId string
 	stackApiBaseURL    string
 }
 
 func init() {
-	o := GetKubernetesExecCredentialOpts{}
+	o := getKubernetesExecCredentialOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "get-kubernetes-execcredential ENVIRONMENT_HUMAN_ID STACK_API_BASE_URL",
+		Use:   "kubernetes-execcredential ENVIRONMENT_HUMAN_ID STACK_API_BASE_URL",
 		Short: "[internal] Get kubernetes credentials in execcredential format (used from the generated kubeconfigs)",
 		Run:   runCommand(&o),
 	}
+
 	cmd.Hidden = true
-	environmentCmd.AddCommand(cmd)
+	getCmd.AddCommand(cmd)
 }
 
-func (o *GetKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
 	}
@@ -41,7 +42,7 @@ func (o *GetKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []str
 	return nil
 }
 
-func (o *GetKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
+func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {

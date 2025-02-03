@@ -42,7 +42,6 @@ type Task struct {
 // TaskRunner manages and executes a sequence of tasks with visual progress
 
 type TaskRunner struct {
-	title      string        // Title of the operation
 	tasks      []*Task       // Tasks that the operation consists of, run sequentially
 	quitting   bool          // Is the operation quitting?
 	done       chan struct{} // Signals when all tasks are complete
@@ -58,9 +57,8 @@ type tickMsg struct{}
 type doneMsg struct{ err error }
 
 // NewTaskRunner creates a new TaskRunner
-func NewTaskRunner(title string) *TaskRunner {
+func NewTaskRunner() *TaskRunner {
 	return &TaskRunner{
-		title:    title,
 		tasks:    make([]*Task, 0),
 		done:     make(chan struct{}),
 		lastTick: time.Now(),
@@ -135,9 +133,6 @@ func (m *TaskRunner) runInteractive() error {
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
 func (m *TaskRunner) runNonInteractive() error {
-	// log.Info().Msgf("%s", m.title)
-	log.Info().Msgf("\n%s", styles.RenderTitle(m.title))
-
 	for _, task := range m.tasks {
 		log.Info().Msgf("%s...", task.title)
 
@@ -163,7 +158,7 @@ func (m *TaskRunner) runNonInteractive() error {
 		task.elapsed = elapsed
 		task.mu.Unlock()
 
-		log.Info().Msgf("%s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
+		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
 	}
 
 	log.Info().Msg("")
@@ -286,7 +281,6 @@ func humanizeElapsed(d time.Duration) string {
 func (m TaskRunner) View() string {
 	// Build the content starting with the title
 	var lines []string
-	lines = append(lines, "", styles.RenderTitle(m.title), "")
 
 	// Build the task list content
 	for _, task := range m.tasks {

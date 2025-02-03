@@ -28,7 +28,7 @@ const logEntryBufferSize = 100
 // Name of the game server container.
 const metaplayServerContainerName = "shard-server"
 
-type ServerLogsOpts struct {
+type debugLogsOpts struct {
 	flagPodName   string        // Show logs from the specified pod only
 	flagSince     time.Duration // Show logs since X duration ago
 	flagSinceTime string        // Show logs since the specified timestamp (RFC3339)
@@ -39,11 +39,11 @@ type ServerLogsOpts struct {
 }
 
 func init() {
-	o := ServerLogsOpts{}
+	o := debugLogsOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "server-logs ENVIRONMENT [flags]",
-		Short: "Get logs from one or more game server pods",
+		Use:   "logs ENVIRONMENT [flags]",
+		Short: "Show logs from one or more game server pods",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
 			Show logs from one or more game server pods in the target environment.
@@ -52,27 +52,27 @@ func init() {
 			- ENVIRONMENT must be one that is declared in the environments list in metaplay-project.yaml.
 
 			Related commands:
-			- 'metaplay environment deploy-server ...' to deploy a game server into the cloud.
+			- 'metaplay deploy game-server ...' to deploy a game server into the cloud.
 		`),
 		Example: trimIndent(`
 			# Show logs from environment 'tough-falcons' up until now.
-			metaplay environment server-logs tough-falcons
+			metaplay debug logs tough-falcons
 
 			# Show logs and keep streaming them until terminated.
-			metaplay environment server-logs tough-falcons -f
+			metaplay debug logs tough-falcons -f
 
 			# Show logs only from the 'service-0' pod.
-			metaplay environment server-logs tough-falcons --pod service-0
+			metaplay debug logs tough-falcons --pod service-0
 
 			# Show logs more recent than 3 hours.
-			metaplay environment server-logs tough-falcons --since=3h
+			metaplay debug logs tough-falcons --since=3h
 
 			# Show logs since Dec 27th, 2024 15:04:05 UTC.
-			metaplay environment server-logs tough-falcons --since-time=2024-12-27T15:04:05Z
+			metaplay debug logs tough-falcons --since-time=2024-12-27T15:04:05Z
 		`),
 	}
 
-	environmentCmd.AddCommand(cmd)
+	debugCmd.AddCommand(cmd)
 
 	// Register flags
 	flags := cmd.Flags()
@@ -82,7 +82,7 @@ func init() {
 	flags.BoolVarP(&o.flagFollow, "follow", "f", false, "Keep streaming logs from pods until terminated.")
 }
 
-func (o *ServerLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *debugLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -106,7 +106,7 @@ func (o *ServerLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *ServerLogsOpts) Run(cmd *cobra.Command) error {
+func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	if o.flagSince != 0 {
 		log.Debug().Msgf("Since: %v", o.flagSince)
 	}
@@ -136,7 +136,7 @@ func (o *ServerLogsOpts) Run(cmd *cobra.Command) error {
 	// Resolve the game server pods in the environment.
 	// \todo Keep updating the list of pods to dynamically adapt to new/delete pods.
 	namespace := envConfig.HumanID
-	pods, err := envapi.FetchGameServerPods(clientset, namespace)
+	pods, err := envapi.FetchGameServerPods(cmd.Context(), clientset, namespace)
 	if err != nil {
 		log.Error().Msgf("Failed to determine game server pods in the environment: %v", err)
 		os.Exit(1)
@@ -168,7 +168,7 @@ func (o *ServerLogsOpts) Run(cmd *cobra.Command) error {
 	return o.readOrderedLogs(cmd.Context(), clientset, pods)
 }
 
-func (o *ServerLogsOpts) readOrderedLogs(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod) error {
+func (o *debugLogsOpts) readOrderedLogs(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod) error {
 	// Use current time as the cut-off time between historical and real-time streaming logs.
 	cutoffTime := time.Now().UTC()
 	log.Debug().Msgf("Use cutoff time: %s", cutoffTime)
@@ -219,7 +219,7 @@ func readPodLogsWithOpts(ctx context.Context, clientset *kubernetes.Clientset, p
 	return sources
 }
 
-func (o *ServerLogsOpts) readHistoricalLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
+func (o *debugLogsOpts) readHistoricalLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
 	// Log options for historical entries.
 	var sinceSecondsPtr *int64 = nil
 	if o.flagSince != 0 {

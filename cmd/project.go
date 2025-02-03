@@ -620,7 +620,8 @@ func getEnvironmentIDs(projectConfig *ProjectConfig) []string {
 // Validate the given project ID:
 // - It must be a dash-separated segmented name (eg, 'gorgeous-bear').
 // - Allow 2-3 segments in the name.
-// - Only lower-case ASCII characters are allowed in the segments (no numbers, no upper-case letters, no special characters).
+// - Only lower-case ASCII alphanumeric characters are allowed in the segments (no upper-case letters, no special characters).
+// \todo Numbers are allowed because of some legacy environments like 'idler-develop5'
 // \todo Only allow 3 segments in the future (for now, we still use 2-segment names as we mock the human IDs)
 func validateProjectID(id string) error {
 	if id == "" {
@@ -635,7 +636,7 @@ func validateProjectID(id string) error {
 		return fmt.Errorf("project ID must have 2-3 dash-separated segments, '%s' has %d segments", id, len(parts))
 	}
 
-	// Validate each segment contains only alphanumeric characters
+	// Validate each segment contains only lower-case ASCII characters
 	validSegment := regexp.MustCompile(`^[a-z]+$`)
 	for i, part := range parts {
 		if !validSegment.MatchString(part) {
@@ -648,7 +649,7 @@ func validateProjectID(id string) error {
 
 // validateEnvironmentID checks whether the given environment ID is valid.
 // The valid format must be dash-separated parts with alphanumeric characters
-// only. There can be either 2 to 4 segments. Eg, 'tiny-squids' or 'idler-develop-12345',
+// only. There can be either 2 to 4 segments. Eg, 'tiny-squids' or 'idler-develop5',
 // or 'yellow-gritty-tuna-jumps'.
 func validateEnvironmentID(id string) error {
 	if id == "" {
@@ -664,10 +665,10 @@ func validateEnvironmentID(id string) error {
 	}
 
 	// Validate each segment contains only alphanumeric characters
-	validSegment := regexp.MustCompile(`^[a-z]+$`)
+	validSegment := regexp.MustCompile(`^[a-z0-9]+$`)
 	for i, part := range parts {
 		if !validSegment.MatchString(part) {
-			return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII characters (a-z) are allowed", i+1, part)
+			return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII alphanumeric characters (a-z, 0-9) are allowed", i+1, part)
 		}
 	}
 
