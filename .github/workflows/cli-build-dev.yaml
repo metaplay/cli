@@ -40,15 +40,14 @@ jobs:
             jq '.[] | select(.name == "Development Build" or .tag_name == "0.0.0") | .id' | \
             xargs -I {} gh api repos/${{ github.repository }}/releases/{} -X DELETE || true
 
-      - name: Delete old development tag
+      # Prevent GoReleaser from picking up any other tag than 0.0.0 for the development build
+      - name: Delete all tags locally
         run: |
-          git tag -d 0.0.0 || true
-          git push origin :refs/tags/0.0.0 || true
+          git tag -l | xargs -r git tag -d
 
-      - name: Create new development tag
-        run: |
-          git tag 0.0.0
-          git push origin 0.0.0 --force
+      # Create the development tag locally on the latest commit.
+      - name: Create a new development build tag locally
+        run: git tag 0.0.0
 
         # Dev builds are not published to distribution channels, only available in Github
       - name: Run GoReleaser (Development Build)
