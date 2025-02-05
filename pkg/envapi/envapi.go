@@ -34,9 +34,9 @@ type Deployment struct {
 	ServerHostname                 string   `json:"server_hostname"`
 	ServerPorts                    []int    `json:"server_ports"`
 	ServerTlsCert                  string   `json:"server_tls_cert"`
-	TenantEnvironment              string   `json:"tenant_environment"`
-	TenantOrganization             string   `json:"tenant_organization"`
-	TenantProject                  string   `json:"tenant_project"`
+	TenantEnvironment              string   `json:"tenant_environment"`  // deprecated
+	TenantOrganization             string   `json:"tenant_organization"` // deprecated
+	TenantProject                  string   `json:"tenant_project"`      // deprecated
 }
 
 type OAuth2Client struct {

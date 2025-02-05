@@ -38,20 +38,20 @@ func (o *LogoutOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 	// Check if we're logged in.
-	tokenSet, err := auth.LoadTokenSet()
+	sessionState, err := auth.LoadSessionState()
 	if err != nil {
 		return err
 	}
 
 	// If not logged in, just exit.
-	if tokenSet == nil {
+	if sessionState == nil {
 		log.Info().Msg("")
 		log.Info().Msg("Not logged in!")
 		return nil
 	}
 
-	// Delete the token set.
-	err = auth.DeleteTokenSet()
+	// Delete the session state.
+	err = auth.DeleteSessionState()
 	if err != nil {
 		return err
 	}

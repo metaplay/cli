@@ -2,7 +2,11 @@ package version
 
 import (
 	"context"
+	"fmt"
+	"strings"
+
 	"github.com/creativeprojects/go-selfupdate"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -51,9 +55,28 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	}
 
 	if found && latest.GreaterThan(AppVersion) {
-		stderrLogger.Info().Msg("*******************************************************************************")
-		stderrLogger.Info().Msgf("Metaplay CLI v%s is available! Your currently installed version is v%s.", latest.Version(), AppVersion)
-		stderrLogger.Info().Msg("Run 'metaplay update' to upgrade.")
-		stderrLogger.Info().Msg("*******************************************************************************")
+		topBorder := "╭──────────────────────────────────────────────────────────────────╮"
+		bottomBorder := "╰──────────────────────────────────────────────────────────────────╯"
+		emptyLine := "│                                                                  │"
+
+		padding := strings.Repeat(" ", 41-len(AppVersion)-len(latest.Version()))
+		updateText := fmt.Sprintf("│  %s %s → %s %s │",
+			"Update available!",
+			styles.RenderError(AppVersion),
+			styles.RenderSuccess(latest.Version()),
+			padding,
+		)
+
+		commandText := fmt.Sprintf("│  To update, run: %s %s │",
+			styles.RenderPrompt("metaplay update cli"),
+			strings.Repeat(" ", 27),
+		)
+
+		stderrLogger.Info().Msg(topBorder)
+		stderrLogger.Info().Msg(emptyLine)
+		stderrLogger.Info().Msg(updateText)
+		stderrLogger.Info().Msg(commandText)
+		stderrLogger.Info().Msg(emptyLine)
+		stderrLogger.Info().Msg(bottomBorder)
 	}
 }

@@ -304,7 +304,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
 	helmValues := map[string]interface{}{
-		"environment":       envConfig.Slug, // \todo use full name? need to allow more chars in Helm chart
+		"environment":       envConfig.HumanID, // \todo use full name? need to allow more chars in Helm chart
 		"environmentFamily": envConfig.getEnvironmentFamily(),
 		"config": map[string]interface{}{
 			"files": []string{

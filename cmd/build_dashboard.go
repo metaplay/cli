@@ -17,9 +17,10 @@ func init() {
 	o := BuildDashboardOpts{}
 
 	var buildDashboardCmd = &cobra.Command{
-		Use:   "dashboard [flags]",
-		Short: "Build the Vue.js LiveOps Dashboard",
-		Run:   runCommand(&o),
+		Use:     "dashboard [flags]",
+		Aliases: []string{"dash"},
+		Short:   "Build the Vue.js LiveOps Dashboard",
+		Run:     runCommand(&o),
 	}
 
 	buildCmd.AddCommand(buildDashboardCmd)

@@ -14,7 +14,7 @@ import (
 
 // Show the version info of the application.
 type VersionOpts struct {
-	flagJsonOutput bool
+	flagFormat string
 }
 
 var versionOpts = VersionOpts{}
@@ -29,15 +29,19 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 
 	flags := versionCmd.Flags()
-	flags.BoolVar(&versionOpts.flagJsonOutput, "json", false, "Output the version information as JSON")
+	flags.StringVar(&versionOpts.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
 }
 
 func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Validate format
+	if o.flagFormat != "text" && o.flagFormat != "json" {
+		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
+	}
 	return nil
 }
 
 func (o *VersionOpts) Run(cmd *cobra.Command) error {
-	if o.flagJsonOutput {
+	if o.flagFormat == "json" {
 		// Create structured version info with exported fields
 		type VersionInfo struct {
 			AppVersion string `json:"appVersion"`

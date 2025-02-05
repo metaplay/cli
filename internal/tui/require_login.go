@@ -57,5 +57,5 @@ func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
 	}
 
 	// Load the newly established token set.
-	return auth.LoadTokenSet()
+	return auth.LoadAndRefreshTokenSet()
 }

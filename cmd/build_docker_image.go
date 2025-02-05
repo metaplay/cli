@@ -31,9 +31,10 @@ func init() {
 	o := buildDockerImageOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "docker-image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
-		Short: "Build a deployable Docker image for the cloud",
-		Run:   runCommand(&o),
+		Use:     "docker-image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
+		Aliases: []string{"i", "image"},
+		Short:   "Build a deployable Docker image for the cloud",
+		Run:     runCommand(&o),
 		Long: trimIndent(`
 			Build a Docker image of your project to be deployed in the cloud.
 			The built image contains both the game server (C# project) and the LiveOps

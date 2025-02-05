@@ -130,15 +130,15 @@ func init() {
 	// Add command groups to root.
 	coreGroup := &cobra.Group{
 		ID:    "core",
-		Title: "Core Commands",
+		Title: "Core workflows:",
 	}
 	manageGroup := &cobra.Group{
 		ID:    "manage",
-		Title: "Management Commands",
+		Title: "Manage resources:",
 	}
 	otherGroup := &cobra.Group{
 		ID:    "other",
-		Title: "Other Commands",
+		Title: "Other:",
 	}
 	rootCmd.AddGroup(coreGroup, manageGroup, otherGroup)
 

@@ -112,7 +112,7 @@ func LoginWithBrowser(ctx context.Context) error {
 				}
 
 				// Save tokens securely
-				err = SaveTokenSet(tokenSet)
+				err = SaveSessionState(UserTypeHuman, tokenSet)
 				if err != nil {
 					http.Error(w, "Failed to save tokens: "+err.Error(), http.StatusInternalServerError)
 					return
@@ -202,7 +202,7 @@ func MachineLogin(clientId, clientSecret string) error {
 	}
 
 	// Save tokens securely
-	err = SaveTokenSet(&tokenSet)
+	err = SaveSessionState(UserTypeMachine, &tokenSet)
 	if err != nil {
 		return fmt.Errorf("Failed to save tokens: %w", err)
 	}

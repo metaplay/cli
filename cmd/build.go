@@ -9,8 +9,9 @@ import (
 
 // buildCmd is a group of commands to build backend components locally
 var buildCmd = &cobra.Command{
-	Use:   "build",
-	Short: "Build game server components locally",
+	Use:     "build",
+	Aliases: []string{"b"},
+	Short:   "Build game server components locally",
 }
 
 func init() {

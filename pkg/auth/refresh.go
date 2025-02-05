@@ -40,21 +40,22 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
-// fails, we just return an error.
+// fails, return an error.
 // \todo Forget the tokens if the refresh fails (due to keys already used)
 func LoadAndRefreshTokenSet() (*TokenSet, error) {
-	// Get current credentials.
-	tokenSet, err := LoadTokenSet()
+	// Get current session (including credentials).
+	sessionState, err := LoadSessionState()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
 	}
 
-	// If no tokens, we're logged in -- just return empty token set.
-	if tokenSet == nil {
+	// If no tokens, user is not logged in; return empty token set.
+	if sessionState == nil {
 		return nil, nil
 	}
 
 	// Resolve when access token expires.
+	tokenSet := sessionState.TokenSet
 	expiresAt, err := getAccessTokenExpiresAt(tokenSet)
 
 	// Compare expiration time with the current time
@@ -70,7 +71,7 @@ func LoadAndRefreshTokenSet() (*TokenSet, error) {
 			}
 
 			// Persist the refreshed tokens.
-			err = SaveTokenSet(tokenSet)
+			err = SaveSessionState(sessionState.UserType, tokenSet)
 			if err != nil {
 				return nil, fmt.Errorf("failed to persist refreshed tokens: %w", err)
 			}
@@ -117,8 +118,8 @@ func refreshTokenSet(tokenSet *TokenSet) (*TokenSet, error) {
 		log.Error().Msgf("Failed to refresh tokens. Response: %s", body)
 		log.Debug().Msg("Clearing local credentials...")
 
-		// Remove the tokens (something has gone badly wrong).
-		err = DeleteTokenSet()
+		// Remove the session state (something has gone badly wrong).
+		err = DeleteSessionState()
 		if err != nil {
 			return nil, fmt.Errorf("failed to delete bad tokens: %w", err)
 		}

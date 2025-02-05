@@ -17,7 +17,7 @@ import (
 
 type ListSecretsOpts struct {
 	flagShowValues bool
-	flagJsonOutput bool
+	flagFormat     string
 
 	argEnvironment string
 	argSecretName  string
@@ -36,7 +36,7 @@ func init() {
 			Show all user-created secrets in the target environment.
 
 			In the default output mode, the secrets are sanitized to avoid accidentally showing
-			them. Use --show-values flag to show the secrets. When using --json, the secret values
+			them. Use --show-values flag to show the secrets. When using --format=json, the secret values
 			are always shown.
 
 			Related commands:
@@ -45,27 +45,32 @@ func init() {
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: trimIndent(`
-			# Show all secrets with their values censored.
+			# Show all secrets in text format (default) with their values censored.
 			metaplay secrets list tough-falcons
 
 			# Show all secrets with their values shown.
 			metaplay secrets list tough-falcons --show-values
 
 			# Show all secrets in JSON format (with all Kubernetes metadata included).
-			metaplay secrets list tough-falcons --json
+			metaplay secrets list tough-falcons --format=json
 		`),
 	}
 
 	secretsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagShowValues, "show-values", false, "Show the values of the secrets. Only applies to default format.")
-	flags.BoolVar(&o.flagJsonOutput, "json", false, "Output values as JSON (with all Kubernetes metadata included). Values are always shown!")
+	flags.BoolVar(&o.flagShowValues, "show-values", false, "Show the values of the secrets. Only applies to text format.")
+	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'. JSON format always shows values.")
 }
 
 func (o *ListSecretsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
+	}
+
+	// Validate format
+	if o.flagFormat != "text" && o.flagFormat != "json" {
+		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
 	}
 
 	// Store arguments.
@@ -97,7 +102,7 @@ func (o *ListSecretsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Output the secrets in desired format.
-	if o.flagJsonOutput {
+	if o.flagFormat == "json" {
 		secretsJson, err := json.MarshalIndent(secrets, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)

@@ -14,7 +14,7 @@ import (
 )
 
 type ShowSecretOpts struct {
-	flagJsonOutput bool
+	flagFormat string
 
 	argEnvironment string
 	argSecretName  string
@@ -33,8 +33,8 @@ func init() {
 
 			Show the contents of a single user secret.
 
-			By default, a human-readable output format is uesd. When using in a script, use
-			the --json to output JSON format.
+			By default, a human-readable text format is used. When using in a script, use
+			the --format=json to output JSON format.
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
@@ -45,23 +45,31 @@ func init() {
 			# Show the contents of secret user-mysecret in environment tough-falcons.
 			metaplay secrets show tough-falcons user-mysecret
 
-			# Show the contents of secret in JSON.
-			metaplay secrets show tough-falcons user-mysecret --json
+			# Show the contents of secret in text format (default).
+			metaplay secrets show tough-falcons user-mysecret --format=text
+
+			# Show the contents of secret in JSON format.
+			metaplay secrets show tough-falcons user-mysecret --format=json
 
 			# Extract the value of the secret field named 'default' and decode the raw value of it.
-			metaplay secrets show tough-falcons user-mysecret --json | jq -r .data.default | base64 -d
+			metaplay secrets show tough-falcons user-mysecret --format=json | jq -r .data.default | base64 -d
 		`),
 	}
 
 	secretsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagJsonOutput, "json", false, "Show the values as JSON (with all Kubernetes metadata included).")
+	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'. JSON format includes all Kubernetes metadata.")
 }
 
 func (o *ShowSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 2 {
 		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
+	}
+
+	// Validate format
+	if o.flagFormat != "text" && o.flagFormat != "json" {
+		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
 	}
 
 	// Store arguments.
@@ -93,7 +101,7 @@ func (o *ShowSecretOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	if o.flagJsonOutput {
+	if o.flagFormat == "json" {
 		secretJson, err := json.MarshalIndent(secret, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)

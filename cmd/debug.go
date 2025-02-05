@@ -8,9 +8,10 @@ import (
 )
 
 var debugCmd = &cobra.Command{
-	Use:   "debug",
-	Short: "Debug and diagnostic commands",
-	Long:  "Commands for debugging and diagnostics of running game servers",
+	Use:     "debug",
+	Aliases: []string{"d"},
+	Short:   "Debug and diagnostic commands",
+	Long:    "Commands for debugging and diagnostics of running game servers",
 }
 
 func init() {

@@ -79,6 +79,13 @@ func (envConfig *ProjectEnvironmentConfig) getEnvironmentSpecificRuntimeOptionsF
 	return configFilePath
 }
 
+type ProjectFeaturesConfig struct {
+	Dashboard struct {
+		UseCustom bool   `yaml:"useCustom"`
+		RootDir   string `yaml:"rootDir"`
+	} `yaml:"dashboard"`
+}
+
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update validateProjectConfig().
 type ProjectConfig struct {
@@ -87,13 +94,14 @@ type ProjectConfig struct {
 	SdkRootDir     string `yaml:"sdkRootDir"`    // Relative path to the MetaplaySDK directory
 	BackendDir     string `yaml:"backendDir"`    // Relative path to the project-specific backend directory
 	SharedCodeDir  string `yaml:"sharedCodeDir"` // Relative path to the shared code directory
-	DashboardDir   string `yaml:"dashboardDir"`  // Relative path to the dashboard directory (non-empty indicates dashboard has been scaffolded)
 
 	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '8.0' or '9.0'
 
 	HelmChartRepository   string `yaml:"helmChartRepository"`   // Helm chart repository to use (defaults to 'https://charts.metaplay.dev')
 	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)
 	BotClientChartVersion string `yaml:"botClientChartVersion"` // Version of the bot client Helm chart to use (or 'latest-prerelease' for absolute latest)
+
+	Features ProjectFeaturesConfig `yaml:"features"`
 
 	Environments []ProjectEnvironmentConfig `yaml:"environments"`
 }
@@ -117,7 +125,7 @@ type MetaplayProject struct {
 }
 
 func (project *MetaplayProject) usesCustomDashboard() bool {
-	return project.config.DashboardDir != ""
+	return project.config.Features.Dashboard.UseCustom
 }
 
 func (project *MetaplayProject) getBuildRootDir() string {
@@ -146,10 +154,11 @@ func (project *MetaplayProject) getBotClientDir() string {
 }
 
 func (project *MetaplayProject) getDashboardDir() string {
-	if project.config.DashboardDir == "" {
-		log.Panic().Msgf("Trying to access project dashboard dir for a project that has no customized dashboard")
+	dashboardConfig := project.config.Features.Dashboard
+	if !dashboardConfig.UseCustom {
+		log.Panic().Msgf("Trying to access custom dashboard dir for a project that has no customized dashboard")
 	}
-	return filepath.Join(project.relativeDir, project.config.DashboardDir)
+	return filepath.Join(project.relativeDir, dashboardConfig.RootDir)
 }
 
 func (project *MetaplayProject) getServerValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
@@ -337,13 +346,6 @@ func validateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "sharedCodeDir", config.SharedCodeDir); err != nil {
 		return err
 	}
-	// Empty dashboardDir means no customized dashboard for the project
-	// \todo Consider a more explicit flag instead?
-	if config.DashboardDir != "" {
-		if err := validateProjectDir(projectDir, "dashboardDir", config.DashboardDir); err != nil {
-			return err
-		}
-	}
 
 	// Check project .NET version.
 	if config.DotnetRuntimeVersion == nil {
@@ -369,6 +371,23 @@ func validateProjectConfig(projectDir string, config *ProjectConfig) error {
 		return err
 	}
 
+	// Validate project features.
+
+	dashboardConfig := config.Features.Dashboard
+	if dashboardConfig.UseCustom {
+		if dashboardConfig.RootDir == "" {
+			return fmt.Errorf("when custom dashboard is used, rootDir must be specified")
+		}
+		if err := validateProjectDir(projectDir, "features.dashboard.rootDir", dashboardConfig.RootDir); err != nil {
+			return err
+		}
+	} else {
+		// if dashboardConfig.RootDir != "" {
+		// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
+		// }
+	}
+
+	// Validate environments.
 	for endNdx, envConfig := range config.Environments {
 		envName := envConfig.Name
 		if envConfig.Name == "" {
