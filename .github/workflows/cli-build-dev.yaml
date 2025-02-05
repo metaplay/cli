@@ -45,9 +45,10 @@ jobs:
         run: |
           git tag -l | xargs -r git tag -d
 
-      # Create the development tag locally on the latest commit.
       - name: Create a new development build tag locally
-        run: git tag 0.0.0
+        run: |
+          git tag 0.0.0
+          git push origin 0.0.0 --force
 
         # Dev builds are not published to distribution channels, only available in Github
       - name: Run GoReleaser (Development Build)
