@@ -6,6 +6,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"net/url"
 	"os"
@@ -79,21 +80,26 @@ func (envConfig *ProjectEnvironmentConfig) getEnvironmentSpecificRuntimeOptionsF
 	return configFilePath
 }
 
+// Configuration for dashboard ($.features.dashboard in metaplay-project.yaml).
+type DashboardFeatureConfig struct {
+	UseCustom bool   `yaml:"useCustom"`
+	RootDir   string `yaml:"rootDir"`
+}
+
+// Configuration for features ($.features in metaplay-project.yaml).
 type ProjectFeaturesConfig struct {
-	Dashboard struct {
-		UseCustom bool   `yaml:"useCustom"`
-		RootDir   string `yaml:"rootDir"`
-	} `yaml:"dashboard"`
+	Dashboard DashboardFeatureConfig `yaml:"dashboard"`
 }
 
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update validateProjectConfig().
 type ProjectConfig struct {
-	ProjectHumanID string `yaml:"projectID"`     // The project's humanID (as in the portal) -- \todo not yet implemented in portal
-	BuildRootDir   string `yaml:"buildRootDir"`  // Relative path to the docker build root directory
-	SdkRootDir     string `yaml:"sdkRootDir"`    // Relative path to the MetaplaySDK directory
-	BackendDir     string `yaml:"backendDir"`    // Relative path to the project-specific backend directory
-	SharedCodeDir  string `yaml:"sharedCodeDir"` // Relative path to the shared code directory
+	ProjectHumanID  string `yaml:"projectID"`       // The project's human ID (as in the portal)
+	BuildRootDir    string `yaml:"buildRootDir"`    // Relative path to the docker build root directory
+	SdkRootDir      string `yaml:"sdkRootDir"`      // Relative path to the MetaplaySDK directory
+	BackendDir      string `yaml:"backendDir"`      // Relative path to the project-specific backend directory
+	SharedCodeDir   string `yaml:"sharedCodeDir"`   // Relative path to the shared code directory
+	UnityProjectDir string `yaml:"unityProjectDir"` // Relative path to the Unity (client) project
 
 	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '8.0' or '9.0'
 
@@ -108,13 +114,16 @@ type ProjectConfig struct {
 
 // Represents MetaplaySDK/version.yaml.
 type MetaplayVersionMetadata struct {
-	SdkVersion               *version.Version `yaml:"sdkVersion"`
-	MinInfraVersion          *version.Version `yaml:"minInfraVersion"`
-	MinServerChartVersion    *version.Version `yaml:"minServerChartVersion"`
-	MinBotClientChartVersion *version.Version `yaml:"minBotClientChartVersion"`
-	MinDotnetSdkVersion      *version.Version `yaml:"minDotnetSdkVersion"` // Minimum .NET SDK version required to build projects.
-	RecommendedNodeVersion   *version.Version `yaml:"nodeVersion"`
-	RecommendedPnpmVersion   *version.Version `yaml:"pnpmVersion"`
+	SdkVersion                   *version.Version `yaml:"sdkVersion"`
+	DefaultDotnetRuntimeVersion  string           `yaml:"defaultDotnetRuntimeVersion"`
+	DefaultServerChartVersion    *version.Version `yaml:"defaultServerChartVersion"`
+	DefaultBotClientChartVersion *version.Version `yaml:"defaultBotClientChartVersion"`
+	MinInfraVersion              *version.Version `yaml:"minInfraVersion"`
+	MinServerChartVersion        *version.Version `yaml:"minServerChartVersion"`
+	MinBotClientChartVersion     *version.Version `yaml:"minBotClientChartVersion"`
+	MinDotnetSdkVersion          *version.Version `yaml:"minDotnetSdkVersion"` // Minimum .NET SDK version required to build projects.
+	RecommendedNodeVersion       *version.Version `yaml:"nodeVersion"`
+	RecommendedPnpmVersion       *version.Version `yaml:"pnpmVersion"`
 }
 
 // Metaplay project.
@@ -142,6 +151,10 @@ func (project *MetaplayProject) getBackendDir() string {
 
 func (project *MetaplayProject) getSharedCodeDir() string {
 	return filepath.Join(project.relativeDir, project.config.SharedCodeDir)
+}
+
+func (project *MetaplayProject) getUnityProjectDir() string {
+	return filepath.Join(project.relativeDir, project.config.UnityProjectDir)
 }
 
 // Return the relative directory to Backend/Server.
@@ -346,6 +359,9 @@ func validateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "sharedCodeDir", config.SharedCodeDir); err != nil {
 		return err
 	}
+	if err := validateProjectDir(projectDir, "unityProjectDir", config.UnityProjectDir); err != nil {
+		return err
+	}
 
 	// Check project .NET version.
 	if config.DotnetRuntimeVersion == nil {
@@ -452,30 +468,7 @@ func extractSDKVersionFromDockerfile(dockerfilePath string) (*version.Version, e
 	return version, err
 }
 
-// Load the MetaplaySDK/version.yaml containing metadata about the Metaplay SDK version,
-// e.g., required .NET and Node/pnpm minimum versions.
-func loadVersionMetadata(projectDir string, projectConfig *ProjectConfig) (*MetaplayVersionMetadata, error) {
-	// Read MetaplaySDK/version.yaml content.
-	sdkRootDir := filepath.Join(projectDir, projectConfig.SdkRootDir)
-	versionFilePath := filepath.Join(sdkRootDir, "version.yaml")
-	versionFileContent, readVersionErr := os.ReadFile(versionFilePath)
-	if readVersionErr != nil {
-		// Detect SDK version from Dockerfile.server (or bad MetaplaySDK directory if file not found).
-		sdkVersion, err := extractSDKVersionFromDockerfile(filepath.Join(sdkRootDir, "Dockerfile.server"))
-		if err != nil {
-			return nil, err
-		}
-
-		// Check that the SDK version is the minimum supported by the CLI.
-		minSupportedVersion, _ := version.NewVersion("32.0.0-aaaaa") // allow prerelease SDK versions
-		if sdkVersion.LessThan(minSupportedVersion) {
-			return nil, fmt.Errorf("minimum Metaplay SDK version supported by this CLI is Release 32, your project is using %s", sdkVersion)
-		}
-
-		// Generic error when we don't know what went wrong.
-		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %v", readVersionErr)
-	}
-
+func parseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, error) {
 	// Unmarshal the YAML content into the ProjectConfig struct.
 	var versionMetadata MetaplayVersionMetadata
 	err := yaml.Unmarshal(versionFileContent, &versionMetadata)
@@ -486,6 +479,15 @@ func loadVersionMetadata(projectDir string, projectConfig *ProjectConfig) (*Meta
 	// Make sure all versions are defined.
 	if versionMetadata.SdkVersion == nil {
 		return nil, fmt.Errorf("MetaplaySDK/version.yaml sdkVersion is nil")
+	}
+	if versionMetadata.DefaultDotnetRuntimeVersion == "" {
+		return nil, fmt.Errorf("MetaplaySDK/version.yaml defaultDotnetRuntimeVersion is missing")
+	}
+	if versionMetadata.DefaultServerChartVersion == nil {
+		return nil, fmt.Errorf("MetaplaySDK/version.yaml defaultServerChartVersion is nil")
+	}
+	if versionMetadata.DefaultBotClientChartVersion == nil {
+		return nil, fmt.Errorf("MetaplaySDK/version.yaml defaultServerChartVersion is nil")
 	}
 	if versionMetadata.MinInfraVersion == nil {
 		return nil, fmt.Errorf("MetaplaySDK/version.yaml minInfraVersion is nil")
@@ -509,6 +511,36 @@ func loadVersionMetadata(projectDir string, projectConfig *ProjectConfig) (*Meta
 	return &versionMetadata, nil
 }
 
+// Load the MetaplaySDK/version.yaml containing metadata about the Metaplay SDK version,
+// e.g., required .NET and Node/pnpm minimum versions.
+func loadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error) {
+	// Read MetaplaySDK/version.yaml content.
+	// If unable to read the file, try to determine the SDK version from the Dockerfile.server to
+	// identify earlier SDK packages.
+	versionFilePath := filepath.Join(sdkRootDir, "version.yaml")
+	log.Debug().Msgf("Read SDK version metadata from %s", versionFilePath)
+	versionFileContent, readVersionErr := os.ReadFile(versionFilePath)
+	if readVersionErr != nil {
+		// Detect SDK version from Dockerfile.server (or bad MetaplaySDK directory if file not found).
+		sdkVersion, err := extractSDKVersionFromDockerfile(filepath.Join(sdkRootDir, "Dockerfile.server"))
+		if err != nil {
+			return nil, err
+		}
+
+		// Check that the SDK version is the minimum supported by the CLI.
+		minSupportedVersion, _ := version.NewVersion("32.0.0-aaaaa") // allow prerelease SDK versions
+		if sdkVersion.LessThan(minSupportedVersion) {
+			return nil, fmt.Errorf("minimum Metaplay SDK version supported by this CLI is Release 32, your project is using %s", sdkVersion)
+		}
+
+		// Generic error when we don't know what went wrong.
+		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %v", readVersionErr)
+	}
+
+	// Parse and validate the 'version.yaml' contents.
+	return parseVersionMetadata(versionFileContent)
+}
+
 // Locate and load the project config file, based on the --project flag.
 func resolveProject() (*MetaplayProject, error) {
 	// Find the path with the project config file.
@@ -526,11 +558,19 @@ func resolveProject() (*MetaplayProject, error) {
 	log.Debug().Msgf("Project config loaded")
 
 	// Load version metadata from MetaplaySDK/version.yaml.
-	versionMetadata, err := loadVersionMetadata(projectDir, projectConfig)
+	versionMetadata, err := loadSdkVersionMetadata(filepath.Join(projectDir, projectConfig.SdkRootDir))
 	if err != nil {
 		return nil, err
 	}
 	log.Debug().Msgf("Version metadata loaded: %+v", versionMetadata)
+
+	return initMetaplayProject(projectDir, projectConfig, versionMetadata)
+}
+
+func initMetaplayProject(projectDir string, projectConfig *ProjectConfig, versionMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+	if filepath.IsAbs(projectDir) {
+		return nil, fmt.Errorf("projectDir must be relative, got '%s'", projectDir)
+	}
 
 	// Return project.
 	return &MetaplayProject{
@@ -598,7 +638,8 @@ func resolveProjectAndEnvironment(environment string) (*MetaplayProject, *Projec
 }
 
 // Find a matching environment from the project config.
-// For now, matching is done againts humanId and slugs, more to be added as needed.
+// The first environment that matches 'environment' is chosen.
+// The 'environment' argument can match either the humanID or the slug of the project.
 func (projectConfig *ProjectConfig) findEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
 	// Match by HumanID.
 	for _, envConfig := range projectConfig.Environments {
@@ -692,6 +733,98 @@ func validateEnvironmentID(id string) error {
 	}
 
 	return nil
+}
+
+var projectFileTemplate = template.Must(template.New("Metaplay project config").Parse(
+	`# Configure schema to use.
+# yaml-language-server: $schema={{.SdkRootDir}}/projectConfigSchema.json
+$schema: "{{.SdkRootDir}}/projectConfigSchema.json"
+
+# Configure project.
+projectID: {{.ProjectID}}
+buildRootDir: .
+sdkRootDir: {{.SdkRootDir}}
+backendDir: {{.BackendDir}}
+sharedCodeDir: {{.SharedCodeDir}}
+unityProjectDir: {{.UnityProjectDir}}
+
+# Specify .NET runtime version to build project for, only '<major>.<minor>'.
+dotnetRuntimeVersion: "{{.DotnetRuntimeVersion}}"
+
+# Specify Helm chart versions to use for server and bot deployments.
+serverChartVersion: {{.ServerChartVersion}}
+botClientChartVersion: {{.BotClientChartVersion}}
+
+# Customize Metaplay features used in the game.
+features:
+  # Configure LiveOps Dashboard.
+  dashboard:
+    useCustom: false
+
+# Project environments.
+environments:
+{{range .Environments}}  - name: {{.Name}}
+    slug: {{.Slug}}
+    humanId: {{.HumanID}}
+    type: {{.Type}}
+    stackDomain: {{.StackDomain}}
+{{end}}`))
+
+// \todo Clean this up
+func generateProjectConfigFile(
+	sdkMetadata *MetaplayVersionMetadata,
+	rootPath string,
+	pathToUnityProject string,
+	pathToMetaplaySdk string,
+	project *portalapi.ProjectInfo,
+	environments []portalapi.EnvironmentInfo) (*ProjectConfig, error) {
+	// Data for the template
+	data := struct {
+		SchemaPath            string
+		ProjectID             string
+		BuildRootDir          string
+		SdkRootDir            string
+		BackendDir            string
+		SharedCodeDir         string
+		UnityProjectDir       string
+		DotnetRuntimeVersion  string
+		ServerChartVersion    string
+		BotClientChartVersion string
+		Environments          []portalapi.EnvironmentInfo
+	}{
+		ProjectID:             project.HumanID,
+		BuildRootDir:          ".",
+		SdkRootDir:            pathToMetaplaySdk,
+		BackendDir:            "Backend",
+		SharedCodeDir:         filepath.ToSlash(filepath.Join(pathToUnityProject, "Assets", "SharedCode")),
+		UnityProjectDir:       pathToUnityProject,
+		DotnetRuntimeVersion:  sdkMetadata.DefaultDotnetRuntimeVersion,
+		ServerChartVersion:    sdkMetadata.DefaultServerChartVersion.String(),
+		BotClientChartVersion: sdkMetadata.DefaultBotClientChartVersion.String(),
+		Environments:          environments,
+	}
+
+	// Render the template.
+	var result strings.Builder
+	err := projectFileTemplate.Execute(&result, data)
+	if err != nil {
+		log.Panic().Msgf("Failed to render Metaplay project config file template: %v", err)
+	}
+
+	var projectConfig ProjectConfig
+	err = yaml.Unmarshal([]byte(result.String()), &projectConfig)
+	if err != nil {
+		log.Panic().Msgf("Failed to parse generated Metaplay project file: %v", err)
+	}
+
+	// Write metaplay-project.yaml.
+	configFilePath := filepath.Join(rootPath, "metaplay-project.yaml")
+	log.Debug().Msgf("Write project configuration to: %s", configFilePath)
+	if err := os.WriteFile(configFilePath, []byte(result.String()), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write project configuration file: %w", err)
+	}
+
+	return &projectConfig, nil
 }
 
 func isValidEnvironmentType(envType portalapi.EnvironmentType) bool {

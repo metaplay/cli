@@ -25,7 +25,7 @@ const metaplayLoadTestChartName = "metaplay-loadtest"
 // const metaplayBotClientPodLabelSelector = "app=botclient"
 
 // Deploy bots to the target environment with specified docker image version.
-type DeployBotsOpts struct {
+type deployBotClientsOpts struct {
 	flagHelmReleaseName     string
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
@@ -38,27 +38,28 @@ type DeployBotsOpts struct {
 }
 
 func init() {
-	o := DeployBotsOpts{}
+	o := deployBotClientsOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "bots ENVIRONMENT IMAGE_TAG [flags] [-- EXTRA_ARGS]",
-		Short: "[experimental] Deploy load testing bots into the target environment",
-		Run:   runCommand(&o),
+		Use:     "botclients ENVIRONMENT IMAGE_TAG [flags] [-- EXTRA_ARGS]",
+		Aliases: []string{"bots"},
+		Short:   "[preview] Deploy load testing bots into the target environment",
+		Run:     runCommand(&o),
 		Long: trimIndent(`
-			WARNING: This command is experimental and subject to change! It also still lacks some
+			PREVIEW: This command is in preview and subject to change! It also still lacks some
 			key functionality.
 
 			Deploy bots into the target cloud environment using the specified docker image version.
 
 			Related commands:
-			- 'metaplay build docker-image ...' to build the docker image.
+			- 'metaplay build image ...' to build the docker image.
 			- 'metaplay image push ...' to push the built image to the environment.
 			- 'metaplay debug logs ...' to view logs from the deployed server.
 			- 'metaplay debug run-shell ...' to debug a running server pod.
 		`),
 		Example: trimIndent(`
 			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
-			metaplay deploy bots tough-falcons 364cff09
+			metaplay deploy botclients tough-falcons 364cff09
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -71,7 +72,7 @@ func init() {
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
 }
 
-func (o *DeployBotsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *deployBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("at least two arguments must be provided, got %d", len(args))
 	}
@@ -96,7 +97,7 @@ func (o *DeployBotsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *DeployBotsOpts) Run(cmd *cobra.Command) error {
+func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {

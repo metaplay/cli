@@ -26,10 +26,10 @@ func init() {
 	// \todo specify payload
 	cmd := &cobra.Command{
 		Use:   "show ENVIRONMENT NAME [flags]",
-		Short: "[experimental] Show a user secret in the target environment",
+		Short: "[preview] Show a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
-			WARNING: This command is experimental and subject to change!
+			PREVIEW: This command is in preview and subject to change!
 
 			Show the contents of a single user secret.
 

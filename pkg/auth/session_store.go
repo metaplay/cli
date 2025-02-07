@@ -50,6 +50,23 @@ type PersistedSessionState struct {
 	EncodedTokenSet string   `json:"tokenSet"` // Encrypted tokenSet
 }
 
+// Represents the config.json persisted on disk.
+type PersistedConfig struct {
+	Sessions map[string]PersistedSessionState `json:"sessions"` // Persisted sessions, use sessionID as key.
+}
+
+func newPersistedConfig() *PersistedConfig {
+	return &PersistedConfig{
+		Sessions: make(map[string]PersistedSessionState),
+	}
+}
+
+// Get the session ID to use. Can use common.PortalBaseURL to force
+// unique sessions for each portal instance.
+func getSessionID() string {
+	return "default"
+}
+
 // Generate or retrieve the AES encryption key from the keyring.
 func getOrCreateAESKey() ([]byte, error) {
 	// On Linux, there is no reliably keyring available, so we resort to a fixed key.
@@ -122,9 +139,9 @@ func decrypt(data []byte, key []byte) ([]byte, error) {
 	return data, nil
 }
 
-// resolveSessionFilePath resolves the file path for storing the encrypted data.
+// resolvePersistedConfigFilePath resolves the path to the persisted configuration.
 // It follows platform-specific best practices for Linux, macOS, and Windows.
-func resolveSessionFilePath() (string, error) {
+func resolvePersistedConfigFilePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get user's home directory: %w", err)
@@ -149,20 +166,91 @@ func resolveSessionFilePath() (string, error) {
 	}
 
 	// Return the resolved file path
-	return filepath.Join(baseDir, "session.json"), nil
+	return filepath.Join(baseDir, "config.json"), nil
 }
 
-// SaveSessionState saves the current session state (with encrypted tokenSet)
-func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
-	key, err := getOrCreateAESKey()
+// Load the persisted config file on disk. Returns an empty default state if the
+// file does not exist.
+func loadPersistedConfig() (*PersistedConfig, error) {
+	// Resolve path to the file.
+	filePath, err := resolvePersistedConfigFilePath()
+	if err != nil {
+		return nil, err
+	}
+
+	// Read persisted config JSON from file
+	persistedConfigJSON, err := os.ReadFile(filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Create a new persisted config if file does not exist.
+			return newPersistedConfig(), nil
+		}
+		return nil, err
+	}
+
+	// Deserialize config.
+	var persistedConfig PersistedConfig
+	err = json.Unmarshal(persistedConfigJSON, &persistedConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal session state JSON: %w", err)
+	}
+
+	return &persistedConfig, nil
+}
+
+// Save the persisted config back to the file on disk.
+func savePersistedConfig(config *PersistedConfig) error {
+	// Resolve path to the file.
+	filePath, err := resolvePersistedConfigFilePath()
 	if err != nil {
 		return err
 	}
 
+	// Serialize the sessionState to JSON
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to serialize PersistedConfig: %w", err)
+	}
+
+	// Write sessionState to file.
+	err = os.WriteFile(filePath, configJSON, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to write session sate to file: %w", err)
+	}
+
+	return nil
+}
+
+// Load the persisted config from disk, apply the update, and then persist the config back to disk.
+func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
+	// Load config from disk.
+	configState, err := loadPersistedConfig()
+	if err != nil {
+		return err
+	}
+
+	// Apply the user-provided update.
+	err = updateFunc(configState)
+	if err != nil {
+		return err
+	}
+
+	// Persist back to disk.
+	return savePersistedConfig(configState)
+}
+
+// SaveSessionState saves the current session state (with encrypted tokenSet).
+func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
 	if err != nil {
 		return fmt.Errorf("failed to serialize TokenSet: %w", err)
+	}
+
+	// Get an encryption key.
+	key, err := getOrCreateAESKey()
+	if err != nil {
+		return err
 	}
 
 	// Encrypt the tokenSet
@@ -171,66 +259,47 @@ func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
 		return fmt.Errorf("failed to encrypt TokenSet: %w", err)
 	}
 
-	// Resolve file path
-	filePath, err := resolveSessionFilePath()
-	if err != nil {
-		return err
-	}
-
 	// Construct session state.
 	sessionState := PersistedSessionState{
 		UserType:        userType,
 		EncodedTokenSet: base64.StdEncoding.EncodeToString(encryptedTokenSet),
 	}
 
-	// Serialize the sessionState to JSON
-	sessionSateJSON, err := json.Marshal(sessionState)
-	if err != nil {
-		return fmt.Errorf("failed to serialize TokenSet: %w", err)
-	}
-
-	// Write sessionState to file.
-	err = os.WriteFile(filePath, sessionSateJSON, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to write session sate to file: %w", err)
-	}
+	// Update session state in persisted config.
+	updatePersistedConfig(func(config *PersistedConfig) error {
+		config.Sessions[getSessionID()] = sessionState
+		return nil
+	})
 
 	return nil
 }
 
 // LoadSessionState loads a session state and decrypts the tokenSet.
+// Returns nil if there is no existing session.
 func LoadSessionState() (*SessionState, error) {
-	key, err := getOrCreateAESKey()
+	// Load persisted config
+	persistedConfig, err := loadPersistedConfig()
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve session state file path
-	filePath, err := resolveSessionFilePath()
-	if err != nil {
-		return nil, err
-	}
-
-	// Read session state JSON from file
-	sessionStateJSON, err := os.ReadFile(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil // session state does not exist
-		}
-		return nil, fmt.Errorf("failed to read session state from file: %w", err)
-	}
-
-	// Deserialize session state.
-	var persistedState PersistedSessionState
-	err = json.Unmarshal(sessionStateJSON, &persistedState)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal session state JSON: %w", err)
+	// Get session state.
+	sessionState, found := persistedConfig.Sessions[getSessionID()]
+	if !found {
+		// Session not found, return nil (but no error).
+		return nil, nil
 	}
 
 	// Base64 decode to get encrypted tokenSet bytes.
-	tokenSetBytes, err := base64.StdEncoding.DecodeString(persistedState.EncodedTokenSet)
+	tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.EncodedTokenSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode encrypted tokenSet: %w", err)
+	}
+
+	// Get encryption key.
+	key, err := getOrCreateAESKey()
+	if err != nil {
+		return nil, err
 	}
 
 	// Decrypt the tokenSet
@@ -239,7 +308,7 @@ func LoadSessionState() (*SessionState, error) {
 		return nil, fmt.Errorf("failed to decrypt TokenSet: %w", err)
 	}
 
-	// Deserialize the JSON into a TokenSet
+	// Deserialize the JSON into a TokenSet.
 	var tokenSet TokenSet
 	err = json.Unmarshal(tokenSetJSON, &tokenSet)
 	if err != nil {
@@ -247,25 +316,16 @@ func LoadSessionState() (*SessionState, error) {
 	}
 
 	return &SessionState{
-		UserType: persistedState.UserType,
+		UserType: sessionState.UserType,
 		TokenSet: &tokenSet,
 	}, nil
 }
 
 // DeleteSessionState removes the current session state (i.e., signs out the user).
 func DeleteSessionState() error {
-	filePath, err := resolveSessionFilePath()
-	if err != nil {
-		return err
-	}
-
-	// Remove the session state file.
-	err = os.Remove(filePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No file to delete
-		}
-		return fmt.Errorf("failed to delete session state file: %w", err)
-	}
-	return nil
+	// Remove the session from the persisted config.
+	return updatePersistedConfig(func(config *PersistedConfig) error {
+		delete(config.Sessions, getSessionID())
+		return nil
+	})
 }

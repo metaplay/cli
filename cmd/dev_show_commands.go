@@ -22,6 +22,7 @@ func init() {
 		Run:   runCommand(&o),
 	}
 
+	cmd.Hidden = true
 	devCmd.AddCommand(cmd)
 }
 

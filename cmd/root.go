@@ -14,6 +14,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/muesli/termenv"
 	"github.com/rs/zerolog"
@@ -100,8 +101,21 @@ var rootCmd = &cobra.Command{
 
 		tui.SetInteractiveMode(isInteractive)
 
+		// Silence the boilerplate for commands where it makes no sense.
+		parentCmd := cmd.Parent()
+		isCompletion := parentCmd != nil && parentCmd.Name() == "completion"
+		isExecCredential := cmd.Name() == "kubernetes-execcredential"
+		if isCompletion || isExecCredential {
+			return
+		}
+
 		// Show CLI version & whether in interactive mode
 		stderrLogger.Info().Msgf(styles.RenderMuted("Metaplay CLI %s, %s"), version.AppVersion, modeStr)
+
+		// Log about non-default portal being used.
+		if common.PortalBaseURL != common.DefaultPortalBaseURL {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Portal base URL: %s"), common.PortalBaseURL)
+		}
 
 		// Check for new CLI version available.
 		if !skipAppVersionCheck && cmd.Use != "update" {
@@ -132,6 +146,10 @@ func init() {
 		ID:    "core",
 		Title: "Core workflows:",
 	}
+	projectGroup := &cobra.Group{
+		ID:    "project",
+		Title: "Manage project:",
+	}
 	manageGroup := &cobra.Group{
 		ID:    "manage",
 		Title: "Manage resources:",
@@ -140,19 +158,26 @@ func init() {
 		ID:    "other",
 		Title: "Other:",
 	}
-	rootCmd.AddGroup(coreGroup, manageGroup, otherGroup)
+	rootCmd.AddGroup(coreGroup, projectGroup, manageGroup, otherGroup)
 
-	authCmd.GroupID = "core"
-	deployCmd.GroupID = "core"
+	// Core workflows:
 	buildCmd.GroupID = "core"
-	runCmd.GroupID = "core"
 	debugCmd.GroupID = "core"
+	deployCmd.GroupID = "core"
+	devCmd.GroupID = "core"
 
+	// Manage project:
+	initCmd.GroupID = "project"
+	updateCmd.GroupID = "project"
+
+	// Manage resources:
 	getCmd.GroupID = "manage"
 	imageCmd.GroupID = "manage"
 	secretsCmd.GroupID = "manage"
-	updateCmd.GroupID = "manage"
+	removeCmd.GroupID = "manage"
 
+	// Other:
+	authCmd.GroupID = "other"
 	versionCmd.GroupID = "other"
 	rootCmd.SetHelpCommandGroupID("other")
 	rootCmd.SetCompletionCommandGroupID("other")

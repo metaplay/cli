@@ -14,34 +14,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Uninstall bots deployment from target environment.
-type UninstallBotsOpts struct {
+// Remove the Metaplay game server deployment from target environment.
+type removeGameServerOpts struct {
 	argEnvironment string
 }
 
 func init() {
-	o := UninstallBotsOpts{}
+	o := removeGameServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "remove-bots ENVIRONMENT [flags]",
-		Short: "[experimental] Remove the bot deployment from the target environment",
-		Run:   runCommand(&o),
+		Use:     "game-server ENVIRONMENT [flags]",
+		Aliases: []string{"server"},
+		Short:   "Remove the game server deployment from the target environment",
+		Run:     runCommand(&o),
 		Long: trimIndent(`
-			WARNING: This command is experimental and subject to change! It also still lacks some
+			PREVIEW: This command is in preview and subject to change! It also still lacks some
 			key functionality.
 
-			Remove the bot deployment from the target environment.
+			Remove the BotClient deployment from the target environment.
 		`),
 		Example: trimIndent(`
-			# Remove bots from environment tough-falcons.
-			metaplay deploy remove-bots tough-falcons
+			# Remove botclients from environment tough-falcons.
+			metaplay remove botclients tough-falcons
 		`),
 	}
 
-	deployCmd.AddCommand(cmd)
+	removeCmd.AddCommand(cmd)
 }
 
-func (o *UninstallBotsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *removeGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -50,7 +51,7 @@ func (o *UninstallBotsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *UninstallBotsOpts) Run(cmd *cobra.Command) error {
+func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
@@ -78,21 +79,23 @@ func (o *UninstallBotsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve all deployed game server Helm releases.
-	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayLoadTestChartName)
+	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayGameServerChartName)
 	if len(helmReleases) == 0 {
-		return fmt.Errorf("no existing bots deployment found")
+		log.Error().Msgf("No game server deployment found")
+		os.Exit(0)
 	}
 
 	// Uninstall all Helm releases (multiple releases should not happen but are possible).
 	for _, release := range helmReleases {
-		log.Info().Msgf("Uninstall Helm release %s...", release.Name)
+		log.Info().Msgf("Remove release %s...", release.Name)
 
 		err := helmutil.UninstallRelease(actionConfig, release)
 		if err != nil {
-			return fmt.Errorf("failed to uninstall Helm relese %s: %w", release.Name, err)
+			log.Error().Msgf("Failed to uninstall Helm release %s: %v", release.Name, err)
+			os.Exit(1)
 		}
 	}
 
-	log.Info().Msgf("Successfully uninstalled bots deployment")
+	log.Info().Msgf("Successfully removed game server deployment")
 	return nil
 }

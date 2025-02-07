@@ -22,7 +22,7 @@ func init() {
 		Run:   runCommand(&o),
 	}
 
-	runCmd.AddCommand(cmd)
+	devCmd.AddCommand(cmd)
 }
 
 func (o *RunDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {

@@ -19,14 +19,14 @@ const (
 )
 
 // Project support tier.
-type ProjectSupportTier string
+type SupportTier string
 
 const (
-	ProjectSupportTierCommunity       ProjectSupportTier = "community"
-	ProjectSupportTierNextBusinessDay ProjectSupportTier = "next-business-day"
-	ProjectSupportTier24_7            ProjectSupportTier = "24-7"
-	ProjectSupportTierTailored        ProjectSupportTier = "tailored"
-	ProjectSupportTierInternalTesting ProjectSupportTier = "testing-internal-only"
+	ProjectSupportTierCommunity       SupportTier = "community"
+	ProjectSupportTierNextBusinessDay SupportTier = "next-business-day"
+	ProjectSupportTier24_7            SupportTier = "24-7"
+	ProjectSupportTierTailored        SupportTier = "tailored"
+	ProjectSupportTierInternalTesting SupportTier = "testing-internal-only"
 )
 
 // Environment type (as specified by the portal).
@@ -45,31 +45,33 @@ type Client struct {
 	tokenSet   *auth.TokenSet
 }
 
-// PortalOrganizationInfo represents information about an organization received from the portal.
-type PortalOrganizationInfo struct {
-	UUID string `json:"id"`   // UUID of the organization.
-	Name string `json:"name"` // Name of the organization.
-	Slug string `json:"slug"` // Slugified name of the organization.
-	// \todo more data
+// Type returned by GET /api/v1/organizations/user-organizations.
+type OrganizationWithProjects struct {
+	UUID      string        `json:"id"`         // UUID of the organization.
+	Name      string        `json:"name"`       // Name of the organization.
+	Slug      string        `json:"slug"`       // Slugified name of the organization.
+	CreatedAt string        `json:"created_at"` // Timestamp when organization was created.
+	Role      string        `json:"role"`       // User's role in the organization.
+	Projects  []ProjectInfo `json:"projects"`   // Accessible projects within the organization.
 }
 
-// PortalProjectInfo represents information about a project received from the portal.
-type PortalProjectInfo struct {
-	UUID             string             `json:"id"`               // UUID of the project.
-	OrganizationUUID string             `json:"organization_id"`  // Owner organization UUID.
-	HumanID          string             `json:"human_id"`         // Immutable human-readable identified, eg, 'gorgeous-bear'.
-	Name             string             `json:"name"`             // Name of the project.
-	Slug             string             `json:"slug"`             // Slugified name of the project.
-	CreatedAt        string             `json:"created_at"`       // Timestamp when the project was created.
-	MaxDevEnvs       int                `json:"max_dev_envs"`     // Maximum number of development environments allowed.
-	MaxProdEnvs      int                `json:"max_prod_envs"`    // Maximum number of production environments allowed.
-	MaxStagingEnvs   int                `json:"max_staging_envs"` // Maximum number of staging environments allowed.
-	SupportTier      ProjectSupportTier `json:"support_tier"`     // Support tier for the project (e.g., 'community').
-	Type             ProjectTier        `json:"type"`             // Type of project (e.g., 'free').
+// ProjectInfo represents information about a project received from the portal.
+type ProjectInfo struct {
+	UUID             string      `json:"id"`               // UUID of the project.
+	OrganizationUUID string      `json:"organization_id"`  // Owner organization UUID.
+	HumanID          string      `json:"human_id"`         // Immutable human-readable identified, eg, 'gorgeous-bear'.
+	Name             string      `json:"name"`             // Name of the project.
+	Slug             string      `json:"slug"`             // Slugified name of the project.
+	CreatedAt        string      `json:"created_at"`       // Timestamp when the project was created.
+	MaxDevEnvs       int         `json:"max_dev_envs"`     // Maximum number of development environments allowed.
+	MaxProdEnvs      int         `json:"max_prod_envs"`    // Maximum number of production environments allowed.
+	MaxStagingEnvs   int         `json:"max_staging_envs"` // Maximum number of staging environments allowed.
+	SupportTier      SupportTier `json:"support_tier"`     // Support tier for the project (e.g., 'community').
+	Type             ProjectTier `json:"type"`             // Type of project (e.g., 'free').
 }
 
-// PortalEnvironmentInfo represents information about an environment received from the portal.
-type PortalEnvironmentInfo struct {
+// EnvironmentInfo represents information about an environment received from the portal.
+type EnvironmentInfo struct {
 	UID         string          `json:"id"`           // UUID of the environment
 	ProjectUID  string          `json:"project_id"`   // UUID of the project that this environment belongs to
 	Name        string          `json:"name"`         // User-provided name for the environment (can change)

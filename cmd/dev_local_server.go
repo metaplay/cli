@@ -11,15 +11,15 @@ import (
 )
 
 // Run the game server locally.
-type RunServerOpts struct {
+type devLocalServerOpts struct {
 	extraArgs []string
 }
 
 func init() {
-	o := RunServerOpts{}
+	o := devLocalServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "game-server [flags] [-- EXTRA_ARGS]",
+		Use:   "local-server [flags] [-- EXTRA_ARGS]",
 		Short: "Run the .NET game server locally",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -35,23 +35,23 @@ func init() {
 		`),
 		Example: trimIndent(`
 			# Run the server until stopped.
-			metaplay run game-server
+			metaplay dev local-server
 
 			# Pass additional arguments to the game server (dotnet run).
-			metaplay run game-server -- -ExitAfter=00:00:30
+			metaplay dev local-server -- -ExitAfter=00:00:30
 		`),
 	}
 
-	runCmd.AddCommand(cmd)
+	devCmd.AddCommand(cmd)
 }
 
-func (o *RunServerOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devLocalServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	o.extraArgs = args
 
 	return nil
 }
 
-func (o *RunServerOpts) Run(cmd *cobra.Command) error {
+func (o *devLocalServerOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {

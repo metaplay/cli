@@ -33,14 +33,14 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "run-shell ENVIRONMENT [POD] [flags]",
-		Short: "[experimental] Start a debug container targeting the specified pod",
+		Short: "[preview] Start a debug container targeting the specified pod",
 		Long: trimIndent(`
+			PREVIEW: This command is in preview and subject to change. For now, it also
+			requires 'kubectl' to be locally installed to work.
+
 			Start a debug container targeting a game server pod in the specified environment.
 			This command creates a Kubernetes ephemeral debug container that attaches to an existing
 			game server pod, allowing you to inspect and troubleshoot the running server.
-
-			WARNING: This is an experimental feature and interface is likely to change. For now,
-			it also requires 'kubectl' to be locally installed to work.
 
 			If multiple game server pods are running in the environment, you must specify which pod
 			to debug by providing its name as the second argument. If only one pod is running,

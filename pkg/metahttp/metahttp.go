@@ -63,13 +63,13 @@ func Request[TResponse any](c *Client, method string, url string, body interface
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
 	}
 
+	// Debug log the raw response.
+	// log.Info().Msgf("Raw response from %s: %s", url, string(response.Body()))
+
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
 		return result, fmt.Errorf("%s request to %s%s failed with status code %d", method, c.BaseURL, url, response.StatusCode())
 	}
-
-	// Debug log the raw response.
-	// log.Info().Msgf("Raw response from %s: %s", url, string(response.Body()))
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext
 	if _, isReturnTypeString := any(result).(string); isReturnTypeString {

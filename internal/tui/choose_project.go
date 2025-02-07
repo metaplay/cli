@@ -13,11 +13,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func chooseOrganization(organizations []portalapi.PortalOrganizationInfo, orgToProjects map[string][]portalapi.PortalProjectInfo) (*portalapi.PortalOrganizationInfo, error) {
+func chooseOrganization(organizations []portalapi.OrganizationWithProjects) (*portalapi.OrganizationWithProjects, error) {
 	// Create list items
 	items := make([]list.Item, len(organizations))
 	for ndx, org := range organizations {
-		projectCount := len(orgToProjects[org.UUID])
+		projectCount := len(org.Projects)
 		items[ndx] = compactListItem{
 			index:       ndx,
 			name:        org.Name,
@@ -26,7 +26,7 @@ func chooseOrganization(organizations []portalapi.PortalOrganizationInfo, orgToP
 	}
 
 	// Let the user choose the organization
-	chosen, err := chooseFromList("Select target organization:", items)
+	chosen, err := chooseFromList("Select Target Organization", items)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +34,7 @@ func chooseOrganization(organizations []portalapi.PortalOrganizationInfo, orgToP
 	return &organizations[chosen], nil
 }
 
-func chooseProject(projects []portalapi.PortalProjectInfo) (*portalapi.PortalProjectInfo, error) {
+func chooseProject(projects []portalapi.ProjectInfo) (*portalapi.ProjectInfo, error) {
 	// Create list items
 	items := make([]list.Item, len(projects))
 	for ndx, proj := range projects {
@@ -46,7 +46,7 @@ func chooseProject(projects []portalapi.PortalProjectInfo) (*portalapi.PortalPro
 	}
 
 	// Let the user choose the project
-	chosen, err := chooseFromList("Select target project:", items)
+	chosen, err := chooseFromList("Select Target Project", items)
 	if err != nil {
 		return nil, err
 	}
@@ -56,50 +56,34 @@ func chooseProject(projects []portalapi.PortalProjectInfo) (*portalapi.PortalPro
 
 // ChooseOrgAndProject fetches all the organizations and projects from the portal (that the user has
 // access to) and then displays an interactive list for the user to choose the project from.
-func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.PortalProjectInfo, error) {
+func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error) {
 	if !isInteractiveMode {
 		return nil, fmt.Errorf("interactive mode required for project selection")
 	}
 
-	// \todo replace the fetching with Teemu's upcoming API
-
 	// Get available organizations from the portal.
 	portalClient := portalapi.NewClient(tokenSet)
-	organizations, err := portalClient.FetchAllOrganizations()
+	orgsAndProjects, err := portalClient.FetchUserOrgsAndProjects()
 	if err != nil {
 		return nil, err
 	}
-	if len(organizations) == 0 {
+	if len(orgsAndProjects) == 0 {
 		return nil, fmt.Errorf("no accessible organizations found in the portal")
 	}
 
-	// Get available projects from the portal.
-	projects, err := portalClient.FetchAllProjects()
-	if err != nil {
-		return nil, err
-	}
-	if len(projects) == 0 {
-		return nil, fmt.Errorf("no accessible projects found in the portal")
-	}
-
-	// Pre-compute organization to projects mapping
-	orgToProjects := make(map[string][]portalapi.PortalProjectInfo)
-	for _, proj := range projects {
-		orgToProjects[proj.OrganizationUUID] = append(orgToProjects[proj.OrganizationUUID], proj)
-	}
-
 	// Let the user choose their organization.
-	chosenOrg, err := chooseOrganization(organizations, orgToProjects)
+	selectedOrg, err := chooseOrganization(orgsAndProjects)
 	if err != nil {
 		return nil, err
 	}
 
-	orgProjects := orgToProjects[chosenOrg.UUID]
+	// Must have at least one project in the organization.
+	orgProjects := selectedOrg.Projects
 	if len(orgProjects) == 0 {
 		return nil, fmt.Errorf("no projects found in the chosen organization")
 	}
 
-	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), chosenOrg.Name)
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedOrg.Name)
 
 	// Let the user choose the project (within the organization)
 	selectedProject, err := chooseProject(orgProjects)

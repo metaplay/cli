@@ -13,17 +13,17 @@ import (
 )
 
 // Run a built docker image locally.
-type RunDockerImageOpts struct {
+type devImageOpts struct {
 	argImageTag string
 	extraArgs   []string
 }
 
 func init() {
-	o := RunDockerImageOpts{}
+	o := devImageOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "docker-image IMAGE:TAG [flags] [-- EXTRA_ARGS]",
-		Short: "Run the docker image locally",
+		Use:   "image IMAGE:TAG [flags] [-- EXTRA_ARGS]",
+		Short: "Run a server Docker image locally",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
 			Run a pre-built docker image locally.
@@ -36,18 +36,18 @@ func init() {
 			- EXTRA_ARGS is passed directly to 'dotnet run'.
 
 			Related commands:
-			- 'metaplay build docker-image ...' to build an image to run.
+			- 'metaplay build image ...' to build a server Docker image.
 		`),
 		Example: trimIndent(`
 			# Run the docker image (until terminated).
-			metaplay run docker-image mygame:test
+			metaplay dev image mygame:test
 		`),
 	}
 
-	runCmd.AddCommand(cmd)
+	devCmd.AddCommand(cmd)
 }
 
-func (o *RunDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("at lest one argument must be provided, got %d", len(args))
 	}
@@ -58,7 +58,7 @@ func (o *RunDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *RunDockerImageOpts) Run(cmd *cobra.Command) error {
+func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	// project, err := resolveProject()
 	// if err != nil {

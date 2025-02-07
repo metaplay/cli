@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/metaplay/cli/pkg/auth"
 )
 
@@ -33,26 +32,22 @@ func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
 	}
 
 	// Confirm the login operation with the user.
-	p := tea.NewProgram(newConfirmDialog(
+	choice, err := DoConfirmDialog(
 		ctx,
 		"Login Required",
 		"Operation requires logging in to Metaplay cloud with your default browser.",
 		"Continue?",
-	))
-	m, err := p.Run()
-	if err != nil {
-		return nil, fmt.Errorf("failed to run confirmation dialog: %v", err)
-	}
+	)
 
 	// Handle the user's decision.
-	if m.(confirmDialog).choice {
-		// User wants to log in
+	if choice {
+		// User wants to log in.
 		err = auth.LoginWithBrowser(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to login: %v", err)
 		}
 	} else {
-		// User declined to log in
+		// User declined to log in.
 		return nil, fmt.Errorf("user cancelled the operation")
 	}
 

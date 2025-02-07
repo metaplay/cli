@@ -13,14 +13,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type RunBotClientOpts struct {
+type devBotClientOpts struct {
 	flagEnvironment string
 
 	extraArgs []string
 }
 
 func init() {
-	o := RunBotClientOpts{}
+	o := devBotClientOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "botclient [flags] [-- EXTRA_ARGS]",
@@ -33,35 +33,35 @@ func init() {
 			- EXTRA_ARGS gets passed to the 'dotnet run' executing the BotClient project.
 
 			Related commands:
-			- 'metaplay run server' runs the game server locally.
-			- 'metaplay run dashboard' runs the LiveOps Dashboard locally.
+			- 'metaplay dev local-server' runs the game server locally.
+			- 'metaplay dev dashboard' runs the LiveOps Dashboard locally.
 			- 'metaplay build botclient' builds the BotClient project.
 		`),
 		Example: trimIndent(`
 			# Run bots against the locally running server.
-			metaplay run botclient
+			metaplay dev botclient
 
 			# Run bots against the 'tough-falcons' cloud environment.
-			metaplay run botclient -e tough-falcons
+			metaplay dev botclient -e tough-falcons
 
 			# Pass additional arguments to 'dotnet run' of the BotClient project.
-			metaplay run botclient -- -MaxBots=5 -MaxBotId=20
+			metaplay dev botclient -- -MaxBots=5 -MaxBotId=20
 		`),
 	}
 
-	runCmd.AddCommand(cmd)
+	devCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
 	flags.StringVarP(&o.flagEnvironment, "environment", "e", "", "Environment (from metaplay-project.yaml) to run the bots against.")
 }
 
-func (o *RunBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 	o.extraArgs = args
 
 	return nil
 }
 
-func (o *RunBotClientOpts) Run(cmd *cobra.Command) error {
+func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {

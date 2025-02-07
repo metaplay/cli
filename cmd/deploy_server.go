@@ -34,6 +34,7 @@ type deployGameServerOpts struct {
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
+	flagCheckOnly           bool // Only perform the server status check, not the deployment itself. \todo separate to its own command?
 
 	argEnvironment  string
 	argImageNameTag string
@@ -44,9 +45,10 @@ func init() {
 	o := deployGameServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "game-server ENVIRONMENT [IMAGE:]TAG [flags] [-- EXTRA_ARGS]",
-		Short: "Deploy a game server into the target environment",
-		Run:   runCommand(&o),
+		Use:     "server ENVIRONMENT [IMAGE:]TAG [flags] [-- EXTRA_ARGS]",
+		Aliases: []string{"srv"},
+		Short:   "Deploy a server image into the target environment",
+		Run:     runCommand(&o),
 		Long: trimIndent(`
 			Deploy a game server into a cloud environment using the specified docker image version.
 
@@ -68,29 +70,29 @@ func init() {
 			- EXTRA_ARGS are passed directly to Helm.
 
 			Related commands:
-			- 'metaplay build docker-image ...' to build the docker image.
+			- 'metaplay build image ...' to build the docker image.
 			- 'metaplay image push ...' to push the built image to the environment.
 			- 'metaplay debug logs ...' to view logs from the deployed server.
 			- 'metaplay debug run-shell ...' to start a shell on a running server pod.
 		`),
 		Example: trimIndent(`
 			# Push the local image and deploy to the environment tough-falcons.
-			metaplay deploy game-server tough-falcons mygame:364cff09
+			metaplay deploy server tough-falcons mygame:364cff09
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy game-server tough-falcons 364cff09
+			metaplay deploy server tough-falcons 364cff09
 
 			# Pass extra arguments to Helm.
-			metaplay deploy game-server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy game-server tough-falcons mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server tough-falcons mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy game-server tough-falcons mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server tough-falcons mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy game-server tough-falcons mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server tough-falcons mygame:364cff09 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -101,6 +103,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.BoolVar(&o.flagCheckOnly, "check-only", false, "Use this flag to only perform the server status check (docker image push and deploy are skipped)")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -352,12 +355,22 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func() error {
+			// Skip push if --check-only is used.
+			if o.flagCheckOnly {
+				return nil
+			}
+
 			return pushDockerImage(cmd.Context(), o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
 		})
 	}
 
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func() error {
+		// Skip deploy if --check-only is used.
+		if o.flagCheckOnly {
+			return nil
+		}
+
 		_, err := helmutil.HelmUpgradeOrInstall(
 			actionConfig,
 			existingRelease,
@@ -381,7 +394,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msg(styles.RenderSuccess("✅ Game server successfully deployed"))
+	log.Info().Msg(styles.RenderSuccess("✅ Game server successfully deployed!"))
 	return nil
 }
 

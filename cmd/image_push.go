@@ -33,7 +33,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "push ENVIRONMENT IMAGE:TAG",
-		Short: "Push a built server Docker image to the environment's docker image repository",
+		Short: "Push a built server Docker image to the target environment's docker image repository",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
 			Push a built game server docker image to the target environment's image repository.
@@ -43,8 +43,8 @@ func init() {
 			- IMAGE:TAG must be a fully-formed docker image name and tag, e.g., 'mygame:1a27c25753'.
 
 			Related commands:
-			- The docker image can be built with 'metaplay build docker-image ...'.
-			- After pushing, the image can be deployed into the environment using 'metaplay deploy game-server ...'.
+			- The docker image can be built with 'metaplay build image ...'.
+			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
 		Example: trimIndent(`
 			# Push the docker image 'mygame:1a27c25753' into environment 'tough-falcons'.

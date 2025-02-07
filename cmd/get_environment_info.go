@@ -29,21 +29,18 @@ func init() {
 		Short:   "Get information about the target environment",
 		Run:     runCommand(&o),
 		Long: trimIndent(`
-		Get information about the target environment.
+			Get information about the target environment.
 
-		By default, displays the most relevant information in a human-readable text format.
-		Use --format=json to get the complete environment information in JSON format.
-	`),
+			By default, displays the most relevant information in a human-readable text format.
+			Use --format=json to get the complete environment information in JSON format.
+		`),
 		Example: trimIndent(`
-		# Show relevant environment information in text format
-		metaplay get environment-info tough-falcons
+			# Show relevant environment information in text format (default)
+			metaplay get environment-info tough-falcons
 
-		# Show relevant environment information in text format (explicit)
-		metaplay get environment-info tough-falcons --format=text
-
-		# Show complete environment information in JSON format
-		metaplay get environment-info tough-falcons --format=json
-	`),
+			# Show complete environment information in JSON format
+			metaplay get environment-info tough-falcons --format=json
+		`),
 	}
 
 	getCmd.AddCommand(cmd)

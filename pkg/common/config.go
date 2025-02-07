@@ -5,8 +5,10 @@ package common
 
 import "os"
 
+const DefaultPortalBaseURL = "https://portal.metaplay.dev"
+
 // Base URL of the Metaplay portal.
-var PortalBaseURL = "https://portal.metaplay.dev"
+var PortalBaseURL = DefaultPortalBaseURL
 
 func init() {
 	// Allow overriding portalBaseURL with an environment variable (for testing purposes)

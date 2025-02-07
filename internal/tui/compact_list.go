@@ -106,7 +106,7 @@ func (m compactListModel) View() string {
 
 func chooseFromList(title string, items []list.Item) (int, error) {
 	// Initialize list with custom delegate
-	list := list.New(items, compactListDelegate{}, 80, 20) // Set default width and height that will be updated by WindowSizeMsg
+	list := list.New(items, compactListDelegate{}, 80, 20)
 	list.SetShowTitle(false)
 	list.SetFilteringEnabled(false)
 	list.SetShowStatusBar(false)

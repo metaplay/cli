@@ -27,6 +27,29 @@ func init() {
 		Use:   "kubeconfig ENVIRONMENT [flags]",
 		Short: "Get the Kubernetes KubeConfig for the target environment",
 		Run:   runCommand(&o),
+		Long: trimIndent(`
+			Get the Kubernetes KubeConfig for accessing the target environment's cluster.
+
+			The KubeConfig can be generated with two different credential handling types:
+			- dynamic: Uses the Metaplay CLI to fetch fresh credentials when needed (recommended for human users)
+			- static: Embeds static credentials in the KubeConfig (recommended for CI/CD pipelines)
+
+			If no type is specified, it defaults to:
+			- dynamic for human users (logged in with refresh token)
+			- static for machine users (logged in with access token only)
+
+			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
+		`),
+		Example: trimIndent(`
+			# Get KubeConfig for environment tough-falcons with dynamic credentials
+			metaplay get kubeconfig tough-falcons --type=dynamic
+
+			# Get KubeConfig with static credentials and save to a file
+			metaplay get kubeconfig tough-falcons --type=static --output=kubeconfig.yaml
+
+			# Get KubeConfig with default credentials type (based on user type)
+			metaplay get kubeconfig tough-falcons
+		`),
 	}
 	getCmd.AddCommand(cmd)
 

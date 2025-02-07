@@ -5,6 +5,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/metaplay/cli/pkg/styles"
@@ -52,8 +53,13 @@ func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m confirmDialog) View() string {
 	// Render content
-	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
-	content += m.body + "\n\n"
+	content := ""
+	if m.title != "" {
+		content += "\n" + styles.RenderTitle(m.title) + "\n"
+	}
+	if m.body != "" {
+		content += "\n" + m.body + "\n\n"
+	}
 
 	// Show question until answered
 	if !m.quitting {
@@ -61,4 +67,20 @@ func (m confirmDialog) View() string {
 	}
 
 	return content
+}
+
+// Show the user a confirm dialog and wait for a yes/no answer.
+func DoConfirmDialog(ctx context.Context, title string, body string, question string) (bool, error) {
+	p := tea.NewProgram(newConfirmDialog(ctx, title, body, question))
+	m, err := p.Run()
+	if err != nil {
+		return false, fmt.Errorf("failed to run confirmation dialog: %v", err)
+	}
+
+	return m.(confirmDialog).choice, nil
+}
+
+// Show the user a one-line confirm question and wait for a yes/no answer.
+func DoConfirmQuestion(ctx context.Context, question string) (bool, error) {
+	return DoConfirmDialog(ctx, "", "", question)
 }

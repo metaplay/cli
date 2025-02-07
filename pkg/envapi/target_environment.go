@@ -87,11 +87,12 @@ type KubeExecCredential struct {
 }
 
 // Container for AWS access credentials into the target environment.
+// The JSON names match those used by AWS.
 type AWSCredentials struct {
-	AccessKeyId     string
-	SecretAccessKey string
-	SessionToken    string
-	Expiration      string
+	AccessKeyID     string `json:"AccessKeyId"`
+	SecretAccessKey string `json:"SecretAccessKey"`
+	SessionToken    string `json:"SessionToken"`
+	Expiration      string `json:"Expiration"`
 }
 
 // Container for access information to an environment's docker registry.
@@ -213,7 +214,7 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	if err != nil {
 		return nil, err
 	}
-	if awsCredentials.AccessKeyId == "" {
+	if awsCredentials.AccessKeyID == "" {
 		return nil, fmt.Errorf("AWS credentials missing AccessKeyId")
 	}
 	if awsCredentials.SecretAccessKey == "" {
@@ -237,7 +238,7 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *EnvironmentDet
 		config.WithRegion(envDetails.Deployment.AwsRegion),
 		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{
-				AccessKeyID:     awsCredentials.AccessKeyId,
+				AccessKeyID:     awsCredentials.AccessKeyID,
 				SecretAccessKey: awsCredentials.SecretAccessKey,
 				SessionToken:    awsCredentials.SessionToken,
 			}, nil

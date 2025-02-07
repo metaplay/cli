@@ -29,10 +29,10 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "create ENVIRONMENT NAME [flags]",
-		Short: "[experimental] Create a user secret in the target environment",
+		Short: "[preview] Create a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
-			WARNING: This command is experimental and subject to change!
+			PREVIEW: This command is in preview and subject to change!
 
 			Create a user secret in the target environment with the given name and payload.
 

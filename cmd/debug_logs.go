@@ -52,7 +52,7 @@ func init() {
 			- ENVIRONMENT must be one that is declared in the environments list in metaplay-project.yaml.
 
 			Related commands:
-			- 'metaplay deploy game-server ...' to deploy a game server into the cloud.
+			- 'metaplay deploy server ...' to deploy a game server into the cloud.
 		`),
 		Example: trimIndent(`
 			# Show logs from environment 'tough-falcons' up until now.

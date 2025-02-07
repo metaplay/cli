@@ -18,7 +18,7 @@ func init() {
 	o := BuildServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "game-server [flags]",
+		Use:   "local-server [flags]",
 		Short: "Build the game server .NET project",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -32,8 +32,8 @@ func init() {
 			Related commands:
 			- 'metaplay build dashboard' builds the LiveOps Dashboard.
 			- 'metaplay build botclient' builds the BotClient project.
-			- 'metaplay build docker-image' builds the docker image with the server and dashboard.
-			- 'metaplay run game-server' runs the game server locally.
+			- 'metaplay build image' builds a Docker image with the server and dashboard.
+			- 'metaplay dev local-server' runs the game server locally.
 		`),
 		Example: trimIndent(`
 			# Build the game server

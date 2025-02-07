@@ -14,24 +14,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Remove the Metaplay game server deployment from target environment.
-type removeGameServerOpts struct {
+// Uninstall bots deployment from target environment.
+type removeBotClientsOpts struct {
 	argEnvironment string
 }
 
 func init() {
-	o := removeGameServerOpts{}
+	o := removeBotClientsOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "remove-game-server ENVIRONMENT [flags]",
-		Short: "Remove the game server deployment from the target environment",
-		Run:   runCommand(&o),
+		Use:     "botclients ENVIRONMENT [flags]",
+		Aliases: []string{"bots"},
+		Short:   "[preview] Remove the BotClient deployment from the target environment",
+		Run:     runCommand(&o),
+		Long: trimIndent(`
+			PREVIEW: This command is in preview and subject to change! It also still lacks some
+			key functionality.
+
+			Remove the BotClient deployment from the target environment.
+		`),
+		Example: trimIndent(`
+			# Remove botclients from environment tough-falcons.
+			metaplay remove botclients tough-falcons
+		`),
 	}
 
-	deployCmd.AddCommand(cmd)
+	removeCmd.AddCommand(cmd)
 }
 
-func (o *removeGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *removeBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
 	}
@@ -40,7 +51,7 @@ func (o *removeGameServerOpts) Prepare(cmd *cobra.Command, args []string) error 
 	return nil
 }
 
-func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
+func (o *removeBotClientsOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
@@ -68,23 +79,21 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve all deployed game server Helm releases.
-	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayGameServerChartName)
+	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayLoadTestChartName)
 	if len(helmReleases) == 0 {
-		log.Error().Msgf("No game server deployment found")
-		os.Exit(0)
+		return fmt.Errorf("no existing bots deployment found")
 	}
 
 	// Uninstall all Helm releases (multiple releases should not happen but are possible).
 	for _, release := range helmReleases {
-		log.Info().Msgf("Remove release %s...", release.Name)
+		log.Info().Msgf("Uninstall Helm release %s...", release.Name)
 
 		err := helmutil.UninstallRelease(actionConfig, release)
 		if err != nil {
-			log.Error().Msgf("Failed to uninstall Helm release %s: %v", release.Name, err)
-			os.Exit(1)
+			return fmt.Errorf("failed to uninstall Helm relese %s: %w", release.Name, err)
 		}
 	}
 
-	log.Info().Msgf("Successfully removed game server deployment")
+	log.Info().Msgf("Successfully uninstalled bots deployment")
 	return nil
 }

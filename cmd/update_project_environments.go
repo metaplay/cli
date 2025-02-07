@@ -19,11 +19,11 @@ import (
 
 // Command for updating the 'environments' section in the 'metaplay-project.yaml'. The environments
 // infos are fetched from the portal using the projectID (human ID) specified in the YAML file.
-type updateProjectEnvironments struct {
+type updateProjectEnvironmentsOpts struct {
 }
 
 func init() {
-	o := &updateProjectEnvironments{}
+	o := &updateProjectEnvironmentsOpts{}
 
 	cmd := &cobra.Command{
 		Use:     "project-environments [flags]",
@@ -34,7 +34,7 @@ func init() {
 			Update the environments in the metaplay-project.yaml from the Metaplay Portal.
 
 			Related commands:
-			- 'metaplay deploy game-server' ...
+			- 'metaplay deploy server' ...
 		`),
 		Example: trimIndent(`
 			# Update the project environments from the portal.
@@ -45,11 +45,11 @@ func init() {
 	updateCmd.AddCommand(cmd)
 }
 
-func (o *updateProjectEnvironments) Prepare(cmd *cobra.Command, args []string) error {
+func (o *updateProjectEnvironmentsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *updateProjectEnvironments) Run(cmd *cobra.Command) error {
+func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	// Ensure the user is logged in
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
 	if err != nil {
@@ -95,7 +95,7 @@ func (o *updateProjectEnvironments) Run(cmd *cobra.Command) error {
 // Update the metaplay-project.yaml to be up-to-date with newEnvironments.
 // Use goccy/go-yaml for minimally editing the file, i.e., to retain ordering, comments,
 // and whitespace in the untouched parts of the file.
-func (o *updateProjectEnvironments) updateProjectConfigEnvironments(project *MetaplayProject, newPortalEnvironments []portalapi.PortalEnvironmentInfo) error {
+func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project *MetaplayProject, newPortalEnvironments []portalapi.EnvironmentInfo) error {
 	// Load the existing YAML file
 	projectConfigFilePath := filepath.Join(project.relativeDir, projectConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)

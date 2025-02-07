@@ -98,13 +98,13 @@ directory with `-p <pathToProject>`.
 1. Build the game server docker image.
 
     ```bash
-    metaplay build docker-image <image>:<tag>
+    metaplay build image <image>:<tag>
     ```
 
 2. Deploy the game server to an environment:
 
     ```bash
-    metaplay deploy game-server <environment> <image>:<tag>
+    metaplay deploy server <environment> <image>:<tag>
     ```
 
     The command also pushes the docker image to the environment's registry.
@@ -133,7 +133,7 @@ For detailed instructions on how to set up your CI system, see the [Getting Star
 If you have any issues running a command, give it the `--verbose` flag to get more detailed output on what is happening, e.g.:
 
 ```bash
-metaplay deploy game-server <environment> <image>:<tag> --verbose
+metaplay deploy server <environment> <image>:<tag> --verbose
 ```
 
 If you have a paid support contract with Metaplay, you can open a ticket on the [Metaplay portal's support page](https://portal.metaplay.dev/orgs/metaplay/support).

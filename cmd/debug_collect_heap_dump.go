@@ -41,16 +41,16 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "collect-heap-dump ENVIRONMENT [POD] [flags]",
-		Short: "[experimental] Collect a heap dump from a running server pod",
+		Short: "[preview] Collect a heap dump from a running server pod",
 		Long: trimIndent(`
+			PREVIEW: This is a preview feature and interface is likely to change. For now,
+			it also requires 'kubectl' to be locally installed to work.
+
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump.
 
 			WARNING: This operation is very intrusive as it completely freeze the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
-
-			WARNING: This is an experimental feature and interface is likely to change. For now,
-			it also requires 'kubectl' to be locally installed to work.
 
 			This command will create a debug container, collect the heap dump using dotnet-gcdump,
 			and copy it back to your local machine.

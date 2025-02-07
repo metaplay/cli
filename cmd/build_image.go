@@ -31,41 +31,44 @@ func init() {
 	o := buildDockerImageOpts{}
 
 	cmd := &cobra.Command{
-		Use:     "docker-image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
-		Aliases: []string{"i", "image"},
-		Short:   "Build a deployable Docker image for the cloud",
+		Use:     "image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
+		Aliases: []string{"i"},
+		Short:   "Build a Docker image of the server components that can be deployed in the cloud",
 		Run:     runCommand(&o),
 		Long: trimIndent(`
 			Build a Docker image of your project to be deployed in the cloud.
-			The built image contains both the game server (C# project) and the LiveOps
-			Dashboard.
+			The built image contains both the game server (C# project), the LiveOps
+			Dashboard, and the BotClient.
 
 			Arguments:
 			- IMAGE:TAG (optional) is the fully-qualified Docker image, e.g., 'mygame:1a27c25753' (default: '<projectID>:<timestamp>').
 			- EXTRA_ARGS are passed to the Docker build as-is.
 
 			Related commands:
-			- 'metaplay deploy game-server ...' to push and deploy the game server image into a cloud environment.
+			- 'metaplay deploy server ...' to push and deploy the game server image into a cloud environment.
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: trimIndent(`
-			# Build Docker image locally to test that it builds.
-			metaplay build docker-image mygame:364cff09
+			# Build Docker image, produces image named '<projectID>:<timestamp>'.
+			metaplay build image
+
+			# Specify only the tag, produces image named '<projectID>:364cff09'.
+			metaplay build image 364cff09
 
 			# Build a project from another directory.
-			metaplay -p ../MyProject build docker-image mygame:364cff09
+			metaplay -p ../MyProject build image
 
 			# Build docker image with commit ID and build number specified.
-			metaplay build docker-image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
+			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
 
 			# Build using docker's BuildKit engine (in case buildx isn't available).
-			metaplay build docker-image mygame:364cff09 --engine=buildkit
+			metaplay build image mygame:364cff09 --engine=buildkit
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build docker-image mygame:364cff09 --platform=arm64
+			metaplay build image mygame:364cff09 --platform=arm64
 
 			# Pass extra arguments to the docker build.
-			metaplay build docker-image mygame:364cff09 -- --build-arg FOO=BAR
+			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
 		`),
 	}
 
@@ -83,8 +86,12 @@ func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error 
 	// Handle image name.
 	if len(args) == 0 {
 		o.argImageName = "<projectID>:<timestamp>"
-	} else {
+	} else if strings.Contains(args[0], ":") {
+		// Full name specified, use as-is
 		o.argImageName = args[0]
+	} else {
+		// Only tag specified, prefix with projectID
+		o.argImageName = fmt.Sprintf("<projectID>:%s", args[0])
 	}
 
 	// Store extra args.
@@ -108,6 +115,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve image name to use: fill in <timestamp> with current unix time
 	// and <projectID> with the project's slug.
+	log.Debug().Msgf("Image name template: %s", o.argImageName)
 	imageName := strings.Replace(o.argImageName, "<timestamp>", fmt.Sprintf("%d", time.Now().Unix()), -1)
 	imageName = strings.Replace(imageName, "<projectID>", project.config.ProjectHumanID, -1)
 
@@ -297,7 +305,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("✅ %s %s", styles.RenderSuccess("Successfully built docker image"), styles.RenderTechnical(imageName))
 	log.Info().Msg("")
 	log.Info().Msg("You can deploy the image to a cloud environment using:")
-	log.Info().Msgf(styles.RenderTechnical("  metaplay deploy game-server ENVIRONMENT %s"), imageName)
+	log.Info().Msgf(styles.RenderTechnical("  metaplay deploy server ENVIRONMENT %s"), imageName)
 
 	envsIDs := []string{}
 	for _, env := range project.config.Environments {

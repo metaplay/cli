@@ -7,11 +7,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var devCmd = &cobra.Command{
-	Use:   "dev",
-	Short: "Commands for local development",
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Initialize project features",
 }
 
 func init() {
-	rootCmd.AddCommand(devCmd)
+	rootCmd.AddCommand(initCmd)
 }

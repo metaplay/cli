@@ -20,7 +20,31 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "botclient [flags]",
 		Short: "Build the BotClient .NET project",
-		Run:   runCommand(&o),
+		Long: trimIndent(`
+			Build the BotClient .NET project using the .NET SDK.
+
+			This command:
+			- Verifies the required .NET SDK version is installed
+			- Builds the BotClient project using 'dotnet build'
+
+			The BotClient is used for automated testing and load testing of the game server.
+			It simulates real player behavior by running multiple bot instances that connect
+			to the server and perform various actions.
+
+			Related commands:
+			- 'metaplay deploy botclients ...' to deploy bot clients to a cloud environment
+			- 'metaplay dev botclient ...' to run the bot client locally
+			- 'metaplay remove botclients ...' to remove bot clients from an environment
+			- 'metaplay debug logs ...' to view bot client logs in an environment
+		`),
+		Example: trimIndent(`
+			# Build the BotClient project
+			metaplay build botclient
+
+			# Build and then run the bot client locally
+			metaplay build botclient && metaplay dev botclient
+		`),
+		Run: runCommand(&o),
 	}
 
 	buildCmd.AddCommand(cmd)

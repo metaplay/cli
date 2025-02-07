@@ -21,7 +21,7 @@ type TokenSet struct {
  * @see https://openid.net/specs/openid-connect-core-1_0.html#UserInfo
  */
 type UserInfoResponse struct {
-	Subject    string   `json:"sub"`
+	Subject    string   `json:"sub"` // Same as account.provideAccountId (not portal userID)
 	Email      string   `json:"email"`
 	Picture    string   `json:"picture"`
 	GivenName  string   `json:"given_name"`
