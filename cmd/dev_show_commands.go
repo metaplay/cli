@@ -6,6 +6,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/spf13/cobra"
 )
 
@@ -42,7 +43,7 @@ func (o *showCommandsOpts) Run(cmd *cobra.Command) error {
 
 // printCommandTree recursively prints the command hierarchy
 func printCommandTree(cmd *cobra.Command, indent string) {
-	fmt.Printf("%s- %s: %s\n", indent, cmd.Name(), cmd.Short)
+	fmt.Printf("%s%s: %s\n", indent, styles.RenderTechnical(cmd.Name()), cmd.Short)
 	for _, subCmd := range cmd.Commands() {
 		printCommandTree(subCmd, indent+"  ")
 	}

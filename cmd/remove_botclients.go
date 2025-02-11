@@ -72,7 +72,7 @@ func (o *removeBotClientsOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Resolved kubeconfig to access environment")
 
 	// Configure Helm.
-	actionConfig, err := helmutil.NewActionConfig(*kubeconfigPayload, envConfig.getKubernetesNamespace())
+	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
 		log.Error().Msgf("Failed to initialize Helm config: %v", err)
 		os.Exit(1)

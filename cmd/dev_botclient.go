@@ -33,7 +33,7 @@ func init() {
 			- EXTRA_ARGS gets passed to the 'dotnet run' executing the BotClient project.
 
 			Related commands:
-			- 'metaplay dev local-server' runs the game server locally.
+			- 'metaplay dev server' runs the game server locally.
 			- 'metaplay dev dashboard' runs the LiveOps Dashboard locally.
 			- 'metaplay build botclient' builds the BotClient project.
 		`),
@@ -78,7 +78,7 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 
 		// Resolve target environment from metaplay-project.yaml.
-		envConfig, err := project.config.findEnvironmentConfig(o.flagEnvironment)
+		envConfig, err := project.Config.FindEnvironmentConfig(o.flagEnvironment)
 		if err != nil {
 			return err
 		}
@@ -102,12 +102,12 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.versionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
 	// Resolve botclient path.
-	botClientPath := project.getBotClientDir()
+	botClientPath := project.GetBotClientDir()
 
 	// Build the BotClient project
 	if err := execChildInteractive(botClientPath, "dotnet", []string{"build"}); err != nil {

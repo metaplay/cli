@@ -55,7 +55,7 @@ func init() {
 			- 'metaplay build image ...' to build the docker image.
 			- 'metaplay image push ...' to push the built image to the environment.
 			- 'metaplay debug logs ...' to view logs from the deployed server.
-			- 'metaplay debug run-shell ...' to debug a running server pod.
+			- 'metaplay debug shell ...' to debug a running server pod.
 		`),
 		Example: trimIndent(`
 			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
@@ -126,7 +126,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
-		helmChartVersion := project.config.ServerChartVersion
+		helmChartVersion := project.Config.ServerChartVersion
 		if o.flagHelmChartVersion != "" {
 			helmChartVersion = o.flagHelmChartVersion
 		}
@@ -159,7 +159,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
-		helmChartRepo := coalesceString(project.config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
+		helmChartRepo := coalesceString(project.Config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
 		minChartVersion, _ := version.NewVersion("0.4.0")
 		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayLoadTestChartName, minChartVersion, chartVersionConstraints)
 		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayLoadTestChartName, useHelmChartVersion)
@@ -170,7 +170,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Helm chart path: %s", styles.RenderTechnical(helmChartPath))
 
 	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.getBotsValuesFiles(envConfig)
+	valuesFiles := project.GetBotsValuesFiles(envConfig)
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
@@ -180,7 +180,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Resolved kubeconfig to access environment")
 
 	// Configure Helm.
-	actionConfig, err := helmutil.NewActionConfig(*kubeconfigPayload, envConfig.getKubernetesNamespace())
+	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
 		return fmt.Errorf("failed to initialize Helm config: %v", err)
 	}
@@ -229,7 +229,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 		_, err = helmutil.HelmUpgradeOrInstall(
 			actionConfig,
 			existingRelease,
-			envConfig.getKubernetesNamespace(),
+			envConfig.GetKubernetesNamespace(),
 			o.flagHelmReleaseName,
 			helmChartPath,
 			helmValues,

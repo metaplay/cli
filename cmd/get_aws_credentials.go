@@ -113,10 +113,10 @@ func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
 		}
 		fmt.Println(string(output))
 	case "text":
-		fmt.Printf("AWS Access Key ID:     %s\n", credentials.AccessKeyID)
-		fmt.Printf("AWS Secret Access Key: %s\n", credentials.SecretAccessKey)
+		log.Info().Msgf("AWS Access Key ID:     %s", credentials.AccessKeyID)
+		log.Info().Msgf("AWS Secret Access Key: %s", credentials.SecretAccessKey)
 		if credentials.SessionToken != "" {
-			fmt.Printf("AWS Session Token:     %s\n", credentials.SessionToken)
+			log.Info().Msgf("AWS Session Token:     %s", credentials.SessionToken)
 		}
 	}
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -119,7 +120,7 @@ func (o *initProjectConfigOpts) Prepare(cmd *cobra.Command, args []string) error
 
 	// Validate project ID (if specified)
 	if o.flagProjectID != "" {
-		if err := validateProjectID(o.flagProjectID); err != nil {
+		if err := metaproj.ValidateProjectID(o.flagProjectID); err != nil {
 			return err
 		}
 	}
@@ -140,7 +141,7 @@ func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check if metaplay-project.yaml already exists
-	configFilePath := filepath.Join(o.projectPath, projectConfigFileName)
+	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 	if _, err := os.Stat(configFilePath); err == nil {
 		return fmt.Errorf("project config file %s already exists", configFilePath)
 	}
@@ -223,7 +224,7 @@ func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Generate the metaplay-project.yaml in project root.
-	_, err = generateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, projectConfig.metaplaySdkPath, targetProject, environments)
+	_, err = metaproj.GenerateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, projectConfig.metaplaySdkPath, targetProject, environments)
 	if err != nil {
 		return err
 	}

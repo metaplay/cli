@@ -57,8 +57,6 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	credential, err := targetEnv.GetKubeExecCredential()
 	if err != nil {
 		return err
-		// log.Error().Msgf("Failed to get environment k8s execcredential: %v", err)
-		// os.Exit(1)
 	}
 
 	log.Info().Msg(*credential)

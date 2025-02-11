@@ -11,15 +11,15 @@ import (
 )
 
 // Run the game server locally.
-type devLocalServerOpts struct {
+type devServerOpts struct {
 	extraArgs []string
 }
 
 func init() {
-	o := devLocalServerOpts{}
+	o := devServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "local-server [flags] [-- EXTRA_ARGS]",
+		Use:   "server [flags] [-- EXTRA_ARGS]",
 		Short: "Run the .NET game server locally",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -35,23 +35,23 @@ func init() {
 		`),
 		Example: trimIndent(`
 			# Run the server until stopped.
-			metaplay dev local-server
+			metaplay dev server
 
 			# Pass additional arguments to the game server (dotnet run).
-			metaplay dev local-server -- -ExitAfter=00:00:30
+			metaplay dev server -- -ExitAfter=00:00:30
 		`),
 	}
 
 	devCmd.AddCommand(cmd)
 }
 
-func (o *devLocalServerOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	o.extraArgs = args
 
 	return nil
 }
 
-func (o *devLocalServerOpts) Run(cmd *cobra.Command) error {
+func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
@@ -59,12 +59,12 @@ func (o *devLocalServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.versionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
 	// Resolve server path.
-	serverPath := project.getServerDir()
+	serverPath := project.GetServerDir()
 
 	// Build the game server .NET project.
 	if err := execChildInteractive(serverPath, "dotnet", []string{"build"}); err != nil {

@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/metaplay/cli/pkg/styles"
+	"github.com/rs/zerolog/log"
 )
 
 // Item in our compact list.
@@ -127,7 +128,40 @@ func chooseFromList(title string, items []list.Item) (int, error) {
 	}
 	selectedItem := finalM.selected
 	if selectedItem == nil {
-		return -1, fmt.Errorf("user did not select any item")
+		return -1, fmt.Errorf("selection canceled")
 	}
 	return selectedItem.index, nil
+}
+
+// Show a dialog to user to select an item from the provided list.
+// The toItemFunc() is used to convert the items into a (name, description)
+// tuple for display. The selected item in the list is returned (or error).
+func ChooseFromListDialog[TItem any](title string, items []TItem, toItemFunc func(item *TItem) (string, string)) (*TItem, error) {
+	// \todo Bit of a hack to render title first
+	if len(items) == 0 {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderTitle(title))
+		log.Info().Msg("")
+		return nil, fmt.Errorf("no items in the list")
+	}
+
+	// Convert items to list items.
+	listItems := make([]list.Item, len(items))
+	for ndx := range items {
+		item := &items[ndx]
+		name, description := toItemFunc(item)
+		listItems[ndx] = compactListItem{
+			index:       ndx,
+			name:        name,
+			description: description,
+		}
+	}
+
+	// Let the user choose list items.
+	chosen, err := chooseFromList(title, listItems)
+	if err != nil {
+		return nil, err
+	}
+
+	return &items[chosen], nil
 }

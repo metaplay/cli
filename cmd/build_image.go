@@ -75,7 +75,6 @@ func init() {
 	buildCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	// flags.StringVarP(&o.flagImageTag, "image-tag", "t", "<project>:<timestamp>", "Docker image tag for build, eg, 'mygame:123456'")
 	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
 	flags.StringVar(&o.flagArchitecture, "architecture", "amd64", "Architecture of build target, 'amd64' or 'arm64'")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
@@ -117,7 +116,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	// and <projectID> with the project's slug.
 	log.Debug().Msgf("Image name template: %s", o.argImageName)
 	imageName := strings.Replace(o.argImageName, "<timestamp>", fmt.Sprintf("%d", time.Now().Unix()), -1)
-	imageName = strings.Replace(imageName, "<projectID>", project.config.ProjectHumanID, -1)
+	imageName = strings.Replace(imageName, "<projectID>", project.Config.ProjectHumanID, -1)
 
 	if strings.HasSuffix(imageName, ":latest") {
 		log.Error().Msg("Building docker image with 'latest' tag is not allowed. Use a commit hash or timestamp instead.")
@@ -129,11 +128,9 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Extra args to docker: %s", strings.Join(o.extraArgs, " "))
 	}
 
-	log.Info().Msgf("Project ID: %s", styles.RenderTechnical(project.config.ProjectHumanID))
-	log.Info().Msgf("Image name: %s", styles.RenderTechnical(imageName))
-
 	// Auto-detect git commit ID
 	commitId := o.flagCommitID
+	commitIdBadge := ""
 	if commitId == "" {
 		commitId = detectEnvVar([]string{
 			"GIT_COMMIT", "GITHUB_SHA", "CI_COMMIT_SHA", "CIRCLE_SHA1", "TRAVIS_COMMIT",
@@ -141,17 +138,16 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"SEMAPHORE_GIT_SHA",
 		})
 		if commitId != "" {
-			log.Info().Msgf("%s %s %s", "Commit ID:", styles.RenderTechnical(commitId), styles.RenderMuted("(auto-detected)"))
+			commitIdBadge = styles.RenderMuted("(auto-detected)")
 		} else {
 			commitId = "none" // default if not specified
-			log.Info().Msgf("%s %s %s", "Commit ID:", styles.RenderTechnical(commitId), styles.RenderWarning("[failed to auto-detect; specify with --commit-id=<id>]"))
+			commitIdBadge = styles.RenderWarning("[failed to auto-detect; specify with --commit-id=<id>]")
 		}
-	} else {
-		log.Info().Msgf("%s %s", "Commit ID:", styles.RenderTechnical(commitId))
 	}
 
 	// Auto-detect build number
 	buildNumber := o.flagBuildNumber
+	buildNumberBadge := ""
 	if buildNumber == "" {
 		buildNumber = detectEnvVar([]string{
 			"BUILD_NUMBER", "GITHUB_RUN_NUMBER", "CI_PIPELINE_IID", "CIRCLE_BUILD_NUM", "TRAVIS_BUILD_NUMBER",
@@ -159,20 +155,18 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"SEMAPHORE_BUILD_NUMBER",
 		})
 		if buildNumber != "" {
-			log.Info().Msgf("Build number: %s (auto-detected)", styles.RenderTechnical(buildNumber))
+			buildNumberBadge = styles.RenderMuted("(auto-detected)")
 		} else {
 			buildNumber = "none" // default if not specified
-			log.Info().Msgf("Build number: %s %s", styles.RenderTechnical(buildNumber), styles.RenderWarning("[failed to auto-detect; specify with --commit-number=<number>]"))
+			buildNumberBadge = styles.RenderWarning("[failed to auto-detect; specify with --commit-number=<number>]")
 		}
-	} else {
-		log.Info().Msgf("Build number: %s", styles.RenderTechnical(buildNumber))
 	}
 
 	// Resolve docker build root directory. All other paths need to be made relative to it.
-	buildRootDir := project.getBuildRootDir()
+	buildRootDir := project.GetBuildRootDir()
 
 	// Check that sdkRoot is a valid directory
-	sdkRootPath := project.getSdkRootDir()
+	sdkRootPath := project.GetSdkRootDir()
 	if _, err := os.Stat(sdkRootPath); os.IsNotExist(err) {
 		log.Error().Msgf("The Metaplay SDK directory '%s' does not exist.", sdkRootPath)
 		os.Exit(2)
@@ -185,14 +179,14 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check project root directory.
-	projectBackendDir := project.getBackendDir()
+	projectBackendDir := project.GetBackendDir()
 	if _, err := os.Stat(projectBackendDir); os.IsNotExist(err) {
 		log.Error().Msgf("Unable to find project backend in '%s'.", projectBackendDir)
 		os.Exit(2)
 	}
 
 	// Check SharedCode directory.
-	sharedCodeDir := project.getSharedCodeDir()
+	sharedCodeDir := project.GetSharedCodeDir()
 	if _, err := os.Stat(sharedCodeDir); os.IsNotExist(err) {
 		log.Error().Msgf("The shared code directory (%s) does not exist.", sharedCodeDir)
 		os.Exit(2)
@@ -205,7 +199,6 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(2)
 	}
 	platform := fmt.Sprintf("linux/%s", o.flagArchitecture)
-	log.Info().Msgf("Target platform: %s", styles.RenderTechnical(platform))
 
 	// Check that docker is installed and running with a 5 second timeout
 	log.Debug().Msgf("Check if docker is available")
@@ -221,6 +214,13 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		log.Error().Msgf("Failed to resolve docker build engine: %v", err)
 		os.Exit(1)
 	}
+
+	// Print build info.
+	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
+	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
+	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitId), commitIdBadge)
+	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
+	log.Info().Msgf("Target platform:     %s", styles.RenderTechnical(platform))
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
 	// Rebase paths to be relative to docker build root.
@@ -234,19 +234,19 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		log.Error().Msgf("Failed to resolve relative path to Dockerfile.server from build root: %v", err)
 		os.Exit(2)
 	}
-	rebasedProjectRoot, err := rebasePath(project.relativeDir, buildRootDir)
+	rebasedProjectRoot, err := rebasePath(project.RelativeDir, buildRootDir)
 	if err != nil {
 		log.Error().Msgf("Failed to resolve relative path to project root from build root: %v", err)
 		os.Exit(2)
 	}
 
 	// Rebase paths relative to project root dir (where metaplay-project.yaml is located).
-	rebasedBackendDir, err := rebasePath(projectBackendDir, project.relativeDir)
+	rebasedBackendDir, err := rebasePath(projectBackendDir, project.RelativeDir)
 	if err != nil {
 		log.Error().Msgf("Failed to resolve relative path to project backend directory from project root: %v", err)
 		os.Exit(2)
 	}
-	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, project.relativeDir)
+	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, project.RelativeDir)
 	if err != nil {
 		log.Error().Msgf("Failed to resolve relative path to project shared code directory from project root: %v", err)
 		os.Exit(2)
@@ -268,7 +268,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve .NET runtime version to build project for, expects '<major>.<minor>'.
-	projectDotnetVersionSegments := project.config.DotnetRuntimeVersion.Segments()
+	projectDotnetVersionSegments := project.Config.DotnetRuntimeVersion.Segments()
 	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
 
 	// Resolve final docker build invocation
@@ -284,7 +284,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
 			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),
 			"--build-arg", "DOTNET_VERSION=" + projectDotnetVersion,
-			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.config.ProjectHumanID),
+			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitId),
 		}...,
@@ -308,7 +308,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf(styles.RenderTechnical("  metaplay deploy server ENVIRONMENT %s"), imageName)
 
 	envsIDs := []string{}
-	for _, env := range project.config.Environments {
+	for _, env := range project.Config.Environments {
 		envsIDs = append(envsIDs, styles.RenderTechnical(env.HumanID))
 	}
 	log.Info().Msgf("Available environments: %s", strings.Join(envsIDs, ", "))

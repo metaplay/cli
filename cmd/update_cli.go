@@ -9,6 +9,7 @@ import (
 
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +67,8 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("Failed to update the Metaplay CLI binary")
 	}
 
-	log.Info().Msgf("Successfully updated to version %s", latest.Version())
+	log.Info().Msg("")
+	log.Info().Msgf(styles.RenderSuccess("✅ Successfully updated to version %s!"), latest.Version())
 
 	return nil
 }

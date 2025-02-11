@@ -11,14 +11,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type BuildServerOpts struct {
+type buildServerOpts struct {
 }
 
 func init() {
-	o := BuildServerOpts{}
+	o := buildServerOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "local-server [flags]",
+		Use:   "server [flags]",
 		Short: "Build the game server .NET project",
 		Run:   runCommand(&o),
 		Long: trimIndent(`
@@ -33,7 +33,7 @@ func init() {
 			- 'metaplay build dashboard' builds the LiveOps Dashboard.
 			- 'metaplay build botclient' builds the BotClient project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
-			- 'metaplay dev local-server' runs the game server locally.
+			- 'metaplay dev server' runs the game server locally.
 		`),
 		Example: trimIndent(`
 			# Build the game server
@@ -44,7 +44,7 @@ func init() {
 	buildCmd.AddCommand(cmd)
 }
 
-func (o *BuildServerOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("no arguments are expected, got %d", len(args))
 	}
@@ -52,7 +52,7 @@ func (o *BuildServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *BuildServerOpts) Run(cmd *cobra.Command) error {
+func (o *buildServerOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
@@ -61,12 +61,12 @@ func (o *BuildServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.versionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
 	// Resolve server path.
-	serverPath := project.getServerDir()
+	serverPath := project.GetServerDir()
 
 	// Build the project.
 	if err := execChildTask(serverPath, "dotnet", []string{"build"}); err != nil {

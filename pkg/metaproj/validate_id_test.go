@@ -1,7 +1,7 @@
 /*
  * Copyright Metaplay. All rights reserved.
  */
-package cmd
+package metaproj
 
 import "testing"
 
@@ -67,7 +67,7 @@ func TestValidateProjectID(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			result := validateProjectID(test.input)
+			result := ValidateProjectID(test.input)
 			didSucceed := result == nil
 			if didSucceed != test.isValid {
 				t.Errorf("For input '%s', expected %v but got %v", test.input, test.isValid, result)
@@ -147,7 +147,7 @@ func TestValidateEnvironmentID(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			result := validateEnvironmentID(test.input)
+			result := ValidateEnvironmentID(test.input)
 			didSucceed := result == nil
 			if didSucceed != test.isValid {
 				t.Errorf("For input '%s', expected %v but got %v", test.input, test.isValid, result)

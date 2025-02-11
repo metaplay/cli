@@ -12,6 +12,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -97,7 +98,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project dashboard dir (only Backend/Dashboard supported for now)
-	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.config.BackendDir, "Dashboard"))
+	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
 	// Install custom project from template in MetaplaySDK
 	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json")
@@ -106,8 +107,8 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Write pnpm-workspace.yaml
-	if err = writePnpmWorkspaceFile(filepath.Join(project.relativeDir, "pnpm-workspace.yaml"), []string{
-		filepath.ToSlash(filepath.Join(project.config.SdkRootDir, "Frontend", "*")),
+	if err = writePnpmWorkspaceFile(filepath.Join(project.RelativeDir, "pnpm-workspace.yaml"), []string{
+		filepath.ToSlash(filepath.Join(project.Config.SdkRootDir, "Frontend", "*")),
 		filepath.ToSlash(dashboardDirRelative),
 	}); err != nil {
 		return err
@@ -120,7 +121,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
-	pathToDashboardDir := filepath.Join(project.relativeDir, dashboardDirRelative)
+	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
 	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}); err != nil {
 		log.Error().Msgf("Failed to run 'pnpm install': %s", err)
 		os.Exit(1)
@@ -141,9 +142,9 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 
 // Update the metaplay-project.yaml features.dashboard section by enabling the custom dashboard
 // and setting the dashboard root directory.
-func updateProjectConfigCustomDashboard(project *MetaplayProject, dashboardDir string) error {
+func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashboardDir string) error {
 	// Load the existing metaplay-project.yaml
-	projectConfigFilePath := filepath.Join(project.relativeDir, projectConfigFileName)
+	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read project config file: %v", err)
@@ -155,7 +156,7 @@ func updateProjectConfigCustomDashboard(project *MetaplayProject, dashboardDir s
 	}
 
 	// Update features.dashboard with new values.
-	updateYamlNode(root, "$.features.dashboard", DashboardFeatureConfig{
+	updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})

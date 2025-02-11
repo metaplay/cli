@@ -59,11 +59,15 @@ func init() {
 }
 
 func (o *getKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
+	if len(args) > 1 {
+		return fmt.Errorf("too many arguments (%d) provided, expecting maximum of 1", len(args))
 	}
 
-	o.argEnvironment = args[0]
+	// Store target environment, if provided
+	if len(args) > 0 {
+		o.argEnvironment = args[0]
+	}
+
 	return nil
 }
 
@@ -94,7 +98,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Generate kubeconfig
-	var kubeconfigPayload *string
+	var kubeconfigPayload string
 	switch credentialsType {
 	case "dynamic":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential()
@@ -110,16 +114,16 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 
-	// (Maybe) write the output to a file
+	// Write the kubeconfig payload to a file or stdout.
 	if o.flagOutput != "" {
 		log.Debug().Msgf("Write kubeconfig to file %s", o.flagOutput)
-		err = os.WriteFile(o.flagOutput, []byte(*kubeconfigPayload), 0600)
+		err = os.WriteFile(o.flagOutput, []byte(kubeconfigPayload), 0600)
 		if err != nil {
 			return fmt.Errorf("failed to write kubeconfig to file: %v", err)
 		}
 		log.Info().Msgf("Wrote kubeconfig to %s", o.flagOutput)
 	} else {
-		log.Info().Msg(*kubeconfigPayload)
+		log.Info().Msg(kubeconfigPayload)
 	}
 
 	return nil

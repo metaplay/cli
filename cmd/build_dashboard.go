@@ -42,7 +42,7 @@ func (o *BuildDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that project uses a custom dashboard, otherwise error out
-	if !project.usesCustomDashboard() {
+	if !project.UsesCustomDashboard() {
 		return fmt.Errorf("project does not have a custom dashboard to build")
 	}
 
@@ -52,7 +52,7 @@ func (o *BuildDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project dashboard path.
-	dashboardPath := project.getDashboardDir()
+	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies
 	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {

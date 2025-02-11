@@ -1,10 +1,9 @@
 /*
  * Copyright Metaplay. All rights reserved.
  */
-package cmd
+package metaproj
 
 import (
-	"errors"
 	"fmt"
 	"html/template"
 	"io"
@@ -15,228 +14,82 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
-	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
 
-// Environment family (given to Helm / C# server).
-type EnvironmentFamily string
-
-const (
-	EnvironmentFamilyDevelopment = "Development"
-	EnvironmentFamilyStaging     = "Staging"
-	EnvironmentFamilyProduction  = "Production"
-)
-
-// Map EnvironmentType (from portal) to an EnvironmentFamily (compatible with Helm and C#)
-var environmentTypeToFamilyMapping = map[portalapi.EnvironmentType]string{
-	portalapi.EnvironmentTypeDevelopment: EnvironmentFamilyDevelopment,
-	portalapi.EnvironmentTypeStaging:     EnvironmentFamilyStaging,
-	portalapi.EnvironmentTypeProduction:  EnvironmentFamilyProduction,
-}
-
-// Mapping from EnvironmentType to the runtime options file to include (in addition to Options.base.yaml).
-var environmentTypeToRuntimeOptionsFileMapping = map[portalapi.EnvironmentType]string{
-	portalapi.EnvironmentTypeDevelopment: "./Config/Options.dev.yaml",
-	portalapi.EnvironmentTypeStaging:     "./Config/Options.staging.yaml",
-	portalapi.EnvironmentTypeProduction:  "./Config/Options.production.yaml",
-}
-
-// Per-environment configuration from 'metaplay-project.yaml'.
-// Note: When adding new fields, remember to update validateProjectConfig().
-type ProjectEnvironmentConfig struct {
-	Name             string                    `yaml:"name"`                       // Name of the environment.
-	Slug             string                    `yaml:"slug"`                       // Mutable slug of the environment, eg, 'develop'.
-	HumanID          string                    `yaml:"humanId"`                    // Stable human ID of the environment. Also the Kubernetes namespace.
-	Type             portalapi.EnvironmentType `yaml:"type"`                       // Type of the environment (eg, development, Staging, production).
-	StackDomain      string                    `yaml:"stackDomain"`                // Stack base domain (eg, 'p1.metaplay.io').
-	ServerValuesFile string                    `yaml:"serverValuesFile,omitempty"` // Relative path (from metaplay-project.yaml) to the game server deployment Helm values file.
-	BotsValuesFile   string                    `yaml:"botsValuesFile,omitempty"`   // Relative path (from metaplay-project.yaml) to the bot client deployment Helm values file.
-}
-
-// Get the Kubernetes namespace for this environment. Same as HumanID but
-// using explicit getter for clarity.
-func (envConfig *ProjectEnvironmentConfig) getKubernetesNamespace() string {
-	return envConfig.HumanID
-}
-
-// Convert the environment type (from portal) to an environment family (for C#).
-func (envConfig *ProjectEnvironmentConfig) getEnvironmentFamily() string {
-	envFamily, found := environmentTypeToFamilyMapping[envConfig.Type]
-	if !found {
-		log.Panic().Msgf("Invalid EnvironmentType: %s", envConfig.Type)
-	}
-	return envFamily
-}
-
-// Get the environment-type specific runtime options file to include in Helm values.
-func (envConfig *ProjectEnvironmentConfig) getEnvironmentSpecificRuntimeOptionsFile() string {
-	configFilePath, found := environmentTypeToRuntimeOptionsFileMapping[envConfig.Type]
-	if !found {
-		log.Panic().Msgf("Invalid EnvironmentType: %s", envConfig.Type)
-	}
-	return configFilePath
-}
-
-// Configuration for dashboard ($.features.dashboard in metaplay-project.yaml).
-type DashboardFeatureConfig struct {
-	UseCustom bool   `yaml:"useCustom"`
-	RootDir   string `yaml:"rootDir"`
-}
-
-// Configuration for features ($.features in metaplay-project.yaml).
-type ProjectFeaturesConfig struct {
-	Dashboard DashboardFeatureConfig `yaml:"dashboard"`
-}
-
-// Metaplay project config file, named `metaplay-project.yaml`.
-// Note: When adding new fields, remember to update validateProjectConfig().
-type ProjectConfig struct {
-	ProjectHumanID  string `yaml:"projectID"`       // The project's human ID (as in the portal)
-	BuildRootDir    string `yaml:"buildRootDir"`    // Relative path to the docker build root directory
-	SdkRootDir      string `yaml:"sdkRootDir"`      // Relative path to the MetaplaySDK directory
-	BackendDir      string `yaml:"backendDir"`      // Relative path to the project-specific backend directory
-	SharedCodeDir   string `yaml:"sharedCodeDir"`   // Relative path to the shared code directory
-	UnityProjectDir string `yaml:"unityProjectDir"` // Relative path to the Unity (client) project
-
-	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '8.0' or '9.0'
-
-	HelmChartRepository   string `yaml:"helmChartRepository"`   // Helm chart repository to use (defaults to 'https://charts.metaplay.dev')
-	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)
-	BotClientChartVersion string `yaml:"botClientChartVersion"` // Version of the bot client Helm chart to use (or 'latest-prerelease' for absolute latest)
-
-	Features ProjectFeaturesConfig `yaml:"features"`
-
-	Environments []ProjectEnvironmentConfig `yaml:"environments"`
-}
-
-// Represents MetaplaySDK/version.yaml.
-type MetaplayVersionMetadata struct {
-	SdkVersion                   *version.Version `yaml:"sdkVersion"`
-	DefaultDotnetRuntimeVersion  string           `yaml:"defaultDotnetRuntimeVersion"`
-	DefaultServerChartVersion    *version.Version `yaml:"defaultServerChartVersion"`
-	DefaultBotClientChartVersion *version.Version `yaml:"defaultBotClientChartVersion"`
-	MinInfraVersion              *version.Version `yaml:"minInfraVersion"`
-	MinServerChartVersion        *version.Version `yaml:"minServerChartVersion"`
-	MinBotClientChartVersion     *version.Version `yaml:"minBotClientChartVersion"`
-	MinDotnetSdkVersion          *version.Version `yaml:"minDotnetSdkVersion"` // Minimum .NET SDK version required to build projects.
-	RecommendedNodeVersion       *version.Version `yaml:"nodeVersion"`
-	RecommendedPnpmVersion       *version.Version `yaml:"pnpmVersion"`
-}
-
-// Metaplay project.
+// Metaplay project: helper type to wrap the resolved project, including relative path to project,
+// parsed metaplay-project.yaml and parsed MetaplaySDK/version.yaml.
 type MetaplayProject struct {
-	config          ProjectConfig
-	relativeDir     string
-	versionMetadata MetaplayVersionMetadata
+	Config          ProjectConfig
+	RelativeDir     string
+	VersionMetadata MetaplayVersionMetadata
 }
 
-func (project *MetaplayProject) usesCustomDashboard() bool {
-	return project.config.Features.Dashboard.UseCustom
+func (project *MetaplayProject) UsesCustomDashboard() bool {
+	return project.Config.Features.Dashboard.UseCustom
 }
 
-func (project *MetaplayProject) getBuildRootDir() string {
-	return filepath.Join(project.relativeDir, project.config.BuildRootDir)
+func (project *MetaplayProject) GetBuildRootDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.BuildRootDir)
 }
 
-func (project *MetaplayProject) getSdkRootDir() string {
-	return filepath.Join(project.relativeDir, project.config.SdkRootDir)
+func (project *MetaplayProject) GetSdkRootDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.SdkRootDir)
 }
 
-func (project *MetaplayProject) getBackendDir() string {
-	return filepath.Join(project.relativeDir, project.config.BackendDir)
+func (project *MetaplayProject) GetBackendDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.BackendDir)
 }
 
-func (project *MetaplayProject) getSharedCodeDir() string {
-	return filepath.Join(project.relativeDir, project.config.SharedCodeDir)
+func (project *MetaplayProject) GetSharedCodeDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.SharedCodeDir)
 }
 
-func (project *MetaplayProject) getUnityProjectDir() string {
-	return filepath.Join(project.relativeDir, project.config.UnityProjectDir)
+func (project *MetaplayProject) GetUnityProjectDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.UnityProjectDir)
 }
 
 // Return the relative directory to Backend/Server.
-func (project *MetaplayProject) getServerDir() string {
-	return filepath.Join(project.relativeDir, project.config.BackendDir, "Server")
+func (project *MetaplayProject) GetServerDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.BackendDir, "Server")
 }
 
-func (project *MetaplayProject) getBotClientDir() string {
-	return filepath.Join(project.relativeDir, project.config.BackendDir, "BotClient")
+func (project *MetaplayProject) GetBotClientDir() string {
+	return filepath.Join(project.RelativeDir, project.Config.BackendDir, "BotClient")
 }
 
-func (project *MetaplayProject) getDashboardDir() string {
-	dashboardConfig := project.config.Features.Dashboard
+func (project *MetaplayProject) GetDashboardDir() string {
+	dashboardConfig := project.Config.Features.Dashboard
 	if !dashboardConfig.UseCustom {
 		log.Panic().Msgf("Trying to access custom dashboard dir for a project that has no customized dashboard")
 	}
-	return filepath.Join(project.relativeDir, dashboardConfig.RootDir)
+	return filepath.Join(project.RelativeDir, dashboardConfig.RootDir)
 }
 
-func (project *MetaplayProject) getServerValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
+func (project *MetaplayProject) GetServerValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
 	if envConfig.ServerValuesFile != "" {
 		return []string{
-			filepath.Join(project.relativeDir, envConfig.ServerValuesFile),
+			filepath.Join(project.RelativeDir, envConfig.ServerValuesFile),
 		}
 	} else {
 		return []string{}
 	}
 }
 
-func (project *MetaplayProject) getBotsValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
+func (project *MetaplayProject) GetBotsValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
 	if envConfig.BotsValuesFile != "" {
 		return []string{
-			filepath.Join(project.relativeDir, envConfig.BotsValuesFile),
+			filepath.Join(project.RelativeDir, envConfig.BotsValuesFile),
 		}
 	} else {
 		return []string{}
 	}
-}
-
-// Name of the Metaplay project config file.
-const projectConfigFileName = "metaplay-project.yaml"
-
-// Locate the Metaplay project directory, i.e., where metaplay-project.yaml is located.
-// If flagProjectConfigPath is given, use it as the directory or project file path.
-// Otherwise, try to locate the config file from the current directory.
-// The (relative or absolute) path to the project directory is returned.
-// \todo Does not handle case mismatches well, eg: -p ..\samples\idler breaks in docker build on Windows
-func findProjectDirectory() (string, error) {
-	// If the flag is provided, check if it's a valid directory or file path
-	if flagProjectConfigPath != "" {
-		log.Debug().Msgf("Try to locate Metaplay project in path '%s'", flagProjectConfigPath)
-		info, err := os.Stat(flagProjectConfigPath)
-		if err != nil {
-			return "", fmt.Errorf("provided path '%s' is not a file or directory", flagProjectConfigPath)
-		}
-
-		if info.IsDir() {
-			// Check if the config file exists in the specified directory
-			configFilePath := filepath.Join(flagProjectConfigPath, projectConfigFileName)
-			if _, err := os.Stat(configFilePath); err == nil {
-				return flagProjectConfigPath, nil
-			}
-			return "", fmt.Errorf("unable to find metaplay-project.yaml in directory '%s'", flagProjectConfigPath)
-		} else {
-			// Check if the specified file is the config file
-			if filepath.Base(flagProjectConfigPath) == projectConfigFileName {
-				return filepath.Dir(flagProjectConfigPath), nil
-			}
-			return "", errors.New("specified file is not metaplay-project.yaml")
-		}
-	}
-
-	// Check that metaplay-project.yaml exists in this directory
-	if _, err := os.Stat(projectConfigFileName); err != nil {
-		return "", errors.New("metaplay-project.yaml file not found in the current directory, use --project=<path> to point to your project directory")
-	}
-
-	return ".", nil
 }
 
 // Load the Metaplay project config file (metaplay-project.yaml) from the project directory.
-func loadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
+func LoadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	// Check that the provided path points to a file or directory.
 	info, err := os.Stat(projectDir)
 	if err != nil {
@@ -247,7 +100,7 @@ func loadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	}
 
 	// Build the full path to the config file in the directory.
-	configFilePath := filepath.Join(projectDir, projectConfigFileName)
+	configFilePath := filepath.Join(projectDir, ConfigFileName)
 
 	// Read the file content.
 	content, err := os.ReadFile(configFilePath)
@@ -263,7 +116,7 @@ func loadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	}
 
 	// Validate the project config.
-	err = validateProjectConfig(projectDir, &projectConfig)
+	err = ValidateProjectConfig(projectDir, &projectConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate metaplay-project.yaml: %v", err)
 	}
@@ -342,7 +195,7 @@ func validateHelmChartVersion(fieldName string, chartVersion string) error {
 }
 
 // Check that the provided project config is a valid one.
-func validateProjectConfig(projectDir string, config *ProjectConfig) error {
+func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	// Project identity and directories.
 	if config.ProjectHumanID == "" {
 		return fmt.Errorf("missing required field 'projectID'")
@@ -416,7 +269,7 @@ func validateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.HumanID == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'humanId'", envName)
 		}
-		if err := validateEnvironmentID(envConfig.HumanID); err != nil {
+		if err := ValidateEnvironmentID(envConfig.HumanID); err != nil {
 			return fmt.Errorf("environment '%s' specified invalid 'humanId': %w", envName, err)
 		}
 		if envConfig.StackDomain == "" {
@@ -425,7 +278,7 @@ func validateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.Type == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
 		}
-		if err := validateEnvironmentID(envConfig.HumanID); err != nil {
+		if err := ValidateEnvironmentID(envConfig.HumanID); err != nil {
 			return fmt.Errorf("environment '%s' specified invalid 'humanId': %w", envName, err)
 		}
 		if envConfig.ServerValuesFile != "" {
@@ -468,7 +321,7 @@ func extractSDKVersionFromDockerfile(dockerfilePath string) (*version.Version, e
 	return version, err
 }
 
-func parseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, error) {
+func ParseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, error) {
 	// Unmarshal the YAML content into the ProjectConfig struct.
 	var versionMetadata MetaplayVersionMetadata
 	err := yaml.Unmarshal(versionFileContent, &versionMetadata)
@@ -513,7 +366,7 @@ func parseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, 
 
 // Load the MetaplaySDK/version.yaml containing metadata about the Metaplay SDK version,
 // e.g., required .NET and Node/pnpm minimum versions.
-func loadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error) {
+func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error) {
 	// Read MetaplaySDK/version.yaml content.
 	// If unable to read the file, try to determine the SDK version from the Dockerfile.server to
 	// identify earlier SDK packages.
@@ -538,109 +391,26 @@ func loadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error)
 	}
 
 	// Parse and validate the 'version.yaml' contents.
-	return parseVersionMetadata(versionFileContent)
+	return ParseVersionMetadata(versionFileContent)
 }
 
-// Locate and load the project config file, based on the --project flag.
-func resolveProject() (*MetaplayProject, error) {
-	// Find the path with the project config file.
-	projectDir, err := findProjectDirectory()
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Project located in directory %s", projectDir)
-
-	// Load the project config file.
-	projectConfig, err := loadProjectConfigFile(projectDir)
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Project config loaded")
-
-	// Load version metadata from MetaplaySDK/version.yaml.
-	versionMetadata, err := loadSdkVersionMetadata(filepath.Join(projectDir, projectConfig.SdkRootDir))
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Version metadata loaded: %+v", versionMetadata)
-
-	return initMetaplayProject(projectDir, projectConfig, versionMetadata)
-}
-
-func initMetaplayProject(projectDir string, projectConfig *ProjectConfig, versionMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, versionMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
 	if filepath.IsAbs(projectDir) {
 		return nil, fmt.Errorf("projectDir must be relative, got '%s'", projectDir)
 	}
 
 	// Return project.
 	return &MetaplayProject{
-		config:          *projectConfig,
-		relativeDir:     projectDir,
-		versionMetadata: *versionMetadata,
+		Config:          *projectConfig,
+		RelativeDir:     projectDir,
+		VersionMetadata: *versionMetadata,
 	}, nil
-}
-
-// Resolve the environment configuration. First, try the project config, if available.
-// Otherwise, fetch the information from the portal.
-func resolveEnvironment(tokenSet *auth.TokenSet, environment string) (*ProjectEnvironmentConfig, error) {
-	// If a metaplay-project.yaml can be located, resolve the environment
-	// from the project config.
-	project, err := resolveProject()
-	if err == nil {
-		// Find target environment.
-		envConfig, err := project.config.findEnvironmentConfig(environment)
-		if err != nil {
-			return nil, err
-		}
-
-		return envConfig, nil
-	}
-
-	// Check that the specified environment ID is a valid human ID.
-	if err := validateEnvironmentID(environment); err != nil {
-		return nil, fmt.Errorf("full environment ID must be specified when metaplay-project.yaml not found: %w", err)
-	}
-
-	// No project config found, try to resolve the environment from the portal.
-	portalClient := portalapi.NewClient(tokenSet)
-	portalEnv, err := portalClient.FetchEnvironmentInfoByHumanID(environment)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert to ProjectEnvironmentConfig.
-	envConfig := ProjectEnvironmentConfig{
-		Name:        portalEnv.Name,
-		Slug:        portalEnv.Slug,
-		HumanID:     portalEnv.HumanID,
-		StackDomain: portalEnv.StackDomain,
-		Type:        portalEnv.Type,
-	}
-	return &envConfig, nil
-}
-
-// Helper for resolving both the MetaplayProject and a specific environment at the same time.
-// This operation is common enough to justify its own method.
-func resolveProjectAndEnvironment(environment string) (*MetaplayProject, *ProjectEnvironmentConfig, error) {
-	// Resolve the project.
-	project, err := resolveProject()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Find target environment.
-	envConfig, err := project.config.findEnvironmentConfig(environment)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return project, envConfig, nil
 }
 
 // Find a matching environment from the project config.
 // The first environment that matches 'environment' is chosen.
 // The 'environment' argument can match either the humanID or the slug of the project.
-func (projectConfig *ProjectConfig) findEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
+func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
 	// Match by HumanID.
 	for _, envConfig := range projectConfig.Environments {
 		if envConfig.HumanID == environment {
@@ -659,7 +429,7 @@ func (projectConfig *ProjectConfig) findEnvironmentConfig(environment string) (*
 	return nil, fmt.Errorf("no environment matching '%s' found in project config. The valid environments are: %s", environment, environmentIDs)
 }
 
-func (projectConfig *ProjectConfig) getEnvironmentByHumanID(humanID string) (*ProjectEnvironmentConfig, error) {
+func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*ProjectEnvironmentConfig, error) {
 	// Match by HumanID.
 	for _, envConfig := range projectConfig.Environments {
 		if envConfig.HumanID == humanID {
@@ -683,7 +453,7 @@ func getEnvironmentIDs(projectConfig *ProjectConfig) []string {
 // - Only lower-case ASCII alphanumeric characters are allowed in the segments (no upper-case letters, no special characters).
 // \todo Numbers are allowed because of some legacy environments like 'idler-develop5'
 // \todo Only allow 3 segments in the future (for now, we still use 2-segment names as we mock the human IDs)
-func validateProjectID(id string) error {
+func ValidateProjectID(id string) error {
 	if id == "" {
 		return fmt.Errorf("project ID is empty")
 	}
@@ -711,7 +481,7 @@ func validateProjectID(id string) error {
 // The valid format must be dash-separated parts with alphanumeric characters
 // only. There can be either 2 to 4 segments. Eg, 'tiny-squids' or 'idler-develop5',
 // or 'yellow-gritty-tuna-jumps'.
-func validateEnvironmentID(id string) error {
+func ValidateEnvironmentID(id string) error {
 	if id == "" {
 		return fmt.Errorf("environment ID is empty")
 	}
@@ -771,7 +541,7 @@ environments:
 {{end}}`))
 
 // \todo Clean this up
-func generateProjectConfigFile(
+func GenerateProjectConfigFile(
 	sdkMetadata *MetaplayVersionMetadata,
 	rootPath string,
 	pathToUnityProject string,

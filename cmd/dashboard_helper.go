@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/rs/zerolog/log"
 )
 
@@ -26,7 +27,7 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
 	}
 
-	// Node.js version output starts with 'v' (e.g., "v22.13.0"), so strip it
+	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
 	installedVersionStr := strings.TrimSpace(out.String())
 	if strings.HasPrefix(installedVersionStr, "v") {
 		installedVersionStr = installedVersionStr[1:]
@@ -112,14 +113,14 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 	return nil
 }
 
-func checkDashboardToolVersions(project *MetaplayProject) error {
+func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(project.versionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(project.VersionMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(project.versionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(project.VersionMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 

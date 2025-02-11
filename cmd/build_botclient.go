@@ -67,13 +67,13 @@ func (o *BuildBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.versionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		log.Error().Msgf("Failed to resolve .NET version: %s", err)
 		os.Exit(1)
 	}
 
 	// Resolve backend root path.
-	botClientPath := project.getBotClientDir()
+	botClientPath := project.GetBotClientDir()
 
 	// Build the project
 	if err := execChildTask(botClientPath, "dotnet", []string{"build"}); err != nil {

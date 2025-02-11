@@ -114,6 +114,24 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 	return orgWithProjects, err
 }
 
+func (c *Client) FetchAllUserProjects() ([]ProjectInfo, error) {
+	// Fetch with the combined getter.
+	orgsWithProjects, err := c.FetchUserOrgsAndProjects()
+	if err != nil {
+		return nil, err
+	}
+
+	// Linearize all projects.
+	projects := []ProjectInfo{}
+	for _, org := range orgsWithProjects {
+		for _, proj := range org.Projects {
+			projects = append(projects, proj)
+		}
+	}
+
+	return projects, nil
+}
+
 // FetchProjectInfo fetches information about a project using its human ID.
 func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 	url := fmt.Sprintf("/api/v1/projects?human_id=%s", projectHumanID)

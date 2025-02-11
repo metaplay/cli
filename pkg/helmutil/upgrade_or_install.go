@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
 	"helm.sh/helm/v3/pkg/cli"
@@ -79,7 +80,14 @@ func HelmUpgradeOrInstall(
 
 	// Resolve final values map: use extraValues as base to allow files to override any defaults.
 	finalValueMap := mergeValuesMaps(baseValues, filesValueMap)
-	log.Debug().Msgf("Final Helm values: %+v", finalValueMap)
+
+	// Log values as YAML.
+	finalValuesYAML, err := yaml.Marshal(finalValueMap)
+	if err != nil {
+		log.Warn().Msgf("Failed to marshal values as YAML: %+v", finalValueMap)
+	} else {
+		log.Debug().Msgf("Default Helm values:\n%s", finalValuesYAML)
+	}
 
 	// Run install or upgrade install
 	if installCmd != nil {

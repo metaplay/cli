@@ -73,7 +73,7 @@ func init() {
 			- 'metaplay build image ...' to build the docker image.
 			- 'metaplay image push ...' to push the built image to the environment.
 			- 'metaplay debug logs ...' to view logs from the deployed server.
-			- 'metaplay debug run-shell ...' to start a shell on a running server pod.
+			- 'metaplay debug shell ...' to start a shell on a running server pod.
 		`),
 		Example: trimIndent(`
 			# Push the local image and deploy to the environment tough-falcons.
@@ -157,7 +157,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
-		helmChartVersion := project.config.ServerChartVersion
+		helmChartVersion := project.Config.ServerChartVersion
 		if o.flagHelmChartVersion != "" {
 			helmChartVersion = o.flagHelmChartVersion
 		}
@@ -244,7 +244,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
-		helmChartRepo := coalesceString(project.config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
+		helmChartRepo := coalesceString(project.Config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
 		minChartVersion, _ := version.NewVersion("0.7.0")
 		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayGameServerChartName, minChartVersion, chartVersionConstraints)
 		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayGameServerChartName, useHelmChartVersion)
@@ -255,17 +255,16 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Helm chart path: %s", helmChartPath)
 
 	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.getServerValuesFiles(envConfig)
+	valuesFiles := project.GetServerValuesFiles(envConfig)
 
-	// Get kubeconfig to access the environment.
-	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	// Create a Kubernetes client.
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("Resolved kubeconfig to access environment")
 
 	// Configure Helm.
-	actionConfig, err := helmutil.NewActionConfig(*kubeconfigPayload, envConfig.getKubernetesNamespace())
+	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
 		return fmt.Errorf("failed to initialize Helm config: %v", err)
 	}
@@ -308,13 +307,19 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// \todo check for the existence of the runtime options files
 	helmValues := map[string]interface{}{
 		"environment":       envConfig.HumanID, // \todo use full name? need to allow more chars in Helm chart
-		"environmentFamily": envConfig.getEnvironmentFamily(),
+		"environmentFamily": envConfig.GetEnvironmentFamily(),
 		"config": map[string]interface{}{
 			"files": []string{
 				"./Config/Options.base.yaml",
-				envConfig.getEnvironmentSpecificRuntimeOptionsFile(),
+				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
 		},
+		// DEBUG DEBUG Opt into the new operator
+		// "experimental": map[string]interface{}{
+		// 	"gameserversV0Api": map[string]interface{}{
+		// 		"enabled": true,
+		// 	},
+		// },
 		"tenant": map[string]interface{}{
 			"discoveryEnabled": true,
 		},
@@ -374,7 +379,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
 			actionConfig,
 			existingRelease,
-			envConfig.getKubernetesNamespace(),
+			envConfig.GetKubernetesNamespace(),
 			o.flagHelmReleaseName,
 			helmChartPath,
 			helmValues,

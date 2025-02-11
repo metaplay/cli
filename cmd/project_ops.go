@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/sjson"
@@ -140,7 +141,7 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 
 // Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
 // Use sdkVersion == "" for latest.
-func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, sdkVersion string) (*MetaplayVersionMetadata, error) {
+func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, sdkVersion string) (*metaproj.MetaplayVersionMetadata, error) {
 	// Download the SDK archive to temp directory.
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
@@ -165,7 +166,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, sd
 	return sdkMetadata, nil
 }
 
-func resolveSdkSource(targetProjectPath, sdkSource string) (string, *MetaplayVersionMetadata, error) {
+func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.MetaplayVersionMetadata, error) {
 	// Sdk source can be either an existing directory or a path to the MetaplaySDK zip file
 	if sdkSource != "" && isDirectory(sdkSource) {
 		// Refer (don't copy) to the specified MetaplaySDK directory.
@@ -200,9 +201,9 @@ func resolveSdkSource(targetProjectPath, sdkSource string) (string, *MetaplayVer
 
 // Check that the target directory is a valid MetaplaySDK/ distribution.
 // Note: Only works with R32 and above (requires version.yaml).
-func validateSdkDirectory(sdkDirPath string) (*MetaplayVersionMetadata, error) {
+func validateSdkDirectory(sdkDirPath string) (*metaproj.MetaplayVersionMetadata, error) {
 	log.Debug().Msgf("Validate Metaplay SDK directory: %s", sdkDirPath)
-	versionMetadata, err := loadSdkVersionMetadata(sdkDirPath)
+	versionMetadata, err := metaproj.LoadSdkVersionMetadata(sdkDirPath)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +211,7 @@ func validateSdkDirectory(sdkDirPath string) (*MetaplayVersionMetadata, error) {
 	return versionMetadata, err
 }
 
-func validateSdkZipFile(sdkZipPath string) (*MetaplayVersionMetadata, error) {
+func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, error) {
 	// Check if file exists
 	fileInfo, err := os.Stat(sdkZipPath)
 	if err != nil {
@@ -262,7 +263,7 @@ func validateSdkZipFile(sdkZipPath string) (*MetaplayVersionMetadata, error) {
 	}
 
 	// Parse the version metadata
-	versionMetadata, err := parseVersionMetadata(content)
+	versionMetadata, err := metaproj.ParseVersionMetadata(content)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +340,7 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 
 // Install files from installer template file in SDK/Installer.
 // dstPath - Root directory for installed files, relative to metaplay project dir.
-func installFromTemplate(project *MetaplayProject, dstPath string, templateFileName string) error {
+func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string) error {
 	// Single template file within an installer project. Text files have non-empty
 	// `File` and binary files a non-empty `Bytes`. Text files support text replacement.
 	type installerTemplateFile struct {
@@ -355,7 +356,7 @@ func installFromTemplate(project *MetaplayProject, dstPath string, templateFileN
 	}
 
 	// Resolve path to installer template file
-	templatePath := filepath.Join(project.getSdkRootDir(), "Installer", templateFileName)
+	templatePath := filepath.Join(project.GetSdkRootDir(), "Installer", templateFileName)
 	if _, err := os.Stat(templatePath); err != nil {
 		return fmt.Errorf("unable to find template file at %s: %v", templatePath, err)
 	}
@@ -379,10 +380,10 @@ func installFromTemplate(project *MetaplayProject, dstPath string, templateFileN
 		return fmt.Errorf("installer project template does not have any files")
 	}
 
-	dstRoot := filepath.Join(project.relativeDir, dstPath)
+	dstRoot := filepath.Join(project.RelativeDir, dstPath)
 	projectName := getProjectName(project)
 	backendSolutionFileName := fmt.Sprintf("%s-Server.sln", projectName)
-	unityProjectDir := project.config.UnityProjectDir
+	unityProjectDir := project.Config.UnityProjectDir
 	if unityProjectDir == "." {
 		unityProjectDir = ""
 	} else if unityProjectDir != "" && !strings.HasSuffix(unityProjectDir, "/") {
@@ -390,11 +391,11 @@ func installFromTemplate(project *MetaplayProject, dstPath string, templateFileN
 	}
 
 	// Template replace rules.
-	relativePathToSdk := project.config.SdkRootDir
+	relativePathToSdk := project.Config.SdkRootDir
 	projectNameLower := strings.ToLower(projectName)
 	log.Debug().Msgf("Template replace:")
 	log.Debug().Msgf("  PROJECT_NAME: %s", projectNameLower)
-	log.Debug().Msgf("  PROJECT_HUMAN_ID: %s", project.config.ProjectHumanID)
+	log.Debug().Msgf("  PROJECT_HUMAN_ID: %s", project.Config.ProjectHumanID)
 	log.Debug().Msgf("  BACKEND_SOLUTION_FILENAME: %s", backendSolutionFileName)
 	log.Debug().Msgf("  RELATIVE_PATH_TO_SDK: %s", relativePathToSdk)
 	log.Debug().Msgf("  UNITY_PROJECT_DIR: %s", unityProjectDir)
@@ -421,7 +422,7 @@ func installFromTemplate(project *MetaplayProject, dstPath string, templateFileN
 			content := file.Text
 			content = strings.ReplaceAll(content, "{{{RELATIVE_PATH_TO_SDK}}}", relativePathToSdk)
 			content = strings.ReplaceAll(content, "{{{PROJECT_NAME}}}", projectNameLower)
-			content = strings.ReplaceAll(content, "{{{PROJECT_HUMAN_ID}}}", project.config.ProjectHumanID)
+			content = strings.ReplaceAll(content, "{{{PROJECT_HUMAN_ID}}}", project.Config.ProjectHumanID)
 			content = strings.ReplaceAll(content, "{{{UNITY_PROJECT_DIR}}}", unityProjectDir)
 			if strings.Contains(content, "{{{") || strings.Contains(content, "}}}") {
 				return fmt.Errorf("template file %s contains unhandled template strings", dstPath)
@@ -468,13 +469,13 @@ func readUnityProductName(unityProjectPath string) (string, error) {
 	return settings.PlayerSettings.ProductName, nil
 }
 
-func getProjectName(project *MetaplayProject) string {
+func getProjectName(project *metaproj.MetaplayProject) string {
 	// Try reading product name from Unity PlayerSettings
-	productName, err := readUnityProductName(project.getUnityProjectDir())
+	productName, err := readUnityProductName(project.GetUnityProjectDir())
 	if err != nil {
 		// Fallback to using name of project parent dir
 		log.Warn().Msgf("Unable to read project name from Unity PlayerSettings, using parent directory name")
-		absPath, err := filepath.Abs(project.relativeDir)
+		absPath, err := filepath.Abs(project.RelativeDir)
 		if err != nil {
 			log.Panic().Msgf("Could not read parent directory name: %v", err)
 		}
@@ -499,13 +500,13 @@ func filterInvalidFileNameChars(productName string) string {
 }
 
 // Add reference to the MetaplaySDK/Client project in the Unity project Packages/manifest.json.
-func addReferenceToUnityManifest(project *MetaplayProject) error {
+func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	const packageName = "io.metaplay.unitysdk"
 
-	manifestPath := filepath.Join(project.getUnityProjectDir(), "Packages", "manifest.json")
+	manifestPath := filepath.Join(project.GetUnityProjectDir(), "Packages", "manifest.json")
 
 	// Convert the SDK directory to a relative path from manifest.json.
-	relativePath, err := filepath.Rel(filepath.Dir(manifestPath), project.getSdkRootDir())
+	relativePath, err := filepath.Rel(filepath.Dir(manifestPath), project.GetSdkRootDir())
 	if err != nil {
 		return fmt.Errorf("failed to compute relative path: %w", err)
 	}

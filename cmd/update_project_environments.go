@@ -12,6 +12,7 @@ import (
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -66,7 +67,7 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 
 	// Fetch project information from the portal.
 	portalClient := portalapi.NewClient(tokenSet)
-	projectInfo, err := portalClient.FetchProjectInfo(project.config.ProjectHumanID)
+	projectInfo, err := portalClient.FetchProjectInfo(project.Config.ProjectHumanID)
 	if err != nil {
 		return fmt.Errorf("failed to fetch project information from the portal: %w", err)
 	}
@@ -95,9 +96,9 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 // Update the metaplay-project.yaml to be up-to-date with newEnvironments.
 // Use goccy/go-yaml for minimally editing the file, i.e., to retain ordering, comments,
 // and whitespace in the untouched parts of the file.
-func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project *MetaplayProject, newPortalEnvironments []portalapi.EnvironmentInfo) error {
+func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project *metaproj.MetaplayProject, newPortalEnvironments []portalapi.EnvironmentInfo) error {
 	// Load the existing YAML file
-	projectConfigFilePath := filepath.Join(project.relativeDir, projectConfigFileName)
+	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read project config file: %v", err)
@@ -145,7 +146,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		}
 
 		// Initialize new project environment config (with fresh information from portal).
-		newEnvConfig := ProjectEnvironmentConfig{
+		newEnvConfig := metaproj.ProjectEnvironmentConfig{
 			Name:        portalEnv.Name,
 			Slug:        portalEnv.Slug,
 			HumanID:     portalEnv.HumanID,
@@ -156,7 +157,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		// If updating an existing environment, copy the fields from the original entry
 		// that are not owned/known by the portal.
 		if foundIndex != -1 {
-			oldConfig, err := project.config.getEnvironmentByHumanID(portalEnv.HumanID)
+			oldConfig, err := project.Config.GetEnvironmentByHumanID(portalEnv.HumanID)
 			if err != nil {
 				return err
 			}

@@ -20,8 +20,8 @@ const userSecretLabelName = "io.metaplay.secret-type"
 const userSecretLabelValue = "user"
 
 func (targetEnv *TargetEnvironment) CreateSecret(ctx context.Context, name string, payloadValues map[string][]byte) error {
-	// Initialize a Kubernetes clientset against the environment
-	clientset, err := targetEnv.NewKubernetesClientSet()
+	// Initialize a Kubernetes kubeCli against the environment
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
@@ -41,19 +41,20 @@ func (targetEnv *TargetEnvironment) CreateSecret(ctx context.Context, name strin
 	}
 
 	// Create the secret.
-	_, err = clientset.CoreV1().Secrets(targetEnv.HumanId).Create(ctx, secret, metav1.CreateOptions{})
+	_, err = kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Create(ctx, secret, metav1.CreateOptions{})
 	return err
 }
 
 // DeleteSecret deletes a Kubernetes secret with the given name
 func (targetEnv *TargetEnvironment) DeleteSecret(ctx context.Context, name string) error {
-	clientset, err := targetEnv.NewKubernetesClientSet()
+	// Initialize a Kubernetes kubeCli against the environment
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
 
 	// Get the secret to check its labels
-	secret, err := clientset.CoreV1().Secrets(targetEnv.HumanId).Get(ctx, name, metav1.GetOptions{})
+	secret, err := kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to retrieve secret: %w", err)
 	}
@@ -64,18 +65,19 @@ func (targetEnv *TargetEnvironment) DeleteSecret(ctx context.Context, name strin
 	}
 
 	// Delete the secret
-	return clientset.CoreV1().Secrets(targetEnv.HumanId).Delete(ctx, name, metav1.DeleteOptions{})
+	return kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 }
 
 // GetSecret retrieves a Kubernetes secret by name
 func (targetEnv *TargetEnvironment) GetSecret(ctx context.Context, name string) (*corev1.Secret, error) {
-	clientset, err := targetEnv.NewKubernetesClientSet()
+	// Initialize a Kubernetes kubeCli against the environment
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return nil, err
 	}
 
 	// Get the secret
-	secret, err := clientset.CoreV1().Secrets(targetEnv.HumanId).Get(ctx, name, metav1.GetOptions{})
+	secret, err := kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -90,13 +92,14 @@ func (targetEnv *TargetEnvironment) GetSecret(ctx context.Context, name string) 
 
 // ListSecrets lists all Kubernetes secrets with the label foo=bar
 func (targetEnv *TargetEnvironment) ListSecrets(ctx context.Context) ([]corev1.Secret, error) {
-	clientset, err := targetEnv.NewKubernetesClientSet()
+	// Initialize a Kubernetes kubeCli against the environment
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return nil, err
 	}
 
 	labelSelector := fmt.Sprintf("%s=%s", userSecretLabelName, userSecretLabelValue)
-	secrets, err := clientset.CoreV1().Secrets(targetEnv.HumanId).List(ctx, metav1.ListOptions{
+	secrets, err := kubeCli.Clientset.CoreV1().Secrets(targetEnv.HumanId).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {

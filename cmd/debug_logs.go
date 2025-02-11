@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -83,11 +82,14 @@ func init() {
 }
 
 func (o *debugLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
+	if len(args) > 1 {
+		return fmt.Errorf("too many arguments (%d) provided, expecting maximum of 1", len(args))
 	}
 
-	o.argEnvironment = args[0]
+	// Store target environment, if provided.
+	if len(args) > 0 {
+		o.argEnvironment = args[0]
+	}
 
 	// --since and --since-time are mutually exclusive.
 	if o.flagSince != 0 && o.flagSinceTime != "" {
@@ -127,16 +129,15 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Create a Kubernetes client.
-	clientset, err := targetEnv.NewKubernetesClientSet()
+	// \todo support multi-region
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
-		log.Error().Msgf("Failed to initialize Kubernetes client: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Resolve the game server pods in the environment.
 	// \todo Keep updating the list of pods to dynamically adapt to new/delete pods.
-	namespace := envConfig.HumanID
-	pods, err := envapi.FetchGameServerPods(cmd.Context(), clientset, namespace)
+	pods, err := envapi.FetchGameServerPods(cmd.Context(), kubeCli)
 	if err != nil {
 		log.Error().Msgf("Failed to determine game server pods in the environment: %v", err)
 		os.Exit(1)
@@ -165,21 +166,21 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Stream logs from the pods.
-	return o.readOrderedLogs(cmd.Context(), clientset, pods)
+	return o.readOrderedLogs(cmd.Context(), kubeCli, pods)
 }
 
-func (o *debugLogsOpts) readOrderedLogs(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod) error {
+func (o *debugLogsOpts) readOrderedLogs(ctx context.Context, kubeCli *envapi.KubeClient, pods []corev1.Pod) error {
 	// Use current time as the cut-off time between historical and real-time streaming logs.
 	cutoffTime := time.Now().UTC()
 	log.Debug().Msgf("Use cutoff time: %s", cutoffTime)
 
 	// Start reading the historical logs from each time -- read until cutoffTime.
-	historicalSources := o.readHistoricalLogsFromPods(ctx, clientset, pods, cutoffTime)
+	historicalSources := o.readHistoricalLogsFromPods(ctx, kubeCli, pods, cutoffTime)
 
 	// Start reading/following the realtime logs from each pod, starting from cutoffTime.
 	var realtimeSources []*podLogSource
 	if o.flagFollow {
-		realtimeSources = readRealtimeLogsFromPods(ctx, clientset, pods, cutoffTime)
+		realtimeSources = readRealtimeLogsFromPods(ctx, kubeCli, pods, cutoffTime)
 	}
 
 	// Aggregate historical source while merging the sources in timestamp order (until completion).
@@ -194,14 +195,14 @@ func (o *debugLogsOpts) readOrderedLogs(ctx context.Context, clientset *kubernet
 	return nil
 }
 
-func readPodLogsWithOpts(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod, logOpts *corev1.PodLogOptions, cutoffTime *time.Time) []*podLogSource {
+func readPodLogsWithOpts(ctx context.Context, kubeCli *envapi.KubeClient, pods []corev1.Pod, logOpts *corev1.PodLogOptions, cutoffTime *time.Time) []*podLogSource {
 	// Determine longest prefix name (to keep the prefixes aligned).
 	longestPrefixName := getLongestPodPrefix(pods)
 
 	// Create logs request for realtime entries from each pod.
 	sources := make([]*podLogSource, len(pods))
 	for ndx, pod := range pods {
-		req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, logOpts)
+		req := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).GetLogs(pod.Name, logOpts)
 		channel := make(chan LogEntry, logEntryBufferSize)
 		prefix := rightPad(fmt.Sprintf("%s:", pod.Name), longestPrefixName+1)
 		sources[ndx] = &podLogSource{
@@ -219,7 +220,7 @@ func readPodLogsWithOpts(ctx context.Context, clientset *kubernetes.Clientset, p
 	return sources
 }
 
-func (o *debugLogsOpts) readHistoricalLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
+func (o *debugLogsOpts) readHistoricalLogsFromPods(ctx context.Context, kubeCli *envapi.KubeClient, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
 	// Log options for historical entries.
 	var sinceSecondsPtr *int64 = nil
 	if o.flagSince != 0 {
@@ -240,10 +241,10 @@ func (o *debugLogsOpts) readHistoricalLogsFromPods(ctx context.Context, clientse
 		SinceTime:    sinceTimePtr,
 	}
 
-	return readPodLogsWithOpts(ctx, clientset, pods, opts, &cutoffTime)
+	return readPodLogsWithOpts(ctx, kubeCli, pods, opts, &cutoffTime)
 }
 
-func readRealtimeLogsFromPods(ctx context.Context, clientset *kubernetes.Clientset, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
+func readRealtimeLogsFromPods(ctx context.Context, kubeCli *envapi.KubeClient, pods []corev1.Pod, cutoffTime time.Time) []*podLogSource {
 	// Log options for realtime entries.
 	opts := &corev1.PodLogOptions{
 		Follow:     true,
@@ -253,7 +254,7 @@ func readRealtimeLogsFromPods(ctx context.Context, clientset *kubernetes.Clients
 	}
 
 	// Read the logs from the pods.
-	return readPodLogsWithOpts(ctx, clientset, pods, opts, nil)
+	return readPodLogsWithOpts(ctx, kubeCli, pods, opts, nil)
 }
 
 type podLogSource struct {

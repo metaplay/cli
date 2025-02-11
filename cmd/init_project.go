@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -108,7 +109,7 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 	// Validate project ID (if specified)
 	if o.flagProjectID != "" {
-		if err := validateProjectID(o.flagProjectID); err != nil {
+		if err := metaproj.ValidateProjectID(o.flagProjectID); err != nil {
 			return err
 		}
 	}
@@ -119,7 +120,7 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 	}
 
 	// Check if metaplay-project.yaml already exists
-	configFilePath := filepath.Join(o.projectPath, projectConfigFileName)
+	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 	if _, err := os.Stat(configFilePath); err == nil {
 		return fmt.Errorf("config file %s exists, project has already been initialized", configFilePath)
 	}
@@ -250,7 +251,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	runner := tui.NewTaskRunner()
 
 	var relativePathToSdk string
-	var sdkMetadata *MetaplayVersionMetadata
+	var sdkMetadata *metaproj.MetaplayVersionMetadata
 
 	// Only download/extract SDK if not migrating existing project
 	runner.AddTask("Download & extract Metaplay SDK", func() error {
@@ -277,16 +278,16 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	})
 
 	// Generate the metaplay-project.yaml in project root.
-	var projectConfig *ProjectConfig
+	var projectConfig *metaproj.ProjectConfig
 	runner.AddTask("Generate metaplay-project.yaml", func() error {
-		projectConfig, err = generateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, relativePathToSdk, targetProject, environments)
+		projectConfig, err = metaproj.GenerateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, relativePathToSdk, targetProject, environments)
 		return err
 	})
 
 	// Only extract files if not migrating existing project
 	runner.AddTask("Update files to project", func() error {
 		// Create MetaplayProject.
-		project, err := initMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
+		project, err := metaproj.NewMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
 		if err != nil {
 			return err
 		}
