@@ -9,6 +9,7 @@ import (
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -69,6 +70,10 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 	authProvider := getAuthProvider(project)
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Run Bot Client Locally"))
+	log.Info().Msg("")
 
 	// Resolve target environment flags (if specified)
 	targetEnvFlags := []string{}

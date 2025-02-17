@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +42,10 @@ func (o *BuildDashboardOpts) Run(cmd *cobra.Command) error {
 	if !project.UsesCustomDashboard() {
 		return fmt.Errorf("project does not have a custom dashboard to build")
 	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Build LiveOps Dashboard Locally"))
+	log.Info().Msg("")
 
 	// Check that required dashboard tools are installed and satisfy version requirements.
 	if err := checkDashboardToolVersions(project); err != nil {

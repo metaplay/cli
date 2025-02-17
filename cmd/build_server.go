@@ -6,6 +6,7 @@ package cmd
 import (
 	"os"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -54,6 +55,10 @@ func (o *buildServerOpts) Run(cmd *cobra.Command) error {
 		log.Error().Msgf("Failed to find project: %v", err)
 		os.Exit(1)
 	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Build Game Server Locally"))
+	log.Info().Msg("")
 
 	// Check for .NET SDK installation and required version (based on SDK version).
 	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {

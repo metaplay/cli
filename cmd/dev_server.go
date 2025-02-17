@@ -6,6 +6,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -61,6 +62,10 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Run Game Server Locally"))
+	log.Info().Msg("")
 
 	// Check for .NET SDK installation and required version (based on SDK version).
 	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {

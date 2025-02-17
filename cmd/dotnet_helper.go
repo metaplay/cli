@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -76,7 +77,10 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse required .NET version from '%s': %v", installedVersionStr, err)
 	}
-	log.Info().Msgf("Detected .NET version: %s", installedVersion)
+
+	// Print the info.
+	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", requiredDotnetVersion))
+	log.Info().Msgf("Installed .NET SDK: %s %s", styles.RenderTechnical(installedVersion.String()), badge)
 
 	// Check that .NET version is recent enough
 	if installedVersion.LessThan(requiredDotnetVersion) {
@@ -84,6 +88,7 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 			requiredDotnetVersion, installedVersion, getDotnetInstallInstructions())
 	}
 
+	log.Info().Msg("")
 	return nil
 }
 
