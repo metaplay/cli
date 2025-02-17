@@ -61,12 +61,6 @@ func newPersistedConfig() *PersistedConfig {
 	}
 }
 
-// Get the session ID to use. Can use common.PortalBaseURL to force
-// unique sessions for each portal instance.
-func getSessionID() string {
-	return "default"
-}
-
 // Generate or retrieve the AES encryption key from the keyring.
 func getOrCreateAESKey() ([]byte, error) {
 	// On Linux, there is no reliably keyring available, so we resort to a fixed key.
@@ -240,7 +234,7 @@ func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 }
 
 // SaveSessionState saves the current session state (with encrypted tokenSet).
-func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
+func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
 	if err != nil {
@@ -267,7 +261,7 @@ func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
 
 	// Update session state in persisted config.
 	updatePersistedConfig(func(config *PersistedConfig) error {
-		config.Sessions[getSessionID()] = sessionState
+		config.Sessions[sessionID] = sessionState
 		return nil
 	})
 
@@ -276,7 +270,7 @@ func SaveSessionState(userType UserType, tokenSet *TokenSet) error {
 
 // LoadSessionState loads a session state and decrypts the tokenSet.
 // Returns nil if there is no existing session.
-func LoadSessionState() (*SessionState, error) {
+func LoadSessionState(sessionID string) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
 	if err != nil {
@@ -284,7 +278,7 @@ func LoadSessionState() (*SessionState, error) {
 	}
 
 	// Get session state.
-	sessionState, found := persistedConfig.Sessions[getSessionID()]
+	sessionState, found := persistedConfig.Sessions[sessionID]
 	if !found {
 		// Session not found, return nil (but no error).
 		return nil, nil
@@ -322,10 +316,10 @@ func LoadSessionState() (*SessionState, error) {
 }
 
 // DeleteSessionState removes the current session state (i.e., signs out the user).
-func DeleteSessionState() error {
+func DeleteSessionState(sessionID string) error {
 	// Remove the session from the persisted config.
 	return updatePersistedConfig(func(config *PersistedConfig) error {
-		delete(config.Sessions, getSessionID())
+		delete(config.Sessions, sessionID)
 		return nil
 	})
 }

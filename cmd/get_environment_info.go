@@ -17,22 +17,30 @@ import (
 )
 
 type getEnvironmentInfoOpts struct {
-	flagFormat     string
+	UsePositionalArgs
+
 	argEnvironment string
+	flagFormat     string
 }
 
 func init() {
 	o := getEnvironmentInfoOpts{}
+
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
 		Use:     "environment-info ENVIRONMENT [flags]",
 		Aliases: []string{"env-info"},
 		Short:   "Get information about the target environment",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Get information about the target environment.
 
 			By default, displays the most relevant information in a human-readable text format.
 			Use --format=json to get the complete environment information in JSON format.
+
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Show relevant environment information in text format (default)
@@ -50,17 +58,10 @@ func init() {
 }
 
 func (o *getEnvironmentInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
-	}
-
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
 	}
-
-	// Store target environment.
-	o.argEnvironment = args[0]
 
 	return nil
 }
@@ -76,14 +77,21 @@ func intListToStr(ints []int) string {
 }
 
 func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

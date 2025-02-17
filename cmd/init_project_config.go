@@ -44,13 +44,13 @@ type detectedProjectConfig struct {
 }
 
 func init() {
-	o := &initProjectConfigOpts{}
+	o := initProjectConfigOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "project-config [flags]",
 		Short: "Initialize the metaplay-project.yaml in an existing project",
-		Run:   runCommand(o),
-		Long: trimIndent(`
+		Run:   runCommand(&o),
+		Long: renderLong(&o, `
 			Initialize a metaplay-project.yaml configuration file in an existing project directory.
 			This file is used by the CLI to understand the project structure and configuration.
 
@@ -104,10 +104,6 @@ func init() {
 }
 
 func (o *initProjectConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("not expecting any arguments, got %d", len(args))
-	}
-
 	// Resolve target project root directory (where metaplay-project.yaml is created).
 	o.projectPath = coalesceString(flagProjectConfigPath, ".")
 
@@ -134,8 +130,15 @@ func (o *initProjectConfigOpts) Prepare(cmd *cobra.Command, args []string) error
 }
 
 func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Make sure the user is logged in.
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
 	"github.com/rs/zerolog/log"
@@ -62,7 +61,7 @@ func findAvailableCallbackPort() (net.Listener, int, error) {
 	return nil, 0, fmt.Errorf("no available ports between 5000-5004")
 }
 
-func LoginWithBrowser(ctx context.Context) error {
+func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) error {
 	// Set up a local server on a random port.
 	listener, port, err := findAvailableCallbackPort()
 	if err != nil {
@@ -105,14 +104,14 @@ func LoginWithBrowser(ctx context.Context) error {
 				}
 
 				// Exchange authorization code for tokenSet
-				tokenSet, err := exchangeCodeForTokens(code, codeVerifier, redirectURI)
+				tokenSet, err := exchangeCodeForTokens(code, codeVerifier, redirectURI, authProvider)
 				if err != nil {
 					http.Error(w, "Token exchange failed: "+err.Error(), http.StatusInternalServerError)
 					return
 				}
 
 				// Save tokens securely
-				err = SaveSessionState(UserTypeHuman, tokenSet)
+				err = SaveSessionState(authProvider.GetSessionID(), UserTypeHuman, tokenSet)
 				if err != nil {
 					http.Error(w, "Failed to save tokens: "+err.Error(), http.StatusInternalServerError)
 					return
@@ -135,13 +134,13 @@ func LoginWithBrowser(ctx context.Context) error {
 	}()
 
 	// Construct authorization URL with proper encoding
-	const authorizationUrl = `${authorizationEndpoint}?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&code_challenge=${challenge}&code_challenge_method=S256&scope=${encodeURIComponent('openid offline_access')}&state=${encodeURIComponent(state)}`
-	authURL := fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256&scope=%s&state=%s",
-		authEndpoint,
-		clientID,
+	authURL := fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256&scope=%s&audience=%s&state=%s",
+		authProvider.AuthEndpoint,
+		authProvider.ClientID,
 		url.QueryEscape(redirectURI),
 		codeChallenge,
-		url.QueryEscape("openid offline_access"),
+		url.QueryEscape(authProvider.Scopes),
+		url.QueryEscape(authProvider.Audience),
 		url.QueryEscape(state))
 
 	// Log the authorization URL for manual fallback
@@ -152,7 +151,7 @@ func LoginWithBrowser(ctx context.Context) error {
 	select {
 	case <-done:
 		log.Info().Msg("")
-		log.Info().Msg(styles.RenderSuccess("✅ Authentication successful!"))
+		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
 	case <-time.After(5 * time.Minute):
 		return fmt.Errorf("timeout during authentication")
 	}
@@ -165,7 +164,7 @@ func LoginWithBrowser(ctx context.Context) error {
 	return nil
 }
 
-func MachineLogin(clientId, clientSecret string) error {
+func MachineLogin(authProvider *AuthProviderConfig, clientId, clientSecret string) error {
 	// Get a fresh access token from Metaplay Auth.
 	params := url.Values{
 		"grant_type":    {"client_credentials"},
@@ -175,42 +174,42 @@ func MachineLogin(clientId, clientSecret string) error {
 	}
 
 	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint
-	resp, err := http.Post(tokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
+	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
 	if err != nil {
-		return fmt.Errorf("Failed to send request to token endpoint: %w", err)
+		return fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Parse the response, there should be a non-empty body containing the token as JSON
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("Failed to read token endpoint response: %w", err)
+		return fmt.Errorf("failed to read token endpoint response: %w", err)
 	}
 
-	// Check for HTTP errors
+	// Check for HTTP errors.
 	// TODO: Check whether other 2xx codes with a token in the body should be expected and accepted
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Token endpoint returned an error: %s - %s", resp.Status, string(body))
+		return fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
 	}
 
 	// Parse a TokenSet object from the response body JSON
 	var tokenSet TokenSet
 	err = json.Unmarshal(body, &tokenSet)
 	if err != nil {
-		return fmt.Errorf("Failed to parse token JSON: %w", err)
+		return fmt.Errorf("failed to parse token JSON: %w", err)
 	}
 
 	// Save tokens securely
-	err = SaveSessionState(UserTypeMachine, &tokenSet)
+	err = SaveSessionState(authProvider.GetSessionID(), UserTypeMachine, &tokenSet)
 	if err != nil {
-		return fmt.Errorf("Failed to save tokens: %w", err)
+		return fmt.Errorf("failed to save tokens: %w", err)
 	}
 
-	// TODO: There is probably unnecessary repetition in the error formatting
-	userinfo, err := FetchUserInfo(&tokenSet)
+	// Fetch the user info.
+	userinfo, err := FetchUserInfo(authProvider, &tokenSet)
 	if err != nil {
-		return fmt.Errorf("Failed to fetch userinfo: %w", err)
+		return err
 	}
 
 	log.Info().Msgf("You are now logged in with machine user %s %s (clientId=%s) and can execute other commands.", userinfo.GivenName, userinfo.FamilyName, userinfo.Subject)
@@ -218,17 +217,16 @@ func MachineLogin(clientId, clientSecret string) error {
 	return nil
 }
 
-func FetchUserInfo(tokenSet *TokenSet) (*UserInfoResponse, error) {
+func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
 	// Resolve userinfo endpoint (on the portal).
-	userInfoEndpoint := common.PortalBaseURL + "/api/external/userinfo"
-	log.Debug().Msgf("Fetch user info from %s", userInfoEndpoint)
+	log.Debug().Msgf("Fetch user info from %s", authProvider.UserInfoEndpoint)
 
 	// Make the request
 	var userinfo UserInfoResponse
 	resp, err := resty.New().R().
 		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
 		SetResult(&userinfo).               // Unmarshal response into the struct
-		Get(userInfoEndpoint)
+		Get(authProvider.UserInfoEndpoint)
 
 	if err != nil {
 		return nil, fmt.Errorf("Failed to fetch userinfo %w", err)
@@ -242,17 +240,17 @@ func FetchUserInfo(tokenSet *TokenSet) (*UserInfoResponse, error) {
 }
 
 // Exchange the OAuth2 code for the token set.
-func exchangeCodeForTokens(code, verifier, redirectURI string) (*TokenSet, error) {
+func exchangeCodeForTokens(code, verifier, redirectURI string, authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Prepare the POST request payload
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("code", code)
 	data.Set("redirect_uri", redirectURI)
-	data.Set("client_id", clientID)
+	data.Set("client_id", authProvider.ClientID)
 	data.Set("code_verifier", verifier)
 
 	// Make the HTTP POST request
-	resp, err := http.Post(tokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}

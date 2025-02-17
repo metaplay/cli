@@ -4,8 +4,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -29,16 +27,26 @@ func init() {
 }
 
 func (o *LogoutOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("expecting no arguments, got %d", len(args))
-	}
-
 	return nil
 }
 
 func (o *LogoutOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Sign Out"))
+	log.Info().Msg("")
+	log.Info().Msgf("Project:       %s", styles.RenderTechnical(project.Config.ProjectHumanID))
+	log.Info().Msgf("Auth provider: %s", styles.RenderTechnical(authProvider.Name))
+	log.Info().Msg("")
+
 	// Check if we're logged in.
-	sessionState, err := auth.LoadSessionState()
+	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())
 	if err != nil {
 		return err
 	}
@@ -51,7 +59,7 @@ func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Delete the session state.
-	err = auth.DeleteSessionState()
+	err = auth.DeleteSessionState(authProvider.GetSessionID())
 	if err != nil {
 		return err
 	}

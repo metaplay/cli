@@ -14,6 +14,8 @@ import (
 
 // Run a built docker image locally.
 type devImageOpts struct {
+	UsePositionalArgs
+
 	argImageTag string
 	extraArgs   []string
 }
@@ -21,19 +23,22 @@ type devImageOpts struct {
 func init() {
 	o := devImageOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'dotnet run'.")
+
 	cmd := &cobra.Command{
 		Use:   "image IMAGE:TAG [flags] [-- EXTRA_ARGS]",
 		Short: "Run a server Docker image locally",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Run a pre-built docker image locally.
 
 			The LiveOps Dashboard is served at http://localhost:5550.
 
 			Prometheus metrics are served at http://localhost:9090/metrics.
 
-			Arguments:
-			- EXTRA_ARGS is passed directly to 'dotnet run'.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay build image ...' to build a server Docker image.
@@ -48,13 +53,6 @@ func init() {
 }
 
 func (o *devImageOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) < 1 {
-		return fmt.Errorf("at lest one argument must be provided, got %d", len(args))
-	}
-
-	o.argImageTag = args[0]
-	o.extraArgs = args[1:]
-
 	return nil
 }
 

@@ -14,20 +14,24 @@ import (
 )
 
 type getKubeConfigOpts struct {
+	UsePositionalArgs
+
+	argEnvironment      string
 	flagCredentialsType string
 	flagOutput          string
-
-	argEnvironment string
 }
 
 func init() {
 	o := getKubeConfigOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
 		Use:   "kubeconfig ENVIRONMENT [flags]",
 		Short: "Get the Kubernetes KubeConfig for the target environment",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Get the Kubernetes KubeConfig for accessing the target environment's cluster.
 
 			The KubeConfig can be generated with two different credential handling types:
@@ -39,6 +43,8 @@ func init() {
 			- static for machine users (logged in with access token only)
 
 			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
+
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Get KubeConfig for environment tough-falcons with dynamic credentials
@@ -59,27 +65,25 @@ func init() {
 }
 
 func (o *getKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("too many arguments (%d) provided, expecting maximum of 1", len(args))
-	}
-
-	// Store target environment, if provided
-	if len(args) > 0 {
-		o.argEnvironment = args[0]
-	}
-
 	return nil
 }
 
 func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -101,7 +105,8 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	var kubeconfigPayload string
 	switch credentialsType {
 	case "dynamic":
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential()
+		// \todo fetch userinfo and pass that in?
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(authProvider)
 	case "static":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	default:

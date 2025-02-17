@@ -23,50 +23,65 @@ func NewClient(tokenSet *auth.TokenSet) *Client {
 	}
 }
 
-// Status of a single contract for a user.
-type UserContractStatus struct {
-	Version    string `json:"version"`     // Version of contract.
-	AcceptedAt string `json:"accepted_at"` // Timestamp when contract accepted.
-}
-
 // User profile in the portal.
 type UserProfile struct {
-	UserID         string                        `json:"id"`              // Portal user ID (different from Metaplay Auth).
-	ContractStatus map[string]UserContractStatus `json:"contract_status"` // Contract statuses for user.
+	UserID string `json:"id"` // Portal user ID (different from Metaplay Auth).
 }
 
-// Check whether the user has agreed to the general terms and conditions, i.e.,
-// are they allowed to download the SDK.
-func (c *Client) IsGeneralTermsAndConditionsAccepted() (bool, error) {
+// Status of a single user contract (signed or not).
+type UserCoreContract struct {
+	Changes        *string `json:"changes"`
+	CreatedAt      string  `json:"created_at"`
+	Description    string  `json:"description"`
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	OrganizationID *string `json:"organization_id"`
+	Type           string  `json:"type"`
+	URI            string  `json:"uri"`
+	URIType        string  `json:"uri_type"`
+	UserID         *string `json:"user_id"`
+	Version        string  `json:"version"`
+
+	// Signature by the user. Nil if not signed.
+	ContractSignature *struct {
+		ID        string `json:"id"`
+		CreatedAt string `json:"created_at"`
+	} `json:"contract_signature"`
+}
+
+// User state as returned from the /users/me endpoint on portal.
+// Includes basic profile info as well as contract signatures.
+type UserState struct {
+	User UserProfile `json:"user"`
+
+	Contracts struct {
+		PrivacyPolicy      UserCoreContract `json:"privacyPolicy"`
+		TermsAndConditions UserCoreContract `json:"termsAndConditions"`
+	} `json:"contracts"`
+}
+
+// Get the user's state from portal /api/v1/users/me endpoint. This includes
+// the user profile and contract signature status.
+func (c *Client) GetUserState() (*UserState, error) {
 	// Fetch my user profile from portal.
-	myProfile, err := metahttp.Get[UserProfile](c.httpClient, "/api/v1/users/me")
+	userState, err := metahttp.Get[UserState](c.httpClient, "/api/v1/users/me")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	log.Debug().Msgf("User profile: %+v", myProfile)
+	// log.Info().Msgf("User state: %+v", userState)
 
-	// Get General Terms & Conditions (prerequisite for downloading the SDK) status.
-	_, found := myProfile.ContractStatus["general-terms-and-conditions"]
-	if !found {
-		return false, nil
-	}
-
-	return true, nil
+	return &userState, nil
 }
 
-func (c *Client) AgreeToGeneralTermsAndConditions() error {
+// User has agreed to the contents of a specific contract. Update the status to the portal.
+func (c *Client) AgreeToContract(contractID string) error {
 	// Fill in the request.
 	payload := map[string]interface{}{
-		"contract_status": map[string]interface{}{
-			"general-terms-and-conditions": map[string]interface{}{
-				"version":     "", // Version is handled on the server
-				"accepted_at": "", // The timestamp is handled on the server
-			},
-		},
+		"contract_id": contractID,
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.Post[any](c.httpClient, fmt.Sprintf("/api/v1/users/me"), payload)
+	_, err := metahttp.Put[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}

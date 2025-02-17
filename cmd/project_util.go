@@ -55,6 +55,29 @@ func findProjectDirectory() (string, error) {
 	return ".", nil
 }
 
+// Get the AuthProvider: either return the project's custom provider (if defined),
+// or otherwise use the default Metaplay Auth.
+func getAuthProvider(project *metaproj.MetaplayProject) *auth.AuthProviderConfig {
+	// If have a project, return its auth provider.
+	if project != nil && project.Config.AuthProvider != nil {
+		return project.Config.AuthProvider
+	}
+
+	// Otherwise, return default Metaplay Auth provider.
+	return auth.NewMetaplayAuthProvider()
+}
+
+func tryResolveProject() (*metaproj.MetaplayProject, error) {
+	// Check if we can find the project file.
+	_, err := findProjectDirectory()
+	if err != nil {
+		return nil, nil
+	}
+
+	// If found the project file, load it.
+	return resolveProject()
+}
+
 // Locate and load the project config file, based on the --project flag.
 func resolveProject() (*metaproj.MetaplayProject, error) {
 	// Find the path with the project config file.
@@ -83,11 +106,10 @@ func resolveProject() (*metaproj.MetaplayProject, error) {
 
 // Resolve the environment configuration. First, try the project config, if available.
 // Otherwise, fetch the information from the portal.
-func resolveEnvironment(tokenSet *auth.TokenSet, environment string) (*metaproj.ProjectEnvironmentConfig, error) {
+func resolveEnvironment(project *metaproj.MetaplayProject, tokenSet *auth.TokenSet, environment string) (*metaproj.ProjectEnvironmentConfig, error) {
 	// If a metaplay-project.yaml can be located, resolve the environment
 	// from the project config.
-	project, err := resolveProject()
-	if err == nil {
+	if project != nil {
 		// If environment not specified, ask it from the user (if in interactive mode).
 		if environment == "" {
 			if tui.IsInteractiveMode() {
@@ -137,6 +159,7 @@ func resolveEnvironment(tokenSet *auth.TokenSet, environment string) (*metaproj.
 		}
 
 		// Try to resolve the environment from the portal by its human ID.
+		var err error
 		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
 		if err != nil {
 			return nil, err

@@ -14,27 +14,33 @@ import (
 )
 
 type ShowSecretOpts struct {
-	flagFormat string
+	UsePositionalArgs
 
 	argEnvironment string
 	argSecretName  string
+	flagFormat     string
 }
 
 func init() {
 	o := ShowSecretOpts{}
 
-	// \todo specify payload
+	args := o.Arguments()
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
+
 	cmd := &cobra.Command{
 		Use:   "show ENVIRONMENT NAME [flags]",
 		Short: "[preview] Show a user secret in the target environment",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change!
 
 			Show the contents of a single user secret.
 
 			By default, a human-readable text format is used. When using in a script, use
 			the --format=json to output JSON format.
+
+			{Arguments}
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
@@ -63,31 +69,30 @@ func init() {
 }
 
 func (o *ShowSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
-	}
-
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
 	}
 
-	// Store arguments.
-	o.argEnvironment = args[0]
-	o.argSecretName = args[1]
-
 	return nil
 }
 
 func (o *ShowSecretOpts) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

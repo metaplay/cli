@@ -24,6 +24,8 @@ import (
 
 // debugShellOpts holds the options for the 'debug shell' command
 type debugShellOpts struct {
+	UsePositionalArgs
+
 	// Environment and pod selection
 	Environment string
 	PodName     string
@@ -52,12 +54,16 @@ func init() {
 		TTY:           true,
 	}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.Environment, "ENVIRONMENT", "Target environment, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.PodName, "POD", "Target pod name, eg, 'all-0'.")
+
 	cmd := &cobra.Command{
-		Use:     "shell ENVIRONMENT [POD] [flags]",
+		Use:     "shell [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"sh"},
 		Short:   "[preview] Start a debug container targeting the specified pod",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change
 
 			Start a debug container targeting a game server pod in the specified environment.
@@ -72,9 +78,7 @@ func init() {
 			debugging and diagnostic tools. The container is attached to the shard-server container
 			within the pod, giving you direct access to the game server process.
 
-			Arguments:
-			- ENVIRONMENT is the target environment in the current project.
-			- POD (optional) is name of the pod to target. Must be given when multiple pods exist.
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Start a debug container in the 'tough-falcons' environment (when only one pod is running).
@@ -90,17 +94,6 @@ func init() {
 
 // Complete finishes parsing arguments for the command
 func (o *debugShellOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) > 2 {
-		return fmt.Errorf("too many arguments (%d) provided, expecting maximum of 2", len(args))
-	}
-
-	if len(args) > 0 {
-		o.Environment = args[0]
-	}
-	if len(args) > 1 {
-		o.PodName = args[1]
-	}
-
 	if o.TTY && !o.Interactive {
 		return fmt.Errorf("cannot enable TTY without stdin")
 	}
@@ -115,14 +108,21 @@ func (o *debugShellOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 // Run executes the command
 func (o *debugShellOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment config.
-	envConfig, err := resolveEnvironment(tokenSet, o.Environment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.Environment)
 	if err != nil {
 		return err
 	}

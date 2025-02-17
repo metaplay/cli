@@ -2,7 +2,7 @@
 
 ## Description
 
-The `metaplay` command-line tool is used to manage projects using Metaplay, to build and deploy the game server into the cloud, and to interact with the cloud environments in various ways.
+The `metaplay` command-line tool is used to manage projects using Metaplay, to build and deploy the game server into the cloud, and to interact with the cloud environments.
 
 ## Installation
 
@@ -58,56 +58,56 @@ You can find the latest release on our [Github releases page](https://github.com
 
 * Now you can run the `metaplay` executable in your terminal and it will output further instructions. See section [Usage](https://github.com/metaplay/cli?tab=readme-ov-file#usage) for details.
 
-### Development Build
-
-We do continuously update the latest development build from the `metaplay/cli` repository `main` branch and it can be found on the [releases page](https://github.com/metaplay/cli/releases/tag/0.0.0), but there are no quality guarantees whatsoever associated with it. The development build is primarily intended for our internal use and is made available for Github CI runners to run automated tests on (and with) without the need to always build from scratch.
-
-Development builds do not currently perform any version checks (for the purpose of new release notifications), and the CLI `update` command is disabled on development builds as well.
-
-It is highly recommended to use the latest official release, so should you decide to mess with development builds, proceed with extreme caution!
-
 ## Usage
 
-### Authentication
+### Integrate Metaplay SDK to Your Game
 
-To sign in using your browser via the Metaplay portal:
-
-```bash
-metaplay auth login
-```
-
-To sign in as a machine user (primarily for CI use cases), first set the `METAPLAY_CREDENTIALS` environment to the credentials from the [Metaplay portal](https://portal.metaplay.dev):
+You can add Metaplay SDK to your game using the integration wizard in the CLI by running:
 
 ```bash
-export METAPLAY_CREDENTIALS=<credentials>
-metaplay auth machine-login
+MyProject$ metaplay init project
 ```
 
-To sign out:
-
-```bash
-metaplay auth logout
-```
+This will link your local project to the [Metaplay Portal](https://portal.metaplay.dev), donwload and extract the SDK, add the game-specific backend project, and add some samples on how to get started.
 
 ### Build and Deploy Server to Cloud
 
 You must run the steps in the same directory as your `metaplay-project.yaml` project config file
-is located. If you wish to run in another directory, provide the path to the project
-directory with `-p <pathToProject>`.
+is located.
 
-1. Build the game server docker image.
+First, build the game server docker image.
 
-    ```bash
-    metaplay build image <image>:<tag>
-    ```
+```bash
+MyProject$ metaplay build image <image>:<tag>
+```
 
-2. Deploy the game server to an environment:
+Then, deploy the game server to an environment:
 
-    ```bash
-    metaplay deploy server <environment> <image>:<tag>
-    ```
+```bash
+MyProject$ metaplay deploy server <environment> <image>:<tag>
+```
 
-    The command also pushes the docker image to the environment's registry.
+The command also pushes the docker image to the environment's registry.
+
+### View Game Server Logs
+
+To get logs from your game server running in the cloud, use the following:
+
+```bash
+metaplay debug logs ENVIRONMENT
+```
+
+By default, it shows time-ordered logs from all pods, but you can also only target a single pod with:
+
+```bash
+metaplay debug logs ENVIRONMENT --pod=POD_NAME
+```
+
+Alternatively, you can run the command without any parameters and the CLI will ask you the project and environment:
+
+```bash
+metaplay debug logs
+```
 
 ### Kubernetes Access
 
@@ -115,20 +115,28 @@ To access the Kubernetes control plane for your environment, you can do the foll
 
 ```bash
 # Get the kubeconfig file for the environment.
-metaplay get kubeconfig <environment> -o <pathToKubeconfig>
+metaplay get kubeconfig ENVIRONMENT -o <pathToKubeconfig>
 # Configure kubectl to use the kubeconfig file.
 export KUBECONFIG=<pathToKubeconfig>
 # Check the status of your pods.
 kubectl get pods
-# Get the logs from a specific pod.
-kubectl logs <podName>
 ```
+
+By default, the generated `kubeconfig` file will invoke the `metaplay` CLI itself to resolve the credentials used to communicate with the Kubernetes control plane.
 
 ### Using in CI Jobs
 
 For detailed instructions on how to set up your CI system, see the [Getting Started with Cloud Deployments](https://docs.metaplay.io/cloud-deployments/getting-started.html) guide.
 
-### Troubleshooting
+### Tips & Tricks
+
+#### Working Directory
+
+It's generally easiest to run the `metaplay` CLI in your project directory, i.e., where `metaplay-project.yaml` is located. This way the CLI knows the project you're working with and can target operations to operate on that.
+
+If you wish to run in another directory, provide the path to the project directory with `-p <pathToProject>`.
+
+#### Troubleshooting the CLI
 
 If you have any issues running a command, give it the `--verbose` flag to get more detailed output on what is happening, e.g.:
 
@@ -136,7 +144,51 @@ If you have any issues running a command, give it the `--verbose` flag to get mo
 metaplay deploy server <environment> <image>:<tag> --verbose
 ```
 
+#### Multiple Sessions
+
+The CLI supports storing multiple sessions at the same time. This can be useful when working with projects that use 3rd party authentication instead of Metaplay Portal for their authentication.
+
+The authentication provider is determined from the `metaplay-project.yaml` and thus any authentication operations are dependent on the project in the context of which the CLI is run.
+
+### Support & Feature Requests
+
 If you have a paid support contract with Metaplay, you can open a ticket on the [Metaplay portal's support page](https://portal.metaplay.dev/orgs/metaplay/support).
+
+### Development
+
+#### Development Build
+
+We do continuously update the latest development build from the `metaplay/cli` repository `main` branch and it can be found on the [releases page](https://github.com/metaplay/cli/releases/tag/0.0.0), but there are no quality guarantees whatsoever associated with it. The development build is primarily intended for our internal use and is made available for Github CI runners to run automated tests on (and with) without the need to always build from scratch.
+
+Development builds do not currently perform any version checks (for the purpose of new release notifications), and the CLI `update` command is disabled on development builds as well.
+
+It is highly recommended to use the latest official release, so should you decide to mess with development builds, proceed with extreme caution!
+
+#### Run Locally
+
+While developing the CLI itself, it's often most convenient to run the binary from source and direct it to operate on a project with the `-p` flag, e.g.:
+
+```bash
+cli$ go run . -p ../MyProject debug shell
+```
+
+When working on authentication-related features on Windows, you can avoid the network confirm dialog from being asked each with the following:
+
+```bash
+cli$ go build . && cli.exe auth login
+```
+
+#### Unit Tests
+
+To run all unit tests:
+
+```bash
+cli$ go test ./...
+```
+
+#### Platform Tests
+
+Most of the testing of the CLI is done using Metaplay's internal platform tests. The CLI does very little in isolation so there's not much that can be tested without the surrounding components.
 
 ## License
 

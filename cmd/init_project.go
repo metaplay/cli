@@ -4,11 +4,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -16,17 +19,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Link to the terms & conditions required to download the SDK
-// \todo add test to see that this URL is valid
-const metaplayTermsAndConditionsUrl = "https://portal.metaplay.dev/licenses/general-terms-and-conditions"
-
 type initProjectOpts struct {
-	flagProjectID                   string // Human ID of the project.
-	flagSdkVersion                  string // Metaplay SDK version to use (e.g., "32.0").
-	flagSdkSource                   string // Path to Metaplay SDK release .zip to use.
-	flagUnityProjectPath            string // Path to the Unity project files within the project.
-	flagAutoAgreeTermsAndConditions bool   // Automatically agree to the terms & conditions.
-	flagAutoConfirm                 bool   // Automatically confirm the 'Does this look correct?'
+	flagProjectID          string // Human ID of the project.
+	flagSdkVersion         string // Metaplay SDK version to use (e.g., "32.0").
+	flagSdkSource          string // Path to Metaplay SDK release .zip to use.
+	flagUnityProjectPath   string // Path to the Unity project files within the project.
+	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
+	flagAutoConfirm        bool   // Automatically confirm the 'Does this look correct?'
 
 	projectPath              string // User-provided path to project root (relative or absolute).
 	absoluteProjectPath      string // Absolute path to the project root.
@@ -34,13 +33,13 @@ type initProjectOpts struct {
 }
 
 func init() {
-	o := &initProjectOpts{}
+	o := initProjectOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "project [flags]",
 		Short: "Initialize Metaplay SDK in an existing Unity project",
-		Run:   runCommand(o),
-		Long: trimIndent(`
+		Run:   runCommand(&o),
+		Long: renderLong(&o, `
 			Integrate Metaplay SDK into an existing project.
 
 			By default, this command downloads the latest Metaplay SDK from the portal. You must be
@@ -86,17 +85,13 @@ func init() {
 	flags.StringVar(&o.flagSdkVersion, "sdk-version", "", "Specify Metaplay SDK version to use, defaults to latest (optional)")
 	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-32.0.zip' (optional)")
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
-	flags.BoolVar(&o.flagAutoAgreeTermsAndConditions, "auto-agree", false, fmt.Sprintf("Automatically agree to the terms & conditions (%s)", metaplayTermsAndConditionsUrl))
+	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
 	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm to the 'Does this look correct?' confirmation")
 
 	initCmd.AddCommand(cmd)
 }
 
 func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("not expecting any arguments, got %d", len(args))
-	}
-
 	// Resolve target project root directory (where metaplay-project.yaml is created).
 	o.projectPath = coalesceString(flagProjectConfigPath, ".")
 
@@ -150,8 +145,12 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *initProjectOpts) Run(cmd *cobra.Command) error {
+	// Use default auth provider.
+	// \todo ability to customize or disable provider?
+	authProvider := auth.NewMetaplayAuthProvider()
+
 	// Make sure the user is logged in.
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
@@ -168,36 +167,22 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	portalClient := portalapi.NewClient(tokenSet)
 	if o.flagSdkSource == "" {
 		// Handle agreeing to general terms & conditions.
-		log.Debug().Msg("Check whether terms and conditions has been signed")
-		hasSigned, err := portalClient.IsGeneralTermsAndConditionsAccepted()
+		log.Debug().Msg("Fetch the user state to see which contracts have been signed")
+		userState, err := portalClient.GetUserState()
 		if err != nil {
 			return err
 		}
 
-		// If hasn't agreed to the terms & conditions, let the user do so.
-		if !hasSigned {
-			if !o.flagAutoAgreeTermsAndConditions {
-				choice, err := tui.DoConfirmDialog(
-					cmd.Context(),
-					"Agree to General Terms & Conditions",
-					fmt.Sprintf("You need to agree to the Metaplay General Terms & Conditions before you can download the Metaplay SDK:\n  %s", metaplayTermsAndConditionsUrl),
-					"Do you agree?")
-				if err != nil {
-					return fmt.Errorf("failed to agree to terms & conditions: %w", err)
-				}
+		// Ensure Privacy Policy is accepted.
+		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.PrivacyPolicy)
+		if err != nil {
+			return err
+		}
 
-				if !choice {
-					return fmt.Errorf("the user did not agree to the terms & conditions; unable to download Metaplay SDK")
-				}
-			}
-
-			// Update agreed-to status in portal
-			err = portalClient.AgreeToGeneralTermsAndConditions()
-			if err != nil {
-				return err
-			}
-
-			log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), "Status updated in portal!")
+		// Ensure Terms & Conditions is accepted.
+		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.TermsAndConditions)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -323,5 +308,38 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical("UnityClient/Assets/StreamingAssets/"))
 	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical("UnityClient/Package/manifest.json"))
 
+	return nil
+}
+
+func (o *initProjectOpts) ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client, contractState *portalapi.UserCoreContract) error {
+	// If already signed, return immediately.
+	if contractState.ContractSignature != nil {
+		return nil
+	}
+
+	// If auto-agree not specified, confirm the user for agreement to contract.
+	if !o.flagAutoAgreeContracts {
+		contractURL := fmt.Sprintf("%s/contracts/%s", common.PortalBaseURL, contractState.ID)
+		choice, err := tui.DoConfirmDialog(
+			ctx,
+			fmt.Sprintf("Agree to %s", contractState.Name),
+			fmt.Sprintf("You need to agree to the Metaplay %s in order to download the Metaplay SDK:\n  %s", contractState.Name, contractURL),
+			"Do you agree?")
+		if err != nil {
+			return err
+		}
+
+		if !choice {
+			return fmt.Errorf("refused to accept %s; unable to download Metaplay SDK", contractState.Name)
+		}
+	}
+
+	// Update agreed-to status in portal
+	err := portalClient.AgreeToContract(contractState.ID)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Msgf(" %s Agreed to %s!", styles.RenderSuccess("✓"), contractState.Name)
 	return nil
 }

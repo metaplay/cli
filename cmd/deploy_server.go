@@ -9,11 +9,7 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/daemon"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -29,27 +25,33 @@ const metaplayGameServerPodLabelSelector = "app=metaplay-server"
 
 // Deploy a game server to the target environment with specified docker image version.
 type deployGameServerOpts struct {
+	UsePositionalArgs
+
+	argEnvironment          string
+	argImageNameTag         string
+	extraArgs               []string
 	flagHelmReleaseName     string
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
 	flagCheckOnly           bool // Only perform the server status check, not the deployment itself. \todo separate to its own command?
-
-	argEnvironment  string
-	argImageNameTag string
-	extraArgs       []string
 }
 
 func init() {
 	o := deployGameServerOpts{}
+
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
 		Use:     "server ENVIRONMENT [IMAGE:]TAG [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"srv"},
 		Short:   "Deploy a server image into the target environment",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Deploy a game server into a cloud environment using the specified docker image version.
 
 			After deploying the server image, various checks are run against the deployment to help
@@ -64,10 +66,7 @@ func init() {
 			pushed to the environment's registry. If only a tag is specified (eg, '364cff09'), the
 			image is assumed to be present in the remote registry already.
 
-			Arguments:
-			- ENVIRONMENT specifies the target environment into which the image is pushed.
-			- [IMAGE:]TAG is the image to deploy; specify full local IMAGE:TAG to also push the image.
-			- EXTRA_ARGS are passed directly to Helm.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay build image ...' to build the docker image.
@@ -107,19 +106,6 @@ func init() {
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("expecting two arguments: ENVIRONMENT and [IMAGE:]TAG")
-	}
-
-	o.argEnvironment = args[0]
-	o.argImageNameTag = args[1]
-	o.extraArgs = args[2:]
-
-	// Validate image tag.
-	if o.argImageNameTag == "" {
-		return fmt.Errorf("received empty docker IMAGE tag argument")
-	}
-
 	// Validate Helm release name.
 	if o.flagHelmReleaseName == "" {
 		return fmt.Errorf("an empty Helm release name was given with '--helm-release-name=<name>'")
@@ -129,18 +115,21 @@ func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error 
 }
 
 func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := resolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle("Deploy Game Server to Cloud"))
-	log.Info().Msg("")
-
 	// Resolve project and environment.
-	project, envConfig, err := resolveProjectAndEnvironment(o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -188,13 +177,38 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
+	// If no docker image specified, scan the images matching project from the local docker repo
+	// and then let the user choose from the images.
+	if o.argImageNameTag == "" {
+		// Resolve the local docker images matching project human ID.
+		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
+		if err != nil {
+			return err
+		}
+
+		// Let the user choose from the list of images.
+		selectedImage, err := tui.ChooseFromListDialog(
+			"Select Docker Image to Deploy",
+			localImages,
+			func(img *envapi.MetaplayImageInfo) (string, string) {
+				description := fmt.Sprintf("[%s, %s, %s]", humanize.Time(img.ConfigFile.Created.Time), img.CommitID, img.BuildNumber)
+				return img.RepoTag, description
+			})
+		if err != nil {
+			return err
+		}
+
+		log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedImage.RepoTag)
+		o.argImageNameTag = selectedImage.RepoTag
+	}
+
 	// Push the image to the remote repository (if full name is specified).
 	useLocalImage := strings.Contains(o.argImageNameTag, ":")
 	var imageTag string
 	var imageConfig *v1.ConfigFile
 	if useLocalImage {
 		// Resolve metadata from local image.
-		imageConfig, err = fetchLocalDockerImageMetadata(o.argImageNameTag)
+		imageConfig, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
 		if err != nil {
 			return err
 		}
@@ -209,7 +223,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 		// Fetch the labels from the remote docker image.
 		remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)
-		imageConfig, err = fetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+		imageConfig, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
 		if err != nil {
 			return err
 		}
@@ -332,6 +346,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"shards": shardConfig,
 	}
 
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Deploy Game Server to Cloud"))
+	log.Info().Msg("")
+
 	// Show info.
 	log.Info().Msgf("Target environment:")
 	log.Info().Msgf("  Name:               %s", styles.RenderTechnical(envConfig.Name))
@@ -401,63 +419,6 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg(styles.RenderSuccess("✅ Game server successfully deployed!"))
 	return nil
-}
-
-// fetchLocalDockerImageMetadata retrieves metadata from a local Docker image.
-func fetchLocalDockerImageMetadata(imageRef string) (*v1.ConfigFile, error) {
-	// Parse the image reference (name + tag or digest)
-	ref, err := name.ParseReference(imageRef)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse docker image reference: %w", err)
-	}
-
-	// Load the image from the local Docker daemon
-	img, err := daemon.Image(ref)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get local docker image: %w", err)
-	}
-
-	// Fetch the image configuration blob
-	cfg, err := img.ConfigFile()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image config file: %w", err)
-	}
-
-	return cfg, nil
-}
-
-// fetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
-func fetchRemoteDockerImageMetadata(creds *envapi.DockerCredentials, imageRef string) (*v1.ConfigFile, error) {
-	// Create a registry authenticator using the provided credentials
-	authenticator := authn.FromConfig(authn.AuthConfig{
-		Username: creds.Username,
-		Password: creds.Password,
-	})
-
-	// Parse the image reference (name + tag or digest)
-	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse docker image reference: %w", err)
-	}
-
-	// Retrieve the image manifest and associated metadata
-	desc, err := remote.Get(ref, remote.WithAuth(authenticator))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image descriptor: %w", err)
-	}
-
-	// Fetch the image configuration blob
-	img, err := desc.Image()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image from descriptor: %w", err)
-	}
-	cfg, err := img.ConfigFile()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image config file: %w", err)
-	}
-
-	// Return the labels from the configuration
-	return cfg, nil
 }
 
 // Return the first non-empty string in the provided arguments.

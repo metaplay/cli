@@ -54,6 +54,8 @@ func Request[TResponse any](c *Client, method string, url string, body interface
 		response, err = c.Resty.R().Get(url)
 	case http.MethodPost:
 		response, err = c.Resty.R().SetBody(body).Post(url)
+	case http.MethodPut:
+		response, err = c.Resty.R().SetBody(body).Put(url)
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
@@ -98,4 +100,10 @@ func Get[TResponse any](c *Client, url string) (TResponse, error) {
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
 func Post[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPost, url, body)
+}
+
+// Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.
+// URL should start with a slash, e.g. "/v0/credentials/123/k8s"
+func Put[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPut, url, body)
 }

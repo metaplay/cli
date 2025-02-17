@@ -22,13 +22,13 @@ type initDashboardOpts struct {
 }
 
 func init() {
-	o := &initDashboardOpts{}
+	o := initDashboardOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "dashboard [flags]",
 		Short: "Initializes custom LiveOps Dashboard for the project",
-		Run:   runCommand(o),
-		Long: trimIndent(`
+		Run:   runCommand(&o),
+		Long: renderLong(&o, `
 			Setup the development environment for a custom LiveOps Dashboard in your project.
 
 			This command does the following:
@@ -56,9 +56,6 @@ func init() {
 }
 
 func (o *initDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("no arguments expected, got %d", len(args))
-	}
 	return nil
 }
 

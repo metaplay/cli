@@ -28,10 +28,6 @@ func init() {
 }
 
 func (o *showCommandsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("expecting no arguments, got %d", len(args))
-	}
-
 	return nil
 }
 

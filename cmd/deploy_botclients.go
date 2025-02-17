@@ -26,30 +26,39 @@ const metaplayLoadTestChartName = "metaplay-loadtest"
 
 // Deploy bots to the target environment with specified docker image version.
 type deployBotClientsOpts struct {
+	UsePositionalArgs
+
+	argEnvironment          string
+	argImageTag             string
+	extraArgs               []string
 	flagHelmReleaseName     string
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
-
-	argEnvironment string
-	argImageTag    string
-	extraArgs      []string
 }
 
 func init() {
 	o := deployBotClientsOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '364cff09'.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
+
 	cmd := &cobra.Command{
-		Use:     "botclients ENVIRONMENT IMAGE_TAG [flags] [-- EXTRA_ARGS]",
+		Use:     "botclients [ENVIRONMENT] [IMAGE_TAG] [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"bots"},
 		Short:   "[preview] Deploy load testing bots into the target environment",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change! It also still lacks some
 			key functionality.
 
 			Deploy bots into the target cloud environment using the specified docker image version.
+			The image must exist in the target environment image repository.
+
+			{Arguments}
 
 			Related commands:
 			- 'metaplay build image ...' to build the docker image.
@@ -73,14 +82,6 @@ func init() {
 }
 
 func (o *deployBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("at least two arguments must be provided, got %d", len(args))
-	}
-
-	o.argEnvironment = args[0]
-	o.argImageTag = args[1]
-	o.extraArgs = args[2:]
-
 	// Validate image tag.
 	if o.argImageTag == "" {
 		log.Panic().Msgf("Positional argument IMAGE_TAG is empty")
@@ -98,8 +99,15 @@ func (o *deployBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error 
 }
 
 func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
@@ -109,7 +117,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Resolve project and environment.
-	project, envConfig, err := resolveProjectAndEnvironment(o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -170,7 +178,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Helm chart path: %s", styles.RenderTechnical(helmChartPath))
 
 	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.GetBotsValuesFiles(envConfig)
+	valuesFiles := project.GetBotClientValuesFiles(envConfig)
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()

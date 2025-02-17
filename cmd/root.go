@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -285,12 +286,46 @@ type CommandOptions interface {
 	Run(cmd *cobra.Command) error
 }
 
+// Get the UsePositionalArgs for the given command
+func getUsePositionalArgs(opts CommandOptions) (UsePositionalArgs, bool) {
+	// Use reflection to access the embedded UsePositionalArgs (to parse PositionalArgs)
+	v := reflect.ValueOf(opts)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+
+	field := v.FieldByName("UsePositionalArgs")
+	if field.IsValid() {
+		baseOpts, hasBase := field.Interface().(UsePositionalArgs)
+		if hasBase {
+			return baseOpts, true
+		} else {
+			return UsePositionalArgs{}, false
+		}
+	} else {
+		return UsePositionalArgs{}, false
+	}
+}
+
 // Create a Cobra.Run compatible runner function for a command implementing
 // CommandOptions.
-func runCommand(o CommandOptions) func(cmd *cobra.Command, args []string) {
+func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 	return func(cmd *cobra.Command, args []string) {
-		// Parse arguments.
-		err := o.Prepare(cmd, args)
+		posArgs, hasPosArgs := getUsePositionalArgs(opts)
+		if hasPosArgs {
+			err := posArgs.Arguments().ParseCommandLine(args)
+			if err != nil {
+				log.Error().Msgf("Expected usage: %s", cmd.UseLine())
+				log.Warn().Msgf("%s", posArgs.args.GetHelpText())
+				log.Info().Msgf("Run with --help flag for full help.")
+				os.Exit(2)
+			}
+		} else {
+			// \todo implement me: expect no args provided
+		}
+
+		// Prepare the command.
+		err := opts.Prepare(cmd, args)
 		if err != nil {
 			log.Info().Msgf("%s", cmd.UsageString())
 			log.Error().Msgf("USAGE ERROR: %v", err)
@@ -298,7 +333,7 @@ func runCommand(o CommandOptions) func(cmd *cobra.Command, args []string) {
 		}
 
 		// Run the command.
-		err = o.Run(cmd)
+		err = opts.Run(cmd)
 		if err != nil {
 			log.Error().Msgf("ERROR: %v", err)
 			os.Exit(1)
@@ -317,6 +352,25 @@ func trimIndent(str string) string {
 		trimmedLines = append(trimmedLines, trimmed)
 	}
 	return strings.Join(trimmedLines, "\n")
+}
+
+// Render a long command description.
+func renderLong(opts CommandOptions, str string) string {
+	// Trim indent from string.
+	str = trimIndent(str)
+
+	// Inject positional arguments descriptions.
+	if strings.Contains(str, "{Arguments}") {
+		posArgs, hasPosArgs := getUsePositionalArgs(opts)
+		if hasPosArgs {
+			str = strings.Replace(str, "{Arguments}", posArgs.Arguments().GetHelpText(), 1)
+		} else {
+			log.Panic().Msgf("Description text refers to positional arguments but command does not use any")
+		}
+	}
+
+	// Return final result
+	return str
 }
 
 // Return true if the value is truthy ('yes', 'y', 'true', '1').

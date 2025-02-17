@@ -16,22 +16,29 @@ import (
 
 // Uninstall bots deployment from target environment.
 type removeBotClientsOpts struct {
+	UsePositionalArgs
+
 	argEnvironment string
 }
 
 func init() {
 	o := removeBotClientsOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
 		Use:     "botclients ENVIRONMENT [flags]",
 		Aliases: []string{"bots"},
 		Short:   "[preview] Remove the BotClient deployment from the target environment",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change! It also still lacks some
 			key functionality.
 
 			Remove the BotClient deployment from the target environment.
+
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Remove botclients from environment tough-falcons.
@@ -43,23 +50,25 @@ func init() {
 }
 
 func (o *removeBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
-	}
-
-	o.argEnvironment = args[0]
 	return nil
 }
 
 func (o *removeBotClientsOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

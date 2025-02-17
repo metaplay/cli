@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/rs/zerolog/log"
@@ -21,7 +20,7 @@ func init() {
 		Use:   "server [flags]",
 		Short: "Build the game server .NET project",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Build the game server .NET project locally.
 
 			Also check that the .NET SDK is installed and is a recent enough version.
@@ -45,10 +44,6 @@ func init() {
 }
 
 func (o *buildServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("no arguments are expected, got %d", len(args))
-	}
-
 	return nil
 }
 

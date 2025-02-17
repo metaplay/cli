@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -14,15 +13,21 @@ import (
 )
 
 type getKubernetesExecCredentialOpts struct {
-	environmentHumanId string
-	stackApiBaseURL    string
+	UsePositionalArgs
+
+	argEnvironmentHumanId string
+	argStackApiBaseURL    string
 }
 
 func init() {
 	o := getKubernetesExecCredentialOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgument(&o.argEnvironmentHumanId, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argStackApiBaseURL, "STACK_API", "StackAPI base URL for environment, eg, 'https://infra.p1.metaplay.io/stackapi'.")
+
 	cmd := &cobra.Command{
-		Use:   "kubernetes-execcredential ENVIRONMENT_HUMAN_ID STACK_API_BASE_URL",
+		Use:   "kubernetes-execcredential ENVIRONMENT STACK_API",
 		Short: "[internal] Get kubernetes credentials in execcredential format (used from the generated kubeconfigs)",
 		Run:   runCommand(&o),
 	}
@@ -32,26 +37,26 @@ func init() {
 }
 
 func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
-	}
-
-	o.environmentHumanId = args[0]
-	o.stackApiBaseURL = args[1]
-
 	return nil
 }
 
 func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// \todo Fix stack domain hack
-	stackDomain := strings.Replace(strings.Replace(o.stackApiBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.environmentHumanId)
+	stackDomain := strings.Replace(strings.Replace(o.argStackApiBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanId)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()

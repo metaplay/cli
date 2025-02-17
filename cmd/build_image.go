@@ -18,31 +18,34 @@ import (
 
 // Build docker image for the project.
 type buildDockerImageOpts struct {
+	UsePositionalArgs
+
+	argImageName     string
+	extraArgs        []string
 	flagBuildEngine  string
 	flagArchitecture string
 	flagCommitID     string
 	flagBuildNumber  string
-
-	argImageName string
-	extraArgs    []string
 }
 
 func init() {
 	o := buildDockerImageOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build.")
+
 	cmd := &cobra.Command{
-		Use:     "image [IMAGE:TAG] [flags] [-- EXTRA_ARGS]",
+		Use:     "image [IMAGE] [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"i"},
 		Short:   "Build a Docker image of the server components that can be deployed in the cloud",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Build a Docker image of your project to be deployed in the cloud.
 			The built image contains both the game server (C# project), the LiveOps
 			Dashboard, and the BotClient.
 
-			Arguments:
-			- IMAGE:TAG (optional) is the fully-qualified Docker image, e.g., 'mygame:1a27c25753' (default: '<projectID>:<timestamp>').
-			- EXTRA_ARGS are passed to the Docker build as-is.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay deploy server ...' to push and deploy the game server image into a cloud environment.
@@ -83,19 +86,13 @@ func init() {
 
 func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle image name.
-	if len(args) == 0 {
+	if o.argImageName == "" {
 		o.argImageName = "<projectID>:<timestamp>"
-	} else if strings.Contains(args[0], ":") {
+	} else if strings.Contains(o.argImageName, ":") {
 		// Full name specified, use as-is
-		o.argImageName = args[0]
 	} else {
 		// Only tag specified, prefix with projectID
-		o.argImageName = fmt.Sprintf("<projectID>:%s", args[0])
-	}
-
-	// Store extra args.
-	if len(args) > 0 {
-		o.extraArgs = args[1:]
+		o.argImageName = fmt.Sprintf("<projectID>:%s", o.argImageName)
 	}
 
 	return nil
@@ -410,10 +407,10 @@ func checkDockerAvailable() error {
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and working.", err)
+			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
 		}
-	case <-time.After(5 * time.Second):
-		return fmt.Errorf("docker availablity check timed out. Ensure docker is running and responsive.")
+	case <-time.After(10 * time.Second):
+		return fmt.Errorf("timeout while checking for docker. Ensure docker is running and responsive.")
 	}
 
 	return nil

@@ -271,7 +271,7 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 * access credentials each time the kubeconfig is used.
 * @returns The kubeconfig YAML.
  */
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential() (string, error) {
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
 	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanId)
 	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
 
@@ -284,10 +284,10 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential() (string, erro
 		return "", fmt.Errorf("Received kubeExecCredential with missing spec.cluster")
 	}
 
-	// TODO: There is probably unnecessary repetition in the error formatting
-	userinfo, err := auth.FetchUserInfo(target.TokenSet)
+	// Fetch the userinfo for an email.
+	userinfo, err := auth.FetchUserInfo(authProvider, target.TokenSet)
 	if err != nil {
-		return "", fmt.Errorf("Failed to fetch userinfo: %w", err)
+		return "", err
 	}
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{

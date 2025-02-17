@@ -24,14 +24,14 @@ type updateProjectEnvironmentsOpts struct {
 }
 
 func init() {
-	o := &updateProjectEnvironmentsOpts{}
+	o := updateProjectEnvironmentsOpts{}
 
 	cmd := &cobra.Command{
 		Use:     "project-environments [flags]",
 		Aliases: []string{"project-envs"},
 		Short:   "Update the project's environments in the metaplay-project.yaml",
-		Run:     runCommand(o),
-		Long: trimIndent(`
+		Run:     runCommand(&o),
+		Long: renderLong(&o, `
 			Update the environments in the metaplay-project.yaml from the Metaplay Portal.
 
 			Related commands:
@@ -51,14 +51,15 @@ func (o *updateProjectEnvironmentsOpts) Prepare(cmd *cobra.Command, args []strin
 }
 
 func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := resolveProject()
 	if err != nil {
 		return err
 	}
+	authProvider := getAuthProvider(project)
 
-	// Find & load the project config file.
-	project, err := resolveProject()
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
@@ -162,7 +163,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 				return err
 			}
 			newEnvConfig.ServerValuesFile = oldConfig.ServerValuesFile
-			newEnvConfig.BotsValuesFile = oldConfig.BotsValuesFile
+			newEnvConfig.BotClientValuesFile = oldConfig.BotClientValuesFile
 		}
 
 		// Convert environment info to YAML.

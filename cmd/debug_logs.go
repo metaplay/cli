@@ -28,27 +28,30 @@ const logEntryBufferSize = 100
 const metaplayServerContainerName = "shard-server"
 
 type debugLogsOpts struct {
-	flagPodName   string        // Show logs from the specified pod only
-	flagSince     time.Duration // Show logs since X duration ago
-	flagSinceTime string        // Show logs since the specified timestamp (RFC3339)
-	flagFollow    bool          // Keep streaming logs in until terminated
-	sinceTime     *time.Time    // Parsed flagSinceTime (or nil of flagSinceTime is empty)
+	UsePositionalArgs
 
 	argEnvironment string
+	flagPodName    string        // Show logs from the specified pod only
+	flagSince      time.Duration // Show logs since X duration ago
+	flagSinceTime  string        // Show logs since the specified timestamp (RFC3339)
+	flagFollow     bool          // Keep streaming logs in until terminated
+	sinceTime      *time.Time    // Parsed flagSinceTime (or nil of flagSinceTime is empty)
 }
 
 func init() {
 	o := debugLogsOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
-		Use:   "logs ENVIRONMENT [flags]",
+		Use:   "logs [ENVIRONMENT] [flags]",
 		Short: "Show logs from one or more game server pods",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Show logs from one or more game server pods in the target environment.
 
-			Arguments:
-			- ENVIRONMENT must be one that is declared in the environments list in metaplay-project.yaml.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay deploy server ...' to deploy a game server into the cloud.
@@ -82,15 +85,6 @@ func init() {
 }
 
 func (o *debugLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("too many arguments (%d) provided, expecting maximum of 1", len(args))
-	}
-
-	// Store target environment, if provided.
-	if len(args) > 0 {
-		o.argEnvironment = args[0]
-	}
-
 	// --since and --since-time are mutually exclusive.
 	if o.flagSince != 0 && o.flagSinceTime != "" {
 		return fmt.Errorf("only one of either --since or --since-time can be used, not both")
@@ -113,14 +107,21 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Since: %v", o.flagSince)
 	}
 
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

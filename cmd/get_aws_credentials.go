@@ -15,18 +15,23 @@ import (
 )
 
 type getAWSCredentialsOpts struct {
-	flagFormat string
+	UsePositionalArgs
 
 	argEnvironment string
+	flagFormat     string
 }
 
 func init() {
 	o := getAWSCredentialsOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
-		Use:   "aws-credentials ENVIRONMENT [flags]",
-		Short: "Get AWS credentials for the target environment",
-		Long: trimIndent(`
+		Use:     "aws-credentials ENVIRONMENT [flags]",
+		Aliases: []string{"aws-creds"},
+		Short:   "Get AWS credentials for the target environment",
+		Long: renderLong(&o, `
 			Get temporary AWS credentials for accessing resources in the target environment.
 			These credentials can be used to authenticate AWS CLI commands or SDK calls.
 
@@ -39,8 +44,7 @@ func init() {
 			- text: Human-readable format, suitable for reading and copying values
 			- json: Machine-readable format, suitable for parsing and automation
 
-			Arguments:
-			- ENVIRONMENT specifies the target environment to get credentials for.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay get kubeconfig ...' to get Kubernetes configuration
@@ -69,27 +73,29 @@ func init() {
 }
 
 func (o *getAWSCredentialsOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("expecting argument ENVIRONMENT, got %d", len(args))
-	}
-
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q; must be either \"text\" or \"json\"", o.flagFormat)
 	}
 
-	o.argEnvironment = args[0]
 	return nil
 }
 
 func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

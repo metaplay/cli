@@ -24,6 +24,8 @@ import (
 
 // Push the (already built) docker image to the remote docker repository.
 type PushImageOptions struct {
+	UsePositionalArgs
+
 	argEnvironment string
 	argImageName   string
 }
@@ -31,16 +33,18 @@ type PushImageOptions struct {
 func init() {
 	o := PushImageOptions{}
 
+	args := o.Arguments()
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+
 	cmd := &cobra.Command{
 		Use:   "push ENVIRONMENT IMAGE:TAG",
 		Short: "Push a built server Docker image to the target environment's docker image repository",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Push a built game server docker image to the target environment's image repository.
 
-			Arguments:
-			- ENVIRONMENT must be one that is declared in the environments list in metaplay-project.yaml.
-			- IMAGE:TAG must be a fully-formed docker image name and tag, e.g., 'mygame:1a27c25753'.
+			{Arguments}
 
 			Related commands:
 			- The docker image can be built with 'metaplay build image ...'.
@@ -55,38 +59,30 @@ func init() {
 }
 
 func (o *PushImageOptions) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
-	}
-
-	// Environment.
-	o.argEnvironment = args[0]
-
 	// Validate docker image name: must be a repository:tag pair.
-	o.argImageName = args[1]
-	if o.argImageName == "" {
-		return fmt.Errorf("IMAGE must be non-empty")
-		// log.Error().Msg("Must provide a docker image name with --image-tag=<name>:<tag>")
-		// os.Exit(2)
-	}
 	if !strings.Contains(o.argImageName, ":") {
-		return fmt.Errorf("IMAGE must be a full docker image name 'REPOSITORY:TAG', got '%s'", o.argImageName)
-		// log.Error().Msg("Must provide a full docker image name with --image-tag=<name>:<tag>")
-		// os.Exit(2)
+		return fmt.Errorf("IMAGE must be a full docker image name 'NAME:TAG', got '%s'", o.argImageName)
 	}
 
 	return nil
 }
 
 func (o *PushImageOptions) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

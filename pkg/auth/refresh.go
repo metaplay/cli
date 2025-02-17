@@ -42,9 +42,9 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 // If logged in and tokens have expired, refresh the tokens. If the refresh
 // fails, return an error.
 // \todo Forget the tokens if the refresh fails (due to keys already used)
-func LoadAndRefreshTokenSet() (*TokenSet, error) {
+func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Get current session (including credentials).
-	sessionState, err := LoadSessionState()
+	sessionState, err := LoadSessionState(authProvider.GetSessionID())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
 	}
@@ -65,13 +65,13 @@ func LoadAndRefreshTokenSet() (*TokenSet, error) {
 	if isExpired {
 		if tokenSet.RefreshToken != "" {
 			// Refresh the tokenSet.
-			tokenSet, err = refreshTokenSet(tokenSet)
+			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
 			if err != nil {
 				return nil, fmt.Errorf("failed to refresh tokens: %w", err)
 			}
 
 			// Persist the refreshed tokens.
-			err = SaveSessionState(sessionState.UserType, tokenSet)
+			err = SaveSessionState(authProvider.GetSessionID(), sessionState.UserType, tokenSet)
 			if err != nil {
 				return nil, fmt.Errorf("failed to persist refreshed tokens: %w", err)
 			}
@@ -84,16 +84,16 @@ func LoadAndRefreshTokenSet() (*TokenSet, error) {
 }
 
 // Refresh the tokenSet. Return a new tokenSet that was returned by the token endpoint.
-func refreshTokenSet(tokenSet *TokenSet) (*TokenSet, error) {
+func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Create URL-encoded form data
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", tokenSet.RefreshToken)
-	data.Set("scope", "openid offline_access")
-	data.Set("client_id", clientID)
+	data.Set("scope", authProvider.Scopes) //"openid offline_access")
+	data.Set("client_id", authProvider.ClientID)
 
 	// Prepare the POST request
-	req, err := http.NewRequest("POST", tokenEndpoint, bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequest("POST", authProvider.TokenEndpoint, bytes.NewBufferString(data.Encode()))
 	if err != nil {
 		log.Error().Msgf("Failed to create HTTP request: %v", err)
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
@@ -104,11 +104,11 @@ func refreshTokenSet(tokenSet *TokenSet) (*TokenSet, error) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", tokenEndpoint, err)
+		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
 			return nil, errors.New("failed to refresh tokens: SSL certificate validation failed. Is someone tampering with your internet connection?")
 		}
-		return nil, fmt.Errorf("failed to refresh tokens via %s: %w", tokenEndpoint, err)
+		return nil, fmt.Errorf("failed to refresh tokens via %s: %w", authProvider.TokenEndpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -119,7 +119,7 @@ func refreshTokenSet(tokenSet *TokenSet) (*TokenSet, error) {
 		log.Debug().Msg("Clearing local credentials...")
 
 		// Remove the session state (something has gone badly wrong).
-		err = DeleteSessionState()
+		err = DeleteSessionState(authProvider.GetSessionID())
 		if err != nil {
 			return nil, fmt.Errorf("failed to delete bad tokens: %w", err)
 		}

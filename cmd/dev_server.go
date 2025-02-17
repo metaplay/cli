@@ -12,17 +12,22 @@ import (
 
 // Run the game server locally.
 type devServerOpts struct {
+	UsePositionalArgs
+
 	extraArgs []string
 }
 
 func init() {
 	o := devServerOpts{}
 
+	args := o.Arguments()
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'dotnet run'.")
+
 	cmd := &cobra.Command{
 		Use:   "server [flags] [-- EXTRA_ARGS]",
 		Short: "Run the .NET game server locally",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Run the C# game server locally.
 
 			Also check that the .NET SDK is installed and is a recent enough version.
@@ -30,8 +35,7 @@ func init() {
 			This command is roughly equivalent to running:
 			Backend/Server$ dotnet run EXTRA_ARGS
 
-			Arguments:
-			- EXTRA_ARGS is passed directly to 'dotnet run'.
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Run the server until stopped.

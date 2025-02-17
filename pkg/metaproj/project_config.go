@@ -5,6 +5,7 @@ package metaproj
 
 import (
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/auth"
 )
 
 // Name of the Metaplay project config file.
@@ -36,6 +37,8 @@ type ProjectConfig struct {
 	HelmChartRepository   string `yaml:"helmChartRepository"`   // Helm chart repository to use (defaults to 'https://charts.metaplay.dev')
 	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)
 	BotClientChartVersion string `yaml:"botClientChartVersion"` // Version of the bot client Helm chart to use (or 'latest-prerelease' for absolute latest)
+
+	AuthProvider *auth.AuthProviderConfig `yaml:"authProvider,omitempty"`
 
 	Features ProjectFeaturesConfig `yaml:"features"`
 

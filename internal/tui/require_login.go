@@ -12,9 +12,9 @@ import (
 
 // RequireLoggedIn ensures that the user is logged in. If the user is not logged
 // in, it will prompt the user to log in.
-func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
+func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig) (*auth.TokenSet, error) {
 	// Check if we're logged in.
-	tokenSet, err := auth.LoadAndRefreshTokenSet()
+	tokenSet, err := auth.LoadAndRefreshTokenSet(authProvider)
 	if err != nil {
 		return nil, err
 	}
@@ -32,6 +32,7 @@ func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
 	}
 
 	// Confirm the login operation with the user.
+	// \todo show auth provider info
 	choice, err := DoConfirmDialog(
 		ctx,
 		"Login Required",
@@ -42,7 +43,7 @@ func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
 	// Handle the user's decision.
 	if choice {
 		// User wants to log in.
-		err = auth.LoginWithBrowser(ctx)
+		err = auth.LoginWithBrowser(ctx, authProvider)
 		if err != nil {
 			return nil, fmt.Errorf("failed to login: %v", err)
 		}
@@ -52,5 +53,5 @@ func RequireLoggedIn(ctx context.Context) (*auth.TokenSet, error) {
 	}
 
 	// Load the newly established token set.
-	return auth.LoadAndRefreshTokenSet()
+	return auth.LoadAndRefreshTokenSet(authProvider)
 }

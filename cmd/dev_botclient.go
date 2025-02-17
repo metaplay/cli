@@ -14,23 +14,26 @@ import (
 )
 
 type devBotClientOpts struct {
-	flagEnvironment string
+	UsePositionalArgs
 
-	extraArgs []string
+	extraArgs       []string
+	flagEnvironment string
 }
 
 func init() {
 	o := devBotClientOpts{}
 
+	args := o.Arguments()
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'dotnet run'.")
+
 	cmd := &cobra.Command{
 		Use:   "botclient [flags] [-- EXTRA_ARGS]",
 		Short: "Run BotClient locally (againts local or remote server)",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Run simulated bots against the locally running server, or a cloud environment.
 
-			Arguments:
-			- EXTRA_ARGS gets passed to the 'dotnet run' executing the BotClient project.
+			{Arguments}
 
 			Related commands:
 			- 'metaplay dev server' runs the game server locally.
@@ -56,8 +59,6 @@ func init() {
 }
 
 func (o *devBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
-	o.extraArgs = args
-
 	return nil
 }
 
@@ -67,12 +68,13 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	authProvider := getAuthProvider(project)
 
 	// Resolve target environment flags (if specified)
 	targetEnvFlags := []string{}
 	if o.flagEnvironment != "" {
 		// Ensure the user is logged in
-		tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+		tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 		if err != nil {
 			return err
 		}

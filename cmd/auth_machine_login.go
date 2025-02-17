@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 	"strings"
 
@@ -32,14 +31,17 @@ func init() {
 }
 
 func (o *MachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("expecting no arguments, got %d", len(args))
-	}
-
 	return nil
 }
 
 func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Resolve credentials to use.
 	var credentials string
 	if o.flagCredentials != "" {
@@ -59,7 +61,7 @@ func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
 		log.Error().Msg("Invalid format for credentials, you should copy-paste the value from the developer portal verbatim")
 		os.Exit(2)
 	} else {
-		err := auth.MachineLogin(clientId, clientSecret)
+		err := auth.MachineLogin(authProvider, clientId, clientSecret)
 		if err != nil {
 			log.Error().Msgf("Machine login failed: %s", err)
 			os.Exit(1)

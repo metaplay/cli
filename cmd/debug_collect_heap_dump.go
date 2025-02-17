@@ -20,6 +20,8 @@ import (
 // \todo Refactor to extract a common framework for the ephemeral containers; use for CPU profiles, too
 
 type CollectHeapDumpOpts struct {
+	UsePositionalArgs
+
 	argEnvironment  string
 	argPodName      string
 	flagOutputPath  string
@@ -30,10 +32,14 @@ type CollectHeapDumpOpts struct {
 func init() {
 	o := CollectHeapDumpOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argPodName, "POD", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
+
 	cmd := &cobra.Command{
-		Use:   "collect-heap-dump ENVIRONMENT [POD] [flags]",
+		Use:   "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
 		Short: "[preview] Collect a heap dump from a running server pod",
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface is likely to change.
 
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump.
@@ -49,9 +55,7 @@ func init() {
 			avoid the kubelet from considering the game server to not be responsive which would
 			lead to its termination.
 
-			Arguments:
-			- ENVIRONMENT is the target environment in the current project.
-			- POD (optional) is name of the pod to target. Must be given when multiple pods exist.
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Collect heap dump from the only running pod.
@@ -82,20 +86,6 @@ func init() {
 }
 
 func (o *CollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) > 2 {
-		return fmt.Errorf("exactly one or two arguments must be provided, got %d", len(args))
-	}
-
-	// Store target environment, if provided.
-	if len(args) > 0 {
-		o.argEnvironment = args[0]
-	}
-
-	// Store target pod name, if provided.
-	if len(args) >= 2 {
-		o.argPodName = args[1]
-	}
-
 	// Validate collection mode
 	if o.flagCollectMode != "gcdump" && o.flagCollectMode != "dump" {
 		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
@@ -123,14 +113,21 @@ func (o *CollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *CollectHeapDumpOpts) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment config.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

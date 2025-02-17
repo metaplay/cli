@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/rs/zerolog/log"
@@ -20,7 +19,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:   "botclient [flags]",
 		Short: "Build the BotClient .NET project",
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			Build the BotClient .NET project using the .NET SDK.
 
 			This command:
@@ -51,10 +50,6 @@ func init() {
 }
 
 func (o *BuildBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("no arguments are expected, got %d", len(args))
-	}
-
 	return nil
 }
 

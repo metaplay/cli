@@ -17,7 +17,9 @@ type MetaplayIDToken struct {
 	MetaplayRoles []string `json:"https://schemas.metaplay.io/roles"` // Roles in Metaplay environments.
 }
 
-func ResolveMetaplayIDToken(ctx context.Context, idTokenStr string) (MetaplayIDToken, error) {
+func ResolveMetaplayIDToken(ctx context.Context, authProvider *AuthProviderConfig, idTokenStr string) (MetaplayIDToken, error) {
+	authIssuer := "https://auth.metaplay.dev"
+
 	// Create a new OpenID Connect provider
 	provider, err := oidc.NewProvider(ctx, authIssuer)
 	if err != nil {
@@ -25,7 +27,7 @@ func ResolveMetaplayIDToken(ctx context.Context, idTokenStr string) (MetaplayIDT
 	}
 
 	// Set up a verifier for the ID token
-	verifier := provider.Verifier(&oidc.Config{ClientID: clientID})
+	verifier := provider.Verifier(&oidc.Config{ClientID: authProvider.ClientID})
 
 	// Parse and verify the ID token
 	idToken, err := verifier.Verify(ctx, idTokenStr)

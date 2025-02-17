@@ -4,9 +4,9 @@
 package cmd
 
 import (
-	"fmt"
-
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/styles"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -27,15 +27,32 @@ func init() {
 }
 
 func (o *LoginOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("expecting no arguments, got %d", len(args))
-	}
-
 	return nil
 }
 
 func (o *LoginOpts) Run(cmd *cobra.Command) error {
-	err := auth.LoginWithBrowser(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	// Project ID to show
+	projectID := "n/a"
+	if project != nil {
+		projectID = project.Config.ProjectHumanID
+	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Sign In"))
+	log.Info().Msg("")
+	log.Info().Msgf("Project:       %s", styles.RenderTechnical(projectID))
+	log.Info().Msgf("Auth provider: %s", styles.RenderTechnical(authProvider.Name))
+	log.Info().Msg("")
+
+	// Login using the active auth provider.
+	err = auth.LoginWithBrowser(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}

@@ -78,10 +78,10 @@ func (project *MetaplayProject) GetServerValuesFiles(envConfig *ProjectEnvironme
 	}
 }
 
-func (project *MetaplayProject) GetBotsValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
-	if envConfig.BotsValuesFile != "" {
+func (project *MetaplayProject) GetBotClientValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
+	if envConfig.BotClientValuesFile != "" {
 		return []string{
-			filepath.Join(project.RelativeDir, envConfig.BotsValuesFile),
+			filepath.Join(project.RelativeDir, envConfig.BotClientValuesFile),
 		}
 	} else {
 		return []string{}
@@ -240,8 +240,64 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		return err
 	}
 
-	// Validate project features.
+	// Validate auth provider (if specified).
+	authProviderCfg := config.AuthProvider
+	if authProviderCfg != nil {
+		// Validate required fields
+		if authProviderCfg.Name == "" {
+			return fmt.Errorf("authProvider.name is required")
+		}
 
+		if authProviderCfg.ClientID == "" {
+			return fmt.Errorf("authProvider.clientId is required")
+		}
+
+		// Validate URLs
+		endpoints := map[string]string{
+			"authEndpoint":     authProviderCfg.AuthEndpoint,
+			"tokenEndpoint":    authProviderCfg.TokenEndpoint,
+			"userInfoEndpoint": authProviderCfg.UserInfoEndpoint,
+		}
+		for name, endpoint := range endpoints {
+			if endpoint == "" {
+				return fmt.Errorf("authProvider.%s is required", name)
+			}
+			parsedURL, err := url.Parse(endpoint)
+			if err != nil {
+				return fmt.Errorf("authProvider.%s is not a valid URL: %v", name, err)
+			}
+			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+				return fmt.Errorf("authProvider.%s must use http or https scheme", name)
+			}
+			if parsedURL.Host == "" {
+				return fmt.Errorf("authProvider.%s must include a host", name)
+			}
+		}
+
+		// Validate scopes.
+		if authProviderCfg.Scopes == "" {
+			return fmt.Errorf("authProvider.scopes are required")
+		}
+		scopes := strings.Fields(authProviderCfg.Scopes)
+		if len(scopes) == 0 {
+			return fmt.Errorf("authProvider.must specify at least one scope")
+		}
+		for _, scope := range scopes {
+			if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(scope) {
+				return fmt.Errorf("invalid authProvider.scopes '%s': must contain only alphanumeric characters, underscores, dots, and hyphens", scope)
+			}
+		}
+
+		// Validate audience
+		if authProviderCfg.Audience == "" {
+			return fmt.Errorf("authProvider.audience is required")
+		}
+		if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(authProviderCfg.Audience) {
+			return fmt.Errorf("invalid authProvider.audience: must contain only alphanumeric characters, underscores, dots, and hyphens")
+		}
+	}
+
+	// Validate project features.
 	dashboardConfig := config.Features.Dashboard
 	if dashboardConfig.UseCustom {
 		if dashboardConfig.RootDir == "" {
@@ -287,10 +343,10 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 				return fmt.Errorf("environment '%s' failed to validate 'serverValuesFile': %w", envName, err)
 			}
 		}
-		if envConfig.BotsValuesFile != "" {
-			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.BotsValuesFile))
+		if envConfig.BotClientValuesFile != "" {
+			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
 			if err != nil {
-				return fmt.Errorf("environment '%s' failed to validate 'botsValuesFile': %w", envName, err)
+				return fmt.Errorf("environment '%s' failed to validate 'botclientValuesFile': %w", envName, err)
 			}
 		}
 	}
@@ -564,10 +620,10 @@ func GenerateProjectConfigFile(
 	}{
 		ProjectID:             project.HumanID,
 		BuildRootDir:          ".",
-		SdkRootDir:            pathToMetaplaySdk,
+		SdkRootDir:            filepath.ToSlash(pathToMetaplaySdk),
 		BackendDir:            "Backend",
 		SharedCodeDir:         filepath.ToSlash(filepath.Join(pathToUnityProject, "Assets", "SharedCode")),
-		UnityProjectDir:       pathToUnityProject,
+		UnityProjectDir:       filepath.ToSlash(pathToUnityProject),
 		DotnetRuntimeVersion:  sdkMetadata.DefaultDotnetRuntimeVersion,
 		ServerChartVersion:    sdkMetadata.DefaultServerChartVersion.String(),
 		BotClientChartVersion: sdkMetadata.DefaultBotClientChartVersion.String(),
@@ -584,7 +640,7 @@ func GenerateProjectConfigFile(
 	var projectConfig ProjectConfig
 	err = yaml.Unmarshal([]byte(result.String()), &projectConfig)
 	if err != nil {
-		log.Panic().Msgf("Failed to parse generated Metaplay project file: %v", err)
+		log.Panic().Msgf("Failed to parse generated Metaplay project file: %v\nFull YAML:\n%s", err, result.String())
 	}
 
 	// Write metaplay-project.yaml.

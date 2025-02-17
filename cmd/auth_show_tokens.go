@@ -34,8 +34,15 @@ func (o *ShowTokensOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *ShowTokensOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Load tokenSet from keyring & refresh if needed.
-	tokenSet, err := auth.LoadAndRefreshTokenSet()
+	tokenSet, err := auth.LoadAndRefreshTokenSet(authProvider)
 	if err != nil {
 		return err
 	}

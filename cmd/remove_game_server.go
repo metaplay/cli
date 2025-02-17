@@ -4,7 +4,6 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -16,22 +15,29 @@ import (
 
 // Remove the Metaplay game server deployment from target environment.
 type removeGameServerOpts struct {
+	UsePositionalArgs
+
 	argEnvironment string
 }
 
 func init() {
 	o := removeGameServerOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+
 	cmd := &cobra.Command{
 		Use:     "game-server ENVIRONMENT [flags]",
 		Aliases: []string{"server"},
 		Short:   "Remove the game server deployment from the target environment",
 		Run:     runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change! It also still lacks some
 			key functionality.
 
 			Remove the BotClient deployment from the target environment.
+
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Remove botclients from environment tough-falcons.
@@ -43,23 +49,25 @@ func init() {
 }
 
 func (o *removeGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("exactly one argument must be provided, got %d", len(args))
-	}
-
-	o.argEnvironment = args[0]
 	return nil
 }
 
 func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}

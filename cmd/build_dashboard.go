@@ -27,10 +27,6 @@ func init() {
 }
 
 func (o *BuildDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("no arguments are expected, got %d", len(args))
-	}
-
 	return nil
 }
 

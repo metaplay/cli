@@ -15,11 +15,12 @@ import (
 )
 
 type CreateSecretOpts struct {
+	UsePositionalArgs
+
+	argEnvironment    string
+	argSecretName     string
 	flagLiteralValues []string
 	flagFileValues    []string
-
-	argEnvironment string
-	argSecretName  string
 
 	payloadKeyValuePairs map[string][]byte
 }
@@ -27,11 +28,15 @@ type CreateSecretOpts struct {
 func init() {
 	o := CreateSecretOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
+
 	cmd := &cobra.Command{
 		Use:   "create ENVIRONMENT NAME [flags]",
 		Short: "[preview] Create a user secret in the target environment",
 		Run:   runCommand(&o),
-		Long: trimIndent(`
+		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change!
 
 			Create a user secret in the target environment with the given name and payload.
@@ -45,17 +50,19 @@ func init() {
 			The game server supports a special syntax 'kube-secret://<secretName>#<secretKey>' to access Kubernetes
 			secrets in the various runtime options, configurable from the Options.*.yaml files.
 
+			{Arguments}
+
 			Related commands:
 			- 'metaplay secrets delete ENVIRONMENT NAME ...' to delete a user secret.
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: trimIndent(`
-			# Create a secret named 'user-mysecret' with two entries.
-			metaplay secrets create my-environment user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
+			# Create a secret named 'user-mysecret' in environment 'tough-falcons' with two entries.
+			metaplay secrets create tough-falcons user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
 
 			# Create a secret with entry payload read from a file.
-			metaplay secrets create my-environment user-mysecret --from-file=credentials.json=../../credentials-dev.json
+			metaplay secrets create tough-falcons user-mysecret --from-file=credentials.json=../../credentials-dev.json
 		`),
 	}
 
@@ -67,14 +74,6 @@ func init() {
 }
 
 func (o *CreateSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if len(args) != 2 {
-		return fmt.Errorf("exactly two arguments must be provided, got %d", len(args))
-	}
-
-	// Store arguments.
-	o.argEnvironment = args[0]
-	o.argSecretName = args[1]
-
 	// Initialize key-value map.
 	o.payloadKeyValuePairs = map[string][]byte{}
 
@@ -126,14 +125,21 @@ func (o *CreateSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *CreateSecretOpts) Run(cmd *cobra.Command) error {
+	// Try to resolve the project & auth provider.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	authProvider := getAuthProvider(project)
+
 	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context())
+	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
 	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(tokenSet, o.argEnvironment)
+	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
 	if err != nil {
 		return err
 	}
