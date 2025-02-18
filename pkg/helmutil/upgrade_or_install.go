@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package helmutil
 
@@ -53,6 +53,7 @@ func HelmUpgradeOrInstall(
 		log.Debug().Msgf("Upgrade existing Helm release...")
 		if existingRelease.Name != releaseName {
 			log.Warn().Msgf("Mismatched Helm release name: existing release is named '%s', updating with name '%s'", existingRelease.Name, releaseName)
+			releaseName = existingRelease.Name
 		}
 	}
 

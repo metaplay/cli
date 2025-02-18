@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -25,7 +25,7 @@ const metaplayLoadTestChartName = "metaplay-loadtest"
 // const metaplayBotClientPodLabelSelector = "app=botclient"
 
 // Deploy bots to the target environment with specified docker image version.
-type deployBotClientsOpts struct {
+type deployBotClientOpts struct {
 	UsePositionalArgs
 
 	argEnvironment          string
@@ -39,7 +39,7 @@ type deployBotClientsOpts struct {
 }
 
 func init() {
-	o := deployBotClientsOpts{}
+	o := deployBotClientOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -47,8 +47,8 @@ func init() {
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
-		Use:     "botclients [ENVIRONMENT] [IMAGE_TAG] [flags] [-- EXTRA_ARGS]",
-		Aliases: []string{"bots"},
+		Use:     "botclient [ENVIRONMENT] [IMAGE_TAG] [flags] [-- EXTRA_ARGS]",
+		Aliases: []string{"bots", "botclients"},
 		Short:   "[preview] Deploy load testing bots into the target environment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
@@ -68,20 +68,20 @@ func init() {
 		`),
 		Example: trimIndent(`
 			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
-			metaplay deploy botclients tough-falcons 364cff09
+			metaplay deploy botclient tough-falcons 364cff09
 		`),
 	}
 	deployCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "loadtest", "Helm release name to use for the bot deployment") // \todo default value?
+	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "", "Helm release name to use for the bot deployment (defaults to '<environmentID)-loadtest'")
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
 }
 
-func (o *deployBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate image tag.
 	if o.argImageTag == "" {
 		log.Panic().Msgf("Positional argument IMAGE_TAG is empty")
@@ -90,15 +90,10 @@ func (o *deployBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error 
 		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '364cff092af8646bd'")
 	}
 
-	// Validate deployment name.
-	if o.flagHelmReleaseName == "" {
-		return fmt.Errorf("an empty Helm deployment name was given with '--helm-release-name=<name>'")
-	}
-
 	return nil
 }
 
-func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
+func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -175,7 +170,6 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 	}
-	log.Info().Msgf("Helm chart path: %s", styles.RenderTechnical(helmChartPath))
 
 	// Resolve Helm values file path relative to current directory.
 	valuesFiles := project.GetBotClientValuesFiles(envConfig)
@@ -219,15 +213,30 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 		},
 	}
 
+	// Resolve Helm release name. If not specified, default to:
+	// - Earlier name if a deployment already exists.
+	// - '<environmentID>-loadtest' otherwise.
+	helmReleaseName := o.flagHelmReleaseName
+	helmReleaseNameBadge := ""
+	if helmReleaseName == "" {
+		if existingRelease != nil {
+			helmReleaseName = existingRelease.Name
+			helmReleaseNameBadge = styles.RenderMuted("[existing]")
+		} else {
+			helmReleaseName = fmt.Sprintf("%s-loadtest", envConfig.HumanID)
+			helmReleaseNameBadge = styles.RenderMuted("[default]")
+		}
+	}
+
 	// Show info.
 	log.Info().Msgf("Environment ID:     %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("Environment name:   %s", styles.RenderTechnical(envConfig.Name))
 	log.Info().Msgf("Environment type:   %s", styles.RenderTechnical(string(envConfig.Type)))
-	log.Info().Msgf("Docker image tag:   %s", o.argImageTag)
-	log.Info().Msgf("Helm chart version: %s", useHelmChartVersion)
-	log.Info().Msgf("Helm chart path:    %s", helmChartPath)
-	log.Info().Msgf("Helm release name:  %s", o.flagHelmReleaseName)
-	log.Info().Msgf("Helm values files:  %s", valuesFiles)
+	log.Info().Msgf("Docker image tag:   %s", styles.RenderTechnical(o.argImageTag))
+	log.Info().Msgf("Helm chart version: %s", styles.RenderTechnical(useHelmChartVersion))
+	log.Info().Msgf("Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
+	log.Info().Msgf("Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
+	log.Info().Msgf("Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
 	log.Info().Msg("")
 
 	taskRunner := tui.NewTaskRunner()
@@ -238,7 +247,7 @@ func (o *deployBotClientsOpts) Run(cmd *cobra.Command) error {
 			actionConfig,
 			existingRelease,
 			envConfig.GetKubernetesNamespace(),
-			o.flagHelmReleaseName,
+			helmReleaseName,
 			helmChartPath,
 			helmValues,
 			valuesFiles,

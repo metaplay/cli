@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -14,46 +14,43 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Uninstall bots deployment from target environment.
-type removeBotClientsOpts struct {
+// Remove botclient deployment from target environment.
+type removeBotClientOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
 }
 
 func init() {
-	o := removeBotClientsOpts{}
+	o := removeBotClientOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
 
 	cmd := &cobra.Command{
-		Use:     "botclients ENVIRONMENT [flags]",
-		Aliases: []string{"bots"},
-		Short:   "[preview] Remove the BotClient deployment from the target environment",
+		Use:     "botclient [ENVIRONMENT]",
+		Aliases: []string{"bots", "botclients"},
+		Short:   "Remove the BotClient deployment from the target environment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change! It also still lacks some
-			key functionality.
-
 			Remove the BotClient deployment from the target environment.
 
 			{Arguments}
 		`),
 		Example: trimIndent(`
-			# Remove botclients from environment tough-falcons.
-			metaplay remove botclients tough-falcons
+			# Remove botclient deployment from environment tough-falcons.
+			metaplay remove botclient tough-falcons
 		`),
 	}
 
 	removeCmd.AddCommand(cmd)
 }
 
-func (o *removeBotClientsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *removeBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *removeBotClientsOpts) Run(cmd *cobra.Command) error {
+func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

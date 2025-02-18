@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -27,21 +27,18 @@ func init() {
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
 
 	cmd := &cobra.Command{
-		Use:     "game-server ENVIRONMENT [flags]",
-		Aliases: []string{"server"},
+		Use:     "server ENVIRONMENT",
+		Aliases: []string{"game-server"},
 		Short:   "Remove the game server deployment from the target environment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change! It also still lacks some
-			key functionality.
-
-			Remove the BotClient deployment from the target environment.
+			Remove the game server deployment from the target environment.
 
 			{Arguments}
 		`),
 		Example: trimIndent(`
-			# Remove botclients from environment tough-falcons.
-			metaplay remove botclients tough-falcons
+			# Remove game server deployment from environment tough-falcons.
+			metaplay remove game-server tough-falcons
 		`),
 	}
 

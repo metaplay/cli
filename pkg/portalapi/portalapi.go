@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package portalapi
 

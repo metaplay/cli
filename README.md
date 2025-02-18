@@ -192,4 +192,4 @@ Most of the testing of the CLI is done using Metaplay's internal platform tests.
 
 ## License
 
-This module and all files within are distributed under the Metaplay SDK Software License.
+This module and all files within are distributed under the Apache-2.0 license.

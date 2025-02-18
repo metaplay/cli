@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -97,7 +97,7 @@ func init() {
 	deployCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "gameserver", "Helm release name to use for the game server deployment")
+	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "", "Helm release name to use for the game server deployment (default to '<environmentID>-gameserver')")
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-gameserver chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
@@ -106,11 +106,6 @@ func init() {
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	// Validate Helm release name.
-	if o.flagHelmReleaseName == "" {
-		return fmt.Errorf("an empty Helm release name was given with '--helm-release-name=<name>'")
-	}
-
 	return nil
 }
 
@@ -346,6 +341,21 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"shards": shardConfig,
 	}
 
+	// Resolve Helm release name. If not specified, default to:
+	// - Earlier name if a deployment already exists.
+	// - '<environmentID>-gameserver' otherwise.
+	helmReleaseName := o.flagHelmReleaseName
+	helmReleaseNameBadge := ""
+	if helmReleaseName == "" {
+		if existingRelease != nil {
+			helmReleaseName = existingRelease.Name
+			helmReleaseNameBadge = styles.RenderMuted("[existing]")
+		} else {
+			helmReleaseName = fmt.Sprintf("%s-gameserver", envConfig.HumanID)
+			helmReleaseNameBadge = styles.RenderMuted("[default]")
+		}
+	}
+
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Deploy Game Server to Cloud"))
 	log.Info().Msg("")
@@ -366,7 +376,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	} else {
 		log.Info().Msgf("  Helm chart version: %s", styles.RenderTechnical(useHelmChartVersion))
 	}
-	log.Info().Msgf("  Helm release name:  %s", styles.RenderTechnical(o.flagHelmReleaseName))
+	log.Info().Msgf("  Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
 	if len(valuesFiles) > 0 {
 		log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
 	}
@@ -398,7 +408,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			actionConfig,
 			existingRelease,
 			envConfig.GetKubernetesNamespace(),
-			o.flagHelmReleaseName,
+			helmReleaseName,
 			helmChartPath,
 			helmValues,
 			valuesFiles,

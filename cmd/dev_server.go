@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -39,8 +39,11 @@ func init() {
 			{Arguments}
 		`),
 		Example: trimIndent(`
-			# Run the server until stopped.
+			# Run the server. Stop the server by pressing 'q'.
 			metaplay dev server
+
+			# Run with specific log level.
+			metaplay dev server -- -LogLevel=Warning
 
 			# Pass additional arguments to the game server (dotnet run).
 			metaplay dev server -- -ExitAfter=00:00:30

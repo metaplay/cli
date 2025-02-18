@@ -1,5 +1,5 @@
 /*
- * Copyright Metaplay. All rights reserved.
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 package cmd
 
@@ -11,11 +11,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type BuildBotClientOpts struct {
+type buildBotClientOpts struct {
 }
 
 func init() {
-	o := BuildBotClientOpts{}
+	o := buildBotClientOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "botclient [flags]",
@@ -32,9 +32,9 @@ func init() {
 			to the server and perform various actions.
 
 			Related commands:
-			- 'metaplay deploy botclients ...' to deploy bot clients to a cloud environment
+			- 'metaplay deploy botclient ...' to deploy bot clients to a cloud environment
 			- 'metaplay dev botclient ...' to run the bot client locally
-			- 'metaplay remove botclients ...' to remove bot clients from an environment
+			- 'metaplay remove botclient ...' to remove bot clients from an environment
 			- 'metaplay debug logs ...' to view bot client logs in an environment
 		`),
 		Example: trimIndent(`
@@ -50,11 +50,11 @@ func init() {
 	buildCmd.AddCommand(cmd)
 }
 
-func (o *BuildBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *BuildBotClientOpts) Run(cmd *cobra.Command) error {
+func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
