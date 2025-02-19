@@ -110,7 +110,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve image name to use: fill in <timestamp> with current unix time
-	// and <projectID> with the project's slug.
+	// and <projectID> with the project's human ID.
 	log.Debug().Msgf("Image name template: %s", o.argImageName)
 	imageName := strings.Replace(o.argImageName, "<timestamp>", fmt.Sprintf("%d", time.Now().Unix()), -1)
 	imageName = strings.Replace(imageName, "<projectID>", project.Config.ProjectHumanID, -1)

@@ -318,10 +318,6 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.Name == "" {
 			return fmt.Errorf("environment at index %d did not specify required field 'name'", endNdx)
 		}
-		// \todo should we require slug? it doesn't make sense for self-hosted envs?
-		if envConfig.Slug == "" {
-			return fmt.Errorf("environment '%s' did not specify required field 'slug'", envName)
-		}
 		if envConfig.HumanID == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'humanId'", envName)
 		}
@@ -465,7 +461,7 @@ func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, version
 
 // Find a matching environment from the project config.
 // The first environment that matches 'environment' is chosen.
-// The 'environment' argument can match either the humanID or the slug of the project.
+// The 'environment' argument can match either the humanID or the name of the project.
 func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
 	// Match by HumanID.
 	for _, envConfig := range projectConfig.Environments {
@@ -474,9 +470,9 @@ func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*
 		}
 	}
 
-	// Match by slug.
+	// Match by name.
 	for _, envConfig := range projectConfig.Environments {
-		if envConfig.Slug == environment {
+		if envConfig.Name == environment {
 			return &envConfig, nil
 		}
 	}
@@ -590,7 +586,6 @@ features:
 # Project environments.
 environments:
 {{range .Environments}}  - name: {{.Name}}
-    slug: {{.Slug}}
     humanId: {{.HumanID}}
     type: {{.Type}}
     stackDomain: {{.StackDomain}}

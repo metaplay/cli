@@ -149,7 +149,6 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		// Initialize new project environment config (with fresh information from portal).
 		newEnvConfig := metaproj.ProjectEnvironmentConfig{
 			Name:        portalEnv.Name,
-			Slug:        portalEnv.Slug,
 			HumanID:     portalEnv.HumanID,
 			StackDomain: portalEnv.StackDomain,
 			Type:        portalEnv.Type,

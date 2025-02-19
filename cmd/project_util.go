@@ -169,7 +169,6 @@ func resolveEnvironment(project *metaproj.MetaplayProject, tokenSet *auth.TokenS
 	// Convert to ProjectEnvironmentConfig.
 	envConfig := metaproj.ProjectEnvironmentConfig{
 		Name:        portalEnv.Name,
-		Slug:        portalEnv.Slug,
 		HumanID:     portalEnv.HumanID,
 		StackDomain: portalEnv.StackDomain,
 		Type:        portalEnv.Type,

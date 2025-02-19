@@ -18,9 +18,10 @@ func init() {
 	o := RunDashboardOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "dashboard",
-		Short: "Run the dashboard Vue.js project locally in development mode",
-		Run:   runCommand(&o),
+		Use:     "dashboard",
+		Aliases: []string{"dash"},
+		Short:   "Run the dashboard Vue.js project locally in development mode",
+		Run:     runCommand(&o),
 	}
 
 	devCmd.AddCommand(cmd)

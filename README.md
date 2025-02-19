@@ -126,7 +126,7 @@ By default, the generated `kubeconfig` file will invoke the `metaplay` CLI itsel
 
 ### Using in CI Jobs
 
-For detailed instructions on how to set up your CI system, see the [Getting Started with Cloud Deployments](https://docs.metaplay.io/cloud-deployments/getting-started.html) guide.
+For detailed instructions on how to set up your CI system, see the [Setup CI Pipeline](https://docs.metaplay.io/cloud-deployments/setup-ci-pipeline.html) guide.
 
 ### Tips & Tricks
 

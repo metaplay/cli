@@ -39,18 +39,8 @@ func getDotnetInstallInstructions() string {
 5. Verify installation with: dotnet --version
 `
 	case "linux":
-		return `
-.NET SDK is missing or outdated. Please install or upgrade .NET SDK:
-1. Open a terminal.
-2. Run the following commands:
-   - For Ubuntu/Debian:
-     sudo apt update
-     sudo apt install -y dotnet-sdk-x.y
-   - For Fedora:
-     sudo dnf install dotnet-sdk-x.y
-   - For other distributions: https://learn.microsoft.com/en-us/dotnet/core/install/linux
-3. Verify installation with: dotnet --version
-`
+		return `.NET SDK is missing or outdated.
+Please install or upgrade .NET SDK: https://learn.microsoft.com/en-us/dotnet/core/install/linux`
 	default:
 		return `
 .NET SDK is missing or outdated. Please install or upgrade .NET SDK:
