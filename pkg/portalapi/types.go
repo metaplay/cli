@@ -83,3 +83,17 @@ type EnvironmentInfo struct {
 	StackDomain string          `json:"stack_domain"` // Domain of the infra stack
 	// Slug        string          `json:"slug"`         // Slug for the environment (simplified version of name)
 }
+
+// SdkVersionInfo represents information about an SDK version
+type SdkVersionInfo struct {
+	ID             string  `json:"id"`
+	Version        string  `json:"version"`
+	Name           string  `json:"name"`
+	Description    *string `json:"description"`
+	IsPublic       bool    `json:"is_public"`
+	IsTestAsset    bool    `json:"is_test_asset"`
+	ReleaseDate    *string `json:"release_date"`
+	ReleaseNotesURL *string `json:"release_notes_url"`
+	StoragePath    *string `json:"storage_path"`
+	CreatedAt      string  `json:"created_at"`
+}

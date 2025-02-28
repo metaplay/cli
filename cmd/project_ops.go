@@ -140,15 +140,21 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 }
 
 // Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
-// Use sdkVersion == "" for latest.
-func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, sdkVersion string) (*metaproj.MetaplayVersionMetadata, error) {
+// Downloads the version specified by versionInfo.
+func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo) (*metaproj.MetaplayVersionMetadata, error) {
 	// Download the SDK archive to temp directory.
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
-	sdkZipPath, err := portalClient.DownloadSdk(tmpDir, sdkVersion)
+
+	var sdkZipPath string
+	var err error
+
+	// Download the specific version
+	sdkZipPath, err = portalClient.DownloadSdkByVersionId(tmpDir, versionInfo.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
+	log.Debug().Msgf("Downloaded SDK version '%s' (ID: %s)", versionInfo.Version, versionInfo.ID)
 	defer os.Remove(sdkZipPath)
 
 	// Validate the SDK archive file.

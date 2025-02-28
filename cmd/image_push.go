@@ -89,7 +89,7 @@ func (o *PushImageOptions) Run(cmd *cobra.Command) error {
 
 	// Log attempt
 	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderTitle("Push Docker Image to Cloud"))
+	log.Info().Msg(styles.RenderTitle("Push Docker Image to Cloud"))
 	log.Info().Msg("")
 	log.Info().Msgf("Target environment: %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("Docker image name: %s", styles.RenderTechnical(o.argImageName))
@@ -119,7 +119,7 @@ func (o *PushImageOptions) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderSuccess("✅ Successfully pushed image!"))
+	log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
 	return nil
 }
 

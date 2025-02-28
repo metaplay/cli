@@ -28,7 +28,7 @@ func ChooseTargetEnvironmentDialog(environments []metaproj.ProjectEnvironmentCon
 		return nil, err
 	}
 
-	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selected.Name)
+	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), selected.Name, styles.RenderMuted(fmt.Sprintf("[%s]", selected.HumanID)))
 
 	return selected, nil
 }

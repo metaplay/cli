@@ -89,17 +89,14 @@ func (c *Client) AgreeToContract(contractID string) error {
 	return nil
 }
 
-// DownloadSdk downloads the latest SDK to the specified target directory.
-// Use sdkVersion == "" for latest.
-func (c *Client) DownloadSdk(targetDir, sdkVersion string) (string, error) {
-	// Download the SDK to a temp file.
-	// \todo hoist version handling to happen earlier & always use versioned download link here?
-	var path string
-	if sdkVersion != "" {
-		path = fmt.Sprintf("/download/sdk?sdk_version=%s", sdkVersion)
-	} else {
-		path = "/download/sdk" // defaults to latest
+// DownloadSdkByVersionId downloads the SDK with the specified version ID to the target directory.
+func (c *Client) DownloadSdkByVersionId(targetDir, versionId string) (string, error) {
+	if versionId == "" {
+		return "", fmt.Errorf("version ID is required")
 	}
+
+	// Download the SDK to a temp file.
+	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionId)
 	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
 	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
 	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath)
@@ -194,4 +191,75 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	}
 
 	return &envInfos[0], nil
+}
+
+// GetLatestSdkVersionInfo retrieves information about the latest SDK version.
+func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
+	sdkInfo, err := metahttp.Get[SdkVersionInfo](c.httpClient, "/api/v1/sdk/latest")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest SDK version info: %w", err)
+	}
+	return &sdkInfo, nil
+}
+
+// GetSdkVersions retrieves a list of all available SDK versions.
+func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
+	sdkVersions, err := metahttp.Get[[]SdkVersionInfo](c.httpClient, "/api/v1/sdk")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
+	}
+	return sdkVersions, nil
+}
+
+// FindSdkVersionByVersionOrName attempts to find an SDK version by its version string or name.
+// Returns nil if no matching version is found.
+func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersionInfo, error) {
+	// Get all SDK versions
+	versions, err := c.GetSdkVersions()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
+	}
+
+	// First, try to find an exact match for the version string
+	for _, v := range versions {
+		if v.Version == versionOrName {
+			// Check if the version has a storage path
+			if v.StoragePath == nil {
+				return nil, fmt.Errorf("SDK version '%s' found but it has no downloadable file", versionOrName)
+			}
+			return &v, nil
+		}
+	}
+
+	// If no exact version match, try to find a match in the name
+	for _, v := range versions {
+		if v.Name == versionOrName {
+			// Check if the version has a storage path
+			if v.StoragePath == nil {
+				return nil, fmt.Errorf("SDK version with name '%s' found but it has no downloadable file", versionOrName)
+			}
+			return &v, nil
+		}
+	}
+
+	// No match found
+	return nil, nil
+}
+
+// DownloadLatestSdk downloads the latest SDK to the specified target directory.
+// This is a convenience function that combines GetLatestSdkVersionInfo and DownloadSdkByVersionId.
+func (c *Client) DownloadLatestSdk(targetDir string) (string, error) {
+	// Get the latest SDK version info
+	latestSdk, err := c.GetLatestSdkVersionInfo()
+	if err != nil {
+		return "", fmt.Errorf("failed to get latest SDK version info: %w", err)
+	}
+
+	// Check if we have a storage path
+	if latestSdk.StoragePath == nil {
+		return "", fmt.Errorf("latest SDK version does not have a downloadable file")
+	}
+
+	// Download the SDK
+	return c.DownloadSdkByVersionId(targetDir, latestSdk.ID)
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
@@ -165,6 +166,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 	// If download SDK from portal, general terms & conditions must be approved for download to work.
 	portalClient := portalapi.NewClient(tokenSet)
+	var sdkVersionInfo *portalapi.SdkVersionInfo = nil
+	var sdkVersionBadge string = ""
 	if o.flagSdkSource == "" {
 		// Handle agreeing to general terms & conditions.
 		log.Debug().Msg("Fetch the user state to see which contracts have been signed")
@@ -183,6 +186,46 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.TermsAndConditions)
 		if err != nil {
 			return err
+		}
+
+		// Resolve SDK version to download:
+		// - If --sdk-version not specified, fetch the latest public release.
+		// - If --sdk-version specified, try to match it from the available public releases.
+		if o.flagSdkVersion == "" {
+			// Get the latest SDK version info
+			sdkVersionInfo, err = portalClient.GetLatestSdkVersionInfo()
+			if err != nil {
+				return fmt.Errorf("failed to get latest SDK version info: %w", err)
+			}
+
+			sdkVersionBadge = styles.RenderMuted("[latest]")
+		} else {
+			// Try to find the specified version
+			sdkVersionInfo, err = portalClient.FindSdkVersionByVersionOrName(o.flagSdkVersion)
+			if err != nil {
+				return fmt.Errorf("failed to find SDK version '%s': %w", o.flagSdkVersion, err)
+			}
+
+			if sdkVersionInfo == nil {
+				return fmt.Errorf("SDK version '%s' not found in Metaplay portal", o.flagSdkVersion)
+			}
+		}
+
+		// Validate the selected SDK version.
+		vsn, err := version.NewVersion(sdkVersionInfo.Version)
+		if err != nil {
+			return fmt.Errorf("invalid SDK version string '%s': %w", sdkVersionInfo.Version, err)
+		}
+
+		// Must be at least 32.0 (allow pre versions too).
+		requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
+		if vsn.LessThan(requiredVersion) {
+			return fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", sdkVersionInfo.Version)
+		}
+
+		// The SDK version must be downloadable.
+		if sdkVersionInfo.StoragePath == nil {
+			return fmt.Errorf("latest SDK version does not have a downloadable file")
 		}
 	}
 
@@ -215,7 +258,11 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Project:            %s %s", styles.RenderTechnical(targetProject.Name), styles.RenderMuted(fmt.Sprintf("[%s]", targetProject.HumanID)))
 	log.Info().Msgf("Project root:       %s", styles.RenderTechnical(o.absoluteProjectPath))
 	log.Info().Msgf("Unity project dir:  %s", styles.RenderTechnical(filepath.Join(o.absoluteProjectPath, o.relativeUnityProjectPath)))
-	log.Info().Msgf("Metaplay SDK:       %s", styles.RenderTechnical(coalesceString(metaplaySdkSource, o.flagSdkVersion, "latest")))
+	if sdkVersionInfo != nil {
+		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
+	} else {
+		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(metaplaySdkSource), styles.RenderAttention("[use existing]"))
+	}
 	log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
 	log.Info().Msgf("Game backend dir:   %s%s", styles.RenderTechnical("Backend"), styles.RenderAttention(" [new]"))
 	log.Info().Msg("")
@@ -247,7 +294,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		if o.flagSdkSource == "" {
 			// Download and extract to target project dir.
 			relativePathToSdk = "MetaplaySDK"
-			sdkMetadata, err = downloadAndExtractSdk(tokenSet, o.absoluteProjectPath, o.flagSdkVersion)
+			sdkMetadata, err = downloadAndExtractSdk(tokenSet, o.absoluteProjectPath, sdkVersionInfo)
 			if err != nil {
 				return err
 			}

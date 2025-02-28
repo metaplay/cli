@@ -75,6 +75,7 @@ func (m compactListModel) Init() tea.Cmd {
 func (m compactListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.model.SetWidth(msg.Width)
 		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -105,9 +106,17 @@ func (m compactListModel) View() string {
 	return content
 }
 
+// min returns the smaller of x or y
+func min(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
+}
+
 func chooseFromList(title string, items []list.Item) (int, error) {
 	// Initialize list with custom delegate
-	list := list.New(items, compactListDelegate{}, 80, 20)
+	list := list.New(items, compactListDelegate{}, 0, min(2+len(items), 20))
 	list.SetShowTitle(false)
 	list.SetFilteringEnabled(false)
 	list.SetShowStatusBar(false)

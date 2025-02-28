@@ -186,7 +186,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			"Select Docker Image to Deploy",
 			localImages,
 			func(img *envapi.MetaplayImageInfo) (string, string) {
-				description := fmt.Sprintf("[%s, %s, %s]", humanize.Time(img.ConfigFile.Created.Time), img.CommitID, img.BuildNumber)
+				description := humanize.Time(img.ConfigFile.Created.Time)
 				return img.RepoTag, description
 			})
 		if err != nil {
