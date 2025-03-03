@@ -29,7 +29,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "botclient [flags] [-- EXTRA_ARGS]",
-		Short: "Run BotClient locally (againts local or remote server)",
+		Short: "Run BotClient locally (against local or remote server)",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			Run simulated bots against the locally running server, or a cloud environment.

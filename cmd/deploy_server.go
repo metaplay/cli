@@ -35,7 +35,6 @@ type deployGameServerOpts struct {
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
-	flagCheckOnly           bool // Only perform the server status check, not the deployment itself. \todo separate to its own command?
 }
 
 func init() {
@@ -102,7 +101,6 @@ func init() {
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
-	flags.BoolVar(&o.flagCheckOnly, "check-only", false, "Use this flag to only perform the server status check (docker image push and deploy are skipped)")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -179,6 +177,11 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
 			return err
+		}
+
+		// If there are no images for this project, error out.
+		if len(localImages) == 0 {
+			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
 		}
 
 		// Let the user choose from the list of images.
@@ -389,22 +392,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func() error {
-			// Skip push if --check-only is used.
-			if o.flagCheckOnly {
-				return nil
-			}
-
 			return pushDockerImage(cmd.Context(), o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
 		})
 	}
 
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func() error {
-		// Skip deploy if --check-only is used.
-		if o.flagCheckOnly {
-			return nil
-		}
-
 		_, err := helmutil.HelmUpgradeOrInstall(
 			actionConfig,
 			existingRelease,
