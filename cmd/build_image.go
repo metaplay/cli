@@ -138,7 +138,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			commitIdBadge = styles.RenderMuted("(auto-detected)")
 		} else {
 			commitId = "none" // default if not specified
-			commitIdBadge = styles.RenderWarning("[failed to auto-detect; specify with --commit-id=<id>]")
+			commitIdBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-id=<id>]")
 		}
 	}
 
@@ -155,7 +155,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			buildNumberBadge = styles.RenderMuted("(auto-detected)")
 		} else {
 			buildNumber = "none" // default if not specified
-			buildNumberBadge = styles.RenderWarning("[failed to auto-detect; specify with --commit-number=<number>]")
+			buildNumberBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-number=<number>]")
 		}
 	}
 

@@ -11,11 +11,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type RunDashboardOpts struct {
+type devDashboardOpts struct {
+	UsePositionalArgs
+
+	extraArgs []string
 }
 
 func init() {
-	o := RunDashboardOpts{}
+	o := devDashboardOpts{}
+
+	args := o.Arguments()
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'pnpm dev'.")
 
 	cmd := &cobra.Command{
 		Use:     "dashboard",
@@ -27,11 +33,11 @@ func init() {
 	devCmd.AddCommand(cmd)
 }
 
-func (o *RunDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *RunDashboardOpts) Run(cmd *cobra.Command) error {
+func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
@@ -61,7 +67,8 @@ func (o *RunDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Run the dashboard project in dev mode
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"dev"}); err != nil {
+	devArgs := append([]string{"dev"}, o.extraArgs...)
+	if err := execChildInteractive(dashboardPath, "pnpm", devArgs); err != nil {
 		return fmt.Errorf("failed to run the LiveOps Dashboard: %s", err)
 	}
 

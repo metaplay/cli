@@ -12,10 +12,17 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type BuildDashboardOpts struct{}
+type buildDashboardOpts struct {
+	UsePositionalArgs
+
+	extraArgs []string
+}
 
 func init() {
-	o := BuildDashboardOpts{}
+	o := buildDashboardOpts{}
+
+	args := o.Arguments()
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'pnpm build'.")
 
 	var buildDashboardCmd = &cobra.Command{
 		Use:     "dashboard [flags]",
@@ -27,11 +34,11 @@ func init() {
 	buildCmd.AddCommand(buildDashboardCmd)
 }
 
-func (o *BuildDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *BuildDashboardOpts) Run(cmd *cobra.Command) error {
+func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
@@ -55,14 +62,15 @@ func (o *BuildDashboardOpts) Run(cmd *cobra.Command) error {
 	// Resolve project dashboard path.
 	dashboardPath := project.GetDashboardDir()
 
-	// Install dashboard dependencies
+	// Install dashboard dependencies.
 	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {
 		log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
 		os.Exit(1)
 	}
 
-	// Build the dashboard
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"build"}); err != nil {
+	// Build the dashboard.
+	buildArgs := append([]string{"build"}, o.extraArgs...)
+	if err := execChildInteractive(dashboardPath, "pnpm", buildArgs); err != nil {
 		log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
 		os.Exit(1)
 	}

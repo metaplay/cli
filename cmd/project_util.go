@@ -47,12 +47,47 @@ func findProjectDirectory() (string, error) {
 		}
 	}
 
-	// Check that metaplay-project.yaml exists in this directory
-	if _, err := os.Stat(metaproj.ConfigFileName); err != nil {
-		return "", errors.New("metaplay-project.yaml file not found in the current directory, use --project=<path> to point to your project directory")
+	// Start from the current directory and walk up towards the root
+	// until we find metaplay-project.yaml
+	currentDir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current working directory: %w", err)
 	}
 
-	return ".", nil
+	// Convert to absolute path to handle relative paths correctly
+	absCurrentDir, err := filepath.Abs(currentDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	// Walk up the directory tree to find the metaplay-project.yaml
+	for {
+		// Check if the config file exists in the current directory
+		configFilePath := filepath.Join(absCurrentDir, metaproj.ConfigFileName)
+		if _, err := os.Stat(configFilePath); err == nil {
+			// Found the config file, return the directory
+			log.Debug().Msgf("Found metaplay-project.yaml in directory '%s'", absCurrentDir)
+
+			// Return path relative to the starting directory if possible
+			relPath, err := filepath.Rel(currentDir, absCurrentDir)
+			if err == nil && !filepath.IsAbs(relPath) {
+				return relPath, nil
+			}
+			return absCurrentDir, nil
+		}
+
+		// Get the parent directory
+		parentDir := filepath.Dir(absCurrentDir)
+
+		// Check if we've reached the root directory
+		if parentDir == absCurrentDir {
+			// We've reached the root and didn't find the config file
+			return "", errors.New("metaplay-project.yaml file not found in any parent directory, use --project=<path> to point to your project directory")
+		}
+
+		// Move up to the parent directory
+		absCurrentDir = parentDir
+	}
 }
 
 // Get the AuthProvider: either return the project's custom provider (if defined),
