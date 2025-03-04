@@ -64,7 +64,7 @@ func (o *debugCheckServerStatus) Prepare(cmd *cobra.Command, args []string) erro
 
 func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
-	project, err := resolveProject()
+	project, err := tryResolveProject()
 	if err != nil {
 		return err
 	}

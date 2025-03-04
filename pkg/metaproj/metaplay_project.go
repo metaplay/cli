@@ -463,15 +463,19 @@ func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, version
 // The first environment that matches 'environment' is chosen.
 // The 'environment' argument can match either the humanID or the name of the project.
 func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
-	// Match by HumanID.
 	for _, envConfig := range projectConfig.Environments {
+		// Match by HumanID.
 		if envConfig.HumanID == environment {
 			return &envConfig, nil
 		}
-	}
 
-	// Match by name.
-	for _, envConfig := range projectConfig.Environments {
+		// Match by human ID suffix, e.g., 'quickly' matches env 'lovely-wombats-build-quickly' for project 'lovely-wombats-build'.
+		suffixed := fmt.Sprintf("%s-%s", projectConfig.ProjectHumanID, environment)
+		if envConfig.HumanID == suffixed {
+			return &envConfig, nil
+		}
+
+		// Match by display name.
 		if envConfig.Name == environment {
 			return &envConfig, nil
 		}
