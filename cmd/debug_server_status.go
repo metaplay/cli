@@ -125,7 +125,6 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  ID:                %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("  Type:              %s", styles.RenderTechnical(string(envConfig.Type)))
 	log.Info().Msgf("  Stack domain:      %s", styles.RenderTechnical(envConfig.StackDomain))
-	log.Info().Msg("")
 	log.Info().Msg("Deployment info:")
 	log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
 	log.Info().Msg("")

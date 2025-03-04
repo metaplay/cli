@@ -90,20 +90,27 @@ func (targetEnv *TargetEnvironment) GetSecret(ctx context.Context, name string) 
 	return secret, nil
 }
 
-// ListSecrets lists all Kubernetes secrets with the label foo=bar
+// ListSecrets lists all Kubernetes secrets with the user secret label.
+// If no secrets exist, an empty list is returned.
 func (targetEnv *TargetEnvironment) ListSecrets(ctx context.Context) ([]corev1.Secret, error) {
-	// Initialize a Kubernetes kubeCli against the environment
+	// Initialize a Kubernetes kubeCli against the environment.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return nil, err
 	}
 
+	// Fetch the secrets with the appropriate label from Kubernetes.
 	labelSelector := fmt.Sprintf("%s=%s", userSecretLabelName, userSecretLabelValue)
 	secrets, err := kubeCli.Clientset.CoreV1().Secrets(targetEnv.HumanId).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// Return empty list instead of nil.
+	if secrets.Items == nil {
+		return []corev1.Secret{}, nil
 	}
 
 	return secrets.Items, nil
