@@ -147,7 +147,6 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Get environment details.
-	log.Debug().Msg("Get environment details")
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return err

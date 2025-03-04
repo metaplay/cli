@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/rs/zerolog/log"
 )
@@ -22,10 +23,14 @@ type Client struct {
 
 // NewClient creates a new HTTP client with the given auth token set and base URL.
 func NewClient(tokenSet *auth.TokenSet, baseURL string) *Client {
+	restyClient := resty.New().
+		SetAuthToken(tokenSet.AccessToken).
+		SetBaseURL(baseURL).
+		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))
 	return &Client{
 		TokenSet: tokenSet,
 		BaseURL:  baseURL,
-		Resty:    resty.New().SetAuthToken(tokenSet.AccessToken).SetBaseURL(baseURL), //.SetRedirectPolicy(resty.FlexibleRedirectPolicy(5)),
+		Resty:    restyClient,
 	}
 }
 

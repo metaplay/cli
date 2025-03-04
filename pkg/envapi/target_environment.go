@@ -58,6 +58,7 @@ type DockerCredentials struct {
 
 func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanId string) *TargetEnvironment {
 	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
 		StackApiBaseURL: stackApiBaseURL,
@@ -247,6 +248,7 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 // Request details about an environment from the StackAPI.
 func (target *TargetEnvironment) GetDetails() (*EnvironmentDetails, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanId)
+	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
 	details, err := metahttp.Get[EnvironmentDetails](target.StackApiClient, path)
 	return &details, err
 }

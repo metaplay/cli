@@ -104,6 +104,12 @@ By default, it shows time-ordered logs from all pods, but you can also only targ
 metaplay debug logs ENVIRONMENT --pod=POD_NAME
 ```
 
+It's enough to provide only the environment ID's suffix. For example, in project `lovely-wombats-build`, the environment `lovely-wombats-build-quickly` can be targeted with just:
+
+```bash
+metaplay debug logs quickly
+```
+
 Alternatively, you can run the command without any parameters and the CLI will ask you the project and environment:
 
 ```bash

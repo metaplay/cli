@@ -86,7 +86,6 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Get environment details.
-	log.Debug().Msg("Get environment details")
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return err

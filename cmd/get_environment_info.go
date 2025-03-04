@@ -11,6 +11,7 @@ import (
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -104,6 +105,18 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+
+	// Fetch information from the portal.
+	portalClient := portalapi.NewClient(tokenSet)
+	portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+	if err != nil {
+		return err
+	}
+	portalInfoJSON, err := json.MarshalIndent(portalInfo, "", "  ")
+	if err != nil {
+		return err
+	}
+	log.Debug().Msgf("Portal client info: %s", portalInfoJSON)
 
 	// Output based on format
 	if o.flagFormat == "json" {
