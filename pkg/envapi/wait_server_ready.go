@@ -380,12 +380,14 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
 
 	for {
+		// Do a DNS lookup.
 		_, err := net.LookupHost(hostname)
 		if err == nil {
 			log.Debug().Msgf("Successfully resolved domain %s", hostname)
 			return nil
 		}
 
+		// Check for timeout.
 		if time.Now().After(timeoutAt) {
 			return fmt.Errorf("could not resolve domain %s before timeout", hostname)
 		}
@@ -403,7 +405,10 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 
 // waitForGameServerClientEndpointToBeReady waits until a game server client endpoint is ready by performing a TLS handshake.
 func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname string, port int, timeout time.Duration) error {
+	timeoutAt := time.Now().Add(timeout)
+
 	for {
+		// Do a request.
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout reached while waiting to establish connection to %s:%d", hostname, port)
@@ -415,6 +420,11 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname stri
 			}
 			log.Debug().Msgf("Attempt failed, retrying: %v", err)
 			time.Sleep(1 * time.Second) // Wait before retrying
+		}
+
+		// Check for timeout.
+		if time.Now().After(timeoutAt) {
+			return fmt.Errorf("timeout while waiting for response from %s:%d", hostname, port)
 		}
 	}
 }
@@ -450,11 +460,14 @@ func attemptTLSConnection(hostname string, port int) error {
 
 // waitForHTTPServerToRespond pings a target URL until it returns a success status code or a timeout occurs.
 func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Duration) error {
+	timeoutAt := time.Now().Add(timeout)
+
 	client := &http.Client{
 		Timeout: 5 * time.Second, // Per-request timeout
 	}
 
 	for {
+		// Do a request.
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
@@ -472,6 +485,11 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 			}
 
 			time.Sleep(2 * time.Second) // Wait before retrying
+		}
+
+		// Check for timeout.
+		if time.Now().After(timeoutAt) {
+			return fmt.Errorf("timeout while waiting for respones from %s", url)
 		}
 	}
 }
