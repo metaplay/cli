@@ -16,6 +16,7 @@ type buildDashboardOpts struct {
 	UsePositionalArgs
 
 	extraArgs []string
+	skipPnpm  bool
 }
 
 func init() {
@@ -30,6 +31,8 @@ func init() {
 		Short:   "Build the Vue.js LiveOps Dashboard",
 		Run:     runCommand(&o),
 	}
+
+	buildDashboardCmd.Flags().BoolVar(&o.skipPnpm, "skip-pnpm", false, "Skip the pnpm install step")
 
 	buildCmd.AddCommand(buildDashboardCmd)
 }
@@ -62,10 +65,15 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	// Resolve project dashboard path.
 	dashboardPath := project.GetDashboardDir()
 
-	// Install dashboard dependencies.
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {
-		log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
-		os.Exit(1)
+	// Install dashboard dependencies if not skipped.
+	if !o.skipPnpm {
+		log.Info().Msg("Installing dashboard dependencies...")
+		if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {
+			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
+			os.Exit(1)
+		}
+	} else {
+		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
 	}
 
 	// Build the dashboard.
