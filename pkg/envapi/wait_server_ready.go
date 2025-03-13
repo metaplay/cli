@@ -489,7 +489,7 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 
 		// Check for timeout.
 		if time.Now().After(timeoutAt) {
-			return fmt.Errorf("timeout while waiting for respones from %s", url)
+			return fmt.Errorf("timeout while waiting for response from %s", url)
 		}
 	}
 }

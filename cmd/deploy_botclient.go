@@ -220,7 +220,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	if helmReleaseName == "" {
 		if existingRelease != nil {
 			helmReleaseName = existingRelease.Name
-			helmReleaseNameBadge = styles.RenderMuted("[existing]")
+			helmReleaseNameBadge = styles.RenderMuted("[update existing]")
 		} else {
 			helmReleaseName = fmt.Sprintf("%s-loadtest", envConfig.HumanID)
 			helmReleaseNameBadge = styles.RenderMuted("[default]")

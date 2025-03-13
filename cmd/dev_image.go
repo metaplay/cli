@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -25,7 +27,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
-	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'dotnet run'.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'docker run'.")
 
 	cmd := &cobra.Command{
 		Use:   "image IMAGE:TAG [flags] [-- EXTRA_ARGS]",
@@ -46,6 +48,9 @@ func init() {
 		Example: trimIndent(`
 			# Run the docker image (until terminated).
 			metaplay dev image mygame:test
+
+			# Run the latest built local docker image.
+			metaplay dev image latest-local
 		`),
 	}
 
@@ -57,15 +62,39 @@ func (o *devImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *devImageOpts) Run(cmd *cobra.Command) error {
-	// Load project config.
-	// project, err := resolveProject()
-	// if err != nil {
-	// 	return err
-	// }
+	// Try to resolve the project & auth provider.
+	project, err := resolveProject()
+	if err != nil {
+		return err
+	}
 
 	// Check that docker is installed and running
 	if err := checkCommand("docker", "info"); err != nil {
 		return fmt.Errorf("failed to invoke docker. Ensure docker is installed and running.")
+	}
+
+	// If no docker image specified, scan the images matching project from the local docker repo
+	// and then let the user choose from the images.
+	if o.argImageTag == "" {
+		selectedImage, err := selectDockerImageInteractively("Select Image to Run Locally", project.Config.ProjectHumanID)
+		if err != nil {
+			return err
+		}
+		o.argImageTag = selectedImage.RepoTag
+	} else if o.argImageTag == "latest-local" {
+		// Resolve the local docker images matching project human ID.
+		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
+		if err != nil {
+			return err
+		}
+
+		// If there are no images for this project, error out.
+		if len(localImages) == 0 {
+			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+		}
+
+		// Use the first entry (they are reverse sorted by creation time).
+		o.argImageTag = localImages[0].RepoTag
 	}
 
 	// Construct docker run args.
@@ -88,7 +117,10 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 		"--Database:SqliteInMemory=true",
 	}
 	dockerRunArgs = append(dockerRunArgs, o.extraArgs...)
-	log.Info().Msgf("Execute: docker %s", strings.Join(dockerRunArgs, " "))
+
+	log.Info().Msg("")
+	log.Info().Msgf(styles.RenderMuted("docker %s"), strings.Join(dockerRunArgs, " "))
+	log.Info().Msg("")
 
 	// Run the docker image.
 	if err := executeCommand(".", nil, "docker", dockerRunArgs...); err != nil {

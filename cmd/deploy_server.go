@@ -80,6 +80,9 @@ func init() {
 			# Deploy an image that has already been pushed into the environment.
 			metaplay deploy server tough-falcons 364cff09
 
+			# Deploy the latest locally built image for this project.
+			metaplay deploy server tough-falcons latest-local
+
 			# Pass extra arguments to Helm.
 			metaplay deploy server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
 
@@ -172,6 +175,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
 	if o.argImageNameTag == "" {
+		selectedImage, err := selectDockerImageInteractively("Select Image to Deploy", project.Config.ProjectHumanID)
+		if err != nil {
+			return err
+		}
+		o.argImageNameTag = selectedImage.RepoTag
+	} else if o.argImageNameTag == "latest-local" {
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
@@ -183,20 +192,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
 		}
 
-		// Let the user choose from the list of images.
-		selectedImage, err := tui.ChooseFromListDialog(
-			"Select Docker Image to Deploy",
-			localImages,
-			func(img *envapi.MetaplayImageInfo) (string, string) {
-				description := humanize.Time(img.ConfigFile.Created.Time)
-				return img.RepoTag, description
-			})
-		if err != nil {
-			return err
-		}
-
-		log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedImage.RepoTag)
-		o.argImageNameTag = selectedImage.RepoTag
+		// Use the first entry (they are reverse sorted by creation time).
+		o.argImageNameTag = localImages[0].RepoTag
 	}
 
 	// Push the image to the remote repository (if full name is specified).
@@ -351,7 +348,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if helmReleaseName == "" {
 		if existingRelease != nil {
 			helmReleaseName = existingRelease.Name
-			helmReleaseNameBadge = styles.RenderMuted("[existing]")
+			helmReleaseNameBadge = styles.RenderMuted("[update existing]")
 		} else {
 			helmReleaseName = fmt.Sprintf("%s-gameserver", envConfig.HumanID)
 			helmReleaseNameBadge = styles.RenderMuted("[default]")
@@ -422,6 +419,34 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg(styles.RenderSuccess("✅ Game server successfully deployed!"))
 	return nil
+}
+
+func selectDockerImageInteractively(title string, projectHumanID string) (*envapi.MetaplayImageInfo, error) {
+	// Resolve the local docker images matching project human ID.
+	localImages, err := envapi.ReadLocalDockerImagesByProjectID(projectHumanID)
+	if err != nil {
+		return nil, err
+	}
+
+	// If there are no images for this project, error out.
+	if len(localImages) == 0 {
+		return nil, fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", projectHumanID)
+	}
+
+	// Let the user choose from the list of images.
+	selectedImage, err := tui.ChooseFromListDialog(
+		title,
+		localImages,
+		func(img *envapi.MetaplayImageInfo) (string, string) {
+			description := humanize.Time(img.ConfigFile.Created.Time)
+			return img.RepoTag, description
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedImage.RepoTag)
+	return selectedImage, nil
 }
 
 // Return the first non-empty string in the provided arguments.
