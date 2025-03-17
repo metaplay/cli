@@ -138,10 +138,10 @@ func Execute() {
 func init() {
 	// Register global flags.
 	flags := rootCmd.PersistentFlags()
-	flags.BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging, useful for troubleshooting")
+	flags.BoolVarP(&flagVerbose, "verbose", "v", false, "Enable verbose logging, useful for troubleshooting [env: METAPLAYCLI_VERBOSE]")
 	flags.StringVarP(&flagProjectConfigPath, "project", "p", "", "Path to the to project directory (where metaplay-project.yaml is located)")
 	flags.BoolVar(&skipAppVersionCheck, "skip-version-check", false, "Skip the check for a new CLI version being available")
-	flags.StringVar(&flagColorMode, "color", "auto", "Should the output be colored (yes/no/auto)?")
+	flags.StringVar(&flagColorMode, "color", "auto", "Should the output be colored (yes/no/auto)? [env: METAPLAYCLI_COLOR]")
 
 	// Add command groups to root.
 	coreGroup := &cobra.Group{
@@ -183,6 +183,9 @@ func init() {
 	versionCmd.GroupID = "other"
 	rootCmd.SetHelpCommandGroupID("other")
 	rootCmd.SetCompletionCommandGroupID("other")
+
+	// Initialize colored help templates
+	initColoredHelpTemplates(rootCmd)
 }
 
 // Customer version of zerolog's ConsoleWriter that writes out the full
@@ -370,6 +373,14 @@ func renderLong(opts CommandOptions, str string) string {
 		}
 	}
 
+	// Highlight important keywords
+	for _, keyword := range []string{"Note:", "Warning:", "Important:"} {
+		str = strings.ReplaceAll(str, keyword, styles.RenderAttention(keyword))
+	}
+
+	// Style code blocks and inline code with a different color
+	str = styleInlineCode(str)
+
 	// Return final result
 	return str
 }
@@ -380,8 +391,7 @@ func isTruthy(str string) bool {
 	return str == "yes" || str == "y" || str == "true" || str == "1"
 }
 
-// Return true if the value is truthy ('yes', 'y', 'true', '1').
-// Note: Returns false for an empty input!
+// Return true if the value is falsy ('no', 'n', 'false', '0').
 func isFalsy(str string) bool {
 	str = strings.ToLower(str)
 	return str == "no" || str == "n" || str == "false" || str == "0"

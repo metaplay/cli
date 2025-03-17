@@ -58,19 +58,19 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return errors.New("dotnet SDK is not installed or not in PATH.\n" + getDotnetInstallInstructions())
+		return errors.New(".NET SDK is not installed or not in PATH.\n" + getDotnetInstallInstructions())
 	}
 
 	// Parse installed .NET version
 	installedVersionStr := strings.TrimSpace(out.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse required .NET version from '%s': %v", installedVersionStr, err)
+		return fmt.Errorf("failed to parse required .NET version string '%s': %v", installedVersionStr, err)
 	}
 
 	// Print the info.
 	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", requiredDotnetVersion))
-	log.Info().Msgf("Installed .NET SDK: %s %s", styles.RenderTechnical(installedVersion.String()), badge)
+	log.Info().Msgf(".NET SDK detected: %s %s %s", styles.RenderTechnical(installedVersion.String()), styles.RenderSuccess("✓"), badge)
 
 	// Check that .NET version is recent enough
 	if installedVersion.LessThan(requiredDotnetVersion) {
