@@ -6,7 +6,6 @@ package cmd
 import (
 	"strings"
 
-	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -46,10 +45,9 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
 
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
+	// Resolve environment.
+	_, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanId)
 	if err != nil {
 		return err
 	}

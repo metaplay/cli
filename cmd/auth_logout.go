@@ -11,16 +11,30 @@ import (
 )
 
 type LogoutOpts struct {
+	UsePositionalArgs
+
+	argAuthProvider string
 }
 
 func init() {
 	o := LogoutOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+
 	cmd := &cobra.Command{
-		Use:   "logout",
-		Short: "Sign out from Metaplay cloud",
-		Long:  `Delete the locally persisted credentials to sign out from Metaplay cloud.`,
-		Run:   runCommand(&o),
+		Use:   "logout [AUTH_PROVIDER]",
+		Short: "Sign out from the target authentication provider",
+		Long: renderLong(&o, `
+			Delete the locally persisted credentials to sign out from the target authentication provider.
+
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
+			argument AUTH_PROVIDER.
+
+			{Arguments}
+		`),
+		Run: runCommand(&o),
 	}
 
 	authCmd.AddCommand(cmd)
@@ -36,7 +50,13 @@ func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
+
+	// Resolve auth provider.
+	authProviderName := coalesceString(o.argAuthProvider, "metaplay")
+	authProvider, err := getAuthProvider(project, authProviderName)
+	if err != nil {
+		return err
+	}
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Sign Out"))

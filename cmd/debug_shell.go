@@ -113,16 +113,9 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
-
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-	if err != nil {
-		return err
-	}
 
 	// Resolve environment config.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.Environment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.Environment)
 	if err != nil {
 		return err
 	}

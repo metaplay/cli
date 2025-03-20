@@ -165,6 +165,7 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 // FetchProjectEnvironments fetches all environments for the given project.
 func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?projectId=%s", projectUUID)
+	log.Debug().Msgf("Fetch project environments by UUID from %s%s", c.httpClient.BaseURL, url)
 	environmentInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
@@ -177,6 +178,7 @@ func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo
 // FetchEnvironmentInfoByHumanID fetches information about an environment using its human ID.
 func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?human_id=%s", humanID)
+	log.Debug().Msgf("Fetch environment by human ID from %s%s", c.httpClient.BaseURL, url)
 	envInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)

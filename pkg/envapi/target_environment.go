@@ -271,9 +271,10 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 /**
 * Get a `kubeconfig` payload which invokes `metaplay-auth get-kubernetes-execcredential` to get the actual
 * access credentials each time the kubeconfig is used.
+* @param userID Any identity for the user, stored in the kubeconfig but not used otherwise.
 * @returns The kubeconfig YAML.
  */
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
 	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanId)
 	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
 
@@ -284,12 +285,6 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(authProvider *a
 
 	if string(credentials.Spec.Cluster.CertificateAuthorityData) == "" && credentials.Spec.Cluster.Server == "" {
 		return "", fmt.Errorf("Received kubeExecCredential with missing spec.cluster")
-	}
-
-	// Fetch the userinfo for an email.
-	userinfo, err := auth.FetchUserInfo(authProvider, target.TokenSet)
-	if err != nil {
-		return "", err
 	}
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{
@@ -308,7 +303,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(authProvider *a
 				Context: KubeConfigContextData{
 					Cluster:   credentials.Spec.Cluster.Server,
 					Namespace: target.HumanId,
-					User:      userinfo.Email,
+					User:      userID,
 				},
 				Name: target.HumanId,
 			},
@@ -318,7 +313,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(authProvider *a
 		Preferences:    make(map[string]interface{}),
 		Users: []KubeConfigUser{
 			{
-				Name: userinfo.Email,
+				Name: userID,
 				User: KubeConfigUserData{
 					Exec: KubeConfigUserDataExec{
 						Command: "metaplay",

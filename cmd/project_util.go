@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -92,36 +93,34 @@ func findProjectDirectory() (string, error) {
 
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
-func getAuthProvider(project *metaproj.MetaplayProject) *auth.AuthProviderConfig {
-	// If have a project, return its auth provider.
-	if project != nil && project.Config.AuthProvider != nil {
-		return project.Config.AuthProvider
+func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
+	if providerName == "" {
+		return nil, errors.New("no auth provider specified")
 	}
+
+	// Handle built-in provider 'metaplay'.
+	if providerName == "metaplay" {
+		return auth.NewMetaplayAuthProvider(), nil
+	}
+
+	// If have a project, return its auth provider.
+	if project != nil && project.Config.AuthProviders != nil {
+		for providerID, provider := range project.Config.AuthProviders {
+			if providerID == providerName || provider.Name == providerName {
+				return provider, nil
+			}
+		}
+	}
+
+	// Log the existing providers.
+	log.Debug().Msgf("Existing providers: %v", project.Config.AuthProviders)
 
 	// Otherwise, return default Metaplay Auth provider.
-	return auth.NewMetaplayAuthProvider()
+	return nil, fmt.Errorf("no matching auth provider '%s' found", providerName)
 }
 
-func tryResolveProject() (*metaproj.MetaplayProject, error) {
-	// Check if we can find the project file.
-	_, err := findProjectDirectory()
-	if err != nil {
-		return nil, nil
-	}
-
-	// If found the project file, load it.
-	return resolveProject()
-}
-
-// Locate and load the project config file, based on the --project flag.
-func resolveProject() (*metaproj.MetaplayProject, error) {
-	// Find the path with the project config file.
-	projectDir, err := findProjectDirectory()
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Project located in directory %s", projectDir)
-
+// Load the metaplay-project.yaml from the specified directory.
+func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 	// Load the project config file.
 	projectConfig, err := metaproj.LoadProjectConfigFile(projectDir)
 	if err != nil {
@@ -139,28 +138,81 @@ func resolveProject() (*metaproj.MetaplayProject, error) {
 	return metaproj.NewMetaplayProject(projectDir, projectConfig, versionMetadata)
 }
 
+// Try to find the metaplay-project.yaml based on the --project flag, and load
+// it if found. Returns nil, nil if not found.
+func tryResolveProject() (*metaproj.MetaplayProject, error) {
+	// Check if we can find the project file.
+	projectDir, err := findProjectDirectory()
+	if err != nil {
+		return nil, nil
+	}
+
+	// If found the project file, load it.
+	return loadProject(projectDir)
+}
+
+// Locate and load the project config file, based on the --project flag.
+func resolveProject() (*metaproj.MetaplayProject, error) {
+	// Find the path with the project config file.
+	projectDir, err := findProjectDirectory()
+	if err != nil {
+		return nil, err
+	}
+	log.Debug().Msgf("Project located in directory %s", projectDir)
+
+	return loadProject(projectDir)
+}
+
 // Resolve the environment configuration. First, try the project config, if available.
 // Otherwise, fetch the information from the portal.
-func resolveEnvironment(project *metaproj.MetaplayProject, tokenSet *auth.TokenSet, environment string) (*metaproj.ProjectEnvironmentConfig, error) {
+func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, environment string) (*metaproj.ProjectEnvironmentConfig, *auth.TokenSet, error) {
+	var envConfig *metaproj.ProjectEnvironmentConfig
+	var err error
+
 	// If a metaplay-project.yaml can be located, resolve the environment
 	// from the project config.
 	if project != nil {
 		// If environment not specified, ask it from the user (if in interactive mode).
 		if environment == "" {
 			if tui.IsInteractiveMode() {
-				return tui.ChooseTargetEnvironmentDialog(project.Config.Environments)
+				envConfig, err = tui.ChooseTargetEnvironmentDialog(project.Config.Environments)
+				if err != nil {
+					return nil, nil, err
+				}
 			} else {
-				return nil, fmt.Errorf("in non-interactive mode, target environment must be explicitly specified")
+				return nil, nil, fmt.Errorf("in non-interactive mode, target environment must be explicitly specified")
+			}
+		} else {
+			// Find target environment.
+			envConfig, err = project.Config.FindEnvironmentConfig(environment)
+			if err != nil {
+				return nil, nil, err
 			}
 		}
 
-		// Find target environment.
-		envConfig, err := project.Config.FindEnvironmentConfig(environment)
+		// Get auth provider for env.
+		authProvider, err := getAuthProvider(project, envConfig.AuthProvider)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		return envConfig, nil
+		// Ensure the user is logged in.
+		tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		return envConfig, tokenSet, nil
+	}
+
+	// If no metaplay-project.yaml can be located, we know we are using Metaplay auth provider.
+	// \todo store in project config instead?
+	authProvider := auth.NewMetaplayAuthProvider()
+
+	// Ensure the user is logged in.
+	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// If target environment not specified, let user choose from all accessible portal projects
@@ -171,44 +223,45 @@ func resolveEnvironment(project *metaproj.MetaplayProject, tokenSet *auth.TokenS
 		// Let the user choose from the accessible ones.
 		project, err := tui.ChooseOrgAndProject(tokenSet)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Fetch all environments of the project.
 		environments, err := portalClient.FetchProjectEnvironments(project.UUID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		// Let the user choose from the environments.
 		portalEnv, err = tui.ChooseEnvironmentDialog(environments)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s]", portalEnv.HumanID)))
 	} else {
 		// Check that the specified environment ID is a valid human ID.
 		if err := metaproj.ValidateEnvironmentID(environment); err != nil {
-			return nil, fmt.Errorf("full environment ID must be specified when metaplay-project.yaml not found: %w", err)
+			return nil, nil, fmt.Errorf("full environment ID must be specified when metaplay-project.yaml not found: %w", err)
 		}
 
 		// Try to resolve the environment from the portal by its human ID.
 		var err error
 		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Convert to ProjectEnvironmentConfig.
-	envConfig := metaproj.ProjectEnvironmentConfig{
-		Name:        portalEnv.Name,
-		HumanID:     portalEnv.HumanID,
-		StackDomain: portalEnv.StackDomain,
-		Type:        portalEnv.Type,
+	envConfig = &metaproj.ProjectEnvironmentConfig{
+		Name:         portalEnv.Name,
+		HumanID:      portalEnv.HumanID,
+		StackDomain:  portalEnv.StackDomain,
+		Type:         portalEnv.Type,
+		AuthProvider: "metaplay",
 	}
-	return &envConfig, nil
+	return envConfig, tokenSet, nil
 }
 
 // Helper for resolving both the MetaplayProject and a specific environment at the same time.

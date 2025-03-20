@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -83,16 +82,9 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
-
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-	if err != nil {
-		return err
-	}
 
 	// Resolve environment.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -106,17 +98,21 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Fetch information from the portal.
-	portalClient := portalapi.NewClient(tokenSet)
-	portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
-	if err != nil {
-		return err
+	// Only fetch portal info if targeting a managed stack.
+	authProviderName := coalesceString(envConfig.AuthProvider, "metaplay")
+	if authProviderName == "metaplay" {
+		// Fetch information from the portal.
+		portalClient := portalapi.NewClient(tokenSet)
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		if err != nil {
+			return err
+		}
+		portalInfoJSON, err := json.MarshalIndent(portalInfo, "", "  ")
+		if err != nil {
+			return err
+		}
+		log.Debug().Msgf("Portal client info: %s", portalInfoJSON)
 	}
-	portalInfoJSON, err := json.MarshalIndent(portalInfo, "", "  ")
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("Portal client info: %s", portalInfoJSON)
 
 	// Output based on format
 	if o.flagFormat == "json" {

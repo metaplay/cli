@@ -12,15 +12,30 @@ import (
 
 // Sign in a natural user to Metaplay Auth using the browser.
 type LoginOpts struct {
+	UsePositionalArgs
+
+	argAuthProvider string
 }
 
 func init() {
 	o := LoginOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+
 	cmd := &cobra.Command{
-		Use:   "login",
-		Short: "Login to your Metaplay account using the browser",
-		Run:   runCommand(&o),
+		Use:   "login [AUTH_PROVIDER]",
+		Short: "Login to your authentication provider using the browser",
+		Long: renderLong(&o, `
+			Login to your authentication provider using the browser.
+
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
+			argument AUTH_PROVIDER.
+
+			{Arguments}
+		`),
+		Run: runCommand(&o),
 	}
 
 	authCmd.AddCommand(cmd)
@@ -36,7 +51,13 @@ func (o *LoginOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
+
+	// Resolve auth provider.
+	authProviderName := coalesceString(o.argAuthProvider, "metaplay")
+	authProvider, err := getAuthProvider(project, authProviderName)
+	if err != nil {
+		return err
+	}
 
 	// Project ID to show
 	projectID := "n/a"

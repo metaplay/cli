@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -118,16 +117,9 @@ func (o *CollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
-
-	// Ensure the user is logged in.
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-	if err != nil {
-		return err
-	}
 
 	// Resolve environment config.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}

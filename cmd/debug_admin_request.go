@@ -10,7 +10,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
@@ -119,16 +118,9 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
-
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-	if err != nil {
-		return err
-	}
 
 	// Resolve project and environment.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}

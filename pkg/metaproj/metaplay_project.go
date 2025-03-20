@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
@@ -240,16 +241,20 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		return err
 	}
 
-	// Validate auth provider (if specified).
-	authProviderCfg := config.AuthProvider
-	if authProviderCfg != nil {
+	// Validate auth providers (if specified).
+	if config.AuthProviders == nil {
+		config.AuthProviders = make(map[string]*auth.AuthProviderConfig)
+	}
+
+	// Validate each auth provider
+	for name, authProviderCfg := range config.AuthProviders {
 		// Validate required fields
 		if authProviderCfg.Name == "" {
-			return fmt.Errorf("authProvider.name is required")
+			return fmt.Errorf("authProviders[%s].name is required", name)
 		}
 
 		if authProviderCfg.ClientID == "" {
-			return fmt.Errorf("authProvider.clientId is required")
+			return fmt.Errorf("authProviders[%s].clientId is required", name)
 		}
 
 		// Validate URLs
@@ -258,42 +263,42 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			"tokenEndpoint":    authProviderCfg.TokenEndpoint,
 			"userInfoEndpoint": authProviderCfg.UserInfoEndpoint,
 		}
-		for name, endpoint := range endpoints {
+		for endpointName, endpoint := range endpoints {
 			if endpoint == "" {
-				return fmt.Errorf("authProvider.%s is required", name)
+				return fmt.Errorf("authProviders[%s].%s is required", name, endpointName)
 			}
 			parsedURL, err := url.Parse(endpoint)
 			if err != nil {
-				return fmt.Errorf("authProvider.%s is not a valid URL: %v", name, err)
+				return fmt.Errorf("authProviders[%s].%s is not a valid URL: %v", name, endpointName, err)
 			}
 			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-				return fmt.Errorf("authProvider.%s must use http or https scheme", name)
+				return fmt.Errorf("authProviders[%s].%s must use http or https scheme", name, endpointName)
 			}
 			if parsedURL.Host == "" {
-				return fmt.Errorf("authProvider.%s must include a host", name)
+				return fmt.Errorf("authProviders[%s].%s must include a host", name, endpointName)
 			}
 		}
 
 		// Validate scopes.
 		if authProviderCfg.Scopes == "" {
-			return fmt.Errorf("authProvider.scopes are required")
+			return fmt.Errorf("authProviders[%s].scopes are required", name)
 		}
 		scopes := strings.Fields(authProviderCfg.Scopes)
 		if len(scopes) == 0 {
-			return fmt.Errorf("authProvider.must specify at least one scope")
+			return fmt.Errorf("authProviders[%s].must specify at least one scope", name)
 		}
 		for _, scope := range scopes {
 			if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(scope) {
-				return fmt.Errorf("invalid authProvider.scopes '%s': must contain only alphanumeric characters, underscores, dots, and hyphens", scope)
+				return fmt.Errorf("invalid authProviders[%s].scopes '%s': must contain only alphanumeric characters, underscores, dots, and hyphens", name, scope)
 			}
 		}
 
 		// Validate audience
 		if authProviderCfg.Audience == "" {
-			return fmt.Errorf("authProvider.audience is required")
+			return fmt.Errorf("authProviders[%s].audience is required", name)
 		}
 		if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(authProviderCfg.Audience) {
-			return fmt.Errorf("invalid authProvider.audience: must contain only alphanumeric characters, underscores, dots, and hyphens")
+			return fmt.Errorf("invalid authProviders[%s].audience: must contain only alphanumeric characters, underscores, dots, and hyphens", name)
 		}
 	}
 
@@ -343,6 +348,13 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
 			if err != nil {
 				return fmt.Errorf("environment '%s' failed to validate 'botclientValuesFile': %w", envName, err)
+			}
+		}
+		// Validate the environment's auth provider if specified
+		if envConfig.AuthProvider != "" {
+			// Check that the specified provider exists in the map
+			if _, exists := config.AuthProviders[envConfig.AuthProvider]; !exists {
+				return fmt.Errorf("environment '%s' specifies auth provider '%s' which is not defined in authProviders", envName, envConfig.AuthProvider)
 			}
 		}
 	}

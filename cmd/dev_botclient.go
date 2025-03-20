@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -69,7 +68,6 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Run Bot Client Locally"))
@@ -78,14 +76,8 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	// Resolve target environment flags (if specified)
 	targetEnvFlags := []string{}
 	if o.flagEnvironment != "" {
-		// Ensure the user is logged in
-		tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-		if err != nil {
-			return err
-		}
-
-		// Resolve target environment from metaplay-project.yaml.
-		envConfig, err := project.Config.FindEnvironmentConfig(o.flagEnvironment)
+		// Resolve project and environment.
+		envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.flagEnvironment)
 		if err != nil {
 			return err
 		}

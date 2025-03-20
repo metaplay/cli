@@ -15,20 +15,32 @@ import (
 
 // Display information about the logged in user.
 type WhoamiOpts struct {
-	flagFormat string
+	UsePositionalArgs
+
+	argAuthProvider string
+	flagFormat      string
 }
 
 func init() {
 	o := WhoamiOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+
 	cmd := &cobra.Command{
-		Use:   "whoami",
+		Use:   "whoami [AUTH_PROVIDER]",
 		Short: "Show information about the signed in user",
 		Long: renderLong(&o, `
 			Show information about the signed in user.
 
 			By default, displays the information in a human-readable text format.
 			Use --format=json to get the complete user information in JSON format.
+
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
+			argument AUTH_PROVIDER.
+
+			{Arguments}
 		`),
 		Example: trimIndent(`
 			# Show user information in text format
@@ -36,6 +48,9 @@ func init() {
 
 			# Show complete user information in JSON format
 			metaplay auth whoami --format=json
+
+			# Show user information for a specific auth provider
+			metaplay auth whoami myAuthProvider
 		`),
 		Run: runCommand(&o),
 	}
@@ -61,7 +76,13 @@ func (o *WhoamiOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
+
+	// Resolve auth provider.
+	authProviderName := coalesceString(o.argAuthProvider, "metaplay")
+	authProvider, err := getAuthProvider(project, authProviderName)
+	if err != nil {
+		return err
+	}
 
 	// Load session state.
 	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())

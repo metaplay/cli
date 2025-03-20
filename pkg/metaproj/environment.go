@@ -40,6 +40,7 @@ type ProjectEnvironmentConfig struct {
 	StackDomain         string                    `yaml:"stackDomain"`                   // Stack base domain (eg, 'p1.metaplay.io').
 	ServerValuesFile    string                    `yaml:"serverValuesFile,omitempty"`    // Relative path (from metaplay-project.yaml) to the game server deployment Helm values file.
 	BotClientValuesFile string                    `yaml:"botclientValuesFile,omitempty"` // Relative path (from metaplay-project.yaml) to the bot client deployment Helm values file.
+	AuthProvider        string                    `yaml:"authProvider,omitempty"`        // Name of the auth provider to use for this environment. Defaults to 'metaplay'.
 }
 
 // Get the Kubernetes namespace for this environment. Same as HumanID but

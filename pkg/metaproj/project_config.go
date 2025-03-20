@@ -38,7 +38,7 @@ type ProjectConfig struct {
 	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)
 	BotClientChartVersion string `yaml:"botClientChartVersion"` // Version of the bot client Helm chart to use (or 'latest-prerelease' for absolute latest)
 
-	AuthProvider *auth.AuthProviderConfig `yaml:"authProvider,omitempty"`
+	AuthProviders map[string]*auth.AuthProviderConfig `yaml:"authProviders,omitempty"`
 
 	Features ProjectFeaturesConfig `yaml:"features"`
 

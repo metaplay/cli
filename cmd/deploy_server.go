@@ -116,16 +116,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
-
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
-	if err != nil {
-		return err
-	}
 
 	// Resolve project and environment.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}

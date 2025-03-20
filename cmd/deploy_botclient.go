@@ -99,10 +99,9 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
 
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
+	// Resolve project and environment.
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -110,12 +109,6 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Deploy Bots to Cloud"))
 	log.Info().Msg("")
-
-	// Resolve project and environment.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
-	if err != nil {
-		return err
-	}
 
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)

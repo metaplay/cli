@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -17,6 +17,7 @@ type getKubeConfigOpts struct {
 	UsePositionalArgs
 
 	argEnvironment      string
+	argAuthProvider     string
 	flagCredentialsType string
 	flagOutput          string
 }
@@ -26,9 +27,10 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
 
 	cmd := &cobra.Command{
-		Use:   "kubeconfig ENVIRONMENT [flags]",
+		Use:   "kubeconfig ENVIRONMENT [AUTH_PROVIDER] [flags]",
 		Short: "Get the Kubernetes KubeConfig for the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
@@ -44,6 +46,10 @@ func init() {
 
 			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
 
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
+			argument AUTH_PROVIDER.
+
 			{Arguments}
 		`),
 		Example: trimIndent(`
@@ -55,6 +61,9 @@ func init() {
 
 			# Get KubeConfig with default credentials type (based on user type)
 			metaplay get kubeconfig tough-falcons
+
+			# Get KubeConfig using a custom auth provider
+			metaplay get kubeconfig tough-falcons my-auth-provider
 		`),
 	}
 	getCmd.AddCommand(cmd)
@@ -74,16 +83,19 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
 
-	// Ensure the user is logged in
-	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
+	// Resolve environment.
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
-	// Resolve environment.
-	envConfig, err := resolveEnvironment(project, tokenSet, o.argEnvironment)
+	// Resolve auth provider.
+	authProviderName := o.argAuthProvider
+	if authProviderName == "" {
+		authProviderName = "metaplay"
+	}
+	authProvider, err := getAuthProvider(project, authProviderName)
 	if err != nil {
 		return err
 	}
@@ -105,8 +117,13 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	var kubeconfigPayload string
 	switch credentialsType {
 	case "dynamic":
-		// \todo fetch userinfo and pass that in?
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(authProvider)
+		// Fetch the userinfo for an email.
+		userinfo, err := auth.FetchUserInfo(authProvider, tokenSet)
+		if err != nil {
+			return err
+		}
+
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email)
 	case "static":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	default:

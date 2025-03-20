@@ -15,16 +15,30 @@ import (
 )
 
 type authShowTokensOpts struct {
+	UsePositionalArgs
+
+	argAuthProvider string
 }
 
 func init() {
 	o := authShowTokensOpts{}
 
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+
 	cmd := &cobra.Command{
-		Use:   "show-tokens",
+		Use:   "show-tokens [AUTH_PROVIDER]",
 		Short: "Print the active tokens as JSON to stdout",
-		Long:  `Print the currently active authentication tokens to stdout.`,
-		Run:   runCommand(&o),
+		Long: renderLong(&o, `
+			Print the currently active authentication tokens to stdout.
+
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
+			argument AUTH_PROVIDER.
+
+			{Arguments}
+		`),
+		Run: runCommand(&o),
 	}
 
 	cmd.Hidden = true
@@ -65,7 +79,13 @@ func (o *authShowTokensOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
+
+	// Resolve auth provider.
+	authProviderName := coalesceString(o.argAuthProvider, "metaplay")
+	authProvider, err := getAuthProvider(project, authProviderName)
+	if err != nil {
+		return err
+	}
 
 	// Load tokenSet from keyring & refresh if needed.
 	tokenSet, err := auth.LoadAndRefreshTokenSet(authProvider)

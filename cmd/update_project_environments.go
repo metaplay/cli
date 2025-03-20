@@ -56,7 +56,12 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	authProvider := getAuthProvider(project)
+
+	// Always use Metaplay Auth for project initialization.
+	authProvider, err := getAuthProvider(project, "metaplay")
+	if err != nil {
+		return err
+	}
 
 	// Ensure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
