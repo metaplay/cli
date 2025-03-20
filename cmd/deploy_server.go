@@ -366,6 +366,11 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  Type:               %s", styles.RenderTechnical(string(envConfig.Type)))
 	log.Info().Msgf("  Stack domain:       %s", styles.RenderTechnical(envConfig.StackDomain))
 	log.Info().Msgf("Build information:")
+	if useLocalImage {
+		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(o.argImageNameTag))
+	} else {
+		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
+	}
 	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageBuildNumber))
 	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageCommitId))
 	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageConfig.Created.Time)))

@@ -33,7 +33,22 @@ var skipAppVersionCheck bool     // Skip check for a new version of the CLI (--s
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use: "metaplay",
+	Use:   "metaplay",
+	Short: "Metaplay CLI for development, deployment, and operations",
+	Example: trimIndent(`
+		# Initialize a new Metaplay project in an existing Unity project
+		MyGame$ metaplay init project
+
+		# Run your game server locally for development
+		MyGame$ metaplay dev server
+
+		# Manually deploy your game server to a cloud environment
+		MyGame$ metaplay build image
+		MyGame$ metaplay deploy server
+
+		# View server logs in a cloud environment
+		MyGame$ metaplay debug logs
+	`),
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Determine if colors can be used
 		hasTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
