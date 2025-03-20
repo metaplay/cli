@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/creativeprojects/go-selfupdate"
+	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -58,7 +59,10 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	exe, err := selfupdate.ExecutablePath()
+	// Calling vendored implementation of `GetExecutablePath()` due to a bug in `selfupdate.GetExecutablePath()`
+	// that uses `filepath.EvalSymlinks()` known to be broken on Windows.
+	// A PR has been made for the `go-selfupdate` library: https://github.com/creativeprojects/go-selfupdate/pull/46
+	exe, err := pathutil.GetExecutablePath()
 	if err != nil {
 		return fmt.Errorf("Could not determine the Metaplay CLI executable path")
 	}

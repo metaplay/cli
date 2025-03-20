@@ -472,9 +472,21 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 		case <-ctx.Done():
 			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
 		default:
-			resp, err := client.Get(url)
+			// Create a new request with headers
+			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if err != nil {
-				log.Info().Msgf("Error connecting to %s: %v. Retrying...", url, err)
+				log.Debug().Msgf("Error creating request for %s: %v. Retrying...", url, err)
+				break
+			}
+
+			// Add the Sec-Fetch-Mode header so that StackAPI returns a 302 redirect (instead
+			// of 403 forbidden) to the request.
+			req.Header.Add("Sec-Fetch-Mode", "navigate")
+
+			// Execute the request
+			resp, err := client.Do(req)
+			if err != nil {
+				log.Debug().Msgf("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				defer resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -483,9 +495,10 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 				}
 				log.Debug().Msgf("Received status code %d from %s. Retrying...", resp.StatusCode, url)
 			}
-
-			time.Sleep(2 * time.Second) // Wait before retrying
 		}
+
+		// Wait before retrying.
+		time.Sleep(1 * time.Second)
 
 		// Check for timeout.
 		if time.Now().After(timeoutAt) {

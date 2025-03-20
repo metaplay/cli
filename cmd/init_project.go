@@ -156,12 +156,20 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	metaplaySdkSource := ""
+	if (o.flagSdkSource != "") {
+		metaplaySdkSource, err = filepath.Abs(o.flagSdkSource)
+		if (err != nil) {
+			return fmt.Errorf("Could not resolve sdk source location: %w", err)
+		}
+	}
 	// Check if MetaplaySDK/ already exists: if so, we do migration only.
-	metaplaySdkPath := filepath.Join(o.projectPath, "MetaplaySDK")
-	metaplaySdkSource := o.flagSdkSource
-	_, err = os.Stat(metaplaySdkPath)
-	if err == nil {
-		return fmt.Errorf("MetaplaySDK/ directory already exists!")
+	if (o.flagSdkSource == "" || !isDirectory(o.flagSdkSource)) {
+		metaplaySdkPath := filepath.Join(o.projectPath, "MetaplaySDK")
+		_, err = os.Stat(metaplaySdkPath)
+		if err == nil {
+			return fmt.Errorf("MetaplaySDK/ directory already exists!")
+		}
 	}
 
 	// If download SDK from portal, general terms & conditions must be approved for download to work.
@@ -260,10 +268,13 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Unity project dir:  %s", styles.RenderTechnical(filepath.Join(o.absoluteProjectPath, o.relativeUnityProjectPath)))
 	if sdkVersionInfo != nil {
 		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
-	} else {
+		log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
+	} else if isDirectory(metaplaySdkSource) {
 		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(metaplaySdkSource), styles.RenderAttention("[use existing]"))
+	} else {
+		log.Info().Msgf("Metaplay SDK:       %s", styles.RenderTechnical(metaplaySdkSource))
+		log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
 	}
-	log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
 	log.Info().Msgf("Game backend dir:   %s%s", styles.RenderTechnical("Backend"), styles.RenderAttention(" [new]"))
 	log.Info().Msg("")
 
@@ -291,7 +302,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		// - If not specified, download .zip from portal and extract it to project directory.
 		// - If points to a Metaplay release .zip file, extract it to project directory.
 		// - If points to a MetaplaySDK directory, refer to the directory (don't copy).
-		if o.flagSdkSource == "" {
+		if metaplaySdkSource == "" {
 			// Download and extract to target project dir.
 			relativePathToSdk = "MetaplaySDK"
 			sdkMetadata, err = downloadAndExtractSdk(tokenSet, o.absoluteProjectPath, sdkVersionInfo)
@@ -299,7 +310,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 				return err
 			}
 		} else {
-			relativePathToSdk, sdkMetadata, err = resolveSdkSource(o.absoluteProjectPath, o.flagSdkSource)
+			relativePathToSdk, sdkMetadata, err = resolveSdkSource(o.absoluteProjectPath, metaplaySdkSource)
 			if err != nil {
 				return err
 			}

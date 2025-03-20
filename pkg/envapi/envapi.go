@@ -5,8 +5,8 @@ package envapi
 
 // \todo Copy-pasted from StackAPI
 
-// `deployment` K8s secret's format
-type EnvironmentDetails struct {
+// Kubernetes secret `metaplay-deployment` field 'deployment'.
+type DeploymentSecret struct {
 	Deployment    Deployment    `json:"deployment"`
 	Format        string        `json:"format"`
 	OAuth2Client  OAuth2Client  `json:"oauth2_client"`
@@ -34,21 +34,24 @@ type Deployment struct {
 	ServerHostname                 string   `json:"server_hostname"`
 	ServerPorts                    []int    `json:"server_ports"`
 	ServerTlsCert                  string   `json:"server_tls_cert"`
-	TenantEnvironment              string   `json:"tenant_environment"`  // deprecated
-	TenantOrganization             string   `json:"tenant_organization"` // deprecated
-	TenantProject                  string   `json:"tenant_project"`      // deprecated
+	TenantEnvironment              string   `json:"tenant_environment"`
+	TenantOrganization             string   `json:"tenant_organization"`
+	TenantProject                  string   `json:"tenant_project"`
 }
 
 type OAuth2Client struct {
-	Audience          string `json:"audience"`
-	ClientId          string `json:"client_id"`
-	ClientSecret      string `json:"client_secret"`
-	Domain            string `json:"domain"`
-	EmailDomain       string `json:"email_domain"`
-	Issuer            string `json:"issuer"`
-	LogoutRedirectUri string `json:"logout_redirect_uri"`
-	RolesClaim        string `json:"roles_claim"`
-	LocalCallback     string `json:"local_callback"`
+	AuthProvider      string   `json:"auth_provider"`
+	Audience          string   `json:"audience"`
+	ClientId          string   `json:"client_id"`
+	ClientSecret      string   `json:"client_secret"`
+	Domain            string   `json:"domain"`
+	EmailDomain       string   `json:"email_domain"`
+	Issuer            string   `json:"issuer"`
+	LogoutRedirectUri string   `json:"logout_redirect_uri"`
+	RolesClaim        string   `json:"roles_claim"`
+	RolePrefix        string   `json:"role_prefix"`
+	LocalCallback     string   `json:"local_callback"`
+	AdditionalScopes  []string `json:"additional_scopes"`
 }
 
 type Observability struct {

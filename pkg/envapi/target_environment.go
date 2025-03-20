@@ -246,10 +246,10 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 }
 
 // Request details about an environment from the StackAPI.
-func (target *TargetEnvironment) GetDetails() (*EnvironmentDetails, error) {
+func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanId)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[EnvironmentDetails](target.StackApiClient, path)
+	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
 	return &details, err
 }
 
@@ -357,7 +357,7 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 }
 
 // Get Docker credentials for the environment's docker registry.
-func (target *TargetEnvironment) GetDockerCredentials(envDetails *EnvironmentDetails) (*DockerCredentials, error) {
+func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecret) (*DockerCredentials, error) {
 	// Fetch AWS credentials from Metaplay cloud
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()

@@ -147,6 +147,7 @@ func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashb
 		return fmt.Errorf("failed to read project config file: %v", err)
 	}
 
+	// Parse the YAML to AST
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
 		panic(err)
@@ -178,10 +179,10 @@ func updateYamlNode(root *ast.File, path string, value interface{}) error {
 	// Marshal the replacement to YAML.
 	bytes, err := yaml.Marshal(value)
 	if err != nil {
-		return fmt.Errorf("failed to marshal new project config features.dashboard node to YAML: %w", err)
+		return fmt.Errorf("failed to marshal '%#v' node to YAML: %w", value, err)
 	}
 
-	// \todo This seems to do what we want -- replace the above with this!
+	// Update the target node with the new value.
 	err = nodePath.MergeFromReader(root, strings.NewReader(string(bytes)))
 	if err != nil {
 		return fmt.Errorf("failed to update node in project config: %w", err)

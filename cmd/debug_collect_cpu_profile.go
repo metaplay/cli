@@ -39,7 +39,7 @@ func init() {
 		Use:   "collect-cpu-profile [ENVIRONMENT] [POD] [flags]",
 		Short: "[preview] Collect a CPU profile from a running server pod",
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface is likely to change.
+			PREVIEW: This is a preview feature and interface may change in the future.
 
 			Collect a CPU profile from a running .NET server pod using dotnet-trace.
 

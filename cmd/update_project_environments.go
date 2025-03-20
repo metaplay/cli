@@ -180,7 +180,6 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		// Update an existing node or append a new node to the end.
 		if foundIndex == -1 {
 			log.Info().Msgf("Add new environment '%s'", portalEnv.HumanID)
-			foundIndex = len(seqNode.Values)
 			seqNode.Values = append(seqNode.Values, envAST.Docs[0].Body)
 		} else {
 			log.Info().Msgf("Update existing environment '%s'", portalEnv.HumanID)

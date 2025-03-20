@@ -149,24 +149,21 @@ func styleInlineCode(text string) string {
 
 // Style examples with different colors for comment and command lines
 func styleExample(text string) string {
-	var result strings.Builder
 	lines := strings.Split(text, "\n")
 
-	for _, line := range lines {
+	for ndx, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmedLine, "#") {
 			// This is a comment line, style it with RenderComment (darker green)
-			result.WriteString(styles.RenderComment(line))
+			lines[ndx] = styles.RenderComment(line)
 		} else if trimmedLine != "" {
 			// This is a command line, style it with RenderTechnical (blue)
-			result.WriteString(styles.RenderTechnical(line))
+			lines[ndx] = styles.RenderTechnical(line)
 		} else {
 			// Empty line, leave as is
-			result.WriteString(line)
 		}
-		result.WriteString("\n")
 	}
-	return result.String()
+	return strings.Join(lines, "\n")
 }
 
 func styleAliases(text string) string {

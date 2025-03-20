@@ -40,7 +40,7 @@ func init() {
 		Use:   "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
 		Short: "[preview] Collect a heap dump from a running server pod",
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface is likely to change.
+			PREVIEW: This is a preview feature and interface may change in the future.
 
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump.
 

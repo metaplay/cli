@@ -167,7 +167,11 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 We do continuously update the latest development build from the `metaplay/cli` repository `main` branch and it can be found on the [releases page](https://github.com/metaplay/cli/releases/tag/0.0.0), but there are no quality guarantees whatsoever associated with it. The development build is primarily intended for our internal use and is made available for Github CI runners to run automated tests on (and with) without the need to always build from scratch.
 
-Development builds do not currently perform any version checks (for the purpose of new release notifications), and the CLI `update` command is disabled on development builds as well.
+Development builds do not currently perform any version checks (for the purpose of new release notifications), and the `update cli` command is disabled on development builds as well. If you need to override this behavior, you can mock up a specific version number with the following:
+
+```bash
+cli$ go build -ldflags="-X 'github.com/metaplay/cli/internal/version.AppVersion=<major.minor.patch>'" .
+```
 
 It is highly recommended to use the latest official release, so should you decide to mess with development builds, proceed with extreme caution!
 

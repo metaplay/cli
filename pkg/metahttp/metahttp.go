@@ -61,6 +61,12 @@ func Request[TResponse any](c *Client, method string, url string, body interface
 		response, err = c.Resty.R().SetBody(body).Post(url)
 	case http.MethodPut:
 		response, err = c.Resty.R().SetBody(body).Put(url)
+	case http.MethodDelete:
+		if body != nil {
+			response, err = c.Resty.R().SetBody(body).Delete(url)
+		} else {
+			response, err = c.Resty.R().Delete(url)
+		}
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
@@ -111,4 +117,10 @@ func Post[TResponse any](c *Client, url string, body interface{}) (TResponse, er
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
 func Put[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPut, url, body)
+}
+
+// Make a HTTP DELETE to the target URL with the specified body and unmarshal the response into the specified type.
+// URL should start with a slash, e.g. "/v0/credentials/123/k8s"
+func Delete[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+	return Request[TResponse](c, http.MethodDelete, url, body)
 }
