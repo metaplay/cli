@@ -413,12 +413,25 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname stri
 		case <-ctx.Done():
 			return fmt.Errorf("timeout reached while waiting to establish connection to %s:%d", hostname, port)
 		default:
-			err := attemptTLSConnection(hostname, port)
-			if err == nil {
+			// Require 10 subsequent successful connections to treat the endpoint as healthy.
+			const numAttempts = 10
+			allSuccess := true
+			for iter := 0; iter < numAttempts; iter++ {
+				// Attempt a connection & bail out on errors.
+				err := attemptTLSConnection(hostname, port)
+				if err != nil {
+					log.Debug().Msgf("Attempt %d of %d failed, retrying: %v", iter+1, numAttempts, err)
+					allSuccess = false
+					break
+				}
+			}
+
+			// If all attempt succeeded, we're done.
+			if allSuccess {
 				log.Debug().Msgf("Successfully connected to the target environment %s:%d", hostname, port)
 				return nil
 			}
-			log.Debug().Msgf("Attempt failed, retrying: %v", err)
+
 			time.Sleep(1 * time.Second) // Wait before retrying
 		}
 

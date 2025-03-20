@@ -94,29 +94,31 @@ func findProjectDirectory() (string, error) {
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
-	if providerName == "" {
-		return nil, errors.New("no auth provider specified")
-	}
-
-	// Handle built-in provider 'metaplay'.
-	if providerName == "metaplay" {
+	if providerName == "" || providerName == "metaplay" {
+		log.Debug().Msgf("Using built-in provider 'metaplay'")
 		return auth.NewMetaplayAuthProvider(), nil
+	} else {
+		log.Debug().Msgf("Resolving auth provider '%s'", providerName)
 	}
 
 	// If have a project, return its auth provider.
-	if project != nil && project.Config.AuthProviders != nil {
-		for providerID, provider := range project.Config.AuthProviders {
-			if providerID == providerName || provider.Name == providerName {
-				return provider, nil
-			}
+	if project.Config.AuthProviders == nil {
+		return nil, fmt.Errorf("trying to resolve auth provider '%s'; project doesn't define any custom providers", providerName)
+	}
+
+	// Find the matching provider (by ID or name).
+	for providerID, provider := range project.Config.AuthProviders {
+		if providerID == providerName || provider.Name == providerName {
+			return provider, nil
 		}
 	}
 
-	// Log the existing providers.
-	log.Debug().Msgf("Existing providers: %v", project.Config.AuthProviders)
-
-	// Otherwise, return default Metaplay Auth provider.
-	return nil, fmt.Errorf("no matching auth provider '%s' found", providerName)
+	// Provider not found, return an error.
+	existingAuthProviders := []string{}
+	for providerID, _ := range project.Config.AuthProviders {
+		existingAuthProviders = append(existingAuthProviders, providerID)
+	}
+	return nil, fmt.Errorf("no matching auth provider '%s' found; project has the following providers: %v", providerName, existingAuthProviders)
 }
 
 // Load the metaplay-project.yaml from the specified directory.
@@ -126,7 +128,7 @@ func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Debug().Msgf("Project config loaded")
+	log.Debug().Msgf("Project config loaded: %#v", projectConfig)
 
 	// Load version metadata from MetaplaySDK/version.yaml.
 	versionMetadata, err := metaproj.LoadSdkVersionMetadata(filepath.Join(projectDir, projectConfig.SdkRootDir))
