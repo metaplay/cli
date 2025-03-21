@@ -187,21 +187,36 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
-	// \todo fix the configurability & params values
 	helmValues := map[string]interface{}{
-		"botclients": map[string]interface{}{
-			"targetPort":      9339,
-			"targetEnableTls": true,
-			"maxBotId":        100000,
-			"botsPerPod":      1,
-			// "botSpawnRate": 10,
-			// "botSessionDuration: "00:00:20",
-			"image": map[string]interface{}{
+		"environmentFamily": "Development", // not really but shouldn't matter in botclient
+		"botclients": map[string]any{
+			"targetPort":         9339,
+			"targetEnableTls":    true,
+			"maxBotId":           100000,
+			"botsPerPod":         10,
+			"botSpawnRate":       5,
+			"botSessionDuration": "00:00:20",
+			"image": map[string]any{
 				"repository": envDetails.Deployment.EcrRepo,
 				"tag":        o.argImageTag,
 			},
-			"targetHost": envDetails.Deployment.ServerHostname,
-			"cdnBaseUrl": fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
+			"targetHost":       envDetails.Deployment.ServerHostname,
+			"targetTlsEnabled": true,
+			"cdnBaseUrl":       fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
+		},
+		"prometheus": map[string]any{
+			"enabled": true,
+			"port":    9090,
+		},
+		"resources": map[string]any{
+			"limits": map[string]any{
+				"memory": "1024Mi",
+				"cpu":    1,
+			},
+			"requests": map[string]any{
+				"memory": "128Mi",
+				"cpu":    0.1,
+			},
 		},
 	}
 
