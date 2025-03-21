@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
-	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -258,52 +257,56 @@ func isGameServerCRReady(gameServer *NewGameServerCR) (bool, error) {
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
 // \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *OldGameServerCR) (bool, error) {
+func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *OldGameServerCR) (bool, []string, error) {
 	// Fetch all game server StatefulSets owned by the game server.
 	// \todo this only works in single-region setups .. use only with old operator?
 	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// If no matching StatefulSets, server is not ready.
 	if len(shardSets) == 0 {
-		return false, nil
+		return false, []string{"No matching StatefulSets found"}, nil
 	}
 
 	// Fetch all the game server pods in the namespace.
 	podsByShard, err := fetchGameServerPodsByShardSet(ctx, kubeCli, shardSets)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 
 	// Check that all pods belonging to all shards are ready.
-	// \todo Parallelize this -- checking lots of pods sequentially is slow
 	allReady := true
+	statusLines := []string{}
 	for shardSetName, shardSetPods := range podsByShard {
 		// Check that all expected pods are found.
 		log.Debug().Msgf("ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods))
+		statusLines = append(statusLines, fmt.Sprintf("ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods)))
 		for podNdx, pod := range shardSetPods {
 			// Check that the pod is healthy & ready.
 			podName := fmt.Sprintf("%s-%d", shardSetName, podNdx)
 			if pod != nil {
 				status := resolvePodStatus(*pod)
 				log.Debug().Msgf("  %s: %s [%s]", podName, status.Phase, status.Message)
+				statusLines = append(statusLines, fmt.Sprintf("  %s: %s [%s]", podName, status.Phase, status.Message))
 				if status.Phase != PhaseReady {
 					allReady = false
 				}
 			} else {
 				log.Debug().Msgf("  %s: not found", podName)
+				statusLines = append(statusLines, fmt.Sprintf("  %s: not found", podName))
+				allReady = false
 			}
 		}
 	}
 
 	// All pods in all shard sets are ready!
-	return allReady, nil
+	return allReady, statusLines, nil
 }
 
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout occurs.
-func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, timeout time.Duration) error {
+func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration) error {
 	// Get target gameServer.
 	gameServer, err := targetEnv.GetGameServer(ctx)
 	if err != nil {
@@ -317,25 +320,30 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		var err error
 
 		// Try to get the gameserver CR used by the new operator.
+		headerLines := []string{}
 		if gameServer.GameServerNewCR != nil {
-			log.Debug().Msgf("Check if new gameserver CR is ready")
+			headerLines = append(headerLines, "Detected new gameserver CR")
 			isReady, err = isGameServerCRReady(gameServer.GameServerNewCR)
 			if err != nil {
 				return err
 			}
 		} else if gameServer.GameServerOldCR != nil {
-			log.Debug().Msgf("Check if old gameserver CR is ready")
 			kubeCli, err := targetEnv.GetPrimaryKubeClient()
 			if err != nil {
 				return err
 			}
-			isReady, err = isOldGameServerReady(ctx, kubeCli, gameServer.GameServerOldCR)
+			var statusLines []string
+			isReady, statusLines, err = isOldGameServerReady(ctx, kubeCli, gameServer.GameServerOldCR)
 			if err != nil {
 				return err
 			}
+			headerLines = append([]string{"Detected old gameserver CR"}, statusLines...)
 		} else {
 			return fmt.Errorf("no old or new gameserver CR found")
 		}
+
+		// Show the game server shard/pod states.
+		output.SetHeaderLines(headerLines)
 
 		// If gamserver is ready, we're done.
 		if isReady {
@@ -351,10 +359,11 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 // fetchPodLogs fetches logs for a specific pod and container.
 func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerName string) (string, error) {
 	log.Debug().Msgf("Fetching logs for pod %s, container %s", podName, containerName)
+	var numTailLines int64 = 100
 	logOptions := &corev1.PodLogOptions{
 		Container: containerName,
 		Follow:    false,
-		TailLines: int64Ptr(100),
+		TailLines: &numTailLines,
 	}
 
 	req := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).GetLogs(podName, logOptions)
@@ -373,17 +382,20 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	return builder.String(), nil
 }
 
-func int64Ptr(i int64) *int64 { return &i }
-
 // waitForDomainResolution waits for a domain to resolve within a 15-minute timeout.
-func waitForDomainResolution(hostname string, timeout time.Duration) error {
+func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
 
+	output.SetHeaderLines([]string{
+		fmt.Sprintf("Waiting for domain %s to resolve (timeout: %s)", hostname, timeout),
+	})
+
+	attemptNdx := 0
 	for {
 		// Do a DNS lookup.
 		_, err := net.LookupHost(hostname)
 		if err == nil {
-			log.Debug().Msgf("Successfully resolved domain %s", hostname)
+			output.AppendLinef("Successfully resolved domain %s", hostname)
 			return nil
 		}
 
@@ -393,10 +405,12 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 		}
 
 		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
-			log.Debug().Msgf("Waiting for domain name %s to propagate... This can take up to 15 minutes on the first deploy.", styles.RenderTechnical(hostname))
+			output.AppendLinef("Attempt %d failed: %v", attemptNdx+1, dnsErr)
 		} else {
-			log.Debug().Msgf("Failed to resolve %s: %v. Retrying...", hostname, err)
+			output.AppendLinef("Failed to resolve %s: %v. Retrying...", hostname, err)
 		}
+
+		attemptNdx += 1
 
 		// Delay before trying again -- these can take a while so avoid spamming the log
 		time.Sleep(5 * time.Second)
@@ -404,8 +418,12 @@ func waitForDomainResolution(hostname string, timeout time.Duration) error {
 }
 
 // waitForGameServerClientEndpointToBeReady waits until a game server client endpoint is ready by performing a TLS handshake.
-func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname string, port int, timeout time.Duration) error {
+func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.TaskOutput, hostname string, port int, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
+
+	output.SetHeaderLines([]string{
+		fmt.Sprintf("Waiting for game server endpoint %s:%d to be ready (timeout: %s)", hostname, port, timeout),
+	})
 
 	for {
 		// Do a request.
@@ -420,7 +438,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname stri
 				// Attempt a connection & bail out on errors.
 				err := attemptTLSConnection(hostname, port)
 				if err != nil {
-					log.Debug().Msgf("Attempt %d of %d failed, retrying: %v", iter+1, numAttempts, err)
+					output.AppendLinef("Connection attempt %d of %d failed: %v", iter+1, numAttempts, err)
 					allSuccess = false
 					break
 				}
@@ -428,7 +446,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, hostname stri
 
 			// If all attempt succeeded, we're done.
 			if allSuccess {
-				log.Debug().Msgf("Successfully connected to the target environment %s:%d", hostname, port)
+				output.AppendLinef("Successfully connected to the target environment %s:%d", hostname, port)
 				return nil
 			}
 
@@ -472,8 +490,12 @@ func attemptTLSConnection(hostname string, port int) error {
 }
 
 // waitForHTTPServerToRespond pings a target URL until it returns a success status code or a timeout occurs.
-func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Duration) error {
+func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
+
+	output.SetHeaderLines([]string{
+		fmt.Sprintf("Waiting for HTTP server %s to respond (timeout: %s)", url, timeout),
+	})
 
 	client := &http.Client{
 		Timeout: 5 * time.Second, // Per-request timeout
@@ -488,7 +510,7 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 			// Create a new request with headers
 			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 			if err != nil {
-				log.Debug().Msgf("Error creating request for %s: %v. Retrying...", url, err)
+				output.AppendLinef("Error creating request for %s: %v. Retrying...", url, err)
 				break
 			}
 
@@ -499,14 +521,14 @@ func waitForHTTPServerToRespond(ctx context.Context, url string, timeout time.Du
 			// Execute the request
 			resp, err := client.Do(req)
 			if err != nil {
-				log.Debug().Msgf("Error connecting to %s: %v. Retrying...", url, err)
+				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				defer resp.Body.Close()
 				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					log.Debug().Msgf("Successfully connected to %s. Status: %s", url, resp.Status)
+					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				}
-				log.Debug().Msgf("Received status code %d from %s. Retrying...", resp.StatusCode, url)
+				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
 			}
 		}
 
@@ -530,8 +552,8 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	// Wait for the gameserver Kubernetes resources to be ready.
 	// Only wait for a few minutes as pods generally become healthy fairly
 	// soon as we want to display the logs from errors early.
-	taskRunner.AddTask("Wait for game server pods to be ready", func() error {
-		return targetEnv.waitForGameServerReady(ctx, 3*time.Minute)
+	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
+		return targetEnv.waitForGameServerReady(ctx, output, 3*time.Minute)
 	})
 
 	// CHECK CLIENT-FACING NETWORKING
@@ -541,25 +563,25 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	log.Debug().Msgf("envDetails.Deployment.ServerPorts: %+v", envDetails.Deployment.ServerPorts)
 
 	// Wait for the primary domain name to resolve to an IP address.
-	taskRunner.AddTask("Wait for game server domain name to propagate", func() error {
-		return waitForDomainResolution(serverPrimaryAddress, 15*time.Minute)
+	taskRunner.AddTask("Wait for game server domain name to propagate", func(output *tui.TaskOutput) error {
+		return waitForDomainResolution(output, serverPrimaryAddress, 15*time.Minute)
 	})
 
 	// Wait for server to respond to client traffic.
-	taskRunner.AddTask("Wait for game server to serve clients", func() error {
-		return waitForGameServerClientEndpointToBeReady(ctx, serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
+	taskRunner.AddTask("Wait for game server to serve clients", func(output *tui.TaskOutput) error {
+		return waitForGameServerClientEndpointToBeReady(ctx, output, serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
 	})
 
 	// CHECK ADMIN INTERFACE
 
 	// Wait for the admin domain name to resolve to an IP address.
-	taskRunner.AddTask("Wait for LiveOps Dashboard domain name to propagate", func() error {
-		return waitForDomainResolution(envDetails.Deployment.AdminHostname, 15*time.Minute)
+	taskRunner.AddTask("Wait for LiveOps Dashboard domain name to propagate", func(output *tui.TaskOutput) error {
+		return waitForDomainResolution(output, envDetails.Deployment.AdminHostname, 15*time.Minute)
 	})
 
 	// Wait for admin API to successfully respond to an HTTP request.
-	taskRunner.AddTask("Wait for LiveOps Dashboard to serve traffic", func() error {
-		return waitForHTTPServerToRespond(ctx, "https://"+envDetails.Deployment.AdminHostname, 2*time.Minute)
+	taskRunner.AddTask("Wait for LiveOps Dashboard to serve traffic", func(output *tui.TaskOutput) error {
+		return waitForHTTPServerToRespond(ctx, output, "https://"+envDetails.Deployment.AdminHostname, 2*time.Minute)
 	})
 
 	// Success

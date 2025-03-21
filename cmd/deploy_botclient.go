@@ -74,7 +74,7 @@ func init() {
 	deployCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "", "Helm release name to use for the bot deployment (defaults to '<environmentID)-loadtest'")
+	flags.StringVar(&o.flagHelmReleaseName, "helm-release-name", "", "Helm release name to use for the bot deployment (defaults to '<environmentID>-loadtest'")
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
@@ -234,15 +234,17 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	taskRunner := tui.NewTaskRunner()
 
 	// Install or upgrade the Helm chart.
-	taskRunner.AddTask("Deploy loadtest Helm chart", func() error {
+	taskRunner.AddTask("Deploy loadtest Helm chart", func(output *tui.TaskOutput) error {
 		_, err = helmutil.HelmUpgradeOrInstall(
+			output,
 			actionConfig,
 			existingRelease,
 			envConfig.GetKubernetesNamespace(),
 			helmReleaseName,
 			helmChartPath,
-			helmValues,
+			useHelmChartVersion,
 			valuesFiles,
+			helmValues,
 			5*time.Minute)
 		return err
 	})

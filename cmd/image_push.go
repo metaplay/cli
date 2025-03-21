@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -103,9 +105,16 @@ func (o *PushImageOptions) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
+	// Use task runner to push the image.
+	taskRunner := tui.NewTaskRunner()
+
 	// Push the image to the remote repository.
-	err = pushDockerImage(cmd.Context(), o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
-	if err != nil {
+	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
+		return pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+	})
+
+	// Run the tasks.
+	if err = taskRunner.Run(); err != nil {
 		return err
 	}
 
@@ -131,7 +140,9 @@ func extractDockerImageTag(imageName string) (string, error) {
 	return srcImageParts[1], nil
 }
 
-func pushDockerImage(ctx context.Context, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
+// Push a docker image from the local repo to a remote one.
+// Output progress into the task output.
+func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
 	// Create a Docker client
 	// \todo This has been observed to fail on Tuomo's Mac with: "Cannot connect to the Docker daemon
 	// at unix:///var/run/docker.sock. Is the docker daemon running?"
@@ -153,14 +164,14 @@ func pushDockerImage(ctx context.Context, imageName, dstRepoName string, dockerC
 
 	// If names don't match, tag the source image as the destination.
 	if srcImageName != dstImageName {
-		log.Printf("Tagging image %s as %s", srcImageName, dstImageName)
+		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
 		if err := cli.ImageTag(ctx, srcImageName, dstImageName); err != nil {
 			return fmt.Errorf("failed to tag image: %w", err)
 		}
 	}
 
 	// Push the image
-	log.Debug().Msgf("Pushing image %s", dstImageName)
+	output.AppendLinef("Pushing image %s", dstImageName)
 	authConfig := registry.AuthConfig{
 		Username:      dockerCredentials.Username,
 		Password:      dockerCredentials.Password,
@@ -183,23 +194,55 @@ func pushDockerImage(ctx context.Context, imageName, dstRepoName string, dockerC
 	defer pushResponseReader.Close()
 
 	// Follow push progress
-	log.Debug().Msg("Following image push stream...")
 	decoder := json.NewDecoder(pushResponseReader)
+	progresses := map[string]jsonmessage.JSONMessage{} // Track progress by ID
+
 	for {
 		var progress jsonmessage.JSONMessage
 		if err := decoder.Decode(&progress); err != nil {
-			if err.Error() == "EOF" {
+			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to follow push progress: %w", err)
+			return fmt.Errorf("failed to decode push response: %w", err)
 		}
+
+		// Track progress by ID to show the latest status for each layer
+		if progress.ID != "" {
+			progresses[progress.ID] = progress
+		}
+
+		// If progress has an error, return it
 		if progress.Error != nil {
-			return fmt.Errorf("failed to push docker image: %w", progress.Error)
+			return fmt.Errorf("error pushing image: %s", progress.Error.Message)
 		}
-		if progress.Status != "" {
-			log.Debug().Msgf("Docker push progress: %s", progress.Status)
-		}
+
+		// Update the output with current progress information
+		updateProgressOutput(output, dstImageName, progresses)
 	}
 
 	return nil
+}
+
+// updateProgressOutput updates the task output with the current push progress information
+func updateProgressOutput(output *tui.TaskOutput, imageName string, progresses map[string]jsonmessage.JSONMessage) {
+	// Start with the header line
+	lines := []string{}
+
+	// Add progress for each layer
+	for id, progress := range progresses {
+		// Skip empty progress entries
+		if progress.Progress == nil && progress.Status == "" {
+			continue
+		}
+
+		// Format the progress line
+		progressLine := fmt.Sprintf("Layer %s: %s", id[:12], progress.Status)
+		if progress.Progress != nil {
+			progressLine += fmt.Sprintf(" %s", progress.Progress.String())
+		}
+		lines = append(lines, progressLine)
+	}
+
+	// Update all lines at once
+	output.SetFooterLines(lines)
 }

@@ -7,76 +7,101 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/cli/values"
-	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/release"
 )
 
 // HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
 func HelmUpgradeOrInstall(
+	output *tui.TaskOutput,
 	actionConfig *action.Configuration,
 	existingRelease *release.Release,
 	namespace, releaseName, chartURL string,
-	baseValues map[string]interface{},
+	chartVersion string,
 	valuesFiles []string,
-	timeout time.Duration) (*release.Release, error) {
-	// Construct the command to use:
-	// - Use install if no previous Helm release exists
-	// - Use upgrade if a previous Helm release exists
+	extraValues map[string]interface{},
+	timeout time.Duration,
+) (*release.Release, error) {
+	// Show header at top
+	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
+	output.SetHeaderLines([]string{headerLine})
+
+	// Pipe Helm output to task output
+	actionConfig.Log = func(format string, args ...interface{}) {
+		output.AppendLinef(format, args)
+	}
+
 	var installCmd *action.Install
 	var upgradeCmd *action.Upgrade
 	var chartPathOptions *action.ChartPathOptions
+
+	// Determine if install or upgrade based on existence of release:
+	// - Use install if no previous Helm release exists
+	// - Use upgrade if a previous Helm release exists
 	if existingRelease == nil {
-		// Create Helm release install action
+		output.AppendLine("No existing release found, install new release")
 		installCmd = action.NewInstall(actionConfig)
+		installCmd.Version = chartVersion
 		installCmd.ReleaseName = releaseName
 		installCmd.Namespace = namespace
 		installCmd.Wait = true
 		installCmd.Timeout = timeout
+		installCmd.Devel = true // If version is development, accept it
 		chartPathOptions = &installCmd.ChartPathOptions
-
-		log.Debug().Msgf("Install new Helm release...")
 	} else {
-		// Create Helm release upgrade action
+		output.AppendLinef("Existing release found (version %s), upgrade existing release", existingRelease.Chart.Metadata.Version)
 		upgradeCmd = action.NewUpgrade(actionConfig)
+		upgradeCmd.Version = chartVersion
 		upgradeCmd.Namespace = namespace
-		upgradeCmd.Install = true // \note NOT the same as 'helm upgrade --install' !!
 		upgradeCmd.Wait = true
 		upgradeCmd.Timeout = timeout
+		upgradeCmd.MaxHistory = 10      // Keep 10 releases max
+		upgradeCmd.Devel = true         // If version is development, accept it
+		upgradeCmd.Atomic = false       // Don't rollback on failures to not hide errors
+		upgradeCmd.CleanupOnFail = true // Clean resources on failure
 		chartPathOptions = &upgradeCmd.ChartPathOptions
-
-		log.Debug().Msgf("Upgrade existing Helm release...")
-		if existingRelease.Name != releaseName {
-			log.Warn().Msgf("Mismatched Helm release name: existing release is named '%s', updating with name '%s'", existingRelease.Name, releaseName)
-			releaseName = existingRelease.Name
-		}
 	}
 
-	// Locate (download) chart.
+	// Load (download) Helm chart
+	output.AppendLine("Loading Helm chart...")
+
 	helmClient := cli.New()
 	chartPath, err := chartPathOptions.LocateChart(chartURL, helmClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate Helm chart: %w", err)
 	}
 
-	// Load the chart from the resolved path.
+	output.AppendLinef("Loading chart from: %s", chartPath)
 	loadedChart, err := loader.Load(chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Helm chart: %w", err)
 	}
 
-	// Load values from files.
-	filesValueOpts := &values.Options{
-		ValueFiles: valuesFiles,
+	output.AppendLinef("Chart loaded: %s (version %s)", loadedChart.Name(), loadedChart.Metadata.Version)
+
+	// Construct base values
+	baseValues := map[string]interface{}{}
+	if extraValues != nil {
+		baseValues = extraValues
 	}
-	filesValueMap, err := filesValueOpts.MergeValues(getter.All(helmClient))
-	if err != nil {
-		return nil, fmt.Errorf("failed to load Helm values files: %w", err)
+
+	// Load values from files if any
+	filesValueMap := map[string]interface{}{}
+	for _, valuesFile := range valuesFiles {
+		output.AppendLinef("Loading values from: %s", valuesFile)
+		values, err := chartutil.ReadValuesFile(valuesFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read values file: %w", err)
+		}
+
+		// Merge with previous values, files processed later override earlier ones
+		filesValueMap = mergeValuesMaps(filesValueMap, values.AsMap())
 	}
 
 	// Resolve final values map: use extraValues as base to allow files to override any defaults.
@@ -91,21 +116,20 @@ func HelmUpgradeOrInstall(
 	}
 
 	// Run install or upgrade install
+	output.AppendLine("Starting Helm deployment...")
 	if installCmd != nil {
+		output.AppendLine("Installing new release...")
 		release, err := installCmd.Run(loadedChart, finalValueMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to install the Helm chart: %w", err)
 		}
-
-		log.Debug().Msg("Helm install success")
 		return release, nil
 	} else {
+		output.AppendLine("Upgrading existing release...")
 		release, err := upgradeCmd.Run(releaseName, loadedChart, finalValueMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upgrade an existing Helm release: %w", err)
 		}
-
-		log.Debug().Msg("Helm upgrade success")
 		return release, nil
 	}
 }

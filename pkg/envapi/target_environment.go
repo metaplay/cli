@@ -99,10 +99,10 @@ func (target *TargetEnvironment) GetPrimaryKubeClient() (*KubeClient, error) {
 	config.GroupVersion = &schema.GroupVersion{Group: "", Version: "v1"}
 	config.NegotiatedSerializer = codecs.WithoutConversion()
 
-	// Create RESTClient.
+	// Create REST client.
 	restClient, err := rest.RESTClientFor(config)
 	if err != nil {
-		fmt.Errorf("failed to create Kubernetes REST client: %w", err)
+		return nil, err
 	}
 
 	// Create the Kubernetes static clientset.

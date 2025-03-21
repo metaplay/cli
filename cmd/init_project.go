@@ -87,7 +87,7 @@ func init() {
 	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-32.0.zip' (optional)")
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
-	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm to the 'Does this look correct?' confirmation")
+	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm the 'Does this look correct?' confirmation")
 
 	initCmd.AddCommand(cmd)
 }
@@ -297,7 +297,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	var sdkMetadata *metaproj.MetaplayVersionMetadata
 
 	// Only download/extract SDK if not migrating existing project
-	runner.AddTask("Download & extract Metaplay SDK", func() error {
+	runner.AddTask("Download & extract Metaplay SDK", func(output *tui.TaskOutput) error {
 		// Resolve the SDK source to use based on --sdk-source flag:
 		// - If not specified, download .zip from portal and extract it to project directory.
 		// - If points to a Metaplay release .zip file, extract it to project directory.
@@ -322,13 +322,13 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 	// Generate the metaplay-project.yaml in project root.
 	var projectConfig *metaproj.ProjectConfig
-	runner.AddTask("Generate metaplay-project.yaml", func() error {
+	runner.AddTask("Generate metaplay-project.yaml", func(output *tui.TaskOutput) error {
 		projectConfig, err = metaproj.GenerateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, relativePathToSdk, targetProject, environments)
 		return err
 	})
 
 	// Only extract files if not migrating existing project
-	runner.AddTask("Update files to project", func() error {
+	runner.AddTask("Update files to project", func(output *tui.TaskOutput) error {
 		// Create MetaplayProject.
 		project, err := metaproj.NewMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
 		if err != nil {

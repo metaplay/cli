@@ -28,19 +28,109 @@ const (
 // Spinner frames for the running state
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// TaskOutput contains the outputs from a given task and is shown along with the task's status.
+type TaskOutput struct {
+	headerLines []string   // Header lines (all are shown, updates are logged)
+	logLines    []string   // Append-only log lines of output (only 5 are shown)
+	footerLines []string   // Footer lines (all are shown, updates are logged)
+	mu          sync.Mutex // Protects the lines slice
+}
+
+// TaskRunFunc is the function signature for task execution functions
+type TaskRunFunc func(output *TaskOutput) error
+
+// Append a new line at the end of the output.
+func (to *TaskOutput) AppendLine(line string) {
+	to.mu.Lock()
+	to.logLines = append(to.logLines, line)
+	to.mu.Unlock()
+
+	// If not in interactive mode, log line.
+	if !isInteractiveMode {
+		log.Debug().Msg(line)
+	}
+}
+
+// AppendLinef appends a new formatted line at the end of the output using fmt.Sprintf.
+func (to *TaskOutput) AppendLinef(format string, a ...interface{}) {
+	line := fmt.Sprintf(format, a...)
+	to.mu.Lock()
+	to.logLines = append(to.logLines, line)
+	to.mu.Unlock()
+
+	// If not in interactive mode, log line.
+	if !isInteractiveMode {
+		log.Debug().Msg(line)
+	}
+}
+
+// Update the header lines to the provided ones. Also logged in non-interactive mode.
+func (to *TaskOutput) SetHeaderLines(lines []string) {
+	to.mu.Lock()
+	to.headerLines = lines
+	to.mu.Unlock()
+
+	// If not in interactive mode, log the lines.
+	if !isInteractiveMode {
+		for _, line := range lines {
+			log.Debug().Msg(line)
+		}
+	}
+}
+
+// Update the footer lines to the provided ones. Also logged in non-interactive mode.
+func (to *TaskOutput) SetFooterLines(lines []string) {
+	to.mu.Lock()
+	to.footerLines = lines
+	to.mu.Unlock()
+
+	// If not in interactive mode, log the lines.
+	if !isInteractiveMode {
+		for _, line := range lines {
+			log.Debug().Msg(line)
+		}
+	}
+}
+
+// getLines returns a copy of the current output lines.
+func (to *TaskOutput) getLines() []string {
+	to.mu.Lock()
+	defer to.mu.Unlock()
+
+	// Get the most recent log lines (up to numLinesToShow)
+	numLinesToShow := 10
+	shownLogLines := to.logLines
+	if len(shownLogLines) > numLinesToShow {
+		shownLogLines = shownLogLines[len(shownLogLines)-numLinesToShow:]
+	}
+
+	// Calculate total size needed
+	totalSize := len(to.headerLines) + len(shownLogLines) + len(to.footerLines)
+
+	// Create a result slice with the right capacity
+	result := make([]string, 0, totalSize)
+
+	// Append all sections in the correct order
+	result = append(result, to.headerLines...)
+	result = append(result, shownLogLines...)
+	result = append(result, to.footerLines...)
+
+	return result
+}
+
 // Task represents a single task with its title, function, and status
 type Task struct {
 	title     string        // Title for the task
-	runFunc   func() error  // Run function for the task
+	runFunc   TaskRunFunc   // Run function for the task
 	status    TaskStatus    // Status of the task
 	error     error         // Error that was returned by the task execution function
 	startTime time.Time     // Time when the task was started
 	elapsed   time.Duration // Amount of time elapsed while running the task
 	mu        sync.Mutex    // Protects status, error, startTime, and elapsed
+	output    TaskOutput    // Output from the task
 }
 
 // TaskRunner manages and executes a sequence of tasks with visual progress
-
 type TaskRunner struct {
 	tasks      []*Task       // Tasks that the operation consists of, run sequentially
 	quitting   bool          // Is the operation quitting?
@@ -66,12 +156,16 @@ func NewTaskRunner() *TaskRunner {
 }
 
 // AddTask adds a new task to the runner
-func (m *TaskRunner) AddTask(title string, runFunc func() error) {
-	m.tasks = append(m.tasks, &Task{
+func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
+	// Initialize task
+	task := &Task{
 		title:   title,
 		runFunc: runFunc,
 		status:  StatusPending,
-	})
+	}
+
+	// Add to runner
+	m.tasks = append(m.tasks, task)
 }
 
 // taskStatusStyle returns the appropriate style for a task based on its status
@@ -141,7 +235,7 @@ func (m *TaskRunner) runNonInteractive() error {
 		task.startTime = time.Now()
 		task.mu.Unlock()
 
-		if err := task.runFunc(); err != nil {
+		if err := task.runFunc(&task.output); err != nil {
 			task.mu.Lock()
 			task.elapsed = time.Since(task.startTime)
 			task.status = StatusFailed
@@ -197,7 +291,7 @@ func (m *TaskRunner) executeTasks() {
 
 		// Execute the task
 		log.Debug().Msgf("Task start: %s", task.title)
-		if err := task.runFunc(); err != nil {
+		if err := task.runFunc(&task.output); err != nil {
 			task.mu.Lock()
 			task.elapsed = time.Since(task.startTime)
 			task.status = StatusFailed
@@ -289,6 +383,7 @@ func (m TaskRunner) View() string {
 		err := task.error
 		title := task.title
 		elapsed := task.elapsed
+		outputLines := task.output.getLines()
 		task.mu.Unlock()
 
 		statusStyle := taskStatusStyle(status)
@@ -303,6 +398,11 @@ func (m TaskRunner) View() string {
 			taskLine = fmt.Sprintf(" %s %s", symbol, title)
 		}
 		lines = append(lines, taskLine)
+
+		// Add output lines if there are any, indented by 4 spaces
+		for _, outputLine := range outputLines {
+			lines = append(lines, fmt.Sprintf("    %s", styles.RenderMuted(outputLine)))
+		}
 	}
 
 	lines = append(lines, "")

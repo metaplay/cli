@@ -385,21 +385,23 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// If using local image, add task to push it.
 	if useLocalImage {
-		taskRunner.AddTask("Push docker image to environment repository", func() error {
-			return pushDockerImage(cmd.Context(), o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
+			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
 		})
 	}
 
 	// Install or upgrade the Helm chart.
-	taskRunner.AddTask("Deploy game server using Helm", func() error {
+	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
+			output,
 			actionConfig,
 			existingRelease,
 			envConfig.GetKubernetesNamespace(),
 			helmReleaseName,
 			helmChartPath,
-			helmValues,
+			useHelmChartVersion,
 			valuesFiles,
+			helmValues,
 			5*time.Minute)
 		return err
 	})

@@ -119,6 +119,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  Stack domain:      %s", styles.RenderTechnical(envConfig.StackDomain))
 	log.Info().Msg("Deployment info:")
 	log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
+	log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
 	log.Info().Msg("")
 
 	taskRunner := tui.NewTaskRunner()
