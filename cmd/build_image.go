@@ -280,7 +280,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
 			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),
-			"--build-arg", "DOTNET_VERSION=" + projectDotnetVersion,
+			"--build-arg", "METAPLAY_DOTNET_SDK_VERSION=" + projectDotnetVersion,
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitId),

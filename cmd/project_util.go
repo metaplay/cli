@@ -115,7 +115,7 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 
 	// Provider not found, return an error.
 	existingAuthProviders := []string{}
-	for providerID, _ := range project.Config.AuthProviders {
+	for providerID := range project.Config.AuthProviders {
 		existingAuthProviders = append(existingAuthProviders, providerID)
 	}
 	return nil, fmt.Errorf("no matching auth provider '%s' found; project has the following providers: %v", providerName, existingAuthProviders)
