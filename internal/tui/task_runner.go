@@ -47,7 +47,7 @@ func (to *TaskOutput) AppendLine(line string) {
 
 	// If not in interactive mode, log line.
 	if !isInteractiveMode {
-		log.Info().Msg(line)
+		log.Info().Msgf("  %s", line)
 	}
 }
 
@@ -60,7 +60,7 @@ func (to *TaskOutput) AppendLinef(format string, a ...interface{}) {
 
 	// If not in interactive mode, log line.
 	if !isInteractiveMode {
-		log.Info().Msg(line)
+		log.Info().Msgf("  %s", line)
 	}
 }
 
@@ -73,7 +73,7 @@ func (to *TaskOutput) SetHeaderLines(lines []string) {
 	// If not in interactive mode, log the lines.
 	if !isInteractiveMode {
 		for _, line := range lines {
-			log.Info().Msg(line)
+			log.Info().Msgf("  %s", line)
 		}
 	}
 }
@@ -87,7 +87,7 @@ func (to *TaskOutput) SetFooterLines(lines []string) {
 	// If not in interactive mode, log the lines.
 	if !isInteractiveMode {
 		for _, line := range lines {
-			log.Info().Msg(line)
+			log.Info().Msgf("  %s", line)
 		}
 	}
 }

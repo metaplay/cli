@@ -195,6 +195,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 	// Follow push progress
 	decoder := json.NewDecoder(pushResponseReader)
+	progressIDs := []string{}                          // Track order of progress IDs
 	progresses := map[string]jsonmessage.JSONMessage{} // Track progress by ID
 
 	for {
@@ -208,6 +209,10 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 		// Track progress by ID to show the latest status for each layer
 		if progress.ID != "" {
+			// Add ID to the order tracking slice if it's not already there
+			if _, exists := progresses[progress.ID]; !exists {
+				progressIDs = append(progressIDs, progress.ID)
+			}
 			progresses[progress.ID] = progress
 		}
 
@@ -216,29 +221,31 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 			return fmt.Errorf("error pushing image: %s", progress.Error.Message)
 		}
 
-		// Update the output with current progress information
-		updateProgressOutput(output, dstImageName, progresses)
+		// Update the output with current progress information (only in interactive mode).
+		if tui.IsInteractiveMode() {
+			updateProgressOutput(output, dstImageName, progressIDs, progresses)
+		}
 	}
 
 	return nil
 }
 
 // updateProgressOutput updates the task output with the current push progress information
-func updateProgressOutput(output *tui.TaskOutput, imageName string, progresses map[string]jsonmessage.JSONMessage) {
+func updateProgressOutput(output *tui.TaskOutput, imageName string, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
 	// Start with the header line
 	lines := []string{}
 
 	// Add progress for each layer
-	for id, progress := range progresses {
+	for _, id := range progressIDs {
 		// Skip empty progress entries
-		if progress.Progress == nil && progress.Status == "" {
+		if progresses[id].Progress == nil && progresses[id].Status == "" {
 			continue
 		}
 
 		// Format the progress line
-		progressLine := fmt.Sprintf("Layer %s: %s", id[:12], progress.Status)
-		if progress.Progress != nil {
-			progressLine += fmt.Sprintf(" %s", progress.Progress.String())
+		progressLine := fmt.Sprintf("Layer %s: %s", id[:12], progresses[id].Status)
+		if progresses[id].Progress != nil {
+			progressLine += fmt.Sprintf(" %s", progresses[id].Progress.String())
 		}
 		lines = append(lines, progressLine)
 	}

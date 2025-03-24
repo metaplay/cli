@@ -215,6 +215,14 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 		}
 
 	case state.Waiting != nil:
+		// Check for CrashLoopBackOff specifically
+		if state.Waiting.Reason == "CrashLoopBackOff" {
+			return GameServerPodStatus{
+				Phase:   PhaseFailed,
+				Message: fmt.Sprintf("Container %s is in CrashLoopBackOff: %s", containerStatus.Name, state.Waiting.Message),
+				Details: state.Waiting,
+			}
+		}
 		return GameServerPodStatus{
 			Phase:   PhasePending,
 			Message: fmt.Sprintf("Container %s is waiting: %s", containerStatus.Name, state.Waiting.Reason),
@@ -267,7 +275,7 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 
 	// If no matching StatefulSets, server is not ready.
 	if len(shardSets) == 0 {
-		return false, []string{"No matching StatefulSets found"}, nil
+		return false, []string{"  No matching StatefulSets found"}, nil
 	}
 
 	// Fetch all the game server pods in the namespace.
@@ -281,21 +289,36 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 	statusLines := []string{}
 	for shardSetName, shardSetPods := range podsByShard {
 		// Check that all expected pods are found.
-		log.Debug().Msgf("ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods))
-		statusLines = append(statusLines, fmt.Sprintf("ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods)))
+		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods)))
 		for podNdx, pod := range shardSetPods {
 			// Check that the pod is healthy & ready.
 			podName := fmt.Sprintf("%s-%d", shardSetName, podNdx)
 			if pod != nil {
 				status := resolvePodStatus(*pod)
-				log.Debug().Msgf("  %s: %s [%s]", podName, status.Phase, status.Message)
-				statusLines = append(statusLines, fmt.Sprintf("  %s: %s [%s]", podName, status.Phase, status.Message))
+				statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s]", podName, status.Phase, status.Message))
 				if status.Phase != PhaseReady {
 					allReady = false
 				}
+
+				// If pod failed, bail out with the logs from the pod
+				if status.Phase == PhaseFailed {
+					podLogs, err := fetchPodLogs(ctx, kubeCli, podName, "shard-server")
+					if err != nil {
+						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
+					} else {
+						// Format logs with each line prefixed by '> '
+						lines := strings.Split(podLogs, "\n")
+						var sb strings.Builder
+						for _, line := range lines {
+							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
+						}
+						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
+					}
+
+					return false, nil, fmt.Errorf("pod %s failed (see above for logs)", status)
+				}
 			} else {
-				log.Debug().Msgf("  %s: not found", podName)
-				statusLines = append(statusLines, fmt.Sprintf("  %s: not found", podName))
+				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
 				allReady = false
 			}
 		}
@@ -322,7 +345,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		// Try to get the gameserver CR used by the new operator.
 		headerLines := []string{}
 		if gameServer.GameServerNewCR != nil {
-			headerLines = append(headerLines, "Detected new gameserver CR")
+			headerLines = append(headerLines, "Game server pod states (new CR):")
 			isReady, err = isGameServerCRReady(gameServer.GameServerNewCR)
 			if err != nil {
 				return err
@@ -337,7 +360,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 			if err != nil {
 				return err
 			}
-			headerLines = append([]string{"Detected old gameserver CR"}, statusLines...)
+			headerLines = append([]string{"Game server pod states (old CR):"}, statusLines...)
 		} else {
 			return fmt.Errorf("no old or new gameserver CR found")
 		}
@@ -350,8 +373,12 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 			return nil
 		}
 
-		// Wait a bit to check again.
-		time.Sleep(500 * time.Millisecond)
+		// Wait a bit to check again (slower updates in non-interactive mode to avoid spamming the log).
+		if tui.IsInteractiveMode() {
+			time.Sleep(200 * time.Millisecond)
+		} else {
+			time.Sleep(2 * time.Second)
+		}
 	}
 	return errors.New("timeout waiting for pods to be ready")
 }
