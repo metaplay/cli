@@ -315,7 +315,9 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
 					}
 
-					return false, nil, fmt.Errorf("pod %s failed (see above for logs)", status)
+					// Log info about failure & return the error
+					log.Info().Msgf("Pod %s failed: %s", podName, status.Message)
+					return false, nil, fmt.Errorf("pod %s failed to deploy (see above for logs and details)", podName)
 				}
 			} else {
 				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))

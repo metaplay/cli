@@ -5,6 +5,7 @@ package helmutil
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -34,7 +35,10 @@ func HelmUpgradeOrInstall(
 
 	// Pipe Helm output to task output
 	actionConfig.Log = func(format string, args ...interface{}) {
-		output.AppendLinef(format, args)
+		// Render line and trim any trailing line endings
+		line := fmt.Sprintf(format, args)
+		line = strings.TrimRight(line, "\n")
+		output.AppendLine(line)
 	}
 
 	var installCmd *action.Install
