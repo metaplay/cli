@@ -192,7 +192,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		"botclients": map[string]any{
 			"targetPort":         9339,
 			"targetEnableTls":    true,
-			"maxBotId":           100000,
+			"maxBotId":           1000,
 			"botsPerPod":         10,
 			"botSpawnRate":       5,
 			"botSessionDuration": "00:00:20",
