@@ -28,7 +28,6 @@ bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh
 Using Chocolatey
 
 ```bash
-choco source add --name metaplay --source https://github.com/metaplay/choco-packages
 choco install metaplay
 ```
 
