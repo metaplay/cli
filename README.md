@@ -10,7 +10,7 @@ The installation is easiest using any of the supported package managers or insta
 
 ### On macOS
 
-Using Homebrew:
+Using Homebrew (recommended):
 
 ```bash
 brew tap metaplay/homebrew-tap
@@ -25,17 +25,17 @@ bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh
 
 ### On Windows
 
-Using Chocolatey
-
-```bash
-choco install metaplay
-```
-
-Using Scoop:
+Using Scoop (recommended):
 
 ```bash
 scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
+```
+
+Using Chocolatey
+
+```bash
+choco install metaplay
 ```
 
 ### On Linux

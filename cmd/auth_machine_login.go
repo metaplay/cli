@@ -57,8 +57,7 @@ func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve auth provider.
-	authProviderName := coalesceString(o.argAuthProvider, "metaplay")
-	authProvider, err := getAuthProvider(project, authProviderName)
+	authProvider, err := getAuthProvider(project, o.argAuthProvider)
 	if err != nil {
 		return err
 	}

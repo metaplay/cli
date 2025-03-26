@@ -43,7 +43,7 @@ type GameServerPodStatus struct {
 // Fetch all game server stateful sets (belonging to a particular gameserver deployment).
 // \todo If gameServer is specified (only for old operator), only accept statefulsets owned by said gameServer
 // \todo For new operator, figure out how to filter them (they currently have no labels)
-func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, gameServer *OldGameServerCR) ([]appsv1.StatefulSet, error) {
+func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameServer *NewGameServerCR, oldGameServer *OldGameServerCR) ([]appsv1.StatefulSet, error) {
 	// Fetch all stateful sets from namespace.
 	// log.Debug().Msgf("Fetch game server stateful sets in namespace: %s", namespace)
 	statefulSets, err := kubeCli.Clientset.AppsV1().StatefulSets(kubeCli.Namespace).List(ctx, metav1.ListOptions{
@@ -58,20 +58,27 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, gameServ
 	for _, sts := range statefulSets.Items {
 		log.Debug().Msgf("  StatefulSet: name=%s, currentRevision=%s, updateRevision=%s", sts.GetName(), sts.Status.CurrentRevision, sts.Status.UpdateRevision)
 
+		// If shardset is being terminated, ignore it.
+		// \todo show this as shardset getting removed
+		if sts.DeletionTimestamp != nil {
+			log.Debug().Msgf("    being deleted (deletionTimestamp=%v)", sts.DeletionTimestamp)
+			continue
+		}
+
 		// If gameserver is provided, check that this is a child of it.
 		// Note: Only used with old operator -- new operator does not hold
 		// direct ownership due to statefulsets not necessarily living on the
 		// same cluster as the gameserver CR.
 		// \todo Figure out better revision handling for gameserver->sts relationship
-		if gameServer != nil {
+		if oldGameServer != nil {
 			for _, ownerRef := range sts.OwnerReferences {
 				log.Debug().Msgf("    owner: apiVersion=%s, kind=%s, name=%s, uid=%s", ownerRef.APIVersion, ownerRef.Kind, ownerRef.Name, ownerRef.UID)
-				if ownerRef.UID == gameServer.Metadata.UID {
+				if ownerRef.UID == oldGameServer.Metadata.UID {
 					log.Debug().Msgf("      is owned by %s/%s (%s)", ownerRef.Name, ownerRef.Kind, ownerRef.Name)
 					ownedSets = append(ownedSets, sts)
 					break
 				} else {
-					log.Debug().Msgf("  Mismatched owner: status.OwnerUID=%s, gameServer.UID=%s", ownerRef.UID, gameServer.Metadata.UID)
+					log.Debug().Msgf("  Mismatched owner: status.OwnerUID=%s, gameServer.UID=%s", ownerRef.UID, oldGameServer.Metadata.UID)
 				}
 			}
 		} else {
@@ -252,23 +259,21 @@ func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 	return nil
 }
 
-// Check if a gameserver CR is ready. Looks at the gameserver CR's .status.phase.
-// The stateful sets and pods can live on other clusters (in other regions) so we
-// don't have direct access to them (at least for now).
-func isGameServerCRReady(gameServer *NewGameServerCR) (bool, error) {
-	log.Debug().Msgf("New gameserver CR status.phase = %s", gameServer.Status.Phase)
-	// \todo check statefulset & pod statuses as well?
-	return gameServer.Status.Phase == "Running", nil
-}
-
-// Check if the given gameserver CR is ready.
+// Check if the given gameserver CR (old or new) is ready.
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
 // \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *OldGameServerCR) (bool, []string, error) {
+func isGameServerReady(ctx context.Context, kubeCli *KubeClient, newGameServer *NewGameServerCR, oldGameServer *OldGameServerCR) (bool, []string, error) {
+	// Must have either old or new operator CR.
+	if newGameServer == nil && oldGameServer == nil {
+		return false, nil, errors.New("either newGameServer or oldGameServer must be specified")
+	} else if newGameServer != nil && oldGameServer != nil {
+		return false, nil, errors.New("both newGameServer and oldGameServer cannot be specified")
+	}
+
 	// Fetch all game server StatefulSets owned by the game server.
 	// \todo this only works in single-region setups .. use only with old operator?
-	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer)
+	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, newGameServer, oldGameServer)
 	if err != nil {
 		return false, nil, err
 	}
@@ -285,7 +290,7 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 	}
 
 	// Check that all pods belonging to all shards are ready.
-	allReady := true
+	allPodsReady := true
 	statusLines := []string{}
 	for shardSetName, shardSetPods := range podsByShard {
 		// Check that all expected pods are found.
@@ -297,7 +302,7 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 				status := resolvePodStatus(*pod)
 				statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s]", podName, status.Phase, status.Message))
 				if status.Phase != PhaseReady {
-					allReady = false
+					allPodsReady = false
 				}
 
 				// If pod failed, bail out with the logs from the pod
@@ -321,13 +326,22 @@ func isOldGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *
 				}
 			} else {
 				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
-				allReady = false
+				allPodsReady = false
 			}
 		}
 	}
 
-	// All pods in all shard sets are ready!
-	return allReady, statusLines, nil
+	// For the new game server, also check the CR status.
+	isCRReady := true
+	if newGameServer != nil {
+		log.Debug().Msgf("New gameserver CR status.phase = %s", newGameServer.Status.Phase)
+		isCRReady = newGameServer.Status.Phase == "Running"
+		statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newGameServer.Status.Phase))
+	}
+
+	// Return whether everything is ready.
+	isReady := isCRReady && allPodsReady
+	return isReady, statusLines, nil
 }
 
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout occurs.
@@ -341,31 +355,33 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	// Keep checking the gameservers until they are ready, or timeout is hit.
 	startTime := time.Now()
 	for time.Since(startTime) < timeout {
-		var isReady bool
-		var err error
-
-		// Try to get the gameserver CR used by the new operator.
-		headerLines := []string{}
-		if gameServer.GameServerNewCR != nil {
-			headerLines = append(headerLines, "Game server pod states (new CR):")
-			isReady, err = isGameServerCRReady(gameServer.GameServerNewCR)
-			if err != nil {
-				return err
-			}
-		} else if gameServer.GameServerOldCR != nil {
-			kubeCli, err := targetEnv.GetPrimaryKubeClient()
-			if err != nil {
-				return err
-			}
-			var statusLines []string
-			isReady, statusLines, err = isOldGameServerReady(ctx, kubeCli, gameServer.GameServerOldCR)
-			if err != nil {
-				return err
-			}
-			headerLines = append([]string{"Game server pod states (old CR):"}, statusLines...)
-		} else {
-			return fmt.Errorf("no old or new gameserver CR found")
+		// Get kube client for primary cluster.
+		kubeCli, err := targetEnv.GetPrimaryKubeClient()
+		if err != nil {
+			return err
 		}
+
+		// Must have either old or new CR.
+		if gameServer.GameServerNewCR == nil && gameServer.GameServerOldCR == nil {
+			return fmt.Errorf("only new or old CR must be defined, not both")
+		}
+
+		// Get status of the deployment.
+		// \todo handle edge clusters (for new CR only)
+		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer.GameServerNewCR, nil)
+		if err != nil {
+			return err
+		}
+
+		// Resolve status lines to show.
+		crVersion := "new"
+		if gameServer.GameServerOldCR != nil {
+			crVersion = "old"
+		}
+		headerLines := append(
+			[]string{fmt.Sprintf("Game server pod states (%s CR):", crVersion)},
+			statusLines...,
+		)
 
 		// Show the game server shard/pod states.
 		output.SetHeaderLines(headerLines)
@@ -581,8 +597,10 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	// Wait for the gameserver Kubernetes resources to be ready.
 	// Only wait for a few minutes as pods generally become healthy fairly
 	// soon as we want to display the logs from errors early.
+	// This can take a long time when larger changes are being applied (eg,
+	// enabling the new operator).
 	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
-		return targetEnv.waitForGameServerReady(ctx, output, 3*time.Minute)
+		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute)
 	})
 
 	// CHECK CLIENT-FACING NETWORKING
