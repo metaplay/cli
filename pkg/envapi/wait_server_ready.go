@@ -263,17 +263,19 @@ func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
 // \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isGameServerReady(ctx context.Context, kubeCli *KubeClient, newGameServer *NewGameServerCR, oldGameServer *OldGameServerCR) (bool, []string, error) {
+func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (bool, []string, error) {
 	// Must have either old or new operator CR.
-	if newGameServer == nil && oldGameServer == nil {
-		return false, nil, errors.New("either newGameServer or oldGameServer must be specified")
-	} else if newGameServer != nil && oldGameServer != nil {
-		return false, nil, errors.New("both newGameServer and oldGameServer cannot be specified")
+	newCR := gameServer.GameServerNewCR
+	oldCR := gameServer.GameServerOldCR
+	if newCR == nil && oldCR == nil {
+		log.Panic().Msg("Either old or new game server CR must be specified")
+	} else if newCR != nil && oldCR != nil {
+		log.Panic().Msg("Both new and old game server CRs cannot be specified")
 	}
 
 	// Fetch all game server StatefulSets owned by the game server.
 	// \todo this only works in single-region setups .. use only with old operator?
-	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, newGameServer, oldGameServer)
+	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, newCR, oldCR)
 	if err != nil {
 		return false, nil, err
 	}
@@ -333,10 +335,10 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, newGameServer *
 
 	// For the new game server, also check the CR status.
 	isCRReady := true
-	if newGameServer != nil {
-		log.Debug().Msgf("New gameserver CR status.phase = %s", newGameServer.Status.Phase)
-		isCRReady = newGameServer.Status.Phase == "Running"
-		statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newGameServer.Status.Phase))
+	if newCR != nil {
+		log.Debug().Msgf("New gameserver CR status.phase = %s", newCR.Status.Phase)
+		isCRReady = newCR.Status.Phase == "Running"
+		statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newCR.Status.Phase))
 	}
 
 	// Return whether everything is ready.
@@ -368,7 +370,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// Get status of the deployment.
 		// \todo handle edge clusters (for new CR only)
-		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer.GameServerNewCR, nil)
+		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer)
 		if err != nil {
 			return err
 		}

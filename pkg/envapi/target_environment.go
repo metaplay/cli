@@ -242,7 +242,7 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 		return oldGameServer, nil
 	}
 
-	return nil, fmt.Errorf("Neither old nor new gameserver CR found in Kubernetes")
+	return nil, fmt.Errorf("neither old nor new gameserver CR found in Kubernetes")
 }
 
 // Request details about an environment from the StackAPI.
