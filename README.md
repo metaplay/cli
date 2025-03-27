@@ -181,6 +181,16 @@ cli$ go build -ldflags="-X 'github.com/metaplay/cli/internal/version.AppVersion=
 
 It is highly recommended to use the latest official release, so should you decide to mess with development builds, proceed with extreme caution!
 
+#### Build Locally
+
+There is a simple `Makefile` which builds the CLI into the `dist/` directory when run:
+
+```bash
+cli$ make
+```
+
+It can be convenient to set the `cli/dist` directory to your `PATH` to make it easier to run the CLI from any directory.
+
 #### Run Locally
 
 While developing the CLI itself, it's often most convenient to run the binary from source and direct it to operate on a project with the `-p` flag, e.g.:
