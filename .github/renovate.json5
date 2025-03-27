@@ -3,7 +3,6 @@
     "config:recommended",
     ":dependencyDashboard"
   ],
-  "language": "go",
   "constraints": {
     "go": "1.24"
   },
