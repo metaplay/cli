@@ -1,0 +1,35 @@
+{
+  "extends": [
+    "config:recommended",
+    ":dependencyDashboard"
+  ],
+  "language": "go",
+  "constraints": {
+    "go": "1.24"
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "enabled": true
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true,
+      "automergeType": "branch"
+    },
+    {
+      "matchDepTypes": ["devDependencies"],
+      "groupName": "dev dependencies",
+      "labels": ["dev-deps"]
+    }
+  ],
+  "labels": ["dependencies"],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "schedule": ["after 10pm every weekday", "before 5am every weekday"],
+  "timezone": "Europe/Berlin"
+}
