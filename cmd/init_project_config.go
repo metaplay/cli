@@ -232,13 +232,21 @@ func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Generate the metaplay-project.yaml in project root.
-	_, err = metaproj.GenerateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, projectConfig.metaplaySdkPath, targetProject, environments)
+	_, err = metaproj.GenerateProjectConfigFile(
+		sdkMetadata,
+		o.absoluteProjectPath,
+		o.relativeUnityProjectPath,
+		projectConfig.metaplaySdkPath,
+		projectConfig.sharedCodePath,
+		projectConfig.gameBackendPath,
+		projectConfig.gameDashboardPath,
+		targetProject,
+		environments)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msg(styles.RenderSuccess("✅ Project config file created!"))
-
+	log.Info().Msg(styles.RenderSuccess("✅ Project config file 'metaplay-project.yaml' created!"))
 	return nil
 }
 

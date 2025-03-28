@@ -597,7 +597,8 @@ botClientChartVersion: {{.BotClientChartVersion}}
 features:
   # Configure LiveOps Dashboard.
   dashboard:
-    useCustom: false
+    useCustom: {{.UseCustomDashboard}}
+    rootDir: {{.CustomDashboardPath}}
 
 # Project environments.
 environments:
@@ -613,6 +614,9 @@ func GenerateProjectConfigFile(
 	rootPath string,
 	pathToUnityProject string,
 	pathToMetaplaySdk string,
+	sharedCodePath string,
+	gameBackendPath string,
+	customDashboardPath string,
 	project *portalapi.ProjectInfo,
 	environments []portalapi.EnvironmentInfo) (*ProjectConfig, error) {
 	// Data for the template
@@ -627,17 +631,21 @@ func GenerateProjectConfigFile(
 		DotnetRuntimeVersion  string
 		ServerChartVersion    string
 		BotClientChartVersion string
+		UseCustomDashboard    bool
+		CustomDashboardPath   string
 		Environments          []portalapi.EnvironmentInfo
 	}{
 		ProjectID:             project.HumanID,
 		BuildRootDir:          ".",
 		SdkRootDir:            filepath.ToSlash(pathToMetaplaySdk),
-		BackendDir:            "Backend",
-		SharedCodeDir:         filepath.ToSlash(filepath.Join(pathToUnityProject, "Assets", "SharedCode")),
+		BackendDir:            filepath.ToSlash(gameBackendPath),
+		SharedCodeDir:         filepath.ToSlash(sharedCodePath),
 		UnityProjectDir:       filepath.ToSlash(pathToUnityProject),
 		DotnetRuntimeVersion:  sdkMetadata.DefaultDotnetRuntimeVersion,
 		ServerChartVersion:    sdkMetadata.DefaultServerChartVersion.String(),
 		BotClientChartVersion: sdkMetadata.DefaultBotClientChartVersion.String(),
+		UseCustomDashboard:    customDashboardPath != "",
+		CustomDashboardPath:   filepath.ToSlash(customDashboardPath),
 		Environments:          environments,
 	}
 

@@ -323,7 +323,16 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	// Generate the metaplay-project.yaml in project root.
 	var projectConfig *metaproj.ProjectConfig
 	runner.AddTask("Generate metaplay-project.yaml", func(output *tui.TaskOutput) error {
-		projectConfig, err = metaproj.GenerateProjectConfigFile(sdkMetadata, o.absoluteProjectPath, o.relativeUnityProjectPath, relativePathToSdk, targetProject, environments)
+		projectConfig, err = metaproj.GenerateProjectConfigFile(
+			sdkMetadata,
+			o.absoluteProjectPath,
+			o.relativeUnityProjectPath,
+			relativePathToSdk,
+			filepath.Join(o.relativeUnityProjectPath, "Assets", "SharedCode"),
+			"Backend", // game backend dir
+			"",        // game dashboard dir
+			targetProject,
+			environments)
 		return err
 	})
 
