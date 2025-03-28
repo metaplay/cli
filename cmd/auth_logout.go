@@ -57,10 +57,17 @@ func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Resolve project ID (if any).
+	projectID := "n/a"
+	if project != nil {
+		projectID = project.Config.ProjectHumanID
+	}
+
+	// Show info.
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Sign Out"))
 	log.Info().Msg("")
-	log.Info().Msgf("Project:       %s", styles.RenderTechnical(project.Config.ProjectHumanID))
+	log.Info().Msgf("Project:       %s", styles.RenderTechnical(projectID))
 	log.Info().Msgf("Auth provider: %s", styles.RenderTechnical(authProvider.Name))
 	log.Info().Msg("")
 
@@ -72,8 +79,7 @@ func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 
 	// If not logged in, just exit.
 	if sessionState == nil {
-		log.Info().Msg("")
-		log.Info().Msg("Not logged in!")
+		log.Info().Msg("ℹ️ You are not logged in to this auth provider, so there's nothing to sign out from.")
 		return nil
 	}
 
@@ -83,7 +89,6 @@ func (o *LogoutOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully logged out!"))
 	return nil
 }
