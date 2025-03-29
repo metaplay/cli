@@ -10,23 +10,20 @@
   "packageRules": [
     {
       "matchManagers": ["gomod"],
-      "enabled": true
+      "enabled": true,
+      "postUpdateOptions": ["gomodTidy"],
+      "ignoreIndirectDependencies": true
     },
     {
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions",
-      "labels": ["github-actions"],
-      "pinDigests": true
+      "labels": ["github-actions"]
     },
     {
+      "matchManagers": ["gomod", "github-actions"],
       "matchUpdateTypes": ["minor", "patch"],
       "automerge": true,
       "automergeType": "branch"
-    },
-    {
-      "matchDepTypes": ["devDependencies"],
-      "groupName": "dev dependencies",
-      "labels": ["dev-deps"]
     }
   ],
   "labels": ["dependencies"],
