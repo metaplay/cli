@@ -11,8 +11,7 @@
     {
       "matchManagers": ["gomod"],
       "enabled": true,
-      "postUpdateOptions": ["gomodTidy"],
-      "ignoreIndirectDependencies": true
+      "postUpdateOptions": ["gomodTidy"]
     },
     {
       "matchManagers": ["github-actions"],
