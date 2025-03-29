@@ -1,8 +1,7 @@
 {
   "extends": [
     "config:recommended",
-    ":dependencyDashboard",
-    "helpers:pinGitHubActionDigests"
+    ":dependencyDashboard"
   ],
   "constraints": {
     "go": "1.24"
