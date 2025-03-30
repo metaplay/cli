@@ -1,12 +1,9 @@
 name: Publish development release
 
 on:
-  schedule:
-    - cron: '0 0 * * *'
   push:
     branches:
       - main
-      - dev
 
 permissions:
   contents: write
