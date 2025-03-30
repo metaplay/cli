@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - main
-      - dev
+
+run-name: Publish dev release from ${{ github.head_ref || github.ref_name }}
 
 permissions:
   contents: write
