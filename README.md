@@ -171,7 +171,7 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 #### Development Build
 
-We do continuously update the latest development build from the `metaplay/cli` repository `main` branch and it can be found on the [releases page](https://github.com/metaplay/cli/releases/tag/0.0.0), but there are no quality guarantees whatsoever associated with it. The development build is primarily intended for our internal use and is made available for Github CI runners to run automated tests on (and with) without the need to always build from scratch.
+We continuously create development builds from the `metaplay/cli` repository `main` branch. These builds are tagged with a `-dev.N` suffix (e.g., `1.2.4-dev.1`) and published as draft releases. You can find the latest development build on the main [releases page](https://github.com/metaplay/cli/releases). The development builds are primarily intended for testing purposes and should generally not be used.
 
 Development builds do not currently perform any version checks (for the purpose of new release notifications), and the `update cli` command is disabled on development builds as well. If you need to override this behavior, you can mock up a specific version number with the following:
 
