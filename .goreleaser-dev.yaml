@@ -32,7 +32,6 @@ release:
   prerelease: true
   make_latest: false
   replace_existing_artifacts: true
-  name_template: Development Build
 
 archives:
   - format: tar.gz
