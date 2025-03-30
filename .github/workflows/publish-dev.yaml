@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  build-dev:
+  publish-dev:
     runs-on: ubicloud-standard-8
 
     steps:
@@ -68,9 +68,11 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ env.NEXT_DEV_TAG }}
+          GORELEASER_PREVIOUS_TAG: ${{ env.LATEST_RELEASE_TAG }}
         with:
           distribution: goreleaser
-          args: release --config .goreleaser-dev.yaml --clean --git-tag ${{ env.NEXT_DEV_TAG }}
+          args: release --config .goreleaser-dev.yaml --clean
 
       # Clean up old dev builds except the two latest (keep two to avoid deleting versions while someone might be installing them)
       - name: Clean up old development releases

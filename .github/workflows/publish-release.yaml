@@ -10,7 +10,7 @@ permissions:
   id-token: write
 
 jobs:
-  build:
+  publish:
     runs-on: windows-latest
 
     steps:
