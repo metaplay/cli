@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: write
@@ -78,7 +79,7 @@ jobs:
           git tag ${{ env.NEXT_DEV_TAG }}
           git push origin ${{ env.NEXT_DEV_TAG }}
 
-      # Dev builds are not published to distribution channels, only available in Github
+      # Dev builds are not published to distribution channels, only available in Github as draft releases
       - name: Run GoReleaser (Development Build)
         uses: goreleaser/goreleaser-action@v6
         env:
@@ -89,12 +90,15 @@ jobs:
           distribution: goreleaser
           args: release --config .goreleaser-dev.yaml --clean
 
-      # Clean up old dev builds except the two latest (keep two to avoid deleting versions while someone might be installing them)
+      # Clean up old dev builds except the most recent
       - name: Clean up old development releases
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Deleting old draft releases (keeping the 2 most recent)..."
+          echo "Wait a bit before deletion to allow active installations to finish..."
+          sleep 10
+
+          echo "Deleting old draft releases (keeping only the most recent)..."
           gh api repos/${{ github.repository }}/releases --paginate |
-            jq '[.[] | select(.draft == true)] | sort_by(.created_at) | reverse | .[2:] | .[] | .id' |
-            xargs -r -I {} sh -c 'gh api repos/${{ github.repository }}/releases/{} -X DELETE && echo "Deleted old draft release {}"' || echo "No old draft releases (beyond the 2 most recent) to delete or failed to delete some."
+            jq '[.[] | select(.draft == true)] | sort_by(.created_at) | reverse | .[1:] | .[] | .id' |
+            xargs -r -I {} sh -c 'gh api repos/${{ github.repository }}/releases/{} -X DELETE && echo "Deleted old draft release {}"' || echo "No old draft releases (beyond the most recent) to delete or failed to delete some."
