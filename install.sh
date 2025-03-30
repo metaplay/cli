@@ -119,9 +119,20 @@ print_verbose "Install dir: $INSTALL_DIR"
 
 # If no VERSION specified, discover latest via GitHub API
 if [ -z "$VERSION" ]; then
-  print_verbose "No version specified. Finding latest release..."
+  print_verbose "No version specified. Finding latest official release..."
   VERSION=$(curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-  print_verbose "Latest version is: $VERSION"
+  print_verbose "Latest official version is: $VERSION"
+elif [ "$VERSION" = "latest-dev" ]; then
+  print_verbose "Version specified as 'latest-dev'. Finding latest development release..."
+  # Fetch all releases (newest first), get the tag_name of the very first one
+  VERSION=$(curl -sSfL "https://api.github.com/repos/${REPO}/releases" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+  print_verbose "Latest development version is: $VERSION"
+fi
+
+# Validate that a version was determined
+if [ -z "$VERSION" ]; then
+  print_error "Could not determine a version to install."
+  exit 1
 fi
 
 # Construct the download URL
