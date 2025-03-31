@@ -8,6 +8,11 @@ before:
   hooks:
     - go mod tidy
 
+# Replace existing assets to recover from partially completed releases
+release:
+  replace_existing_artifacts: true
+  mode: replace
+
 builds:
   - binary: metaplay
     env:
