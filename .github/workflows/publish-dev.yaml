@@ -55,9 +55,6 @@ jobs:
 
           # Check if $latest_tag has the '-dev.n' suffix.
           if [[ "$latest_tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-dev\.([0-9]+)$ ]]; then
-            # This block will likely not be reached due to the grep filter above
-            echo "Warning: latest_tag ($latest_tag) unexpectedly contains -dev.n suffix."
-
             # Bump the '-dev.N' suffix N by 1
             base_version=${BASH_REMATCH[1]}
             dev_num=${BASH_REMATCH[2]}
