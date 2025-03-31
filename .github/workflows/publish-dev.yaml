@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - dev
 
 run-name: Publish dev release from ${{ github.head_ref || github.ref_name }}
 
@@ -97,7 +98,14 @@ jobs:
           echo "Wait a bit before deletion to allow active installations to finish..."
           sleep 10
 
-          echo "Deleting old draft releases (keeping only the most recent)..."
-          gh api repos/${{ github.repository }}/releases --paginate |
-            jq '[.[] | select(.draft == true)] | sort_by(.created_at) | reverse | .[1:] | .[] | .id' |
-            xargs -r -I {} sh -c 'gh api repos/${{ github.repository }}/releases/{} -X DELETE && echo "Deleted old draft release {}"' || echo "No old draft releases (beyond the most recent) to delete or failed to delete some."
+          echo "Deleting old dev releases (keeping only the most recent)..."
+          RELEASE_IDS_TO_DELETE=$(gh api repos/${{ github.repository }}/releases --paginate |
+            jq '[.[] | select(.prerelease == true)] | sort_by(.created_at) | reverse | .[1:] | .[] | .id')
+
+          if [ -z "$RELEASE_IDS_TO_DELETE" ]; then
+            echo "No old dev releases found to delete."
+          else
+            echo "Attempting to delete the following release IDs:"
+            echo "$RELEASE_IDS_TO_DELETE"
+            echo "$RELEASE_IDS_TO_DELETE" | xargs -r -I {} sh -c 'gh api repos/${{ github.repository }}/releases/{} -X DELETE && echo "Deleted old dev release {}"' || echo "Failed to delete some or all releases."
+          fi
