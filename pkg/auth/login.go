@@ -51,8 +51,9 @@ func generateCodeVerifierAndChallenge() (verifier, challenge string) {
 }
 
 // findAvailableCallbackPort attempts to find an available port within the range 5000-5004
+// Note: We try these in reverse order as 5000 is more likely to be used by other systems.
 func findAvailableCallbackPort() (net.Listener, int, error) {
-	for tryPort := 5000; tryPort <= 5004; tryPort++ {
+	for tryPort := 5004; tryPort >= 5000; tryPort-- {
 		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", tryPort))
 		if err == nil {
 			return listener, tryPort, nil
@@ -145,7 +146,11 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 
 	// Log the authorization URL for manual fallback
 	log.Info().Msgf("Opening a browser to log in. If a browser did not open up, you can copy-paste the following URL to authenticate: %s", styles.RenderMuted(authURL))
-	browser.OpenURL(authURL)
+	err = browser.OpenURL(authURL)
+	if err != nil {
+		log.Warn().Msgf("Unable to open browser: %v", err)
+		log.Info().Msg(styles.RenderAttention("Please open the URL above in your browser."))
+	}
 
 	// Wait for authentication to complete or timeout.
 	select {
