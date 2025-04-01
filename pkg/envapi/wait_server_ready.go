@@ -630,7 +630,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for admin API to successfully respond to an HTTP request.
 	taskRunner.AddTask("Wait for LiveOps Dashboard to serve traffic", func(output *tui.TaskOutput) error {
-		return waitForHTTPServerToRespond(ctx, output, "https://"+envDetails.Deployment.AdminHostname, 2*time.Minute)
+		return waitForHTTPServerToRespond(ctx, output, "https://"+envDetails.Deployment.AdminHostname, 5*time.Minute)
 	})
 
 	// Success
