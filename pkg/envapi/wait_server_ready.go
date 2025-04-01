@@ -546,6 +546,11 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 
 	client := &http.Client{
 		Timeout: 5 * time.Second, // Per-request timeout
+		// Prevent the client from following redirects automatically.
+		// We want to check the status code of the initial response directly.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
 	for {
@@ -571,7 +576,8 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				defer resp.Body.Close()
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				// Accept 2xx (Success) and 3xx (Redirection) status codes.
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				}
