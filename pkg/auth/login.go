@@ -54,9 +54,14 @@ func generateCodeVerifierAndChallenge() (verifier, challenge string) {
 // Note: We try these in reverse order as 5000 is more likely to be used by other systems.
 func findAvailableCallbackPort() (net.Listener, int, error) {
 	for tryPort := 5004; tryPort >= 5000; tryPort-- {
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", tryPort))
+		// Verify that both ipv4 and ipv6 are available, using `:port` as addr seems to only check ipv6.
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", tryPort))
 		if err == nil {
-			return listener, tryPort, nil
+			ipv6Listener, err := net.Listen("tcp", fmt.Sprintf("[::1]:%d", tryPort))
+			if err == nil {
+				ipv6Listener.Close()
+				return listener, tryPort, nil
+			}
 		}
 	}
 	return nil, 0, fmt.Errorf("no available ports between 5000-5004")
