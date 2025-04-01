@@ -74,10 +74,11 @@ jobs:
             echo "NEXT_DEV_TAG=$next_dev_tag" >> $GITHUB_ENV
           fi
 
-      - name: Tag the version & push
+      # Note: Not pushing tags due to lots of noise .. can still find versions from CI build history
+      - name: Tag the version
         run: |
           git tag ${{ env.NEXT_DEV_TAG }}
-          git push origin ${{ env.NEXT_DEV_TAG }}
+          # git push origin ${{ env.NEXT_DEV_TAG }}
 
       # Dev builds are not published to distribution channels, only available in Github as draft releases
       - name: Run GoReleaser (Development Build)
