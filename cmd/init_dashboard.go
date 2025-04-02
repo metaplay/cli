@@ -132,7 +132,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("- Updated %s to enable the custom dashboard", styles.RenderTechnical("metaplay-project.yaml"))
 	log.Info().Msgf("- Added %s and %s to help pnpm find the projects", styles.RenderTechnical("pnpm-workspace.yaml"), styles.RenderTechnical("pnpm-lock.yaml"))
 	log.Info().Msg("")
-	log.Info().Msgf("Try running the dashboard locally with: %s", styles.RenderPrompt("metaplay run dashboard"))
+	log.Info().Msgf("Try running the dashboard locally with: %s", styles.RenderPrompt("metaplay dev dashboard"))
 
 	return nil
 }
