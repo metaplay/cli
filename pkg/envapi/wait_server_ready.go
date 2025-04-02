@@ -335,11 +335,12 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 
 	// For the new game server, also check the CR status.
 	isCRReady := true
-	if newCR != nil {
-		log.Debug().Msgf("New gameserver CR status.phase = %s", newCR.Status.Phase)
-		isCRReady = newCR.Status.Phase == "Running"
-		statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newCR.Status.Phase))
-	}
+	// \todo Check disabled for now due to operator not always setting CR phase reliably
+	// if newCR != nil {
+	// 	log.Debug().Msgf("New gameserver CR status.phase = %s", newCR.Status.Phase)
+	// 	isCRReady = newCR.Status.Phase == "Running"
+	// 	statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newCR.Status.Phase))
+	// }
 
 	// Return whether everything is ready.
 	isReady := isCRReady && allPodsReady
