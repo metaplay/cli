@@ -43,6 +43,7 @@ type TargetEnvironment struct {
 // Container for AWS access credentials into the target environment.
 // The JSON names match those used by AWS.
 type AWSCredentials struct {
+	Version         int    `json:"Version"`
 	AccessKeyID     string `json:"AccessKeyId"`
 	SecretAccessKey string `json:"SecretAccessKey"`
 	SessionToken    string `json:"SessionToken"`
@@ -348,6 +349,9 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	if awsCredentials.SecretAccessKey == "" {
 		return nil, fmt.Errorf("AWS credential missing SecretAccessKey")
 	}
+
+	awsCredentials.Version = 1;
+	
 	return &awsCredentials, err
 }
 
