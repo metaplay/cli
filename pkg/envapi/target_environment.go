@@ -350,7 +350,7 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 		return nil, fmt.Errorf("AWS credential missing SecretAccessKey")
 	}
 
-	awsCredentials.Version = 1;
+	awsCredentials.Version = 1
 	
 	return &awsCredentials, err
 }
