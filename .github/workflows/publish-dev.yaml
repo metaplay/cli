@@ -78,7 +78,6 @@ jobs:
       - name: Tag the version
         run: |
           git tag ${{ env.NEXT_DEV_TAG }}
-          # git push origin ${{ env.NEXT_DEV_TAG }}
 
       # Dev builds are not published to distribution channels, only available in Github as draft releases
       - name: Run GoReleaser (Development Build)

@@ -55,13 +55,13 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 	requiredMinorVersion := recommendedVersion.Segments()[1]
 	requiredPatchVersion := recommendedVersion.Segments()[2]
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("installed Node.js version %s is too recent; version v%d.x.y", recommendedVersion, requiredMajorVersion)
+		return fmt.Errorf("installed Node.js version %s is too recent; version v%d.x.y", installedVersion, requiredMajorVersion)
 	} else if installedMinorVersion > requiredMinorVersion {
-		log.Warn().Msgf("Installed Node.js version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", recommendedVersion, requiredMajorVersion, requiredMinorVersion)
+		log.Warn().Msgf("Installed Node.js version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", installedVersion, requiredMajorVersion, requiredMinorVersion)
 	} else if installedPatchVersion > requiredPatchVersion {
 		log.Info().Msgf("Installed Node.js version %s is more recent than recommended version %s", installedVersion, recommendedVersion)
 	} else {
-		log.Info().Msgf("Installed Node.js version: %s matches the recommended version exactly", installedVersion)
+		log.Info().Msgf("Installed Node.js version %s matches the recommended version exactly", installedVersion)
 	}
 
 	return nil
@@ -101,13 +101,13 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 	requiredMinorVersion := recommendedVersion.Segments()[1]
 	requiredPatchVersion := recommendedVersion.Segments()[2]
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("installed pnpm version %s is too recent; version v%d.x.y", recommendedVersion, requiredMajorVersion)
+		return fmt.Errorf("installed pnpm version %s is too recent; version v%d.x.y", installedVersion, requiredMajorVersion)
 	} else if installedMinorVersion > requiredMinorVersion {
-		log.Warn().Msgf("Installed pnpm version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", recommendedVersion, requiredMajorVersion, requiredMinorVersion)
+		log.Warn().Msgf("Installed pnpm version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", installedVersion, requiredMajorVersion, requiredMinorVersion)
 	} else if installedPatchVersion > requiredPatchVersion {
 		log.Info().Msgf("Installed pnpm version %s is more recent than recommended version %s", installedVersion, recommendedVersion)
 	} else {
-		log.Info().Msgf("Installed pnpm version: %s matches the recommended version exactly", installedVersion)
+		log.Info().Msgf("Installed pnpm version %s matches the recommended version exactly", installedVersion)
 	}
 
 	return nil
