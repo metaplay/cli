@@ -4,6 +4,8 @@
 
 The `metaplay` command-line tool is used to manage projects using Metaplay, to build and deploy the game server into the cloud, and to interact with the cloud environments.
 
+![Metaplay CLI Build](images/cli-build.gif)
+
 ## Installation
 
 The installation is easiest using any of the supported package managers or install scripts.
