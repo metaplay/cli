@@ -36,7 +36,7 @@ require (
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0 // indirect
-	code.gitea.io/sdk/gitea v0.20.0 // indirect
+	code.gitea.io/sdk/gitea v0.21.0 // indirect
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/42wim/httpsig v1.2.2 // indirect
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 // indirect
