@@ -46,3 +46,28 @@ jobs:
         with:
           distribution: goreleaser
           args: release --clean
+
+      - name: Push Chocolatey artifacts to choco-packages repo
+        run: |
+          $version = "${{ github.ref_name }}"
+          $chocoArtifactsDir = "dist/chocolatey"
+
+          # Clone the choco-packages repository
+          git config --global user.name "MetaplayBot"
+          git config --global user.email "info@metaplay.io"
+          git clone https://MetaplayBot:${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}@github.com/metaplay/choco-packages.git
+
+          # Create version directory if it doesn't exist
+          $targetDir = "choco-packages/metaplay/$version"
+          if (-not (Test-Path $targetDir)) {
+            New-Item -ItemType Directory -Path $targetDir -Force
+          }
+
+          # Copy Chocolatey artifacts to the repo
+          Copy-Item -Path "$chocoArtifactsDir/*" -Destination $targetDir -Recurse -Force
+
+          # Commit and push changes
+          cd choco-packages
+          git add .
+          git commit -m "Add Chocolatey package for metaplay CLI v$version"
+          git push
