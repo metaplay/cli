@@ -101,6 +101,7 @@ scoops:
 
 chocolateys:
   - name: metaplay
+    package_source_url: https://github.com/metaplay/choco-packages
     owners: Metaplay
     title: Metaplay CLI
     authors: Metaplay
