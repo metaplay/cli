@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/hashicorp/go-version"
@@ -276,6 +277,35 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// If migrating from chart version <0.8.0 to >=0.8.0, uninstall the old release first to avoid the
+	// old and new operators from modifying the same resources.
+	uninstallExisting := false
+	if existingRelease != nil && existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
+		log.Debug().Msgf("Existing Helm release '%s' found with chart version %s", existingRelease.Name, existingRelease.Chart.Metadata.Version)
+
+		// Parse the new chart version.
+		newVersion, err := semver.NewVersion(useHelmChartVersion)
+		if err != nil {
+			return fmt.Errorf("failed to parse Helm chart version '%s': %v", useHelmChartVersion, err)
+		}
+
+		// Parse existing chart version.
+		existingVersion, err := semver.NewVersion(existingRelease.Chart.Metadata.Version)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingRelease.Chart.Metadata.Version)
+			uninstallExisting = true
+		}
+
+		// Check if crossing the v0.8.0 threshold (in either direction).
+		threshold := semver.MustParse("0.8.0")
+		newAboveV080 := newVersion.GreaterThanEqual(threshold)
+		existingAboveV080 := existingVersion.GreaterThanEqual(threshold)
+		if newAboveV080 != existingAboveV080 {
+			log.Info().Msgf("Going from Helm chart v%s to v%s. Must uninstall existing release before installing new one.", existingRelease.Chart.Metadata.Version, useHelmChartVersion)
+			uninstallExisting = true
+		}
+	}
+
 	// Default shard config based on environment type.
 	// \todo Auto-detect these from the infrastructure.
 	var shardConfig []map[string]interface{}
@@ -315,12 +345,6 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
 		},
-		// DEBUG DEBUG Opt into the new operator
-		// "experimental": map[string]interface{}{
-		// 	"gameserversV0Api": map[string]interface{}{
-		// 		"enabled": true,
-		// 	},
-		// },
 		"tenant": map[string]interface{}{
 			"discoveryEnabled": true,
 		},
@@ -341,7 +365,11 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if helmReleaseName == "" {
 		if existingRelease != nil {
 			helmReleaseName = existingRelease.Name
-			helmReleaseNameBadge = styles.RenderMuted("[update existing]")
+			if uninstallExisting {
+				helmReleaseNameBadge = styles.RenderMuted("[uninstall existing]")
+			} else {
+				helmReleaseNameBadge = styles.RenderMuted("[update existing]")
+			}
 		} else {
 			helmReleaseName = fmt.Sprintf("%s-gameserver", envConfig.HumanID)
 			helmReleaseNameBadge = styles.RenderMuted("[default]")
@@ -387,6 +415,15 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
 			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+		})
+	}
+
+	// If migrating from old operator to new operator, uninstall the old release first.
+	if uninstallExisting {
+		taskRunner.AddTask("Uninstall existing game server", func(output *tui.TaskOutput) error {
+			err := helmutil.UninstallRelease(actionConfig, existingRelease)
+			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			return err
 		})
 	}
 
