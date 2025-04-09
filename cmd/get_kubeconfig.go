@@ -52,7 +52,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Get KubeConfig for environment tough-falcons with dynamic credentials
 			metaplay get kubeconfig tough-falcons --type=dynamic
 

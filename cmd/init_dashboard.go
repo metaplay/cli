@@ -43,7 +43,7 @@ func init() {
 			- 'metaplay build dashboard' to build the dashboard locally.
 			- 'metaplay dev dashboard' to serve the dashboard locally.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Initialize the custom LiveOps Dashboard in the project.
 			metaplay init dashboard
 		`),

@@ -62,7 +62,7 @@ func init() {
 			- 'metaplay update project-environments' updates the environments list in metaplay-project.yaml from the cloud.
 			- 'metaplay init dashboard' initializes custom LiveOps Dashboard in the project.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Initialize SDK in your project using the interactive wizard.
 			metaplay init project
 

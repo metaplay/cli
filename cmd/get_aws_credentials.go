@@ -49,7 +49,7 @@ func init() {
 			- 'metaplay get kubeconfig ...' to get Kubernetes configuration
 			- 'metaplay get environment-info ...' to get environment details
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Get credentials in human-readable text format (default)
 			metaplay get aws-credentials tough-falcons
 

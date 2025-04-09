@@ -55,7 +55,7 @@ func init() {
 			Related commands:
 			- 'metaplay deploy server ...' to deploy a game server into the cloud.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Show logs from environment 'tough-falcons' up until now.
 			metaplay debug logs tough-falcons
 

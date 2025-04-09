@@ -77,7 +77,7 @@ func init() {
 			- 'metaplay init project' to create a new project from scratch
 			- 'metaplay update project-environments' to update environment configurations
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Generate the in your project.
 			metaplay init project-config
 

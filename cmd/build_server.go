@@ -35,7 +35,7 @@ func init() {
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev server' runs the game server locally.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Build the game server
 			metaplay build game-server
 		`),

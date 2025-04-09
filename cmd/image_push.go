@@ -51,7 +51,7 @@ func init() {
 			- The docker image can be built with 'metaplay build image ...'.
 			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Push the docker image 'mygame:1a27c25753' into environment 'tough-falcons'.
 			metaplay image push tough-falcons mygame:1a27c25753
 		`),

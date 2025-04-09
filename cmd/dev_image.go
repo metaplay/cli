@@ -45,7 +45,7 @@ func init() {
 			Related commands:
 			- 'metaplay build image ...' to build a server Docker image.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Run the docker image (until terminated).
 			metaplay dev image mygame:test
 

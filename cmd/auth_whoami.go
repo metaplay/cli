@@ -42,7 +42,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Show user information in text format
 			metaplay auth whoami
 

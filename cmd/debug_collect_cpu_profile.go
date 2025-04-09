@@ -51,7 +51,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Collect CPU profile from the only running pod.
 			metaplay debug collect-cpu-profile tough-falcons
 

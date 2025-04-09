@@ -40,7 +40,7 @@ func init() {
 			- 'metaplay dev dashboard' runs the LiveOps Dashboard locally.
 			- 'metaplay build botclient' builds the BotClient project.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Run bots against the locally running server.
 			metaplay dev botclient
 

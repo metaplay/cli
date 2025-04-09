@@ -55,7 +55,7 @@ func init() {
 			Related commands:
 			- 'metaplay debug server-status ...' checks the status of a game server deployment.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Get the server hello message.
 			metaplay debug admin-request tough-falcons GET /api/hello
 

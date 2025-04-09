@@ -38,7 +38,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Run the server. Stop the server by pressing 'q'.
 			metaplay dev server
 

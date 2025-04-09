@@ -56,7 +56,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Collect heap dump from the only running pod.
 			metaplay debug collect-heap-dump tough-falcons
 

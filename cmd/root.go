@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
@@ -35,7 +36,7 @@ var skipAppVersionCheck bool     // Skip check for a new version of the CLI (--s
 var rootCmd = &cobra.Command{
 	Use:   "metaplay",
 	Short: "Metaplay CLI for development, deployment, and operations",
-	Example: trimIndent(`
+	Example: renderExample(`
 		# Initialize a new Metaplay project in an existing Unity project
 		MyGame$ metaplay init project
 
@@ -362,21 +363,69 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 
 // Trim the indentation from the beginning of each line in the string.
 // To be used with the multiline `Long` and `Example` of the Cobra commands.
-func trimIndent(str string) string {
-	str = strings.TrimSpace(str)
+func trimIndent(str string, indent int) string {
+	// 1. Split into lines.
 	lines := strings.Split(str, "\n")
-	trimmedLines := []string{}
-	for _, line := range lines {
-		trimmed := "  " + strings.TrimSpace(line)
-		trimmedLines = append(trimmedLines, trimmed)
+
+	// 2. For lines consisting of only whitespace, remove the whitespace (but leave the empty line).
+	for i, line := range lines {
+		if len(strings.TrimSpace(line)) == 0 {
+			lines[i] = ""
+		}
 	}
-	return strings.Join(trimmedLines, "\n")
+
+	// 3. Remove any fully empty lines from beginning and end.
+	start := 0
+	for start < len(lines) && lines[start] == "" {
+		start++
+	}
+	end := len(lines) - 1
+	for end >= start && lines[end] == "" {
+		end--
+	}
+
+	// If all lines were empty or whitespace
+	if start > end {
+		return ""
+	}
+	lines = lines[start : end+1]
+
+	// 4. Find the minimum leading whitespace among non-empty lines.
+	minIndent := -1
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		currentIndent := 0
+		for _, r := range line {
+			if unicode.IsSpace(r) {
+				currentIndent++
+			} else {
+				break
+			}
+		}
+		if minIndent == -1 || currentIndent < minIndent {
+			minIndent = currentIndent
+		}
+	}
+
+	// 5. Remove that much whitespace from each (non-empty) line and add the specified indent.
+	resultLines := make([]string, len(lines))
+	for i, line := range lines {
+		if line == "" || minIndent == -1 || len(line) < minIndent {
+			resultLines[i] = line // Keep empty lines or lines shorter than minIndent as is
+		} else {
+			resultLines[i] = strings.Repeat(" ", indent) + line[minIndent:]
+		}
+	}
+
+	return strings.Join(resultLines, "\n")
 }
 
 // Render a long command description.
 func renderLong(opts CommandOptions, str string) string {
 	// Trim indent from string.
-	str = trimIndent(str)
+	str = trimIndent(str, 0)
 
 	// Inject positional arguments descriptions.
 	if strings.Contains(str, "{Arguments}") {
@@ -395,6 +444,15 @@ func renderLong(opts CommandOptions, str string) string {
 
 	// Style code blocks and inline code with a different color
 	str = styleInlineCode(str)
+
+	// Return final result
+	return str
+}
+
+// Render a long command description.
+func renderExample(str string) string {
+	// Trim indent from string.
+	str = trimIndent(str, 2)
 
 	// Return final result
 	return str

@@ -66,7 +66,7 @@ func init() {
 			- 'metaplay debug logs ...' to view logs from the deployed server.
 			- 'metaplay debug shell ...' to debug a running server pod.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
 			metaplay deploy botclient tough-falcons 364cff09
 		`),

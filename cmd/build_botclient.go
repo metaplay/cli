@@ -37,7 +37,7 @@ func init() {
 			- 'metaplay remove botclient ...' to remove bot clients from an environment
 			- 'metaplay debug logs ...' to view bot client logs in an environment
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Build the BotClient project
 			metaplay build botclient
 

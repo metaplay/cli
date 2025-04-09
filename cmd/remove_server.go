@@ -35,7 +35,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Remove game server deployment from environment tough-falcons.
 			metaplay remove game-server tough-falcons
 		`),

@@ -39,7 +39,7 @@ func init() {
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Delete the secret 'user-mysecret' from the environment 'tough-falcons'.
 			metaplay secrets delete tough-falcons user-mysecret
 		`),

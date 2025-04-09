@@ -51,7 +51,7 @@ func init() {
 			- 'metaplay deploy server ...' to push and deploy the game server image into a cloud environment.
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Build Docker image, produces image named '<projectID>:<timestamp>'.
 			metaplay build image
 

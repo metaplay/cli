@@ -56,7 +56,7 @@ func init() {
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Create a secret named 'user-mysecret' in environment 'tough-falcons' with two entries.
 			metaplay secrets create tough-falcons user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
 

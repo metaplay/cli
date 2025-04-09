@@ -37,7 +37,7 @@ func init() {
 			Related commands:
 			- 'metaplay deploy server' ...
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Update the project environments from the portal.
 			metaplay update project-environments
 		`),

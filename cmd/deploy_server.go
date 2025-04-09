@@ -73,7 +73,7 @@ func init() {
 			- 'metaplay debug logs ...' to view logs from the deployed server.
 			- 'metaplay debug shell ...' to start a shell on a running server pod.
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Push the local image and deploy to the environment tough-falcons.
 			metaplay deploy server tough-falcons mygame:364cff09
 

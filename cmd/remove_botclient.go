@@ -36,7 +36,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Remove botclient deployment from environment tough-falcons.
 			metaplay remove botclient tough-falcons
 		`),

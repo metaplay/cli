@@ -80,7 +80,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Start a debug container in the 'tough-falcons' environment (when only one pod is running).
 			metaplay debug shell tough-falcons
 

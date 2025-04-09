@@ -42,7 +42,7 @@ func init() {
 
 			{Arguments}
 		`),
-		Example: trimIndent(`
+		Example: renderExample(`
 			# Show relevant environment information in text format (default)
 			metaplay get environment-info tough-falcons
 
