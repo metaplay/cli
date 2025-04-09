@@ -187,6 +187,7 @@ func init() {
 	// Manage project:
 	initCmd.GroupID = "project"
 	updateCmd.GroupID = "project"
+	migrateCmd.GroupID = "project"
 
 	// Manage resources:
 	getCmd.GroupID = "manage"
