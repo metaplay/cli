@@ -57,11 +57,11 @@ func init() {
 			metaplay get aws-credentials tough-falcons --format json
 
 			# Example of using the credentials with AWS CLI (bash):
-			# eval $(metaplay get aws-credentials tough-falcons --format json | jq -r '
-			#   "export AWS_ACCESS_KEY_ID=\(.AccessKeyID)
-			#    export AWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)
-			#    export AWS_SESSION_TOKEN=\(.SessionToken)"
-			# ')
+			eval $(metaplay get aws-credentials tough-falcons --format json | jq -r '
+			  "export AWS_ACCESS_KEY_ID=\(.AccessKeyId)
+			   export AWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)
+			   export AWS_SESSION_TOKEN=\(.SessionToken)"
+			')
 		`),
 		Run: runCommand(&o),
 	}
