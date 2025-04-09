@@ -50,7 +50,6 @@ jobs:
       - name: Push Chocolatey artifacts to choco-packages repo
         run: |
           $version = "${{ github.ref_name }}"
-          $chocoArtifactsDir = "dist/chocolatey"
 
           # Clone the choco-packages repository
           git config --global user.name "MetaplayBot"
@@ -63,8 +62,8 @@ jobs:
             New-Item -ItemType Directory -Path $targetDir -Force
           }
 
-          # Copy Chocolatey artifacts to the repo
-          Copy-Item -Path "$chocoArtifactsDir/*" -Destination $targetDir -Recurse -Force
+          # Copy Chocolatey artifacts to the repo - use specific nupkg pattern to match only Chocolatey packages
+          Copy-Item -Path "dist/*.nupkg" -Destination $targetDir -Force
 
           # Commit and push changes
           cd choco-packages
