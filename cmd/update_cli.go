@@ -40,19 +40,19 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 	if err != nil {
-		return fmt.Errorf("Failed to initialize the Metaplay CLI updater source")
+		return fmt.Errorf("Failed to initialize the Metaplay CLI updater source: %w", err)
 	}
 
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
 		Source: source,
 	})
 	if err != nil {
-		return fmt.Errorf("Failed to initialize the Metaplay CLI updater")
+		return fmt.Errorf("Failed to initialize the Metaplay CLI updater: %w", err)
 	}
 
 	latest, found, err := updater.DetectLatest(context.Background(), selfupdate.ParseSlug("metaplay/cli"))
 	if err != nil {
-		return fmt.Errorf("Failed to detect the latest Metaplay CLI version")
+		return fmt.Errorf("Failed to detect the latest Metaplay CLI version: %w", err)
 	}
 	if !found {
 		log.Info().Msgf("No newer Metaplay CLI version found")
@@ -64,11 +64,11 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 	// A PR has been made for the `go-selfupdate` library: https://github.com/creativeprojects/go-selfupdate/pull/46
 	exe, err := pathutil.GetExecutablePath()
 	if err != nil {
-		return fmt.Errorf("Could not determine the Metaplay CLI executable path")
+		return fmt.Errorf("Could not determine the Metaplay CLI executable path: %w", err)
 	}
 
 	if err := updater.UpdateTo(context.Background(), latest, exe); err != nil {
-		return fmt.Errorf("Failed to update the Metaplay CLI binary")
+		return fmt.Errorf("Failed to update the Metaplay CLI binary: %w", err)
 	}
 
 	log.Info().Msg("")
