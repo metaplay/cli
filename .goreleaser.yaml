@@ -13,6 +13,11 @@ release:
   replace_existing_artifacts: true
   mode: replace
 
+# Ignore all dev release tags
+git:
+  ignore_tags:
+    - '*-*'
+
 builds:
   - binary: metaplay
     env:

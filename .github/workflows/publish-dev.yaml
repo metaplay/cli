@@ -15,7 +15,7 @@ permissions:
 # Only allow running one instance at a time to ensure git tags increment correctly
 concurrency:
   group: ${{ github.workflow }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish-dev:
