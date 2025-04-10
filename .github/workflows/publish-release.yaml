@@ -63,14 +63,13 @@ jobs:
           git config --global user.email "info@metaplay.io"
           git clone https://MetaplayBot:${{ steps.secrets.outputs.METAPLAYBOT_GITHUB_TOKEN }}@github.com/metaplay/choco-packages.git
 
-          # Create version directory if it doesn't exist
-          $targetDir = "choco-packages/metaplay/$version"
+          $targetDir = "choco-packages/metaplay"
           if (-not (Test-Path $targetDir)) {
             New-Item -ItemType Directory -Path $targetDir -Force
           }
 
           # Copy Chocolatey artifacts to the repo - use specific nupkg pattern to match only Chocolatey packages
-          Copy-Item -Path "dist/*.nupkg" -Destination $targetDir -Force
+          Copy-Item -Path "dist/metaplay.choco/*" -Destination $targetDir -Recurse -Force
 
           # Commit and push changes
           cd choco-packages
