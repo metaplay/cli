@@ -34,11 +34,11 @@ scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
 ```
 
-Using Chocolatey, with Metaplay as a custom package source (the package on the public feed is outdated due to the review process taking really long):
+Using Chocolatey the package installed from the public feed is most likely outdated, as the review process is manual and very slow. Therefore, we recommend running the CLI's built-in update command immediately after installing:
 
 ```bash
-choco source add --name metaplay --source https://github.com/metaplay/choco-packages
 choco install metaplay
+metaplay update cli
 ```
 
 ### On Linux
