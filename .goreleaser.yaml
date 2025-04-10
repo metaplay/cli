@@ -14,9 +14,10 @@ release:
   mode: replace
 
 # Ignore all dev release tags
+# Note: GoReleaser doesn't seem to respect this so also manually deleting all the dev tags in the CI job
 git:
   ignore_tags:
-    - '*-*'
+    - "*-dev*"
 
 builds:
   - binary: metaplay

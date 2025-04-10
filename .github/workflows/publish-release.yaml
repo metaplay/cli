@@ -37,6 +37,13 @@ jobs:
             metaplay/data/ci/metaplaybot-github metaplay_cli_release | METAPLAYBOT_GITHUB_TOKEN;
             metaplay/data/ci/metaplaybot-github chocolatey_api_key | METAPLAYBOT_CHOCO_API_KEY;
 
+      # Remove all the dev release tags as GoReleaser seems to easily trip up on them if the
+      # HEAD has a dev tag in addition to the official release tag that we want.
+      - name: Remove local pre-release tags
+        run: |
+          # List tags matching '*-dev*' and delete them locally
+          git tag -l '*-dev*' | ForEach-Object { git tag -d $_ }
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         env:
