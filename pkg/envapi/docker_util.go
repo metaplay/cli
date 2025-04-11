@@ -16,6 +16,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	version "github.com/hashicorp/go-version"
 )
 
 // Metadata about a Metaplay docker image.
@@ -125,12 +126,43 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
 // that have the 'io.metaplay.project_id' label matching the provided projectID.
 func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
-	// Create a new Docker client
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	// Create a new Docker client, enabling API version negotiation
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 	defer cli.Close()
+
+	// Check Docker daemon connectivity and API version compatibility
+	ctx := context.Background()
+	ping, err := cli.Ping(ctx)
+	if err != nil {
+		// Check if the error is due to daemon not running or inaccessible
+		if client.IsErrConnectionFailed(err) {
+			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible?")
+		}
+		return nil, fmt.Errorf("failed to ping Docker daemon: %w", err)
+	}
+
+	// Compare daemon API version (max supported) with the client's negotiated version.
+	// The client attempts to use its version, which must be <= the daemon's max version.
+	clientAPIVersion := cli.ClientVersion()
+	daemonMaxAPIVersion := ping.APIVersion
+
+	clientVsn, errClient := version.NewVersion(clientAPIVersion)
+	daemonMaxVsn, errDaemon := version.NewVersion(daemonMaxAPIVersion)
+
+	if errClient != nil || errDaemon != nil {
+		// Fallback to basic string comparison if semantic version parsing fails
+		if clientAPIVersion > daemonMaxAPIVersion {
+			return nil, fmt.Errorf("docker daemon API version %s is too old. This CLI requires the daemon to support at least API version %s. Please update your Docker daemon", daemonMaxAPIVersion, clientAPIVersion)
+		}
+	} else {
+		// Proper semantic version comparison
+		if clientVsn.GreaterThan(daemonMaxVsn) {
+			return nil, fmt.Errorf("docker daemon API version %s is too old. This CLI requires the daemon to support at least API version %s. Please update your Docker daemon", daemonMaxAPIVersion, clientAPIVersion)
+		}
+	}
 
 	// Create filter for the project ID label
 	filterArgs := filters.NewArgs()
