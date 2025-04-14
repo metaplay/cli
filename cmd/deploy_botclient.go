@@ -78,7 +78,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-botclients.yaml'")
 }
 
 func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -122,7 +122,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
-		helmChartVersion := project.Config.ServerChartVersion
+		helmChartVersion := project.Config.BotClientChartVersion
 		if o.flagHelmChartVersion != "" {
 			helmChartVersion = o.flagHelmChartVersion
 		}
