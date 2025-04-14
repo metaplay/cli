@@ -197,7 +197,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	}
 	platform := fmt.Sprintf("linux/%s", o.flagArchitecture)
 
-	// Check that docker is installed and running with a 5 second timeout
+	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
 	err = checkDockerAvailable()
 	if err != nil {
@@ -404,13 +404,25 @@ func checkDockerAvailable() error {
 		done <- checkCommand("docker", "info")
 	}()
 
+	// Wait for docker to reponds .. print a waiting message after 1sec
 	select {
 	case err := <-done:
 		if err != nil {
 			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
 		}
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("timeout while checking for docker. Ensure docker is running and responsive.")
+		return nil
+	case <-time.After(time.Second):
+		log.Info().Msgf("Waiting for docker daemon to respond...")
+	}
+
+	// Wait for 9sec more (for total of 10sec) before timing out
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
+		}
+	case <-time.After(9 * time.Second):
+		return fmt.Errorf("timeout while invoking docker. Ensure docker is running and responsive.")
 	}
 
 	return nil

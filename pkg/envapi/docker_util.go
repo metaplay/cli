@@ -17,6 +17,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	version "github.com/hashicorp/go-version"
+	"github.com/rs/zerolog/log"
 )
 
 // Metadata about a Metaplay docker image.
@@ -126,6 +127,8 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
 // that have the 'io.metaplay.project_id' label matching the provided projectID.
 func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
+	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
+
 	// Create a new Docker client, enabling API version negotiation
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {

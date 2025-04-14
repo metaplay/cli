@@ -127,6 +127,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
+	// Check that docker is installed and running
+	log.Debug().Msgf("Check if docker is available")
+	err = checkDockerAvailable()
+	if err != nil {
+		return err
+	}
+
 	// Validate Helm chart reference.
 	var chartVersionConstraints version.Constraints = nil
 	if o.flagHelmChartLocalPath != "" {
