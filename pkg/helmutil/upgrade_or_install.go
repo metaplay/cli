@@ -36,8 +36,8 @@ func HelmUpgradeOrInstall(
 	// Pipe Helm output to task output
 	actionConfig.Log = func(format string, args ...interface{}) {
 		// Render line and trim any trailing line endings
-		line := fmt.Sprintf(format, args)
-		line = strings.TrimRight(line, "\n")
+		line := fmt.Sprintf(format, args...)
+		line = strings.TrimRight(line, "\r\n")
 		output.AppendLine(line)
 	}
 
