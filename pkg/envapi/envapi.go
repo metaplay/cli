@@ -15,28 +15,30 @@ type DeploymentSecret struct {
 }
 
 type Deployment struct {
-	AdminHostname                  string   `json:"admin_hostname"`
-	AdminTlsCert                   string   `json:"admin_tls_cert"`
-	AwsRegion                      string   `json:"aws_region"`
-	CdnDistributionArn             string   `json:"cdn_distribution_arn"`
-	CdnDistributionId              string   `json:"cdn_distribution_id"`
-	CdnS3Fqdn                      string   `json:"cdn_s3_fqdn"`
-	EcrRepo                        string   `json:"ecr_repo"`
-	GameserverAdminIamRole         string   `json:"gameserver_admin_iam_role"`
-	GameserverIamRole              string   `json:"gameserver_iam_role"`
-	GameserverServiceAccount       string   `json:"gameserver_service_account"`
-	KubernetesNamespace            string   `json:"kubernetes_namespace"`
-	MetaplayInfraVersion           string   `json:"metaplay_infra_version"`
-	MetaplayRequiredSdkVersion     string   `json:"metaplay_required_sdk_version"`
-	MetaplaySupportedChartVersions []string `json:"metaplay_supported_chart_versions"`
-	S3BucketPrivate                string   `json:"s3_bucket_private"`
-	S3BucketPublic                 string   `json:"s3_bucket_public"`
-	ServerHostname                 string   `json:"server_hostname"`
-	ServerPorts                    []int    `json:"server_ports"`
-	ServerTlsCert                  string   `json:"server_tls_cert"`
-	TenantEnvironment              string   `json:"tenant_environment"`
-	TenantOrganization             string   `json:"tenant_organization"`
-	TenantProject                  string   `json:"tenant_project"`
+	AdminHostname            string `json:"admin_hostname"`
+	AdminTlsCert             string `json:"admin_tls_cert"`
+	AwsRegion                string `json:"aws_region"`
+	CdnDistributionArn       string `json:"cdn_distribution_arn"`
+	CdnDistributionId        string `json:"cdn_distribution_id"`
+	CdnS3Fqdn                string `json:"cdn_s3_fqdn"`
+	EcrRepo                  string `json:"ecr_repo"`
+	GameserverAdminIamRole   string `json:"gameserver_admin_iam_role"`
+	GameserverIamRole        string `json:"gameserver_iam_role"`
+	GameserverServiceAccount string `json:"gameserver_service_account"`
+	KubernetesNamespace      string `json:"kubernetes_namespace"`
+	MetaplayInfraVersion     string `json:"metaplay_infra_version"`
+	S3BucketPrivate          string `json:"s3_bucket_private"`
+	S3BucketPublic           string `json:"s3_bucket_public"`
+	ServerHostname           string `json:"server_hostname"`
+	ServerPorts              []int  `json:"server_ports"`
+	ServerTlsCert            string `json:"server_tls_cert"`
+
+	// Deprecated fields -- still included in the response but should not be used!
+	// MetaplayRequiredSdkVersion     string   `json:"metaplay_required_sdk_version"`
+	// MetaplaySupportedChartVersions []string `json:"metaplay_supported_chart_versions"`
+	// TenantEnvironment              string   `json:"tenant_environment"`
+	// TenantOrganization             string   `json:"tenant_organization"`
+	// TenantProject                  string   `json:"tenant_project"`
 }
 
 type OAuth2Client struct {
