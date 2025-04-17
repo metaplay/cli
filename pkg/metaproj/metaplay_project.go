@@ -568,10 +568,10 @@ func ValidateProjectID(id string) error {
 // ValidateEnvironmentID checks whether the given environment ID is valid.
 // Rules for all hosting types:
 // - Must be between 2 and 50 characters.
-// - Must only contain alphanumeric characters and dashes.
+// - Must only contain lowercase alphanumeric characters and dashes.
 // For Metaplay-hosted environments:
-// - Must be dash-separated parts with alphanumeric characters only in segments.
-// - There can be 2 to 4 segments
+// - Must be dash-separated segments, with 2 to 4 segments allowed.
+// - Each segment must consist of lowercase alphanumeric characters.
 // - Examples: 'tiny-squids' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
 // For self-hosted environments, only the global checks are applied.
 func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
@@ -588,7 +588,7 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	}
 
 	// Only alphanumeric characters and dashes are allowed.
-	validChars := regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	validChars := regexp.MustCompile(`^[a-z0-9-]+$`)
 	if !validChars.MatchString(id) {
 		return fmt.Errorf("environment ID '%s' contains invalid characters - only alphanumeric characters and dashes are allowed", id)
 	}
@@ -610,7 +610,16 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 			}
 		}
 	} else if hostingType == portalapi.HostingTypeSelfHosted {
-		// No further rules for self-hosted stacks.
+		// Cannot start or end with a dash.
+		if strings.HasPrefix(id, "-") {
+			return fmt.Errorf("environment ID '%s' cannot start with a dash", id)
+		}
+		if strings.HasSuffix(id, "-") {
+			return fmt.Errorf("environment ID '%s' cannot end with a dash", id)
+		}
+		if strings.Contains(id, "--") {
+			return fmt.Errorf("environment ID '%s' cannot contain consecutive dashes", id)
+		}
 	}
 
 	return nil

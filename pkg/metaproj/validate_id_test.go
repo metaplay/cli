@@ -3,7 +3,11 @@
  */
 package metaproj
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/metaplay/cli/pkg/portalapi"
+)
 
 func TestValidateProjectID(t *testing.T) {
 	tests := []struct {
@@ -76,7 +80,7 @@ func TestValidateProjectID(t *testing.T) {
 	}
 }
 
-func TestValidateEnvironmentID(t *testing.T) {
+func TestValidateManagedEnvironmentID(t *testing.T) {
 	tests := []struct {
 		input   string
 		isValid bool
@@ -147,7 +151,87 @@ func TestValidateEnvironmentID(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			result := ValidateEnvironmentID(test.input)
+			result := ValidateEnvironmentID(portalapi.HostingTypeMetaplayHosted, test.input)
+			didSucceed := result == nil
+			if didSucceed != test.isValid {
+				t.Errorf("For input '%s', expected %v but got %v", test.input, test.isValid, result)
+			}
+		})
+	}
+}
+
+func TestValidateSelfHostedEnvironmentID(t *testing.T) {
+	tests := []struct {
+		input   string
+		isValid bool
+	}{
+		// Valid cases: 2-40 chars, lowercase alphanumeric and dashes, dashes only in the middle
+		{"ab", true},
+		{"abc", true},
+		{"a-b", true},
+		{"abc-def", true},
+		{"a1b2c3", true},
+		{"abc123", true},
+		{"abc-def-123", true},
+		{"a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-q-r-s-t-u-v-w-x-y-z-1-2-3-4-5-6-7-8-9-0", false}, // too long (>40)
+		{"a", false}, // too short
+		{"abcdefghijklmnopqrstuvwxyz0123456789abcd", true}, // exactly 40 chars
+
+		// Dashes only in the middle, no consecutive dashes
+		{"-abc", false}, // cannot start with dash
+		{"abc-", false}, // cannot end with dash
+		{"a--b", false},
+		{"a---b", false},
+		{"a-b-c-d-e-f-g-h-i-j", true},
+
+		// Invalid: uppercase
+		{"Abcdef", false},
+		{"ABCDEF", false},
+		{"abcDef", false},
+		{"abc-DEF", false},
+
+		// Invalid: symbols
+		{"abc_def", false},
+		{"abc.def", false},
+		{"abc+def", false},
+		{"abc@def", false},
+		{"abc#def", false},
+		{"abc$def", false},
+		{"abc!def", false},
+		{"abc%def", false},
+		{"abc^def", false},
+		{"abc&def", false},
+		{"abc*def", false},
+		{"abc(def", false},
+		{"abc)def", false},
+		{"abc=def", false},
+		{"abc~def", false},
+		{"abc`def", false},
+		{"abc[def", false},
+		{"abc]def", false},
+		{"abc{def", false},
+		{"abc}def", false},
+		{"abc|def", false},
+		{"abc\\def", false},
+		{"abc/def", false},
+		{"abc:def", false},
+		{"abc;def", false},
+		{"abc'def", false},
+		{"abc\"def", false},
+		{"abc<def", false},
+		{"abc>def", false},
+		{"abc,def", false},
+		{"abc?def", false},
+
+		// Edge cases
+		{"", false},
+		{"-", false},
+		{"--", false}, // still invalid
+	}
+
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			result := ValidateEnvironmentID(portalapi.HostingTypeSelfHosted, test.input)
 			didSucceed := result == nil
 			if didSucceed != test.isValid {
 				t.Errorf("For input '%s', expected %v but got %v", test.input, test.isValid, result)

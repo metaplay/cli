@@ -99,7 +99,7 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderSuccess("✅ Successfully updated environments!"))
+	log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
 	return nil
 }
 
