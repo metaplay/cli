@@ -6,6 +6,7 @@ package envapi
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/docker/docker/api/types/filters"
@@ -22,6 +23,7 @@ import (
 
 // Metadata about a Metaplay docker image.
 type MetaplayImageInfo struct {
+	ImageId     string        // Docker image ID
 	Name        string        // Image name (generally project ID for local projects), empty for remote projects.
 	RepoTag     string        // Eg, 'lovely-wombats-build:12345678'.
 	Tag         string        // Image tag (eg, Git hash).
@@ -32,7 +34,7 @@ type MetaplayImageInfo struct {
 	ConfigFile  v1.ConfigFile // Docker metadata.
 }
 
-func newMetaplayImageInfo(repoTag, tag string, configFile v1.ConfigFile) (*MetaplayImageInfo, error) {
+func newMetaplayImageInfo(imageId, repoTag, tag string, configFile v1.ConfigFile) (*MetaplayImageInfo, error) {
 	// Extract required labels
 	projectID, ok := configFile.Config.Labels["io.metaplay.project_id"]
 	if !ok {
@@ -56,6 +58,7 @@ func newMetaplayImageInfo(repoTag, tag string, configFile v1.ConfigFile) (*Metap
 
 	// Create and return the MetaplayImageInfo
 	return &MetaplayImageInfo{
+		ImageId:     imageId,
 		Name:        projectID, // Use projectID as name for local images
 		RepoTag:     repoTag,
 		Tag:         tag,
@@ -126,6 +129,7 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
 // that have the 'io.metaplay.project_id' label matching the provided projectID.
+// The images are returned in a timestamp order, latest first (highest timestamp first).
 func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
 	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
 
@@ -214,7 +218,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 
 			// Convert ConfigFile to MetaplayImageInfo
 			// log.Info().Msgf("REF: context=%s, identifier=%s, name=%s", ref.Context(), ref.Identifier(), ref.Name())
-			imageInfo, err := newMetaplayImageInfo(repoTag, ref.Identifier(), *cfg)
+			imageInfo, err := newMetaplayImageInfo(img.ID, repoTag, ref.Identifier(), *cfg)
 			if err != nil {
 				continue // Skip images with missing required labels
 			}
@@ -223,6 +227,22 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 			// break // Found a match for this image, no need to check other tags
 		}
 	}
+
+	// Sort latest image first
+	slices.SortFunc(matchingImages, func(a, b MetaplayImageInfo) int {
+		// First sort by image time, latest first
+		if imgCmp := a.ConfigFile.Created.Time.Compare(b.ConfigFile.Created.Time); imgCmp != 0 {
+			return -imgCmp
+		}
+		if a.ImageId == b.ImageId {
+			// Within the same image, sort by tag largest first. The intention is that tags commonly represent a
+			// timestamp in a sortable format. Sort the latest tag first.
+			if tagCmp := strings.Compare(a.Tag, b.Tag); tagCmp != 0 {
+				return -tagCmp
+			}
+		}
+		return 0
+	})
 
 	return matchingImages, nil
 }
