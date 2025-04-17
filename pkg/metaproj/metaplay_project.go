@@ -335,9 +335,6 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.Type == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
 		}
-		if err := ValidateEnvironmentID(envConfig.HumanID); err != nil {
-			return fmt.Errorf("environment '%s' specified invalid 'humanId': %w", envName, err)
-		}
 		if envConfig.ServerValuesFile != "" {
 			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
 			if err != nil {
