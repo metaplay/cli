@@ -189,11 +189,25 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 		// Update an existing node or append a new node to the end.
 		if foundIndex == -1 {
-			log.Info().Msgf("%s Add new environment '%s'", styles.RenderSuccess("+"), styles.RenderTechnical(portalEnv.HumanID))
+			log.Info().Msgf("%s Add new environment %s", styles.RenderSuccess("+"), styles.RenderTechnical(portalEnv.HumanID))
 			seqNode.Values = append(seqNode.Values, envAST.Docs[0].Body)
 		} else {
-			log.Info().Msgf("%s Update existing environment '%s'", styles.RenderSuccess("*"), styles.RenderTechnical(portalEnv.HumanID))
+			log.Info().Msgf("%s Update existing environment %s", styles.RenderSuccess("*"), styles.RenderTechnical(portalEnv.HumanID))
 			seqNode.Values[foundIndex] = envAST.Docs[0].Body
+		}
+	}
+
+	// Find any deleted environments. Only show a message if there are any.
+	for _, envConfig := range project.Config.Environments {
+		found := false
+		for _, newEnv := range newPortalEnvironments {
+			if newEnv.HumanID == envConfig.HumanID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Info().Msgf("%s Environment %s does not exist in portal; remove manually from metaplay-project.yaml if not needed", styles.RenderError("-"), styles.RenderTechnical(envConfig.HumanID))
 		}
 	}
 
