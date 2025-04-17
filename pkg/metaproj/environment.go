@@ -35,6 +35,7 @@ var environmentTypeToRuntimeOptionsFileMapping = map[portalapi.EnvironmentType]s
 // Note: When adding new fields, remember to update ValidateProjectConfig().
 type ProjectEnvironmentConfig struct {
 	Name                string                    `yaml:"name"`                          // Name of the environment.
+	HostingType         portalapi.HostingType     `yaml:"hostingType"`                   // Type of hosting for the environment (Metaplay-hosted vs self-hosted)
 	HumanID             string                    `yaml:"humanId"`                       // Stable human ID of the environment. Also the Kubernetes namespace.
 	Type                portalapi.EnvironmentType `yaml:"type"`                          // Type of the environment (eg, development, Staging, production).
 	StackDomain         string                    `yaml:"stackDomain"`                   // Stack base domain (eg, 'p1.metaplay.io').

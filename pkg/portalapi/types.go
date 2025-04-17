@@ -38,6 +38,14 @@ const (
 	EnvironmentTypeProduction  EnvironmentType = "production"
 )
 
+// Type of hosting for an environment (Metaplay-hosted vs self-hosted)
+type HostingType string
+
+const (
+	HostingTypeMetaplayHosted HostingType = "metaplay-hosted"
+	HostingTypeSelfHosted     HostingType = "self-hosted"
+)
+
 // Client represents a Portal API client that handles authentication and requests.
 type Client struct {
 	httpClient *metahttp.Client
@@ -81,6 +89,7 @@ type EnvironmentInfo struct {
 	HumanID     string          `json:"human_id"`     // Immutable human-readable identifier, eg, 'tiny-squids'
 	EnvDomain   string          `json:"env_domain"`   // Domain that the environment uses
 	StackDomain string          `json:"stack_domain"` // Domain of the infra stack
+	HostingType HostingType     `json:"hosting_type"`
 	// Slug        string          `json:"slug"`         // Slug for the environment (simplified version of name)
 }
 
