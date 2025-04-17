@@ -117,14 +117,23 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  ID:                %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("  Type:              %s", styles.RenderTechnical(string(envConfig.Type)))
 	log.Info().Msgf("  Stack domain:      %s", styles.RenderTechnical(envConfig.StackDomain))
-	log.Info().Msg("Deployment info:")
-	log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
-	log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
-	// Print image name/tag from chart values
-	if imageTag, ok := existingRelease.Config["image"].(map[string]interface{})["tag"].(string); ok {
-		log.Info().Msgf("  Image tag:         %s", styles.RenderTechnical(imageTag))
+	if existingRelease != nil {
+		log.Info().Msg("Deployment info:")
+		log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
+		log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
+		// Print image name/tag from chart values
+		if imageTag, ok := existingRelease.Config["image"].(map[string]interface{})["tag"].(string); ok {
+			log.Info().Msgf("  Image tag:         %s", styles.RenderTechnical(imageTag))
+		} else {
+			log.Info().Msg("  Image tag:         <not available>")
+		}
 	}
 	log.Info().Msg("")
+
+	if existingRelease == nil {
+		log.Info().Msg(styles.RenderAttention("No deployment found in environment, skipping tests."))
+		return nil
+	}
 
 	taskRunner := tui.NewTaskRunner()
 
