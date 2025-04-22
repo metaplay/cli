@@ -19,6 +19,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
@@ -415,6 +416,18 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 	// \todo list of runtime options files
 	log.Info().Msg("")
+
+	// Check if the existing release is in some kind of pending state
+	if existingRelease != nil {
+		releaseName := existingRelease.Name
+		releaseStatus := existingRelease.Info.Status
+		if releaseStatus == release.StatusUninstalling {
+			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with 'metaplay remove server'", releaseName)
+		} else if releaseStatus.IsPending() {
+			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the server with 'metaplay remove server'", releaseName, releaseStatus)
+		}
+		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
+	}
 
 	taskRunner := tui.NewTaskRunner()
 
