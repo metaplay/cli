@@ -4,10 +4,13 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -75,24 +78,48 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Remove Game Server"))
+	log.Info().Msg("")
+
 	// Resolve all deployed game server Helm releases.
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayGameServerChartName)
+	if err != nil {
+		return fmt.Errorf("failed to resolve existing Helm releases: %v", err)
+	}
+
+	// If no releases found, exit.
 	if len(helmReleases) == 0 {
-		log.Error().Msgf("No game server deployment found")
+		log.Info().Msgf("No game server deployment found in environment, nothing to do.")
 		os.Exit(0)
 	}
 
-	// Uninstall all Helm releases (multiple releases should not happen but are possible).
-	for _, release := range helmReleases {
-		log.Info().Msgf("Remove release %s...", release.Name)
-
-		err := helmutil.UninstallRelease(actionConfig, release)
-		if err != nil {
-			log.Error().Msgf("Failed to uninstall Helm release %s: %v", release.Name, err)
-			os.Exit(1)
-		}
+	// Warn about multiple game server deployments (can happen if deploying manually or with old CLI).
+	if len(helmReleases) > 1 {
+		log.Warn().Msgf("Multiple game server deployments found in environment, removing them all.")
 	}
 
-	log.Info().Msgf("Successfully removed game server deployment")
+	// Uninstall all Helm releases using task runner.
+	taskRunner := tui.NewTaskRunner()
+
+	for _, release := range helmReleases {
+		taskRunner.AddTask(fmt.Sprintf("Uninstall Helm release %s", release.Name), func(output *tui.TaskOutput) error {
+			output.SetHeaderLines([]string{
+				fmt.Sprintf("Release status: %s", release.Info.Status),
+			})
+			err := helmutil.UninstallRelease(actionConfig, release)
+			if err != nil {
+				return fmt.Errorf("failed to uninstall Helm release %s: %v", release.Name, err)
+			}
+			return nil
+		})
+	}
+
+	// Run the tasks.
+	if err = taskRunner.Run(); err != nil {
+		return err
+	}
+
+	log.Info().Msg("✅ Successfully removed game server deployments")
 	return nil
 }
