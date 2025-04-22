@@ -18,6 +18,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 const metaplayLoadTestChartName = "metaplay-loadtest"
@@ -236,15 +237,28 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Show info.
-	log.Info().Msgf("Environment ID:     %s", styles.RenderTechnical(envConfig.HumanID))
-	log.Info().Msgf("Environment name:   %s", styles.RenderTechnical(envConfig.Name))
-	log.Info().Msgf("Environment type:   %s", styles.RenderTechnical(string(envConfig.Type)))
-	log.Info().Msgf("Docker image tag:   %s", styles.RenderTechnical(o.argImageTag))
-	log.Info().Msgf("Helm chart version: %s", styles.RenderTechnical(useHelmChartVersion))
-	log.Info().Msgf("Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
-	log.Info().Msgf("Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
-	log.Info().Msgf("Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
+	log.Info().Msg("Target environment:")
+	log.Info().Msgf("  Name:               %s", styles.RenderTechnical(envConfig.Name))
+	log.Info().Msgf("  ID:                 %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("  Type:               %s", styles.RenderTechnical(string(envConfig.Type)))
+	log.Info().Msg("Build information:")
+	log.Info().Msgf("  Image tag:          %s", styles.RenderTechnical(o.argImageTag))
+	log.Info().Msgf("Deployment info:")
+	log.Info().Msgf("  Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
+	log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(coalesceString(strings.Join(valuesFiles, ", "), "none")))
 	log.Info().Msg("")
+
+	// Check if the existing release is in some kind of pending state
+	if existingRelease != nil {
+		releaseName := existingRelease.Name
+		releaseStatus := existingRelease.Info.Status
+		if releaseStatus == release.StatusUninstalling {
+			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the botclient with 'metaplay remove botclient'", releaseName)
+		} else if releaseStatus.IsPending() {
+			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the botclient with 'metaplay remove botclient'", releaseName, releaseStatus)
+		}
+		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
+	}
 
 	taskRunner := tui.NewTaskRunner()
 
