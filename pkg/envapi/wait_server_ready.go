@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,6 +89,11 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 		}
 	}
 
+	// Sort the shard sets by name to ensure consistent order in output.
+	sort.Slice(ownedSets, func(i, j int) bool {
+		return ownedSets[i].Name < ownedSets[j].Name
+	})
+
 	log.Debug().Msgf("Found %d matching StatefulSets", len(ownedSets))
 	return ownedSets, nil
 }
@@ -107,18 +113,23 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 	return pods.Items, nil
 }
 
+// shardPodStates holds the shard name and its pod states in order.
+type shardPodStates struct {
+	ShardName string
+	Pods      []*corev1.Pod
+}
+
 // Fetch all game server pods from a namespace for the given shardSets.
-// Return a map of shardName->[]pods. The per-shard arrays are of the length of
-// the expected pods in each shard and can contain nil values (for missing pods).
-func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, shardSets []appsv1.StatefulSet) (map[string][]*corev1.Pod, error) {
+// Return a slice of (shardName, []pods) in the same order as shardSets.
+func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, shardSets []appsv1.StatefulSet) ([]shardPodStates, error) {
 	// Fetch all gameserver pods in the namespace
 	pods, err := FetchGameServerPods(ctx, kubeCli)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve the pods for each shard set.
-	result := make(map[string][]*corev1.Pod, len(shardSets))
+	// Prepare ordered result
+	result := make([]shardPodStates, 0, len(shardSets))
 
 	// Check that all expected pods from StatefulSets exist.
 	for _, shardSet := range shardSets {
@@ -127,7 +138,6 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 
 		// Allocate a state for each expected pod in the stateful set.
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
-		result[shardSet.Name] = shardPods
 
 		// Check that all expected pods are found.
 		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
@@ -173,13 +183,18 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 						continue
 					}
 
+					// Store pod (found or not).
 					foundPod = &pod
+					break
 				}
 			}
-
-			// Store pod (found or not).
 			shardPods[shardNdx] = foundPod
 		}
+
+		result = append(result, shardPodStates{
+			ShardName: shardSet.Name,
+			Pods:      shardPods,
+		})
 	}
 
 	return result, nil
@@ -294,12 +309,12 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 	// Check that all pods belonging to all shards are ready.
 	allPodsReady := true
 	statusLines := []string{}
-	for shardSetName, shardSetPods := range podsByShard {
+	for _, shardPods := range podsByShard {
 		// Check that all expected pods are found.
-		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods)))
-		for podNdx, pod := range shardSetPods {
+		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardPods.ShardName, len(shardPods.Pods)))
+		for podNdx, pod := range shardPods.Pods {
 			// Check that the pod is healthy & ready.
-			podName := fmt.Sprintf("%s-%d", shardSetName, podNdx)
+			podName := fmt.Sprintf("%s-%d", shardPods.ShardName, podNdx)
 			if pod != nil {
 				status := resolvePodStatus(*pod)
 				statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s]", podName, status.Phase, status.Message))
