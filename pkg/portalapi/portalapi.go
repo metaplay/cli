@@ -17,7 +17,7 @@ import (
 // NewClient creates a new Portal API client with the given auth token set.
 func NewClient(tokenSet *auth.TokenSet) *Client {
 	return &Client{
-		httpClient: metahttp.NewClient(tokenSet, common.PortalBaseURL),
+		httpClient: metahttp.NewJsonClient(tokenSet, common.PortalBaseURL),
 		baseURL:    common.PortalBaseURL,
 		tokenSet:   tokenSet,
 	}

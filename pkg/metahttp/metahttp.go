@@ -21,11 +21,12 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
-// NewClient creates a new HTTP client with the given auth token set and base URL.
-func NewClient(tokenSet *auth.TokenSet, baseURL string) *Client {
+// NewJsonClient creates a new HTTP client with the given auth token set and base URL.
+func NewJsonClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	restyClient := resty.New().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
+		SetHeader("accept", "application/json").
 		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))
 	return &Client{
 		TokenSet: tokenSet,
@@ -81,7 +82,11 @@ func Request[TResponse any](c *Client, method string, url string, body interface
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		return result, fmt.Errorf("%s request to %s%s failed with status code %d", method, c.BaseURL, url, response.StatusCode())
+		// Print error details before return the error to keep the log more readable.
+		errorBody := string(response.Body())
+		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
+		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, errorBody)
+		return result, fmt.Errorf("%s %s failed (see above for details)", method, requestURL)
 	}
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext

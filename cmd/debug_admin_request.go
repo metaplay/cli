@@ -134,9 +134,9 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create a client for the admin API
+	// Create a client for the game server admin API
 	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
-	adminClient := metahttp.NewClient(tokenSet, adminAPIBaseURL)
+	adminClient := metahttp.NewJsonClient(tokenSet, adminAPIBaseURL)
 
 	// Prepare request body if needed
 	var requestBody interface{}

@@ -64,7 +64,7 @@ func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanId string) 
 		TokenSet:        tokenSet,
 		StackApiBaseURL: stackApiBaseURL,
 		HumanId:         humanId,
-		StackApiClient:  metahttp.NewClient(tokenSet, stackApiBaseURL),
+		StackApiClient:  metahttp.NewJsonClient(tokenSet, stackApiBaseURL),
 	}
 }
 
@@ -351,7 +351,7 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	}
 
 	awsCredentials.Version = 1
-	
+
 	return &awsCredentials, err
 }
 
