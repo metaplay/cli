@@ -70,7 +70,7 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 
 	// Print the info.
 	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", requiredDotnetVersion))
-	log.Info().Msgf(".NET SDK detected: %s %s %s", styles.RenderTechnical(installedVersion.String()), styles.RenderSuccess("✓"), badge)
+	log.Info().Msgf("%s .NET SDK detected: %s %s", styles.RenderSuccess("✓"), styles.RenderTechnical(installedVersion.String()), badge)
 
 	// Check that .NET version is recent enough
 	if installedVersion.LessThan(requiredDotnetVersion) {
