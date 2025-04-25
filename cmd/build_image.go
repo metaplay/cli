@@ -68,7 +68,7 @@ func init() {
 			metaplay build image mygame:364cff09 --engine=buildkit
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build image mygame:364cff09 --platform=arm64
+			metaplay build image mygame:364cff09 --architecture=arm64
 
 			# Pass extra arguments to the docker build.
 			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
