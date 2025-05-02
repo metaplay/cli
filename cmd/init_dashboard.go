@@ -119,7 +119,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
-	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}); err != nil {
+	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
 		log.Error().Msgf("Failed to run 'pnpm install': %s", err)
 		os.Exit(1)
 	}

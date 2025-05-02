@@ -109,7 +109,7 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	botClientPath := project.GetBotClientDir()
 
 	// Build the BotClient project
-	if err := execChildInteractive(botClientPath, "dotnet", []string{"build"}); err != nil {
+	if err := execChildInteractive(botClientPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
 		log.Error().Msgf("Failed to build the BotClient .NET project: %s", err)
 		os.Exit(1)
 	}
@@ -117,7 +117,7 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	// Run the project without rebuilding
 	botRunFlags := append([]string{"run", "--no-build"}, targetEnvFlags...)
 	botRunFlags = append(botRunFlags, o.extraArgs...)
-	if err := execChildInteractive(botClientPath, "dotnet", botRunFlags); err != nil {
+	if err := execChildInteractive(botClientPath, "dotnet", botRunFlags, commonDotnetEnvVars); err != nil {
 		log.Error().Msgf("BotClient exited with error: %s", err)
 		os.Exit(1)
 	}

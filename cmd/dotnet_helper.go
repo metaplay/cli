@@ -19,6 +19,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Environment variables to pass to all dotnet commands.
+var commonDotnetEnvVars = []string{"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true"}
+
 // Provide installation instructions based on the operating system
 func getDotnetInstallInstructions() string {
 	switch runtime.GOOS {
@@ -97,14 +100,20 @@ func execChildTask(workingDir string, binary string, args []string) error {
 }
 
 // Runs a child process in "interactive" mode where all inputs/outputs are forwarded
-// to the sub-process.
-func execChildInteractive(workingDir string, binary string, args []string) error {
+// to the sub-process. If extraEnv is specified, its contents are appended to the current
+// environment variables.
+func execChildInteractive(workingDir string, binary string, args []string, extraEnv []string) error {
 	// Create the command to run the .NET binary
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = workingDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
+	// If extraEnv is given, append it to the current process's env variables.
+	if extraEnv != nil {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	// Create a channel to forward signals to the subprocess
 	signalChan := make(chan os.Signal, 1)

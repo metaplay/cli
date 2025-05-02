@@ -79,13 +79,13 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	serverPath := project.GetServerDir()
 
 	// Build the game server .NET project.
-	if err := execChildInteractive(serverPath, "dotnet", []string{"build"}); err != nil {
+	if err := execChildInteractive(serverPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
 		return fmt.Errorf("failed to build the game server .NET project: %s", err)
 	}
 
 	// Run the game server (skip build).
 	runArgs := append([]string{"run", "--no-build"}, o.extraArgs...)
-	if err := execChildInteractive(serverPath, "dotnet", runArgs); err != nil {
+	if err := execChildInteractive(serverPath, "dotnet", runArgs, commonDotnetEnvVars); err != nil {
 		return fmt.Errorf("game server exited with error: %s", err)
 	}
 

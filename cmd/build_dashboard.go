@@ -68,7 +68,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	// Install dashboard dependencies if not skipped.
 	if !o.skipPnpm {
 		log.Info().Msg("Installing dashboard dependencies...")
-		if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {
+		if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
 			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
 			os.Exit(1)
 		}
@@ -78,7 +78,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Build the dashboard.
 	buildArgs := append([]string{"build"}, o.extraArgs...)
-	if err := execChildInteractive(dashboardPath, "pnpm", buildArgs); err != nil {
+	if err := execChildInteractive(dashboardPath, "pnpm", buildArgs, nil); err != nil {
 		log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
 		os.Exit(1)
 	}
