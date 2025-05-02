@@ -75,6 +75,9 @@ func (o *buildServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Server built successfully.
-	log.Info().Msgf("Server .NET project built successfully")
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderSuccess("✅ Game server built successfully"))
+	log.Info().Msg("")
+	log.Info().Msgf("To run the server, use: %s", styles.RenderPrompt("metaplay dev server"))
 	return nil
 }
