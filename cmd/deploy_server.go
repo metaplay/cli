@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -311,6 +312,26 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		if newAboveV080 != existingAboveV080 {
 			log.Info().Msgf("Going from Helm chart v%s to v%s. Must uninstall existing release before installing new one.", existingRelease.Chart.Metadata.Version, useHelmChartVersion)
 			uninstallExisting = true
+		}
+	}
+
+	// For Metaplay-managed environments, check that the local env config (from metaplay-project.yaml)
+	// matches the one from portal.
+	if envConfig.HostingType == portalapi.HostingTypeMetaplayHosted {
+		portalClient := portalapi.NewClient(targetEnv.TokenSet)
+
+		// Fetch info from the portal.
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		if err != nil {
+			return err
+		}
+
+		// Environment type (prod, staging, development) must match that in the portal.
+		// Otherwise, the game server will be using wrong environment type-specific defaults.
+		if envConfig.Type != portalInfo.Type {
+			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
+			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
+			os.Exit(1)
 		}
 	}
 
