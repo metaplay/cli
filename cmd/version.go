@@ -14,26 +14,26 @@ import (
 )
 
 // Show the version info of the application.
-type VersionOpts struct {
+type versionOpts struct {
 	flagFormat string
 }
 
-func init() {
-	o := VersionOpts{}
+var versionOpt = versionOpts{}
 
-	cmd := &cobra.Command{
-		Use:   "version",
-		Short: "Print the version information of this CLI",
-		Run:   runCommand(&o),
-	}
-
-	rootCmd.AddCommand(cmd)
-
-	flags := cmd.Flags()
-	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print the version information of this CLI",
+	Run:   runCommand(&versionOpt),
 }
 
-func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {
+func init() {
+	rootCmd.AddCommand(versionCmd)
+
+	flags := versionCmd.Flags()
+	flags.StringVar(&versionOpt.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
+}
+
+func (o *versionOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -41,7 +41,7 @@ func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *VersionOpts) Run(cmd *cobra.Command) error {
+func (o *versionOpts) Run(cmd *cobra.Command) error {
 	if o.flagFormat == "json" {
 		// Create structured version info with exported fields
 		type VersionInfo struct {
