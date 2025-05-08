@@ -18,19 +18,19 @@ type VersionOpts struct {
 	flagFormat string
 }
 
-var versionOpts = VersionOpts{}
-
-var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print the version information of this CLI",
-	Run:   runCommand(&versionOpts),
-}
-
 func init() {
-	rootCmd.AddCommand(versionCmd)
+	o := VersionOpts{}
 
-	flags := versionCmd.Flags()
-	flags.StringVar(&versionOpts.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
+	cmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print the version information of this CLI",
+		Run:   runCommand(&o),
+	}
+
+	rootCmd.AddCommand(cmd)
+
+	flags := cmd.Flags()
+	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
 }
 
 func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {

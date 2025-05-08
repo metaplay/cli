@@ -19,7 +19,7 @@ import (
 // \todo Implement cleaning up ephemeral containers from the target pod.
 // \todo Refactor to extract a common framework for the ephemeral containers; use for CPU profiles, too
 
-type CollectHeapDumpOpts struct {
+type debugCollectHeapDumpOpts struct {
 	UsePositionalArgs
 
 	argEnvironment  string
@@ -30,7 +30,7 @@ type CollectHeapDumpOpts struct {
 }
 
 func init() {
-	o := CollectHeapDumpOpts{}
+	o := debugCollectHeapDumpOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -85,7 +85,7 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip heap size warning and proceed with dump")
 }
 
-func (o *CollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate collection mode
 	if o.flagCollectMode != "gcdump" && o.flagCollectMode != "dump" {
 		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
@@ -112,7 +112,7 @@ func (o *CollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *CollectHeapDumpOpts) Run(cmd *cobra.Command) error {
+func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -181,7 +181,7 @@ func (o *CollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve heap dump - Uses Kubernetes API for exec
-func (o *CollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
+func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
 	// Set healthz probe to always return success before collecting dump
 	log.Info().Msgf("Setting healthz probe to Success mode...")
 	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,

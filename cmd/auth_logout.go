@@ -11,14 +11,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type LogoutOpts struct {
+type authLogoutOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
 }
 
 func init() {
-	o := LogoutOpts{}
+	o := authLogoutOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
@@ -41,11 +41,11 @@ func init() {
 	authCmd.AddCommand(cmd)
 }
 
-func (o *LogoutOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *authLogoutOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *LogoutOpts) Run(cmd *cobra.Command) error {
+func (o *authLogoutOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

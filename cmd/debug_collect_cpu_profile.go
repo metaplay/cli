@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type CollectCpuProfileOpts struct {
+type debugCollectCPUProfileOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -28,7 +28,7 @@ type CollectCpuProfileOpts struct {
 }
 
 func init() {
-	o := CollectCpuProfileOpts{}
+	o := debugCollectCPUProfileOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -80,7 +80,7 @@ func init() {
 	cmd.Flags().IntVar(&o.flagDuration, "duration", 30, "Duration of the trace in seconds")
 }
 
-func (o *CollectCpuProfileOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *debugCollectCPUProfileOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	validFormats := map[string]bool{
 		"nettrace":   true,
@@ -139,7 +139,7 @@ func (o *CollectCpuProfileOpts) Prepare(cmd *cobra.Command, args []string) error
 	return nil
 }
 
-func (o *CollectCpuProfileOpts) Run(cmd *cobra.Command) error {
+func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -197,7 +197,7 @@ func (o *CollectCpuProfileOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve CPU profile - Uses Kubernetes API for exec
-func (o *CollectCpuProfileOpts) collectAndRetrieveCpuProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
+func (o *debugCollectCPUProfileOpts) collectAndRetrieveCpuProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
 	// Set healthz probe to always return success before collecting profile
 	log.Info().Msgf("Setting healthz probe to Success mode...")
 	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,

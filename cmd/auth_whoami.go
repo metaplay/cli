@@ -15,7 +15,7 @@ import (
 )
 
 // Display information about the logged in user.
-type WhoamiOpts struct {
+type authWhoamiOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
@@ -23,7 +23,7 @@ type WhoamiOpts struct {
 }
 
 func init() {
-	o := WhoamiOpts{}
+	o := authWhoamiOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
@@ -62,7 +62,7 @@ func init() {
 	authCmd.AddCommand(cmd)
 }
 
-func (o *WhoamiOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *authWhoamiOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -71,7 +71,7 @@ func (o *WhoamiOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *WhoamiOpts) Run(cmd *cobra.Command) error {
+func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

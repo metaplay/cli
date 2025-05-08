@@ -12,14 +12,14 @@ import (
 )
 
 // Sign in a natural user to Metaplay Auth using the browser.
-type LoginOpts struct {
+type authLoginOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
 }
 
 func init() {
-	o := LoginOpts{}
+	o := authLoginOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
@@ -42,11 +42,11 @@ func init() {
 	authCmd.AddCommand(cmd)
 }
 
-func (o *LoginOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *authLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *LoginOpts) Run(cmd *cobra.Command) error {
+func (o *authLoginOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

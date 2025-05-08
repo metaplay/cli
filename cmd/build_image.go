@@ -18,7 +18,7 @@ import (
 )
 
 // Build docker image for the project.
-type buildDockerImageOpts struct {
+type buildImageOpts struct {
 	UsePositionalArgs
 
 	argImageName     string
@@ -30,7 +30,7 @@ type buildDockerImageOpts struct {
 }
 
 func init() {
-	o := buildDockerImageOpts{}
+	o := buildImageOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
@@ -85,7 +85,7 @@ func init() {
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
 }
 
-func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle image name.
 	if o.argImageName == "" {
 		o.argImageName = "<projectID>:<timestamp>"
@@ -99,7 +99,7 @@ func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error 
 	return nil
 }
 
-func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
+func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Build Docker Image"))
 	log.Info().Msg("")

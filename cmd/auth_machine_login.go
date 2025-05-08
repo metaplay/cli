@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type MachineLoginOpts struct {
+type authMachineLoginOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
@@ -21,7 +21,7 @@ type MachineLoginOpts struct {
 }
 
 func init() {
-	o := MachineLoginOpts{}
+	o := authMachineLoginOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
@@ -46,11 +46,11 @@ func init() {
 	flags.StringVar(&o.flagCredentials, "dev-credentials", "", "Machine login credentials (prefer passing credentials via the environment variable METAPLAY_CREDENTIALS for better security)")
 }
 
-func (o *MachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *authMachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
+func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
