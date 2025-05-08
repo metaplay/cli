@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package envapi
 
 // \todo Copy-pasted from StackAPI

@@ -3,13 +3,15 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package pathutil
 
 import (
 	"fmt"
-	"golang.org/x/sys/windows"
 	"os"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // GetExecutablePath returns the path of the executable file with all symlinks resolved.

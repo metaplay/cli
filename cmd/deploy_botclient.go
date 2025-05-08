@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 // \todo More configurability: number of replicas, number of bots, etc.
