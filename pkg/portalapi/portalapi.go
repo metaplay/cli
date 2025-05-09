@@ -90,14 +90,14 @@ func (c *Client) AgreeToContract(contractID string) error {
 	return nil
 }
 
-// DownloadSdkByVersionId downloads the SDK with the specified version ID to the target directory.
-func (c *Client) DownloadSdkByVersionId(targetDir, versionId string) (string, error) {
-	if versionId == "" {
+// DownloadSdkByVersionID downloads the SDK with the specified version ID to the target directory.
+func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, error) {
+	if versionID == "" {
 		return "", fmt.Errorf("version ID is required")
 	}
 
 	// Download the SDK to a temp file.
-	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionId)
+	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionID)
 	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
 	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
 	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath)
@@ -264,5 +264,5 @@ func (c *Client) DownloadLatestSdk(targetDir string) (string, error) {
 	}
 
 	// Download the SDK
-	return c.DownloadSdkByVersionId(targetDir, latestSdk.ID)
+	return c.DownloadSdkByVersionID(targetDir, latestSdk.ID)
 }

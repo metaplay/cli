@@ -175,11 +175,11 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	return nil
 }
 
-func MachineLogin(authProvider *AuthProviderConfig, clientId, clientSecret string) error {
+func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret string) error {
 	// Get a fresh access token from Metaplay Auth.
 	params := url.Values{
 		"grant_type":    {"client_credentials"},
-		"client_id":     {clientId},
+		"client_id":     {clientID},
 		"client_secret": {clientSecret},
 		"scope":         {"openid email profile offline_access"},
 	}

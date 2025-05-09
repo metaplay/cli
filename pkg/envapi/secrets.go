@@ -102,7 +102,7 @@ func (targetEnv *TargetEnvironment) ListSecrets(ctx context.Context) ([]corev1.S
 
 	// Fetch the secrets with the appropriate label from Kubernetes.
 	labelSelector := fmt.Sprintf("%s=%s", userSecretLabelName, userSecretLabelValue)
-	secrets, err := kubeCli.Clientset.CoreV1().Secrets(targetEnv.HumanId).List(ctx, metav1.ListOptions{
+	secrets, err := kubeCli.Clientset.CoreV1().Secrets(targetEnv.HumanID).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {

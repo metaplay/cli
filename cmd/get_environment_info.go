@@ -144,7 +144,7 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("")
 		log.Info().Msgf("OAuth2 client:")
 		log.Info().Msgf("  Domain:               %s", styles.RenderTechnical(oauth2Client.Domain))
-		log.Info().Msgf("  Client ID:            %s", styles.RenderTechnical(oauth2Client.ClientId))
+		log.Info().Msgf("  Client ID:            %s", styles.RenderTechnical(oauth2Client.ClientID))
 		log.Info().Msgf("  Email domain:         %s", styles.RenderTechnical(oauth2Client.EmailDomain))
 	}
 	return nil

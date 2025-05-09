@@ -78,11 +78,11 @@ func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	if clientId, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
+	if clientID, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
 		log.Error().Msg("Invalid format for credentials, you should copy-paste the value from the developer portal verbatim")
 		os.Exit(2)
 	} else {
-		err := auth.MachineLogin(authProvider, clientId, clientSecret)
+		err := auth.MachineLogin(authProvider, clientID, clientSecret)
 		if err != nil {
 			log.Error().Msgf("Machine login failed: %s", err)
 			os.Exit(1)

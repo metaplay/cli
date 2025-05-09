@@ -24,7 +24,7 @@ import (
 
 // Metadata about a Metaplay docker image.
 type MetaplayImageInfo struct {
-	ImageId     string        // Docker image ID
+	ImageID     string        // Docker image ID
 	Name        string        // Image name (generally project ID for local projects), empty for remote projects.
 	RepoTag     string        // Eg, 'lovely-wombats-build:12345678'.
 	Tag         string        // Image tag (eg, Git hash).
@@ -35,7 +35,7 @@ type MetaplayImageInfo struct {
 	ConfigFile  v1.ConfigFile // Docker metadata.
 }
 
-func newMetaplayImageInfo(imageId, repoTag, tag string, configFile v1.ConfigFile) (*MetaplayImageInfo, error) {
+func newMetaplayImageInfo(imageID, repoTag, tag string, configFile v1.ConfigFile) (*MetaplayImageInfo, error) {
 	// Extract required labels
 	projectID, ok := configFile.Config.Labels["io.metaplay.project_id"]
 	if !ok {
@@ -59,7 +59,7 @@ func newMetaplayImageInfo(imageId, repoTag, tag string, configFile v1.ConfigFile
 
 	// Create and return the MetaplayImageInfo
 	return &MetaplayImageInfo{
-		ImageId:     imageId,
+		ImageID:     imageID,
 		Name:        projectID, // Use projectID as name for local images
 		RepoTag:     repoTag,
 		Tag:         tag,
@@ -235,7 +235,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 		if imgCmp := a.ConfigFile.Created.Time.Compare(b.ConfigFile.Created.Time); imgCmp != 0 {
 			return -imgCmp
 		}
-		if a.ImageId == b.ImageId {
+		if a.ImageID == b.ImageID {
 			// Within the same image, sort by tag largest first. The intention is that tags commonly represent a
 			// timestamp in a sortable format. Sort the latest tag first.
 			if tagCmp := strings.Compare(a.Tag, b.Tag); tagCmp != 0 {

@@ -127,19 +127,19 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Auto-detect git commit ID
-	commitId := o.flagCommitID
-	commitIdBadge := ""
-	if commitId == "" {
-		commitId = detectEnvVar([]string{
+	commitID := o.flagCommitID
+	commitIDBadge := ""
+	if commitID == "" {
+		commitID = detectEnvVar([]string{
 			"GIT_COMMIT", "GITHUB_SHA", "CI_COMMIT_SHA", "CIRCLE_SHA1", "TRAVIS_COMMIT",
 			"BUILD_SOURCEVERSION", "BITBUCKET_COMMIT", "BUILD_VCS_NUMBER", "BUILDKITE_COMMIT", "DRONE_COMMIT_SHA",
 			"SEMAPHORE_GIT_SHA",
 		})
-		if commitId != "" {
-			commitIdBadge = styles.RenderMuted("(auto-detected)")
+		if commitID != "" {
+			commitIDBadge = styles.RenderMuted("(auto-detected)")
 		} else {
-			commitId = "none" // default if not specified
-			commitIdBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-id=<id>]")
+			commitID = "none" // default if not specified
+			commitIDBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-id=<id>]")
 		}
 	}
 
@@ -216,7 +216,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
-	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitId), commitIdBadge)
+	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
 	log.Info().Msgf("Target platform:     %s", styles.RenderTechnical(platform))
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
@@ -284,7 +284,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			"--build-arg", "METAPLAY_DOTNET_SDK_VERSION=" + projectDotnetVersion,
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
-			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitId),
+			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitID),
 		}...,
 	)
 	dockerArgs = append(dockerArgs, o.extraArgs...)

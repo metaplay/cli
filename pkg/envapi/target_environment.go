@@ -34,7 +34,7 @@ import (
 type TargetEnvironment struct {
 	TokenSet        *auth.TokenSet   // Tokens to use to access the environment.
 	StackApiBaseURL string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
-	HumanId         string           // Environment human ID, eg, 'tiny-squids'. Same as Kubernetes namespace.
+	HumanID         string           // Environment human ID, eg, 'tiny-squids'. Same as Kubernetes namespace.
 	StackApiClient  *metahttp.Client // HTTP client to access environment StackAPI.
 
 	primaryKubeClient *KubeClient       // Lazily initialized KubeClient.
@@ -58,19 +58,19 @@ type DockerCredentials struct {
 	RegistryURL string
 }
 
-func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanId string) *TargetEnvironment {
+func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
 	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
 		StackApiBaseURL: stackApiBaseURL,
-		HumanId:         humanId,
+		HumanID:         humanID,
 		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL),
 	}
 }
 
 func (target *TargetEnvironment) GetKubernetesNamespace() string {
-	return target.HumanId
+	return target.HumanID
 }
 
 // Get a Kubernetes client for the primary cluster.
@@ -166,7 +166,7 @@ func (target *TargetEnvironment) tryGetGameServerNewCR(ctx context.Context, kube
 	// Create and store gameserver CR wrapper instance.
 	log.Debug().Msgf("Found new gameserver CR: name=%s, resourceVersion=%s, UID=%s", newGameServerCR.GetName(), newGameServerCR.GetResourceVersion(), newGameServerCR.GetUID())
 	return &TargetGameServer{
-		Namespace:       target.HumanId,
+		Namespace:       target.HumanID,
 		GameServerNewCR: newGameServerCR,
 		Clusters:        clusters,
 		ShardSets:       shardSets,
@@ -204,7 +204,7 @@ func (target *TargetEnvironment) tryGetGameServerOldCR(ctx context.Context, kube
 
 	// Create and store gameserver CR wrapper instance.
 	return &TargetGameServer{
-		Namespace:       target.HumanId,
+		Namespace:       target.HumanID,
 		GameServerOldCR: gameserverCR,
 		Clusters:        clusters,
 		ShardSets:       shardSets,
@@ -249,7 +249,7 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 
 // Request details about an environment from the StackAPI.
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
-	path := fmt.Sprintf("/v0/deployments/%s", target.HumanId)
+	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
 	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
 	return &details, err
@@ -258,14 +258,14 @@ func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
 // Get a short-lived kubeconfig with the access credentials embedded in the kubeconfig file.
 func (target *TargetEnvironment) GetKubeConfigWithEmbeddedCredentials() (string, error) {
 	log.Debug().Msg("Fetching kubeconfig with embedded secret")
-	path := fmt.Sprintf("/v0/credentials/%s/k8s", target.HumanId)
+	path := fmt.Sprintf("/v0/credentials/%s/k8s", target.HumanID)
 	config, err := metahttp.Post[string](target.StackApiClient, path, nil)
 	return config, err
 }
 
 // Get the Kubernetes credentials in the execcredential format
 func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
-	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanId)
+	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
 	credentials, err := metahttp.Post[string](target.StackApiClient, path, nil)
 	return &credentials, err
 }
@@ -277,7 +277,7 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 * @returns The kubeconfig YAML.
  */
 func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
-	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanId)
+	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
 	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
 
 	credentials, err := metahttp.Post[KubeExecCredential](target.StackApiClient, path, nil)
@@ -304,13 +304,13 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 			{
 				Context: KubeConfigContextData{
 					Cluster:   credentials.Spec.Cluster.Server,
-					Namespace: target.HumanId,
+					Namespace: target.HumanID,
 					User:      userID,
 				},
-				Name: target.HumanId,
+				Name: target.HumanID,
 			},
 		},
-		CurrentContext: target.HumanId,
+		CurrentContext: target.HumanID,
 		Kind:           "Config",
 		Preferences:    make(map[string]any),
 		Users: []KubeConfigUser{
@@ -322,7 +322,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 						Args: []string{
 							"get",
 							"kubernetes-execcredential",
-							target.HumanId,
+							target.HumanID,
 							target.StackApiBaseURL,
 						},
 						ApiVersion:      "client.authentication.k8s.io/v1beta1",
@@ -339,7 +339,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 // Get AWS credentials against the target environment.
 // \todo migrate this into StackAPI -- AWS creds should not be given to the client
 func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
-	path := fmt.Sprintf("/v0/credentials/%s/aws", target.HumanId)
+	path := fmt.Sprintf("/v0/credentials/%s/aws", target.HumanID)
 	awsCredentials, err := metahttp.Post[AWSCredentials](target.StackApiClient, path, nil)
 	if err != nil {
 		return nil, err

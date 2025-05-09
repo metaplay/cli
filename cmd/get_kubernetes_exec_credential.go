@@ -15,7 +15,7 @@ import (
 type getKubernetesExecCredentialOpts struct {
 	UsePositionalArgs
 
-	argEnvironmentHumanId string
+	argEnvironmentHumanID string
 	argStackApiBaseURL    string
 }
 
@@ -23,7 +23,7 @@ func init() {
 	o := getKubernetesExecCredentialOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironmentHumanId, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironmentHumanID, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
 	args.AddStringArgument(&o.argStackApiBaseURL, "STACK_API", "StackAPI base URL for environment, eg, 'https://infra.p1.metaplay.io/stackapi'.")
 
 	cmd := &cobra.Command{
@@ -48,14 +48,14 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment.
-	_, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanId)
+	_, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
 	if err != nil {
 		return err
 	}
 
 	// \todo Fix stack domain hack
 	stackDomain := strings.Replace(strings.Replace(o.argStackApiBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanId)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()

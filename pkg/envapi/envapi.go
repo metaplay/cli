@@ -20,7 +20,7 @@ type Deployment struct {
 	AdminTlsCert             string `json:"admin_tls_cert"`
 	AwsRegion                string `json:"aws_region"`
 	CdnDistributionArn       string `json:"cdn_distribution_arn"`
-	CdnDistributionId        string `json:"cdn_distribution_id"`
+	CdnDistributionID        string `json:"cdn_distribution_id"`
 	CdnS3Fqdn                string `json:"cdn_s3_fqdn"`
 	EcrRepo                  string `json:"ecr_repo"`
 	GameserverAdminIamRole   string `json:"gameserver_admin_iam_role"`
@@ -45,7 +45,7 @@ type Deployment struct {
 type OAuth2Client struct {
 	AuthProvider      string   `json:"auth_provider"`
 	Audience          string   `json:"audience"`
-	ClientId          string   `json:"client_id"`
+	ClientID          string   `json:"client_id"`
 	ClientSecret      string   `json:"client_secret"`
 	Domain            string   `json:"domain"`
 	EmailDomain       string   `json:"email_domain"`

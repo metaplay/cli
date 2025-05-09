@@ -235,11 +235,11 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Metaplay SDK version found in the image: %s", imageSdkVersion)
 
-	imageCommitId, hasCommitId := imageLabels["io.metaplay.commit_id"]
-	if !hasCommitId {
+	imageCommitID, hasCommitID := imageLabels["io.metaplay.commit_id"]
+	if !hasCommitID {
 		return fmt.Errorf("invalid docker image: required label 'io.metaplay.commit_id' not found in the image metadata")
 	}
-	log.Debug().Msgf("Commit ID found in the image: %s", imageCommitId)
+	log.Debug().Msgf("Commit ID found in the image: %s", imageCommitID)
 
 	imageBuildNumber, hasBuildNumber := imageLabels["io.metaplay.build_number"]
 	if !hasBuildNumber {
@@ -423,7 +423,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
 	}
 	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageBuildNumber))
-	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageCommitId))
+	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageCommitID))
 	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageConfig.Created.Time)))
 	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageSdkVersion))
 	log.Info().Msgf("Deployment info:")

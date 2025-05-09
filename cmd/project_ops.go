@@ -151,7 +151,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	var err error
 
 	// Download the specific version
-	sdkZipPath, err = portalClient.DownloadSdkByVersionId(tmpDir, versionInfo.ID)
+	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
