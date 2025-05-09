@@ -51,7 +51,7 @@ func (o *authShowTokensOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 // decodeJWT decodes a JWT token and returns the payload as a map
-func decodeJWT(tokenString string) (map[string]interface{}, error) {
+func decodeJWT(tokenString string) (map[string]any, error) {
 	// Split the token into parts
 	parts := strings.Split(tokenString, ".")
 	if len(parts) != 3 {
@@ -65,7 +65,7 @@ func decodeJWT(tokenString string) (map[string]interface{}, error) {
 	}
 
 	// Parse the JSON payload
-	var claims map[string]interface{}
+	var claims map[string]any
 	err = json.Unmarshal(payload, &claims)
 	if err != nil {
 		return nil, err

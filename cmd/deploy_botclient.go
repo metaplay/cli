@@ -189,7 +189,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
-	helmValues := map[string]interface{}{
+	helmValues := map[string]any{
 		"environmentFamily": "Development", // not really but shouldn't matter in botclient
 		"botclients": map[string]any{
 			"targetPort":         9339,

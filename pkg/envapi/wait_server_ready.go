@@ -39,7 +39,7 @@ const (
 type GameServerPodStatus struct {
 	Phase   GameServerPodPhase `json:"phase"`
 	Message string             `json:"message"`
-	Details interface{}        `json:"details,omitempty"`
+	Details any                `json:"details,omitempty"`
 }
 
 // Fetch all game server stateful sets (belonging to a particular gameserver deployment).

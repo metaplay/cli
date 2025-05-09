@@ -214,7 +214,7 @@ type coloredLineConsoleWriter struct {
 }
 
 func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
-	var event map[string]interface{}
+	var event map[string]any
 	if err := json.Unmarshal(p, &event); err != nil {
 		return 0, err
 	}

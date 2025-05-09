@@ -50,7 +50,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 }
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
-func Request[TResponse any](c *Client, method string, url string, body interface{}) (TResponse, error) {
+func Request[TResponse any](c *Client, method string, url string, body any) (TResponse, error) {
 	var result TResponse
 
 	// Perform the request
@@ -115,18 +115,18 @@ func Get[TResponse any](c *Client, url string) (TResponse, error) {
 
 // Make a HTTP POST to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Post[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Post[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPost, url, body)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Put[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Put[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPut, url, body)
 }
 
 // Make a HTTP DELETE to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Delete[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Delete[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodDelete, url, body)
 }

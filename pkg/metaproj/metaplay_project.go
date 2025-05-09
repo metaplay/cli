@@ -749,7 +749,7 @@ func validateHelmValuesFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to read file: %w", err)
 	}
-	var parsedData map[string]interface{}
+	var parsedData map[string]any
 	if err := yaml.Unmarshal(data, &parsedData); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}

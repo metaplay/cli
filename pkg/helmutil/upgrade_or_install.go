@@ -27,7 +27,7 @@ func HelmUpgradeOrInstall(
 	namespace, releaseName, chartURL string,
 	chartVersion string,
 	valuesFiles []string,
-	extraValues map[string]interface{},
+	extraValues map[string]any,
 	timeout time.Duration,
 ) (*release.Release, error) {
 	// Show header at top
@@ -35,7 +35,7 @@ func HelmUpgradeOrInstall(
 	output.SetHeaderLines([]string{headerLine})
 
 	// Pipe Helm output to task output
-	actionConfig.Log = func(format string, args ...interface{}) {
+	actionConfig.Log = func(format string, args ...any) {
 		// Render line and trim any trailing line endings
 		line := fmt.Sprintf(format, args...)
 		line = strings.TrimRight(line, "\r\n")
@@ -91,13 +91,13 @@ func HelmUpgradeOrInstall(
 	output.AppendLinef("Chart loaded: %s (version %s)", loadedChart.Name(), loadedChart.Metadata.Version)
 
 	// Construct base values
-	baseValues := map[string]interface{}{}
+	baseValues := map[string]any{}
 	if extraValues != nil {
 		baseValues = extraValues
 	}
 
 	// Load values from files if any
-	filesValueMap := map[string]interface{}{}
+	filesValueMap := map[string]any{}
 	for _, valuesFile := range valuesFiles {
 		output.AppendLinef("Loading values from: %s", valuesFile)
 		values, err := chartutil.ReadValuesFile(valuesFile)
@@ -141,18 +141,18 @@ func HelmUpgradeOrInstall(
 
 // Combine two Helm values maps into one. On conflicts, the fields in 'override' win
 // over 'base'. Maps are recursively merged. Sequences are replaced.
-func mergeValuesMaps(base, override map[string]interface{}) map[string]interface{} {
+func mergeValuesMaps(base, override map[string]any) map[string]any {
 	// Clone base.
-	combined := make(map[string]interface{}, len(base))
+	combined := make(map[string]any, len(base))
 	for k, v := range base {
 		combined[k] = v
 	}
 
 	// Merge all keys from override (recursively merge maps).
 	for k, v := range override {
-		if v, ok := v.(map[string]interface{}); ok {
+		if v, ok := v.(map[string]any); ok {
 			if bv, ok := combined[k]; ok {
-				if bv, ok := bv.(map[string]interface{}); ok {
+				if bv, ok := bv.(map[string]any); ok {
 					combined[k] = mergeValuesMaps(bv, v)
 					continue
 				}

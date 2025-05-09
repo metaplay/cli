@@ -77,7 +77,7 @@ func (c *Client) GetUserState() (*UserState, error) {
 // User has agreed to the contents of a specific contract. Update the status to the portal.
 func (c *Client) AgreeToContract(contractID string) error {
 	// Fill in the request.
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"contract_id": contractID,
 	}
 

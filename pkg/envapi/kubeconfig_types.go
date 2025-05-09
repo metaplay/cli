@@ -9,13 +9,13 @@ import (
 )
 
 type KubeConfig struct {
-	ApiVersion     string                 `yaml:"apiVersion"`
-	Clusters       []KubeConfigCluster    `yaml:"clusters"`
-	Contexts       []KubeConfigContext    `yaml:"contexts"`
-	CurrentContext string                 `yaml:"current-context"`
-	Kind           string                 `yaml:"kind"`
-	Preferences    map[string]interface{} `yaml:"preferences"`
-	Users          []KubeConfigUser       `yaml:"users"`
+	ApiVersion     string              `yaml:"apiVersion"`
+	Clusters       []KubeConfigCluster `yaml:"clusters"`
+	Contexts       []KubeConfigContext `yaml:"contexts"`
+	CurrentContext string              `yaml:"current-context"`
+	Kind           string              `yaml:"kind"`
+	Preferences    map[string]any      `yaml:"preferences"`
+	Users          []KubeConfigUser    `yaml:"users"`
 }
 
 type KubeConfigCluster struct {

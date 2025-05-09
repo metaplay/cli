@@ -140,7 +140,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	adminClient := metahttp.NewJsonClient(tokenSet, adminAPIBaseURL)
 
 	// Prepare request body if needed
-	var requestBody interface{}
+	var requestBody any
 
 	if o.flagBody != "" {
 		// Use raw body content
@@ -173,18 +173,18 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msg("")
 
 	// Make the HTTP request based on the method
-	var response interface{}
+	var response any
 	var requestErr error
 
 	switch o.argMethod {
 	case http.MethodGet:
-		response, requestErr = metahttp.Get[interface{}](adminClient, o.argPath)
+		response, requestErr = metahttp.Get[any](adminClient, o.argPath)
 	case http.MethodPost:
-		response, requestErr = metahttp.Post[interface{}](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Post[any](adminClient, o.argPath, requestBody)
 	case http.MethodPut:
-		response, requestErr = metahttp.Put[interface{}](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Put[any](adminClient, o.argPath, requestBody)
 	case http.MethodDelete:
-		response, requestErr = metahttp.Delete[interface{}](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Delete[any](adminClient, o.argPath, requestBody)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", o.argMethod)
 	}

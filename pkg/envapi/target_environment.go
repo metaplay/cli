@@ -312,7 +312,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		},
 		CurrentContext: target.HumanId,
 		Kind:           "Config",
-		Preferences:    make(map[string]interface{}),
+		Preferences:    make(map[string]any),
 		Users: []KubeConfigUser{
 			{
 				Name: userID,

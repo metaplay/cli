@@ -170,7 +170,7 @@ func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashb
 
 // Replace a target node with 'value' (marshaled into YAML).
 // Note: If the 'path' doesn't exist, this function does nothing.
-func updateYamlNode(root *ast.File, path string, value interface{}) error {
+func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)
 	if err != nil {

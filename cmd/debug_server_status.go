@@ -123,7 +123,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
 		log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
 		// Print image name/tag from chart values
-		if imageTag, ok := existingRelease.Config["image"].(map[string]interface{})["tag"].(string); ok {
+		if imageTag, ok := existingRelease.Config["image"].(map[string]any)["tag"].(string); ok {
 			log.Info().Msgf("  Image tag:         %s", styles.RenderTechnical(imageTag))
 		} else {
 			log.Info().Msg("  Image tag:         <not available>")

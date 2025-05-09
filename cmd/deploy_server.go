@@ -338,24 +338,24 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Default shard config based on environment type.
 	// \todo Auto-detect these from the infrastructure.
-	var shardConfig []map[string]interface{}
+	var shardConfig []map[string]any
 	if envConfig.Type == portalapi.EnvironmentTypeProduction || envConfig.Type == portalapi.EnvironmentTypeStaging {
-		shardConfig = []map[string]interface{}{
+		shardConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
-				"requests": map[string]interface{}{
+				"requests": map[string]any{
 					"cpu":    "1500m",
 					"memory": "3000M",
 				},
 			},
 		}
 	} else {
-		shardConfig = []map[string]interface{}{
+		shardConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
-				"requests": map[string]interface{}{
+				"requests": map[string]any{
 					"cpu":    "250m",
 					"memory": "500Mi",
 				},
@@ -366,22 +366,22 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
-	helmValues := map[string]interface{}{
+	helmValues := map[string]any{
 		"environment":       envConfig.Name,
 		"environmentFamily": envConfig.GetEnvironmentFamily(),
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"files": []string{
 				"./Config/Options.base.yaml",
 				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
 		},
-		"tenant": map[string]interface{}{
+		"tenant": map[string]any{
 			"discoveryEnabled": true,
 		},
-		"sdk": map[string]interface{}{
+		"sdk": map[string]any{
 			"version": imageSdkVersion,
 		},
-		"image": map[string]interface{}{
+		"image": map[string]any{
 			"tag": imageTag,
 		},
 		"shards": shardConfig,

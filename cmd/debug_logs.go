@@ -332,11 +332,11 @@ type entryWithSource struct {
 // min-heap for entryWithSource, sorted by entry.Timestamp
 type logEntryHeap []entryWithSource
 
-func (h logEntryHeap) Len() int            { return len(h) }
-func (h logEntryHeap) Less(i, j int) bool  { return h[i].entry.timestamp.Before(h[j].entry.timestamp) }
-func (h logEntryHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *logEntryHeap) Push(x interface{}) { *h = append(*h, x.(entryWithSource)) }
-func (h *logEntryHeap) Pop() interface{} {
+func (h logEntryHeap) Len() int           { return len(h) }
+func (h logEntryHeap) Less(i, j int) bool { return h[i].entry.timestamp.Before(h[j].entry.timestamp) }
+func (h logEntryHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *logEntryHeap) Push(x any)        { *h = append(*h, x.(entryWithSource)) }
+func (h *logEntryHeap) Pop() any {
 	old := *h
 	n := len(old)
 	item := old[n-1]
