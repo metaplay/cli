@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type ShowSecretOpts struct {
+type secretsShowOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -22,7 +22,7 @@ type ShowSecretOpts struct {
 }
 
 func init() {
-	o := ShowSecretOpts{}
+	o := secretsShowOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -68,7 +68,7 @@ func init() {
 	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'. JSON format includes all Kubernetes metadata.")
 }
 
-func (o *ShowSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *secretsShowOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -77,7 +77,7 @@ func (o *ShowSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *ShowSecretOpts) Run(cmd *cobra.Command) error {
+func (o *secretsShowOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

@@ -187,7 +187,7 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 		o.flagDuration%60)
 
 	// Collect and retrieve CPU profile
-	err = o.collectAndRetrieveCpuProfile(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo)
+	err = o.collectAndRetrieveCPUProfile(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo)
 	if err != nil {
 		return err
 	}
@@ -197,7 +197,7 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve CPU profile - Uses Kubernetes API for exec
-func (o *debugCollectCPUProfileOpts) collectAndRetrieveCpuProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
+func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
 	// Set healthz probe to always return success before collecting profile
 	log.Info().Msgf("Setting healthz probe to Success mode...")
 	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,

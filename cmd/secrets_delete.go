@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type DeleteSecretOpts struct {
+type secretsDeleteOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -18,7 +18,7 @@ type DeleteSecretOpts struct {
 }
 
 func init() {
-	o := DeleteSecretOpts{}
+	o := secretsDeleteOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -49,11 +49,11 @@ func init() {
 	secretsCmd.AddCommand(cmd)
 }
 
-func (o *DeleteSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *secretsDeleteOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *DeleteSecretOpts) Run(cmd *cobra.Command) error {
+func (o *secretsDeleteOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

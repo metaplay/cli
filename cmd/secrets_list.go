@@ -15,7 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-type ListSecretsOpts struct {
+type secretsListOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -24,7 +24,7 @@ type ListSecretsOpts struct {
 }
 
 func init() {
-	o := ListSecretsOpts{}
+	o := secretsListOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -68,7 +68,7 @@ func init() {
 	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'. JSON format always shows values.")
 }
 
-func (o *ListSecretsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *secretsListOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -77,7 +77,7 @@ func (o *ListSecretsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *ListSecretsOpts) Run(cmd *cobra.Command) error {
+func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

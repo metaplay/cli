@@ -433,15 +433,15 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 		globalJSONPath := filepath.Join(o.absoluteProjectPath, gameBackendPath, "global.json")
 		globalJSONContent, err := os.ReadFile(globalJSONPath)
 		if err == nil {
-			var globalJson struct {
+			var globalJSON struct {
 				SDK struct {
 					Version string `json:"version"`
 				} `json:"sdk"`
 			}
-			if err := json.Unmarshal(globalJSONContent, &globalJson); err != nil {
+			if err := json.Unmarshal(globalJSONContent, &globalJSON); err != nil {
 				return nil, fmt.Errorf("failed to parse .NET runtime version from global.json")
 			}
-			parts := strings.Split(globalJson.SDK.Version, ".")
+			parts := strings.Split(globalJSON.SDK.Version, ".")
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("invalid .NET runtime vesion in global.json")
 			}

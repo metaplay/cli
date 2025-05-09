@@ -17,7 +17,7 @@ type DeploymentSecret struct {
 
 type Deployment struct {
 	AdminHostname            string `json:"admin_hostname"`
-	AdminTlsCert             string `json:"admin_tls_cert"`
+	AdminTLSCert             string `json:"admin_tls_cert"`
 	AwsRegion                string `json:"aws_region"`
 	CdnDistributionArn       string `json:"cdn_distribution_arn"`
 	CdnDistributionID        string `json:"cdn_distribution_id"`
@@ -32,7 +32,7 @@ type Deployment struct {
 	S3BucketPublic           string `json:"s3_bucket_public"`
 	ServerHostname           string `json:"server_hostname"`
 	ServerPorts              []int  `json:"server_ports"`
-	ServerTlsCert            string `json:"server_tls_cert"`
+	ServerTLSCert            string `json:"server_tls_cert"`
 
 	// Deprecated fields -- still included in the response but should not be used!
 	// MetaplayRequiredSdkVersion     string   `json:"metaplay_required_sdk_version"`
