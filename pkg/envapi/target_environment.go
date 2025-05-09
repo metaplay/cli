@@ -65,7 +65,7 @@ func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanId string) 
 		TokenSet:        tokenSet,
 		StackApiBaseURL: stackApiBaseURL,
 		HumanId:         humanId,
-		StackApiClient:  metahttp.NewJsonClient(tokenSet, stackApiBaseURL),
+		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL),
 	}
 }
 

@@ -22,8 +22,8 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
-// NewJsonClient creates a new HTTP client with the given auth token set and base URL.
-func NewJsonClient(tokenSet *auth.TokenSet, baseURL string) *Client {
+// NewJSONClient creates a new HTTP client with the given auth token set and base URL.
+func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	restyClient := resty.New().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).

@@ -298,11 +298,11 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			}
 
 			// Check for required files
-			globalJsonPath := filepath.Join(rootPath, relPath, "global.json")
+			globalJSONPath := filepath.Join(rootPath, relPath, "global.json")
 			buildPropsPath := filepath.Join(rootPath, relPath, "Directory.Build.props")
 
 			// Check if files exist
-			if _, err := os.Stat(globalJsonPath); err != nil {
+			if _, err := os.Stat(globalJSONPath); err != nil {
 				return false, nil
 			}
 			if _, err := os.Stat(buildPropsPath); err != nil {
@@ -335,11 +335,11 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 	} else {
 		gameDashboardPath, err = findSubDirectory("game-specific dashboard", o.absoluteProjectPath, func(rootPath, relPath string) (bool, error) {
 			// Check for required files
-			packageJsonPath := filepath.Join(rootPath, relPath, "package.json")
+			packageJSONPath := filepath.Join(rootPath, relPath, "package.json")
 			tsconfigPath := filepath.Join(rootPath, relPath, "tsconfig.json")
 
 			// Check if files exist
-			if _, err := os.Stat(packageJsonPath); err != nil {
+			if _, err := os.Stat(packageJSONPath); err != nil {
 				return false, nil
 			}
 			if _, err := os.Stat(tsconfigPath); err != nil {
@@ -347,13 +347,13 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			}
 
 			// Read package.json content
-			packageJsonContent, err := os.ReadFile(packageJsonPath)
+			packageJSONContent, err := os.ReadFile(packageJSONPath)
 			if err != nil {
 				return false, nil
 			}
 
 			// Check for @metaplay/core dependency
-			if !strings.Contains(string(packageJsonContent), `"@metaplay/core"`) {
+			if !strings.Contains(string(packageJSONContent), `"@metaplay/core"`) {
 				return false, nil
 			}
 
@@ -430,15 +430,15 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 	if o.flagDotnetRuntimeVer != "" {
 		dotnetRuntimeVersion = o.flagDotnetRuntimeVer
 	} else if gameBackendPath != "" {
-		globalJsonPath := filepath.Join(o.absoluteProjectPath, gameBackendPath, "global.json")
-		globalJsonContent, err := os.ReadFile(globalJsonPath)
+		globalJSONPath := filepath.Join(o.absoluteProjectPath, gameBackendPath, "global.json")
+		globalJSONContent, err := os.ReadFile(globalJSONPath)
 		if err == nil {
 			var globalJson struct {
 				SDK struct {
 					Version string `json:"version"`
 				} `json:"sdk"`
 			}
-			if err := json.Unmarshal(globalJsonContent, &globalJson); err != nil {
+			if err := json.Unmarshal(globalJSONContent, &globalJson); err != nil {
 				return nil, fmt.Errorf("failed to parse .NET runtime version from global.json")
 			}
 			parts := strings.Split(globalJson.SDK.Version, ".")

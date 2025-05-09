@@ -118,11 +118,11 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	// Output based on format
 	if o.flagFormat == "json" {
 		// Pretty-print as JSON for full details
-		envInfoJson, err := json.MarshalIndent(envInfo, "", "  ")
+		envInfoJSON, err := json.MarshalIndent(envInfo, "", "  ")
 		if err != nil {
 			return err
 		}
-		log.Info().Msg(string(envInfoJson))
+		log.Info().Msg(string(envInfoJSON))
 	} else {
 		deployment := envInfo.Deployment
 		observability := envInfo.Observability

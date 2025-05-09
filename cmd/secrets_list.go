@@ -101,12 +101,12 @@ func (o *ListSecretsOpts) Run(cmd *cobra.Command) error {
 
 	// Output the secrets in desired format.
 	if o.flagFormat == "json" {
-		secretsJson, err := json.MarshalIndent(secrets, "", "  ")
+		secretsJSON, err := json.MarshalIndent(secrets, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)
 		}
 
-		log.Info().Msgf("%s", string(secretsJson))
+		log.Info().Msgf("%s", string(secretsJSON))
 	} else {
 		if len(secrets) == 0 {
 			log.Info().Msgf("No secrets found in the environment")

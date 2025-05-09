@@ -56,12 +56,12 @@ func (o *versionOpts) Run(cmd *cobra.Command) error {
 		}
 
 		// Marshal to JSON.
-		infoJson, err := json.MarshalIndent(info, "", "  ")
+		infoJSON, err := json.MarshalIndent(info, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal to JSON: %w", err)
 		}
 
-		log.Info().Msg(string(infoJson))
+		log.Info().Msg(string(infoJSON))
 	} else {
 		log.Info().Msgf("%s", version.AppVersion)
 	}

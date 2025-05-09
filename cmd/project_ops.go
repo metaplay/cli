@@ -369,14 +369,14 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	}
 
 	// Read the template file
-	templateJson, err := os.ReadFile(templatePath)
+	templateJSON, err := os.ReadFile(templatePath)
 	if err != nil {
 		return fmt.Errorf("failed to read template file: %v", err)
 	}
 
 	// Parse the template
 	var template installerTemplateProject
-	if err := json.Unmarshal(templateJson, &template); err != nil {
+	if err := json.Unmarshal(templateJSON, &template); err != nil {
 		return fmt.Errorf("failed to parse template file: %v", err)
 	}
 
