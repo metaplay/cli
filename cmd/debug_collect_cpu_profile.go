@@ -274,7 +274,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Copy the CPU profile file from the debug container
 	log.Info().Msgf("Retrieving CPU profile to local file %s...", o.flagOutputPath)
-	err = copyFileFromPod(ctx, kubeCli, podName, debugContainerName, "/tmp", remoteFileName, o.flagOutputPath)
+	err = copyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", remoteFileName, o.flagOutputPath)
 	if err != nil {
 		log.Error().Msgf("Failed to copy CPU profile: %v", err)
 		return err

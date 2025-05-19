@@ -118,8 +118,8 @@ func getGameServerNewCR(ctx context.Context, kubeCli *KubeClient) (*NewGameServe
 	// Output parsed NewGameServerCR struct
 	log.Debug().Msgf("NewGameServerCR Name: %s", gameServerCR.Name)
 	log.Debug().Msgf("Namespace: %s", gameServerCR.Namespace)
-	log.Debug().Msgf("Spec: %+v", gameServerCR.Spec)
-	log.Debug().Msgf("Status: %+v", gameServerCR.Status)
+	log.Debug().Msgf("Game server CR spec: %+v", gameServerCR.Spec)
+	log.Debug().Msgf("Game server CR status: %+v", gameServerCR.Status)
 
 	return &gameServerCR, nil
 }

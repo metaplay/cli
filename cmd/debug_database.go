@@ -1,0 +1,297 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package cmd
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+	"golang.org/x/term"
+	"gopkg.in/yaml.v3"
+	corev1 "k8s.io/api/core/v1"
+	scheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
+)
+
+// Structure to hold the database shard configuration parsed from the YAML file
+type databaseShardConfig struct {
+	DatabaseName  string `yaml:"DatabaseName"`
+	Password      string `yaml:"Password"`
+	ReadOnlyHost  string `yaml:"ReadOnlyHost"`
+	ReadWriteHost string `yaml:"ReadWriteHost"`
+	UserId        string `yaml:"UserId"`
+}
+
+type metaplayInfraDatabase struct {
+	Backend         string                `yaml:"Backend"`
+	NumActiveShards int                   `yaml:"NumActiveShards"`
+	Shards          []databaseShardConfig `yaml:"Shards"`
+}
+
+type metaplayInfraOptions struct {
+	Database metaplayInfraDatabase `yaml:"Database"`
+}
+
+// debugDatabaseOpts holds the options for the 'debug database' command
+type debugDatabaseOpts struct {
+	UsePositionalArgs
+
+	// Environment and pod selection
+	argEnvironment   string
+	argShardIndex    string
+	parsedShardIndex int  // parsed and validated in Prepare
+	flagReadWrite    bool // If true, connect to read-write replica; otherwise, read-only
+
+	DiagnosticsImage string // Diagnostic container image name to use
+}
+
+func init() {
+	o := debugDatabaseOpts{
+		DiagnosticsImage: "metaplay/diagnostics:latest",
+	}
+
+	args := o.Arguments()
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
+
+	cmd := &cobra.Command{
+		Use:   "database [ENVIRONMENT] [POD] [SHARD] [flags]",
+		Short: "[preview] Connect to a database shard for the specified environment",
+		Long: renderLong(&o, `
+			PREVIEW: This is a preview feature and interface may change in the future.
+
+			Connect to a database shard for the specified environment using MySQL CLI.
+
+			This command starts an ephemeral debug container and runs the MySQL client inside
+			it, connecting to the desired database replica (read-only or read-write) and database
+			shard.
+
+			If a shard name is not specified, the first shard (index 0) will be used.
+
+			By default, the read-only replica will be used, for safety. Use --read-write to connect
+			to the read-write replica.
+
+			{Arguments}
+		`),
+		Example: renderExample(`
+			# Connect to a database shard in the 'tough-falcons' environment using the first shard
+			metaplay debug database tough-falcons
+
+			# Connect to a specific shard in the 'tough-falcons' environment
+			metaplay debug database tough-falcons shard-1
+		`),
+		Run: runCommand(&o),
+	}
+	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
+	debugCmd.AddCommand(cmd)
+}
+
+func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Parse shard index argument if provided
+	o.parsedShardIndex = 0 // default
+	if o.argShardIndex != "" {
+		idx, err := strconv.Atoi(o.argShardIndex)
+		if err != nil {
+			return fmt.Errorf("invalid SHARD '%s': must be an integer", o.argShardIndex)
+		}
+		if idx < 0 {
+			return fmt.Errorf("invalid SHARD '%s': must be non-negative", o.argShardIndex)
+		}
+		o.parsedShardIndex = idx
+	}
+	return nil
+}
+
+func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
+	// Resolve the project & auth provider
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+
+	// Resolve environment config
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	if err != nil {
+		return err
+	}
+
+	// Resolve target environment & game server
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	gameServer, err := targetEnv.GetGameServer(cmd.Context())
+	if err != nil {
+		return err
+	}
+
+	// Get all shard sets and pods from all clusters associated with the game server.
+	shardSetsWithPods, err := gameServer.GetAllShardSetsWithPods()
+	if err != nil {
+		return err
+	}
+	if len(shardSetsWithPods) == 0 || len(shardSetsWithPods[0].Pods) == 0 {
+		return fmt.Errorf("no pods found in any shard set")
+	}
+	kubeCli := shardSetsWithPods[0].ShardSet.Cluster.KubeClient
+	pod := &shardSetsWithPods[0].Pods[0]
+
+	// Fetch the infrastructure options YAML using the debug container
+	log.Debug().Msgf("Fetch infra options YAML from pod: %s", pod.Name)
+	yamlContent, err := o.fetchInfraOptionsYaml(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName)
+	if err != nil {
+		return err
+	}
+
+	log.Debug().Msgf("Infrastructure options YAML:\n%s", yamlContent)
+
+	// Parse the infrastructure options (only database section)
+	var infra metaplayInfraOptions
+	err = yaml.Unmarshal([]byte(yamlContent), &infra)
+	if err != nil {
+		return fmt.Errorf("failed to parse infrastructure options YAML: %v", err)
+	}
+
+	shards := infra.Database.Shards
+	if len(shards) == 0 {
+		return fmt.Errorf("no database shards found in infrastructure configuration")
+	}
+
+	// Create a debug container to fetch the infrastructure YAML file
+	debugContainerName, cleanup, err := createDebugContainer(
+		cmd.Context(),
+		kubeCli,
+		pod.Name,
+		metaplayServerContainerName,
+		false,
+		false,
+		[]string{"sleep", "3600"},
+	)
+	if err != nil {
+		return err
+	}
+	// Make sure the debug container is cleaned up even if we return early
+	defer cleanup()
+
+	// Select the target shard by index
+	shardIndex := o.parsedShardIndex
+	if shardIndex < 0 || shardIndex >= len(shards) {
+		return fmt.Errorf("invalid shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
+	}
+	targetShard := shards[shardIndex]
+	log.Info().Msgf("Connecting to database shard index: %d", shardIndex)
+
+	// Connect to the database shard
+	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
+}
+
+// Helper function to fetch the infrastructure options YAML from the pod
+func (o *debugDatabaseOpts) fetchInfraOptionsYaml(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) (string, error) {
+	// Use readFileFromPod with followSymlinks=true to handle symlinked files
+	contents, err := readFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
+	if err != nil {
+		log.Error().Msgf("Failed to read infrastructure options: %v", err)
+		return "", fmt.Errorf("failed to read infrastructure options: %w", err)
+	}
+
+	if len(contents) == 0 {
+		log.Warn().Msg("Infrastructure options file is empty")
+	}
+
+	return string(contents), nil
+}
+
+// Helper function to connect to the database shard
+func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard databaseShardConfig) error {
+	var host string
+	if o.flagReadWrite {
+		host = shard.ReadWriteHost
+		log.Info().Msg("Connecting to read-write replica.")
+	} else {
+		host = shard.ReadOnlyHost
+		log.Info().Msg("Connecting to read-only replica (default).")
+	}
+
+	// Create the MySQL connection command using new struct fields
+	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
+		host,
+		shard.UserId,
+		shard.Password,
+		shard.DatabaseName)
+
+	log.Info().Msgf("Starting MySQL CLI...")
+
+	// Prepare the request for the exec
+	req := kubeCli.Clientset.CoreV1().
+		RESTClient().
+		Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(kubeCli.Namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: debugContainerName,
+			Command:   []string{"/bin/bash", "-c", mysqlCmd},
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       true,
+		}, scheme.ParameterCodec)
+
+	// Create the executor
+	exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
+	if err != nil {
+		return fmt.Errorf("failed to create SPDY executor: %v", err)
+	}
+
+	// Put terminal in raw mode if needed
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		log.Debug().Msgf("Put terminal in raw mode")
+		state, err := term.MakeRaw(fd)
+		if err != nil {
+			return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+		}
+		defer term.Restore(fd, state)
+	}
+
+	// Setup terminal size
+	var terminalSize *remotecommand.TerminalSize
+	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		if width, height, err := term.GetSize(fd); err == nil {
+			terminalSize = &remotecommand.TerminalSize{
+				Width:  uint16(width),
+				Height: uint16(height),
+			}
+		}
+	}
+
+	// Setup stream options
+	streamOptions := remotecommand.StreamOptions{
+		Stdin:             os.Stdin,
+		Stdout:            os.Stdout,
+		Stderr:            os.Stderr,
+		Tty:               true,
+		TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+	}
+
+	// Start the stream to the mysql client
+	log.Debug().Msgf("Starting SPDY stream to mysql client")
+	log.Info().Msg("Press ENTER to continue..")
+	err = exec.StreamWithContext(ctx, streamOptions)
+	log.Debug().Msgf("Stream terminated with result: %v", err)
+	return err
+}
+
+// Helper function to format the list of available shards for error messages
+func formatShardList(shards []databaseShardConfig) string {
+	names := make([]string, len(shards))
+	for i, shard := range shards {
+		names[i] = shard.Name
+	}
+	return strings.Join(names, ", ")
+}
