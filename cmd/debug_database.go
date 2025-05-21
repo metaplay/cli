@@ -63,8 +63,9 @@ func init() {
 	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
 
 	cmd := &cobra.Command{
-		Use:   "database [ENVIRONMENT] [POD] [SHARD] [flags]",
-		Short: "[preview] Connect to a database shard for the specified environment",
+		Use:     "database [ENVIRONMENT] [POD] [SHARD] [flags]",
+		Aliases: []string{"db"},
+		Short:   "[preview] Connect to a database shard for the specified environment",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
@@ -85,8 +86,11 @@ func init() {
 			# Connect to a database shard in the 'tough-falcons' environment using the first shard
 			metaplay debug database tough-falcons
 
-			# Connect to a specific shard in the 'tough-falcons' environment
-			metaplay debug database tough-falcons shard-1
+			# Connect to the second shard in the 'tough-falcons' environment (0-based indexing is used)
+			metaplay debug database tough-falcons 1
+
+			# Connect to the read-write replica instead of the default read-only replica
+			metaplay debug database tough-falcons --read-write
 		`),
 		Run: runCommand(&o),
 	}
