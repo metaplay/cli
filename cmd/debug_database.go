@@ -9,9 +9,9 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -162,7 +162,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("no database shards found in infrastructure configuration")
 	}
 
-	// Create a debug container to fetch the infrastructure YAML file
+	// Create a debug container to run MySQL client
 	debugContainerName, cleanup, err := createDebugContainer(
 		cmd.Context(),
 		kubeCli,
@@ -184,7 +184,15 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("invalid shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
 	}
 	targetShard := shards[shardIndex]
-	log.Info().Msgf("Connecting to database shard index: %d", shardIndex)
+
+	// Show info
+	replicaType := "read-only"
+	if o.flagReadWrite {
+		replicaType = "read-write"
+	}
+	log.Info().Msg("")
+	log.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	log.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
 
 	// Connect to the database shard
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
@@ -211,10 +219,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	var host string
 	if o.flagReadWrite {
 		host = shard.ReadWriteHost
-		log.Info().Msg("Connecting to read-write replica.")
 	} else {
 		host = shard.ReadOnlyHost
-		log.Info().Msg("Connecting to read-only replica (default).")
 	}
 
 	// Create the MySQL connection command using new struct fields
@@ -224,7 +230,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		shard.Password,
 		shard.DatabaseName)
 
-	log.Info().Msgf("Starting MySQL CLI...")
+	log.Info().Msg("")
 
 	// Prepare the request for the exec
 	req := kubeCli.Clientset.CoreV1().
@@ -281,17 +287,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 	// Start the stream to the mysql client
 	log.Debug().Msgf("Starting SPDY stream to mysql client")
-	log.Info().Msg("Press ENTER to continue..")
 	err = exec.StreamWithContext(ctx, streamOptions)
 	log.Debug().Msgf("Stream terminated with result: %v", err)
 	return err
-}
-
-// Helper function to format the list of available shards for error messages
-func formatShardList(shards []databaseShardConfig) string {
-	names := make([]string, len(shards))
-	for i, shard := range shards {
-		names[i] = shard.Name
-	}
-	return strings.Join(names, ", ")
 }
