@@ -227,7 +227,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Copy the heap dump file from the debug container using tar pipe (using Kubernetes API)
 	log.Info().Msgf("Retrieving heap dump to local file %s...", o.flagOutputPath)
-	err = copyFileFromPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath)
+	err = copyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath)
 	if err != nil {
 		log.Error().Msgf("Failed to copy heap dump: %v", err)
 		return err
