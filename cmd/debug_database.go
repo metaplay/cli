@@ -260,60 +260,21 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		host = shard.ReadOnlyHost
 	}
 
-	// If --query is specified, run the query and exit
-	if o.flagQuery != "" {
-		mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s -e %q",
-			host,
-			shard.UserId,
-			shard.Password,
-			shard.DatabaseName,
-			o.flagQuery)
+	// Determine whether to run in interactive mode or a single query
+	isInteractive := o.flagQuery == ""
 
-		log.Info().Msgf("Running query: %s", o.flagQuery)
-
-		req := kubeCli.Clientset.CoreV1().
-			RESTClient().
-			Post().
-			Resource("pods").
-			Name(podName).
-			Namespace(kubeCli.Namespace).
-			SubResource("exec").
-			VersionedParams(&corev1.PodExecOptions{
-				Container: debugContainerName,
-				Command:   []string{"/bin/bash", "-c", mysqlCmd},
-				Stdin:     false,
-				Stdout:    true,
-				Stderr:    true,
-				TTY:       false,
-			}, scheme.ParameterCodec)
-
-		exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
-		if err != nil {
-			return fmt.Errorf("failed to create SPDY executor: %v", err)
-		}
-
-		// No terminal handling needed for non-interactive
-		streamOptions := remotecommand.StreamOptions{
-			Stdin:  nil,
-			Stdout: os.Stdout,
-			Stderr: os.Stderr,
-			Tty:    false,
-		}
-
-		log.Debug().Msgf("Starting SPDY stream to mysql client for query")
-		err = exec.StreamWithContext(ctx, streamOptions)
-		log.Debug().Msgf("Stream terminated with result: %v", err)
-		return err
-	}
-
-	// Otherwise, run interactive mysql client
+	// Determine command for starting MySQL CLI.
 	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
 		host,
 		shard.UserId,
 		shard.Password,
 		shard.DatabaseName)
 
-	// Prepare the request for the exec
+	if o.flagQuery != "" {
+		log.Info().Msgf("Run query: %s", o.flagQuery)
+		mysqlCmd += fmt.Sprintf(" -e %q", o.flagQuery)
+	}
+
 	req := kubeCli.Clientset.CoreV1().
 		RESTClient().
 		Post().
@@ -324,46 +285,57 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
 			Command:   []string{"/bin/bash", "-c", mysqlCmd},
-			Stdin:     true,
+			Stdin:     isInteractive,
 			Stdout:    true,
 			Stderr:    true,
-			TTY:       true,
+			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Create the executor
 	exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
 	if err != nil {
 		return fmt.Errorf("failed to create SPDY executor: %v", err)
 	}
 
-	// Put terminal in raw mode if needed
-	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		log.Debug().Msgf("Put terminal in raw mode")
-		state, err := term.MakeRaw(fd)
-		if err != nil {
-			return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+	// Configure stream options and terminal mode for interactive or non-interactive mode.
+	var streamOptions remotecommand.StreamOptions
+	if isInteractive {
+		// Put terminal in raw mode if needed
+		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+			log.Debug().Msgf("Put terminal in raw mode")
+			state, err := term.MakeRaw(fd)
+			if err != nil {
+				return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+			}
+			defer term.Restore(fd, state)
 		}
-		defer term.Restore(fd, state)
-	}
 
-	// Setup terminal size
-	var terminalSize *remotecommand.TerminalSize
-	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		if width, height, err := term.GetSize(fd); err == nil {
-			terminalSize = &remotecommand.TerminalSize{
-				Width:  uint16(width),
-				Height: uint16(height),
+		// Setup terminal size
+		var terminalSize *remotecommand.TerminalSize
+		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+			if width, height, err := term.GetSize(fd); err == nil {
+				terminalSize = &remotecommand.TerminalSize{
+					Width:  uint16(width),
+					Height: uint16(height),
+				}
 			}
 		}
-	}
 
-	// Setup stream options
-	streamOptions := remotecommand.StreamOptions{
-		Stdin:             os.Stdin,
-		Stdout:            os.Stdout,
-		Stderr:            os.Stderr,
-		Tty:               true,
-		TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+		// Stream options for interactive mode.
+		streamOptions = remotecommand.StreamOptions{
+			Stdin:             os.Stdin,
+			Stdout:            os.Stdout,
+			Stderr:            os.Stderr,
+			Tty:               true,
+			TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+		}
+	} else {
+		// Stream options for non-interactive mode.
+		streamOptions = remotecommand.StreamOptions{
+			Stdin:  nil,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Tty:    isInteractive,
+		}
 	}
 
 	// Start the stream to the mysql client
