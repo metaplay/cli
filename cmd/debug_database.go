@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -23,6 +24,7 @@ import (
 
 // Structure to hold the database shard configuration parsed from the YAML file
 type databaseShardConfig struct {
+	ShardIndex    int    // added via code, not in the YAML file
 	DatabaseName  string `yaml:"DatabaseName"`
 	Password      string `yaml:"Password"`
 	ReadOnlyHost  string `yaml:"ReadOnlyHost"`
@@ -104,12 +106,17 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
-			return fmt.Errorf("invalid SHARD '%s': must be an integer", o.argShardIndex)
+			return fmt.Errorf("invalid argument SHARD '%s': must be an integer", o.argShardIndex)
 		}
 		if idx < 0 {
-			return fmt.Errorf("invalid SHARD '%s': must be non-negative", o.argShardIndex)
+			return fmt.Errorf("invalid argument SHARD '%s': must be non-negative", o.argShardIndex)
 		}
 		o.parsedShardIndex = idx
+	} else {
+		// In non-interactive mode, SHARD argument must be specified
+		if !tui.IsInteractiveMode() {
+			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
+		}
 	}
 	return nil
 }
@@ -166,6 +173,11 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("no database shards found in infrastructure configuration")
 	}
 
+	// Fill in shard indices
+	for shardNdx := range shards {
+		shards[shardNdx].ShardIndex = shardNdx
+	}
+
 	// Create a debug container to run MySQL client
 	debugContainerName, cleanup, err := createDebugContainer(
 		cmd.Context(),
@@ -182,10 +194,23 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	// Make sure the debug container is cleaned up even if we return early
 	defer cleanup()
 
-	// Select the target shard by index
+	// Interactive shard selection if no index provided and multiple shards exist
 	shardIndex := o.parsedShardIndex
+	if o.argShardIndex == "" && len(shards) > 1 {
+		selected, err := o.chooseDatabaseShardDialog(shards)
+		if err != nil {
+			return err
+		}
+		// Find selected index
+		for i, s := range shards {
+			if &s == selected {
+				shardIndex = i
+				break
+			}
+		}
+	}
 	if shardIndex < 0 || shardIndex >= len(shards) {
-		return fmt.Errorf("invalid shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
+		return fmt.Errorf("invalid database shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
 	}
 	targetShard := shards[shardIndex]
 
@@ -294,4 +319,31 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	err = exec.StreamWithContext(ctx, streamOptions)
 	log.Debug().Msgf("Stream terminated with result: %v", err)
 	return err
+}
+
+// chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
+// The 'shards' argument should be a slice of databaseShardConfig.
+func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []databaseShardConfig) (*databaseShardConfig, error) {
+	if !tui.IsInteractiveMode() {
+		return nil, fmt.Errorf("in non-interactive mode, database shard must be explicitly specified")
+	}
+
+	selected, err := tui.ChooseFromListDialog(
+		"Select Database Shard",
+		shards,
+		func(shard *databaseShardConfig) (string, string) {
+			indexStr := fmt.Sprintf("#%d", shard.ShardIndex)
+			if o.flagReadWrite {
+				return indexStr, shard.ReadWriteHost
+			} else {
+				return indexStr, shard.ReadOnlyHost
+			}
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info().Msgf(" %s #%d %s", styles.RenderSuccess("✓"), selected.ShardIndex, styles.RenderMuted(selected.DatabaseName))
+	return selected, nil
 }
