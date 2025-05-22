@@ -49,8 +49,9 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int  // parsed and validated in Prepare
-	flagReadWrite    bool // If true, connect to read-write replica; otherwise, read-only
+	parsedShardIndex int    // parsed and validated in Prepare
+	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
+	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
 
 	DiagnosticsImage string // Diagnostic container image name to use
 }
@@ -82,6 +83,8 @@ func init() {
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
 
+			Optionally, you can use --query to specify a SQL statement to execute immediately and print the result.
+
 			{Arguments}
 		`),
 		Example: renderExample(`
@@ -93,10 +96,14 @@ func init() {
 
 			# Connect to the read-write replica instead of the default read-only replica
 			metaplay debug database tough-falcons --read-write
+
+			# Run a query on the first shard and exit immediately after
+			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM Players"
 		`),
 		Run: runCommand(&o),
 	}
 	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
+	cmd.Flags().StringVarP(&o.flagQuery, "query", "q", "", "Run this SQL query and exit (non-interactive)")
 	debugCmd.AddCommand(cmd)
 }
 
@@ -222,6 +229,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
 	log.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
+	log.Info().Msg("")
 
 	// Connect to the database shard
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
@@ -252,16 +260,21 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		host = shard.ReadOnlyHost
 	}
 
-	// Create the MySQL connection command using new struct fields
+	// Determine whether to run in interactive mode or a single query
+	isInteractive := o.flagQuery == ""
+
+	// Determine command for starting MySQL CLI.
 	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
 		host,
 		shard.UserId,
 		shard.Password,
 		shard.DatabaseName)
 
-	log.Info().Msg("")
+	if o.flagQuery != "" {
+		log.Info().Msgf("Run query: %s", o.flagQuery)
+		mysqlCmd += fmt.Sprintf(" -e %q", o.flagQuery)
+	}
 
-	// Prepare the request for the exec
 	req := kubeCli.Clientset.CoreV1().
 		RESTClient().
 		Post().
@@ -272,46 +285,57 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
 			Command:   []string{"/bin/bash", "-c", mysqlCmd},
-			Stdin:     true,
+			Stdin:     isInteractive,
 			Stdout:    true,
 			Stderr:    true,
-			TTY:       true,
+			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Create the executor
 	exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
 	if err != nil {
 		return fmt.Errorf("failed to create SPDY executor: %v", err)
 	}
 
-	// Put terminal in raw mode if needed
-	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		log.Debug().Msgf("Put terminal in raw mode")
-		state, err := term.MakeRaw(fd)
-		if err != nil {
-			return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+	// Configure stream options and terminal mode for interactive or non-interactive mode.
+	var streamOptions remotecommand.StreamOptions
+	if isInteractive {
+		// Put terminal in raw mode if needed
+		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+			log.Debug().Msgf("Put terminal in raw mode")
+			state, err := term.MakeRaw(fd)
+			if err != nil {
+				return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+			}
+			defer term.Restore(fd, state)
 		}
-		defer term.Restore(fd, state)
-	}
 
-	// Setup terminal size
-	var terminalSize *remotecommand.TerminalSize
-	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-		if width, height, err := term.GetSize(fd); err == nil {
-			terminalSize = &remotecommand.TerminalSize{
-				Width:  uint16(width),
-				Height: uint16(height),
+		// Setup terminal size
+		var terminalSize *remotecommand.TerminalSize
+		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+			if width, height, err := term.GetSize(fd); err == nil {
+				terminalSize = &remotecommand.TerminalSize{
+					Width:  uint16(width),
+					Height: uint16(height),
+				}
 			}
 		}
-	}
 
-	// Setup stream options
-	streamOptions := remotecommand.StreamOptions{
-		Stdin:             os.Stdin,
-		Stdout:            os.Stdout,
-		Stderr:            os.Stderr,
-		Tty:               true,
-		TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+		// Stream options for interactive mode.
+		streamOptions = remotecommand.StreamOptions{
+			Stdin:             os.Stdin,
+			Stdout:            os.Stdout,
+			Stderr:            os.Stderr,
+			Tty:               true,
+			TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+		}
+	} else {
+		// Stream options for non-interactive mode.
+		streamOptions = remotecommand.StreamOptions{
+			Stdin:  nil,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Tty:    isInteractive,
+		}
 	}
 
 	// Start the stream to the mysql client
