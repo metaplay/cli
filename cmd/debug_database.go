@@ -49,8 +49,9 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int  // parsed and validated in Prepare
-	flagReadWrite    bool // If true, connect to read-write replica; otherwise, read-only
+	parsedShardIndex int    // parsed and validated in Prepare
+	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
+	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
 
 	DiagnosticsImage string // Diagnostic container image name to use
 }
@@ -82,6 +83,8 @@ func init() {
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
 
+			Optionally, you can use --query to specify a SQL statement to execute immediately and print the result.
+
 			{Arguments}
 		`),
 		Example: renderExample(`
@@ -93,10 +96,14 @@ func init() {
 
 			# Connect to the read-write replica instead of the default read-only replica
 			metaplay debug database tough-falcons --read-write
+
+			# Run a query on the first shard and print the result
+			metaplay debug database tough-falcons --query "SELECT COUNT(*) FROM players;"
 		`),
 		Run: runCommand(&o),
 	}
 	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
+	cmd.Flags().StringVar(&o.flagQuery, "query", "", "Run this SQL query and exit (non-interactive)")
 	debugCmd.AddCommand(cmd)
 }
 
@@ -222,6 +229,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
 	log.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
+	log.Info().Msg("")
 
 	// Connect to the database shard
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
@@ -252,14 +260,58 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		host = shard.ReadOnlyHost
 	}
 
-	// Create the MySQL connection command using new struct fields
+	// If --query is specified, run the query and exit
+	if o.flagQuery != "" {
+		mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s -e %q",
+			host,
+			shard.UserId,
+			shard.Password,
+			shard.DatabaseName,
+			o.flagQuery)
+
+		log.Info().Msgf("Running query: %s", o.flagQuery)
+
+		req := kubeCli.Clientset.CoreV1().
+			RESTClient().
+			Post().
+			Resource("pods").
+			Name(podName).
+			Namespace(kubeCli.Namespace).
+			SubResource("exec").
+			VersionedParams(&corev1.PodExecOptions{
+				Container: debugContainerName,
+				Command:   []string{"/bin/bash", "-c", mysqlCmd},
+				Stdin:     false,
+				Stdout:    true,
+				Stderr:    true,
+				TTY:       false,
+			}, scheme.ParameterCodec)
+
+		exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
+		if err != nil {
+			return fmt.Errorf("failed to create SPDY executor: %v", err)
+		}
+
+		// No terminal handling needed for non-interactive
+		streamOptions := remotecommand.StreamOptions{
+			Stdin:  nil,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Tty:    false,
+		}
+
+		log.Debug().Msgf("Starting SPDY stream to mysql client for query")
+		err = exec.StreamWithContext(ctx, streamOptions)
+		log.Debug().Msgf("Stream terminated with result: %v", err)
+		return err
+	}
+
+	// Otherwise, run interactive mysql client
 	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
 		host,
 		shard.UserId,
 		shard.Password,
 		shard.DatabaseName)
-
-	log.Info().Msg("")
 
 	// Prepare the request for the exec
 	req := kubeCli.Clientset.CoreV1().
