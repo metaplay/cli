@@ -98,12 +98,12 @@ func init() {
 			metaplay debug database tough-falcons --read-write
 
 			# Run a query on the first shard and exit immediately after
-			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM players"
+			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM Players"
 		`),
 		Run: runCommand(&o),
 	}
 	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
-	cmd.Flags().StringVar(&o.flagQuery, "query", "", "Run this SQL query and exit (non-interactive)")
+	cmd.Flags().StringVarP(&o.flagQuery, "query", "q", "", "Run this SQL query and exit (non-interactive)")
 	debugCmd.AddCommand(cmd)
 }
 
