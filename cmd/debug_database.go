@@ -97,8 +97,8 @@ func init() {
 			# Connect to the read-write replica instead of the default read-only replica
 			metaplay debug database tough-falcons --read-write
 
-			# Run a query on the first shard and print the result
-			metaplay debug database tough-falcons --query "SELECT COUNT(*) FROM players;"
+			# Run a query on the first shard and exit immediately after
+			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM players"
 		`),
 		Run: runCommand(&o),
 	}
