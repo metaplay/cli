@@ -97,7 +97,7 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
-	project, err := tryResolveProject()
+	project, err := resolveProject()
 	if err != nil {
 		return err
 	}
