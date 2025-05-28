@@ -76,7 +76,7 @@ func ReadLocalDockerImageMetadata(imageRef string) (*v1.ConfigFile, error) {
 	// Parse the image reference (name + tag or digest)
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse docker image reference: %w", err)
+		return nil, fmt.Errorf("failed to parse local docker image reference: %w", err)
 	}
 
 	// Load the image from the local Docker daemon
@@ -88,7 +88,7 @@ func ReadLocalDockerImageMetadata(imageRef string) (*v1.ConfigFile, error) {
 	// Fetch the image configuration blob
 	cfg, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image config file: %w", err)
+		return nil, fmt.Errorf("failed to get local docker image config file: %w", err)
 	}
 
 	return cfg, nil
@@ -105,7 +105,7 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 	// Parse the image reference (name + tag or digest)
 	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse docker image reference: %w", err)
+		return nil, fmt.Errorf("failed to parse remote docker image reference: %w", err)
 	}
 
 	// Retrieve the image manifest and associated metadata
@@ -117,11 +117,11 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 	// Fetch the image configuration blob
 	img, err := desc.Image()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image from descriptor: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image from descriptor: %w", err)
 	}
 	cfg, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get docker image config file: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image config file: %w", err)
 	}
 
 	// Return the labels from the configuration
@@ -141,9 +141,11 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	}
 	defer cli.Close()
 
+	// Negotiate API version -- the WithAPIVersionNegotiation above doesn't do this regardless of the name
+	cli.NegotiateAPIVersion(context.Background())
+
 	// Check Docker daemon connectivity and API version compatibility
-	ctx := context.Background()
-	ping, err := cli.Ping(ctx)
+	ping, err := cli.Ping(context.Background())
 	if err != nil {
 		// Check if the error is due to daemon not running or inaccessible
 		if client.IsErrConnectionFailed(err) {
@@ -160,11 +162,10 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	clientVsn, errClient := version.NewVersion(clientAPIVersion)
 	daemonMaxVsn, errDaemon := version.NewVersion(daemonMaxAPIVersion)
 
-	if errClient != nil || errDaemon != nil {
-		// Fallback to basic string comparison if semantic version parsing fails
-		if clientAPIVersion > daemonMaxAPIVersion {
-			return nil, fmt.Errorf("docker daemon API version %s is too old. This CLI requires the daemon to support at least API version %s. Please update your Docker daemon", daemonMaxAPIVersion, clientAPIVersion)
-		}
+	if errClient != nil {
+		log.Warn().Msgf("Failed to parse Docker client API version '%v', skipping version compatibility check", clientAPIVersion)
+	} else if errDaemon != nil {
+		log.Warn().Msgf("Failed to parse Docker daemon API version '%v', skipping version compatibility check", daemonMaxAPIVersion)
 	} else {
 		// Proper semantic version comparison
 		if clientVsn.GreaterThan(daemonMaxVsn) {
