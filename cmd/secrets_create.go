@@ -59,10 +59,12 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Create a secret named 'user-mysecret' in environment 'tough-falcons' with two entries.
+			# Accessible with URLs 'kube-secret://user-mysecret#username' and 'kube-secret://user-mysecret#password'
 			metaplay secrets create tough-falcons user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
 
 			# Create a secret with entry payload read from a file.
-			metaplay secrets create tough-falcons user-mysecret --from-file=credentials.json=../../credentials-dev.json
+			# Accessible with URL 'kube-secret://user-mysecret#credentials'
+			metaplay secrets create tough-falcons user-mysecret --from-file=credentials=../../credentials-dev.json
 		`),
 	}
 
