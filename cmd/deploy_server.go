@@ -12,7 +12,6 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -200,13 +199,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		o.argImageNameTag = localImages[0].RepoTag
 	}
 
-	// Push the image to the remote repository (if full name is specified).
+	// Resolve image tag and metadata from the local or remote image.
 	useLocalImage := strings.Contains(o.argImageNameTag, ":")
 	var imageTag string
-	var imageConfig *v1.ConfigFile
+	var imageInfo *envapi.MetaplayImageInfo
 	if useLocalImage {
 		// Resolve metadata from local image.
-		imageConfig, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
+		imageInfo, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
 		if err != nil {
 			return err
 		}
@@ -219,33 +218,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	} else {
 		imageTag = o.argImageNameTag
 
-		// Fetch the labels from the remote docker image.
+		// Fetch the image info from the remote docker image.
 		remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)
-		imageConfig, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+		imageInfo, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
 		if err != nil {
 			return err
 		}
 	}
-
-	// Determine the Metaplay SDK version, commit id, and build number from the docker image metadata.
-	imageLabels := imageConfig.Config.Labels
-	imageSdkVersion, found := imageLabels["io.metaplay.sdk_version"]
-	if !found {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.sdk_version' not found in the image metadata")
-	}
-	log.Debug().Msgf("Metaplay SDK version found in the image: %s", imageSdkVersion)
-
-	imageCommitID, hasCommitID := imageLabels["io.metaplay.commit_id"]
-	if !hasCommitID {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.commit_id' not found in the image metadata")
-	}
-	log.Debug().Msgf("Commit ID found in the image: %s", imageCommitID)
-
-	imageBuildNumber, hasBuildNumber := imageLabels["io.metaplay.build_number"]
-	if !hasBuildNumber {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.build_number' not found in the image metadata")
-	}
-	log.Debug().Msgf("Build number found in the image: %s", imageBuildNumber)
 
 	// Resolve Helm chart to use (local or remote).
 	var helmChartPath string
@@ -379,7 +358,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			"discoveryEnabled": true,
 		},
 		"sdk": map[string]any{
-			"version": imageSdkVersion,
+			"version": imageInfo.SdkVersion,
 		},
 		"image": map[string]any{
 			"tag": imageTag,
@@ -422,10 +401,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	} else {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
 	}
-	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageBuildNumber))
-	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageCommitID))
-	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageConfig.Created.Time)))
-	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageSdkVersion))
+	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageInfo.BuildNumber))
+	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
+	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageInfo.CreatedTime)))
+	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageInfo.SdkVersion))
 	log.Info().Msgf("Deployment info:")
 	if o.flagHelmChartLocalPath != "" {
 		log.Info().Msgf("  Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
@@ -517,7 +496,7 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 		title,
 		localImages,
 		func(img *envapi.MetaplayImageInfo) (string, string) {
-			description := humanize.Time(img.ConfigFile.Created.Time)
+			description := humanize.Time(img.CreatedTime)
 			return img.RepoTag, description
 		})
 	if err != nil {
