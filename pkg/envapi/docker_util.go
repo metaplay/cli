@@ -281,14 +281,12 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 		if imgCmp := a.CreatedTime.Compare(b.CreatedTime); imgCmp != 0 {
 			return -imgCmp // Note: Compare returns -1 if a < b, 0 if a == b, 1 if a > b. For descending (latest first), we want -1 if a > b.
 		}
-		if a.ImageID == b.ImageID {
-			// Within the same image, sort by tag largest first. The intention is that tags commonly represent a
-			// timestamp in a sortable format. Sort the latest tag first.
-			if tagCmp := strings.Compare(a.Tag, b.Tag); tagCmp != 0 {
-				return -tagCmp
-			}
-		}
-		return 0
+
+		// If the CreatedTime was the same, sort by tag (largest first). When the timestamp is exactly the
+		// same, it's often the same image tagged multiple times. Tags commonly represent a timestamp in a
+		// sortable format, and we want to sort the latest tag first. In the rare case it is NOT the same
+		// image tagged multiple times, with the same reasoning we want the latest tag sorted first.
+		return -strings.Compare(a.Tag, b.Tag)
 	})
 
 	return matchingImages, nil
