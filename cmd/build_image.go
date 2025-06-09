@@ -21,12 +21,12 @@ import (
 type buildImageOpts struct {
 	UsePositionalArgs
 
-	argImageName     string
-	extraArgs        []string
-	flagBuildEngine  string
-	flagArchitecture string
-	flagCommitID     string
-	flagBuildNumber  string
+	argImageName      string
+	extraArgs         []string
+	flagBuildEngine   string
+	flagArchitectures []string
+	flagCommitID      string
+	flagBuildNumber   string
 }
 
 func init() {
@@ -71,6 +71,9 @@ func init() {
 			# Build an image to be run on an arm64 machine.
 			metaplay build image mygame:364cff09 --architecture=arm64
 
+			# Build a multi-arch image for both amd64 and arm64 (only supported with 'buildx').
+			metaplay build image mygame:364cff09 --architecture=amd64,arm64
+
 			# Pass extra arguments to the docker build.
 			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
 		`),
@@ -80,7 +83,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
-	flags.StringVar(&o.flagArchitecture, "architecture", "amd64", "Architecture of build target, 'amd64' or 'arm64'")
+	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64')")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
 }
@@ -190,14 +193,6 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(2)
 	}
 
-	// Resolve target platform.
-	validArchitectures := []string{"amd64", "arm64"}
-	if !contains(validArchitectures, o.flagArchitecture) {
-		log.Error().Msgf("Invalid architecture '%s'. Must be one of %v.", o.flagArchitecture, validArchitectures)
-		os.Exit(2)
-	}
-	platform := fmt.Sprintf("linux/%s", o.flagArchitecture)
-
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
 	err = checkDockerAvailable()
@@ -213,12 +208,37 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 
+	// Validate target architectures.
+	validArchitectures := []string{"amd64", "arm64"}
+	if len(o.flagArchitectures) == 0 {
+		log.Error().Msg("No architectures specified.")
+		os.Exit(2)
+	}
+	for _, arch := range o.flagArchitectures {
+		if !contains(validArchitectures, arch) {
+			log.Error().Msgf("Invalid architecture '%s' specified. Must be one of %v.", arch, validArchitectures)
+			os.Exit(2)
+		}
+	}
+
+	// Only buildx supports building multiple architectures at once.
+	if buildEngine == "buildkit" && len(o.flagArchitectures) > 1 {
+		log.Error().Msg("BuildKit does not support building multiple architectures at once. Please use '--engine=buildx' for multi-arch builds.")
+		os.Exit(2)
+	}
+
+	// Resolve target platforms.
+	platforms := []string{}
+	for _, arch := range o.flagArchitectures {
+		platforms = append(platforms, fmt.Sprintf("linux/%s", arch))
+	}
+
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
-	log.Info().Msgf("Target platform:     %s", styles.RenderTechnical(platform))
+	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
 	// Rebase paths to be relative to docker build root.
@@ -276,7 +296,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			"--pull",
 			"-t", imageName,
 			"-f", filepath.ToSlash(rebasedDockerFilePath),
-			"--platform", platform,
+			"--platform", strings.Join(platforms, ","),
 			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
 			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
