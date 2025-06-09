@@ -9,14 +9,13 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/google/go-containerregistry/pkg/v1/daemon"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	version "github.com/hashicorp/go-version"
 	"github.com/rs/zerolog/log"
@@ -24,78 +23,87 @@ import (
 
 // Metadata about a Metaplay docker image.
 type MetaplayImageInfo struct {
-	ImageID     string        // Docker image ID
-	Name        string        // Image name (generally project ID for local projects), empty for remote projects.
-	RepoTag     string        // Eg, 'lovely-wombats-build:12345678'.
-	Tag         string        // Image tag (eg, Git hash).
-	ProjectID   string        // Project human ID (label io.metaplay.project_id).
-	SdkVersion  string        // Metaplay SDK version (label io.metaplay.sdk_version).
-	CommitID    string        // Commit ID, e.g., git hash (label io.metaplay.commit_id).
-	BuildNumber string        // Build number (label io.metaplay.build_number).
-	ConfigFile  v1.ConfigFile // Docker metadata.
+	ImageID      string    // Docker image ID
+	Name         string    // Image name (generally project ID for local projects), empty for remote projects.
+	RepoTag      string    // Eg, 'lovely-wombats-build:12345678'.
+	Tag          string    // Image tag (eg, Git hash).
+	ProjectID    string    // Project human ID (label io.metaplay.project_id).
+	SdkVersion   string    // Metaplay SDK version (label io.metaplay.sdk_version).
+	CommitID     string    // Commit ID, e.g., git hash (label io.metaplay.commit_id).
+	BuildNumber  string    // Build number (label io.metaplay.build_number).
+	CreatedTime  time.Time // Image creation timestamp.
+	OS           string    // OS the image is built for (e.g., "linux") - can be added if needed elsewhere
+	Architecture string    // Architecture the image is built for (e.g., "amd64") - can be added if needed elsewhere
 }
 
-func newMetaplayImageInfo(imageID, repoTag, tag string, configFile v1.ConfigFile) (*MetaplayImageInfo, error) {
-	// Extract required labels
-	projectID, ok := configFile.Config.Labels["io.metaplay.project_id"]
+func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string, createdTime time.Time, os string, architecture string) (*MetaplayImageInfo, error) {
+	// Extract required labels for a valid Metaplay server image.
+	projectID, ok := labels["io.metaplay.project_id"]
 	if !ok {
-		return nil, fmt.Errorf("missing required label: io.metaplay.project_id")
+		return nil, fmt.Errorf("missing required label 'io.metaplay.project_id' in image %s (tag %s)", imageID, repoTag)
 	}
 
-	sdkVersion, ok := configFile.Config.Labels["io.metaplay.sdk_version"]
+	sdkVersion, ok := labels["io.metaplay.sdk_version"]
 	if !ok {
-		return nil, fmt.Errorf("missing required label: io.metaplay.sdk_version")
+		return nil, fmt.Errorf("missing required label 'io.metaplay.sdk_version' in image %s (tag %s)", imageID, repoTag)
 	}
 
-	commitID, ok := configFile.Config.Labels["io.metaplay.commit_id"]
+	commitID, ok := labels["io.metaplay.commit_id"]
 	if !ok {
-		return nil, fmt.Errorf("missing required label: io.metaplay.commit_id")
+		return nil, fmt.Errorf("missing required label 'io.metaplay.commit_id' in image %s (tag %s)", imageID, repoTag)
 	}
 
-	buildNumber, ok := configFile.Config.Labels["io.metaplay.build_number"]
+	buildNumber, ok := labels["io.metaplay.build_number"]
 	if !ok {
-		return nil, fmt.Errorf("missing required label: io.metaplay.build_number")
+		return nil, fmt.Errorf("missing required label 'io.metaplay.build_number' in image %s (tag %s)", imageID, repoTag)
 	}
 
 	// Create and return the MetaplayImageInfo
 	return &MetaplayImageInfo{
-		ImageID:     imageID,
-		Name:        projectID, // Use projectID as name for local images
-		RepoTag:     repoTag,
-		Tag:         tag,
-		ProjectID:   projectID,
-		SdkVersion:  sdkVersion,
-		CommitID:    commitID,
-		BuildNumber: buildNumber,
-		ConfigFile:  configFile,
+		ImageID:      imageID,
+		Name:         projectID, // Use projectID as name for local images
+		RepoTag:      repoTag,
+		Tag:          tag,
+		ProjectID:    projectID,
+		SdkVersion:   sdkVersion,
+		CommitID:     commitID,
+		BuildNumber:  buildNumber,
+		CreatedTime:  createdTime,
+		OS:           os,
+		Architecture: architecture,
 	}, nil
 }
 
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
-func ReadLocalDockerImageMetadata(imageRef string) (*v1.ConfigFile, error) {
-	// Parse the image reference (name + tag or digest)
-	ref, err := name.ParseReference(imageRef)
+func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, error) {
+	// Create a new Docker client
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse local docker image reference: %w", err)
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+	}
+	defer dockerClient.Close()
+	dockerClient.NegotiateAPIVersion(context.Background())
+
+	// Parse the image reference string (e.g., "myimage:latest" or "image-id")
+	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
+	parsedRef, err := name.ParseReference(imageRefString)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse local docker image reference '%s': %w", imageRefString, err)
 	}
 
-	// Load the image from the local Docker daemon
-	img, err := daemon.Image(ref)
+	// Inspect the image using the Docker SDK
+	imageInspect, err := dockerClient.ImageInspect(context.Background(), imageRefString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get local docker image: %w", err)
+		return nil, fmt.Errorf("failed to inspect local docker image '%s': %w", imageRefString, err)
 	}
 
-	// Fetch the image configuration blob
-	cfg, err := img.ConfigFile()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get local docker image config file: %w", err)
-	}
-
-	return cfg, nil
+	// Use the helper function to convert inspect data to MetaplayImageInfo
+	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
+	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect)
 }
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
-func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*v1.ConfigFile, error) {
+func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*MetaplayImageInfo, error) {
 	// Create a registry authenticator using the provided credentials
 	authenticator := authn.FromConfig(authn.AuthConfig{
 		Username: creds.Username,
@@ -124,8 +132,50 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 		return nil, fmt.Errorf("failed to get remote docker image config file: %w", err)
 	}
 
-	// Return the labels from the configuration
-	return cfg, nil
+	// Use the helper function to convert config file data to MetaplayImageInfo
+	// ImageID can be obtained from the image's digest for uniqueness.
+	digest, err := img.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get image digest for %s: %w", imageRef, err)
+	}
+	imageID := digest.String()
+	// The 'tag' for newMetaplayImageInfo is the specific identifier part of the reference (tag or digest).
+	tag := ref.Identifier()
+
+	return newMetaplayImageInfo(imageID, imageRef, tag, cfg.Config.Labels, cfg.Created.Time, cfg.OS, cfg.Architecture)
+}
+
+// newMetaplayImageInfoFromInspect creates a MetaplayImageInfo from an image inspect response.
+func newMetaplayImageInfoFromInspect(imageID string, repoTag string, imageRef name.Reference, imageInspect image.InspectResponse) (*MetaplayImageInfo, error) {
+	// Parse the image's creation time.
+	createdTime, err := time.Parse(time.RFC3339Nano, imageInspect.Created)
+	if err != nil {
+		// Fallback parsing for non-Nano precision, Docker might not always include nano
+		createdTime, err = time.Parse(time.RFC3339, imageInspect.Created)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse image created time '%s' for image %s: %w", imageInspect.Created, imageID, err)
+		}
+	}
+
+	// Get the image's labels.
+	if imageInspect.Config == nil {
+		return nil, fmt.Errorf("image %s (repoTag %s) has nil Config from ImageInspect()", imageID, repoTag)
+	}
+	labels := imageInspect.Config.Labels
+	if labels == nil {
+		return nil, fmt.Errorf("image %s (repoTag %s) has nil labels from ImageInspect()", imageID, repoTag)
+	}
+
+	// Convert ImageInspect data to MetaplayImageInfo
+	return newMetaplayImageInfo(
+		imageID,
+		repoTag,
+		imageRef.Identifier(), // from name.ParseReference(repoTag)
+		labels,                // from imageInspect.Config.Labels
+		createdTime,           // from imageInspect.Created (parsed)
+		imageInspect.Os,
+		imageInspect.Architecture,
+	)
 }
 
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
@@ -135,17 +185,17 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
 
 	// Create a new Docker client, enabling API version negotiation
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
-	defer cli.Close()
+	defer dockerClient.Close()
 
 	// Negotiate API version -- the WithAPIVersionNegotiation above doesn't do this regardless of the name
-	cli.NegotiateAPIVersion(context.Background())
+	dockerClient.NegotiateAPIVersion(context.Background())
 
 	// Check Docker daemon connectivity and API version compatibility
-	ping, err := cli.Ping(context.Background())
+	ping, err := dockerClient.Ping(context.Background())
 	if err != nil {
 		// Check if the error is due to daemon not running or inaccessible
 		if client.IsErrConnectionFailed(err) {
@@ -156,7 +206,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 
 	// Compare daemon API version (max supported) with the client's negotiated version.
 	// The client attempts to use its version, which must be <= the daemon's max version.
-	clientAPIVersion := cli.ClientVersion()
+	clientAPIVersion := dockerClient.ClientVersion()
 	daemonMaxAPIVersion := ping.APIVersion
 
 	clientVsn, errClient := version.NewVersion(clientAPIVersion)
@@ -178,7 +228,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	filterArgs.Add("label", fmt.Sprintf("io.metaplay.project_id=%s", projectID))
 
 	// List all images from the local Docker daemon with the filter
-	images, err := cli.ImageList(context.Background(), image.ListOptions{
+	images, err := dockerClient.ImageList(context.Background(), image.ListOptions{
 		All:     false,
 		Filters: filterArgs,
 	})
@@ -186,9 +236,8 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 		return nil, fmt.Errorf("failed to list local docker images: %w", err)
 	}
 
+	// Parse the image information for all local images matching this project.
 	var matchingImages []MetaplayImageInfo
-
-	// Iterate through all images
 	for _, img := range images {
 		// For each image ID, create a reference and fetch metadata
 		// log.Info().Msgf("Repo tags: %#v", img.RepoTags)
@@ -197,44 +246,40 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 				continue
 			}
 
-			ref, err := name.ParseReference(repoTag)
-			if err != nil {
-				continue
-			}
-
-			// Get the image configuration using go-containerregistry
-			containerImg, err := daemon.Image(ref)
-			if err != nil {
-				continue
-			}
-
-			cfg, err := containerImg.ConfigFile()
-			if err != nil {
-				continue
-			}
-
-			// Skip any remote references.
+			// Skip tags that look like fully qualified names (e.g., 'docker.io/library/ubuntu:latest' or 'customregistry/myimage:tag').
+			// We only want to handle simple/local tags (e.g., 'myimage:latest').
 			if strings.Contains(repoTag, "/") {
 				continue
 			}
 
-			// Convert ConfigFile to MetaplayImageInfo
-			// log.Info().Msgf("REF: context=%s, identifier=%s, name=%s", ref.Context(), ref.Identifier(), ref.Name())
-			imageInfo, err := newMetaplayImageInfo(img.ID, repoTag, ref.Identifier(), *cfg)
+			// Parse the image reference.
+			imageRef, err := name.ParseReference(repoTag)
 			if err != nil {
-				continue // Skip images with missing required labels
+				continue
 			}
 
+			// Get the image configuration using Docker SDK
+			imageInspect, err := dockerClient.ImageInspect(context.Background(), img.ID)
+			if err != nil {
+				log.Warn().Err(err).Msgf("Failed to inspect image %s (for repoTag %s), skipping", img.ID, repoTag)
+				continue
+			}
+
+			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect)
+			if err != nil {
+				// Log the error from newMetaplayImageInfoFromInspect, which might indicate parsing/validation failures.
+				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed: %v", img.ID, repoTag, err)
+				continue
+			}
 			matchingImages = append(matchingImages, *imageInfo)
-			// break // Found a match for this image, no need to check other tags
 		}
 	}
 
-	// Sort latest image first
+	// Sort latest-built image first
 	slices.SortFunc(matchingImages, func(a, b MetaplayImageInfo) int {
-		// First sort by image time, latest first
-		if imgCmp := a.ConfigFile.Created.Time.Compare(b.ConfigFile.Created.Time); imgCmp != 0 {
-			return -imgCmp
+		// First sort by image time, with latest-built image as the first item in the result
+		if imgCmp := a.CreatedTime.Compare(b.CreatedTime); imgCmp != 0 {
+			return -imgCmp // Note: Compare returns -1 if a < b, 0 if a == b, 1 if a > b. For descending (latest first), we want -1 if a > b.
 		}
 		if a.ImageID == b.ImageID {
 			// Within the same image, sort by tag largest first. The intention is that tags commonly represent a

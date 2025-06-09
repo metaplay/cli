@@ -405,7 +405,7 @@ func checkDockerAvailable() error {
 		done <- checkCommand("docker", "info")
 	}()
 
-	// Wait for docker to reponds .. print a waiting message after 1sec
+	// Wait for docker to respond .. print a waiting message after 1sec
 	select {
 	case err := <-done:
 		if err != nil {
