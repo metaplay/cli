@@ -278,7 +278,11 @@ func readPodLogs(ctx context.Context, source *podLogSource, cutoffTime *time.Tim
 
 	// Kubernetes logs with 'Timestamps: true' are of the format "<timestamp> <message>",
 	// for example: "2024-12-23T15:04:05.999999999Z some log text".
+	// Create a scanner with increased buffer size to handle very long lines
 	scanner := bufio.NewScanner(bufio.NewReader(stream))
+	scannerBufSize := 1 * 1024 * 1024 // 1MB buffer
+	buf := make([]byte, scannerBufSize)
+	scanner.Buffer(buf, scannerBufSize)
 
 	for scanner.Scan() {
 		// Parse the timestamp and payload from the line. We assume Kubernetes format.
