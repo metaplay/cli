@@ -194,7 +194,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that docker is installed and running
-	log.Debug().Msgf("Check if docker is available")
+	log.Debug().Msgf("Check that docker is available")
 	err = checkDockerAvailable()
 	if err != nil {
 		return err
@@ -206,6 +206,12 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		log.Error().Msgf("Failed to resolve docker build engine: %v", err)
 		os.Exit(1)
+	}
+
+	// Check that the build engine is available.
+	err = checkBuildEngineAvailable(buildEngine)
+	if err != nil {
+		return err
 	}
 
 	// Validate target architectures.
@@ -420,6 +426,8 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 // Check if docker is available and running. Uses a short timeout as 'docker' invocation
 // can sometimes hang indefinitely.
 func checkDockerAvailable() error {
+	// Run 'docker info' in background so we can handle timeouts (docker is known to hang
+	// indefinitely in some cases).
 	done := make(chan error)
 	go func() {
 		done <- checkCommand("docker", "info")
@@ -444,6 +452,21 @@ func checkDockerAvailable() error {
 		}
 	case <-time.After(9 * time.Second):
 		return fmt.Errorf("timeout while invoking docker. Ensure docker is running and responsive.")
+	}
+
+	return nil
+}
+
+// Check that the specified docker build engine is available.
+func checkBuildEngineAvailable(buildEngine string) error {
+	log.Debug().Msgf("Check that build engine %s is available", buildEngine)
+
+	switch buildEngine {
+	case "buildx":
+		err := checkCommand("docker", "buildx", "version")
+		if err != nil {
+			return fmt.Errorf("Docker buildx is not available. Ensure docker buildx is properly installed.")
+		}
 	}
 
 	return nil
