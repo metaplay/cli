@@ -203,15 +203,35 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 
 // resolvePodStatus determines the game server pod's phase and status message.
 func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
-	if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
-		return GameServerPodStatus{
-			Phase:   PhaseUnknown,
-			Message: "ContainerStatuses is empty",
-		}
-	}
-
 	containerStatus := findShardServerContainer(pod)
 	if containerStatus == nil {
+		// If there is no container created yet, try to resolve the cause
+		if pod.Status.Phase == corev1.PodPending {
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+					if condition.Reason == "Unschedulable" {
+						return GameServerPodStatus{
+							Phase:   PhasePending,
+							Message: "Pod is Unschedulable",
+						}
+					}
+					return GameServerPodStatus{
+						Phase:   PhasePending,
+						Message: "Pod is not yet scheduled on any node",
+					}
+				}
+			}
+			return GameServerPodStatus{
+				Phase:   PhasePending,
+				Message: "Pod is Pending",
+			}
+		}
+		if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
+			return GameServerPodStatus{
+				Phase:   PhaseUnknown,
+				Message: "ContainerStatuses is empty",
+			}
+		}
 		return GameServerPodStatus{
 			Phase:   PhaseUnknown,
 			Message: "Shard server container not found",
@@ -233,7 +253,7 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 		}
 		return GameServerPodStatus{
 			Phase:   PhaseRunning,
-			Message: fmt.Sprintf("Container %s is running but not ready", containerStatus.Name),
+			Message: fmt.Sprintf("Container %s is running but not yet ready (app is starting)", containerStatus.Name),
 			Details: state.Running,
 		}
 
