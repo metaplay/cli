@@ -11,6 +11,11 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 )
 
+const (
+	wellKnownGameServerChartName = "metaplay-gameserver"
+	wellKnownBotClientChartName  = "metaplay-loadtest"
+)
+
 // Find an existing Helm relase with the given chart name.
 // If multiple releases are found, it is considered an error.
 func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*release.Release, error) {
@@ -27,7 +32,13 @@ func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*
 
 	// Handle multiple found releases.
 	if len(releases) > 1 {
-		return nil, fmt.Errorf("multiple Helm releases found! Remove them first using the matching 'metaplay remove server|botclient' command.")
+		if chartName == wellKnownGameServerChartName {
+			return nil, fmt.Errorf("multiple Helm releases found! Remove them first using 'metaplay remove server' command.")
+		} else if chartName == wellKnownBotClientChartName {
+			return nil, fmt.Errorf("multiple Helm releases found! Remove them first using 'metaplay remove botclient' command.")
+		} else {
+			return nil, fmt.Errorf("multiple Helm releases found! Remove release for chart %q first.", chartName)
+		}
 	}
 
 	// Handle single release.
