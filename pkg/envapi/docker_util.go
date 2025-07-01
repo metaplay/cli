@@ -7,6 +7,9 @@ package envapi
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -74,15 +77,64 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 	}, nil
 }
 
+// newDockerClient creates a new Docker client with a verified connection.
+// It first tries the default connection mechanism (via environment variables or default socket).
+// If that fails on macOS, it attempts to connect to the Docker Desktop socket as a fallback.
+func NewDockerClient() (*client.Client, error) {
+	// Try creating a client from environment variables (respects DOCKER_HOST).
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Docker client from environment: %w", err)
+	}
+
+	// Ping the daemon to verify connectivity.
+	_, err = dockerClient.Ping(context.Background())
+	if err == nil {
+		dockerClient.NegotiateAPIVersion(context.Background())
+		return dockerClient, nil // Success
+	}
+
+	// If connection failed, decide if we should try a fallback.
+	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" {
+		log.Debug().Msg("Docker connection with default settings failed, trying Docker Desktop socket path as a fallback...")
+		dockerClient.Close() // Close the failed client.
+
+		homeDir, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			return nil, fmt.Errorf("cannot find home directory to build fallback Docker socket path: %w", homeErr)
+		}
+		socketPath := filepath.Join(homeDir, ".docker", "run", "docker.sock")
+		host := "unix://" + socketPath
+
+		// Try again with the fallback host.
+		dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation(), client.WithHost(host))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Docker client with fallback host '%s': %w", host, err)
+		}
+
+		// Ping again to verify the fallback connection.
+		_, err = dockerClient.Ping(context.Background())
+		if err != nil {
+			dockerClient.Close()
+			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Fallback connection also failed: %w", err)
+		}
+
+		dockerClient.NegotiateAPIVersion(context.Background())
+		return dockerClient, nil // Success with fallback
+	}
+
+	// For non-connection errors, or non-macOS systems, return the original error.
+	return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Original error: %w", err)
+}
+
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
 func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, error) {
 	// Create a new Docker client
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	dockerClient, err := NewDockerClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, err // Pass up the detailed error from NewDockerClient
 	}
 	defer dockerClient.Close()
-	dockerClient.NegotiateAPIVersion(context.Background())
 
 	// Parse the image reference string (e.g., "myimage:latest" or "image-id")
 	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
@@ -184,24 +236,19 @@ func newMetaplayImageInfoFromInspect(imageID string, repoTag string, imageRef na
 func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
 	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
 
-	// Create a new Docker client, enabling API version negotiation
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// Create a new Docker client using the helper function.
+	dockerClient, err := NewDockerClient()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client: %w", err)
+		return nil, err // Pass up the detailed error from NewDockerClient
 	}
 	defer dockerClient.Close()
 
-	// Negotiate API version -- the WithAPIVersionNegotiation above doesn't do this regardless of the name
-	dockerClient.NegotiateAPIVersion(context.Background())
-
-	// Check Docker daemon connectivity and API version compatibility
+	// Check Docker API version compatibility.
+	// The ping is already done in NewDockerClient, but we need the ping struct for the API version.
 	ping, err := dockerClient.Ping(context.Background())
 	if err != nil {
-		// Check if the error is due to daemon not running or inaccessible
-		if client.IsErrConnectionFailed(err) {
-			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible?")
-		}
-		return nil, fmt.Errorf("failed to ping Docker daemon: %w", err)
+		// This should ideally not happen as NewDockerClient is supposed to return a connected client.
+		return nil, fmt.Errorf("failed to ping Docker daemon after successful connection: %w", err)
 	}
 
 	// Compare daemon API version (max supported) with the client's negotiated version.

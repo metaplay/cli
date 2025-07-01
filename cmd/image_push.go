@@ -15,7 +15,6 @@ import (
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -145,12 +144,9 @@ func extractDockerImageTag(imageName string) (string, error) {
 // Output progress into the task output.
 func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
 	// Create a Docker client
-	// \todo This has been observed to fail on Tuomo's Mac with: "Cannot connect to the Docker daemon
-	// at unix:///var/run/docker.sock. Is the docker daemon running?"
-	// For details, see comments on https://github.com/metaplay/sdk/pull/3627
-	cli, err := client.NewClientWithOpts(client.WithAPIVersionNegotiation())
+	cli, err := envapi.NewDockerClient()
 	if err != nil {
-		return fmt.Errorf("failed to create Docker client: %w", err)
+		return err
 	}
 
 	// Extract tag from source image.
