@@ -321,8 +321,8 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if authProviderCfg.Audience == "" {
 			return fmt.Errorf("authProviders[%s].audience is required", name)
 		}
-		if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(authProviderCfg.Audience) {
-			return fmt.Errorf("invalid authProviders[%s].audience: must contain only alphanumeric characters, underscores, dots, and hyphens", name)
+		if !regexp.MustCompile(`^[a-zA-Z0-9_.-:/]+$`).MatchString(authProviderCfg.Audience) {
+			return fmt.Errorf("invalid authProviders[%s].audience: must contain only alphanumeric characters, underscores, dots, colon, forward slashes, and hyphens", name)
 		}
 	}
 
