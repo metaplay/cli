@@ -20,7 +20,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	version "github.com/hashicorp/go-version"
 	"github.com/rs/zerolog/log"
 )
 
@@ -82,15 +81,15 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 // If that fails on macOS, it attempts to connect to the Docker Desktop socket as a fallback.
 func NewDockerClient() (*client.Client, error) {
 	// Try creating a client from environment variables (respects DOCKER_HOST).
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client from environment: %w", err)
 	}
 
-	// Ping the daemon to verify connectivity.
-	_, err = dockerClient.Ping(context.Background())
+	// Ping the daemon to verify connectivity and to retrieve the version.
+	pingResponse, err := dockerClient.Ping(context.Background())
 	if err == nil {
-		dockerClient.NegotiateAPIVersion(context.Background())
+		dockerClient.NegotiateAPIVersionPing(pingResponse)
 		return dockerClient, nil // Success
 	}
 
@@ -107,19 +106,19 @@ func NewDockerClient() (*client.Client, error) {
 		host := "unix://" + socketPath
 
 		// Try again with the fallback host.
-		dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation(), client.WithHost(host))
+		dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithHost(host))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Docker client with fallback host '%s': %w", host, err)
 		}
 
 		// Ping again to verify the fallback connection.
-		_, err = dockerClient.Ping(context.Background())
+		pingResponse, err = dockerClient.Ping(context.Background())
 		if err != nil {
 			dockerClient.Close()
 			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Fallback connection also failed: %w", err)
 		}
 
-		dockerClient.NegotiateAPIVersion(context.Background())
+		dockerClient.NegotiateAPIVersionPing(pingResponse)
 		return dockerClient, nil // Success with fallback
 	}
 
@@ -242,33 +241,6 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
 	defer dockerClient.Close()
-
-	// Check Docker API version compatibility.
-	// The ping is already done in NewDockerClient, but we need the ping struct for the API version.
-	ping, err := dockerClient.Ping(context.Background())
-	if err != nil {
-		// This should ideally not happen as NewDockerClient is supposed to return a connected client.
-		return nil, fmt.Errorf("failed to ping Docker daemon after successful connection: %w", err)
-	}
-
-	// Compare daemon API version (max supported) with the client's negotiated version.
-	// The client attempts to use its version, which must be <= the daemon's max version.
-	clientAPIVersion := dockerClient.ClientVersion()
-	daemonMaxAPIVersion := ping.APIVersion
-
-	clientVsn, errClient := version.NewVersion(clientAPIVersion)
-	daemonMaxVsn, errDaemon := version.NewVersion(daemonMaxAPIVersion)
-
-	if errClient != nil {
-		log.Warn().Msgf("Failed to parse Docker client API version '%v', skipping version compatibility check", clientAPIVersion)
-	} else if errDaemon != nil {
-		log.Warn().Msgf("Failed to parse Docker daemon API version '%v', skipping version compatibility check", daemonMaxAPIVersion)
-	} else {
-		// Proper semantic version comparison
-		if clientVsn.GreaterThan(daemonMaxVsn) {
-			return nil, fmt.Errorf("docker daemon API version %s is too old. This CLI requires the daemon to support at least API version %s. Please update your Docker daemon", daemonMaxAPIVersion, clientAPIVersion)
-		}
-	}
 
 	// Create filter for the project ID label
 	filterArgs := filters.NewArgs()
