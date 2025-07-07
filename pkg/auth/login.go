@@ -100,7 +100,8 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 			if r.URL.Path == "/callback" {
 				query := r.URL.Query()
 				if err := query.Get("error"); err != "" {
-					http.Error(w, "Authentication failed: "+err, http.StatusBadRequest)
+					errDescription := query.Get("error_description")
+					http.Error(w, fmt.Sprintf("Authentication failed: %s\nDescription: %s", err, errDescription), http.StatusBadRequest)
 					return
 				}
 
