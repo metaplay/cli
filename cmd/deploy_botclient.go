@@ -189,7 +189,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
-	helmValues := map[string]any{
+	helmDefaultValues := map[string]any{
 		"environmentFamily": "Development", // not really but shouldn't matter in botclient
 		"botclients": map[string]any{
 			"targetPort":         9339,
@@ -218,6 +218,14 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			"requests": map[string]any{
 				"memory": "128Mi",
 				"cpu":    0.1,
+			},
+		},
+	}
+	helmRequiredValues := map[string]any{
+		"botclients": map[string]any{
+			"image": map[string]any{
+				"repository": envDetails.Deployment.EcrRepo,
+				"tag":        o.argImageTag,
 			},
 		},
 	}
@@ -274,7 +282,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			helmChartPath,
 			useHelmChartVersion,
 			valuesFiles,
-			helmValues,
+			helmDefaultValues,
+			helmRequiredValues,
 			5*time.Minute)
 		return err
 	})

@@ -20,6 +20,14 @@ import (
 )
 
 // HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
+//
+// The values are resolved from valuesFiles, defaultValues, and requiredValues.
+// Values from the files defined in valuesFiles are applied in order, the later overriding the earlier.
+// If a value is not defined in any values-file, the value from defaultValues is used.
+//
+// The values from requiredValues are used as-is with the highest priority. Any attempt to override
+// a value defined in requiredValues with a different value results in an error. Overriding with
+// the same value is allowed.
 func HelmUpgradeOrInstall(
 	output *tui.TaskOutput,
 	actionConfig *action.Configuration,
@@ -27,7 +35,8 @@ func HelmUpgradeOrInstall(
 	namespace, releaseName, chartURL string,
 	chartVersion string,
 	valuesFiles []string,
-	extraValues map[string]any,
+	defaultValues map[string]any,
+	requiredValues map[string]any,
 	timeout time.Duration,
 ) (*release.Release, error) {
 	// Show header at top
@@ -92,8 +101,8 @@ func HelmUpgradeOrInstall(
 
 	// Construct base values
 	baseValues := map[string]any{}
-	if extraValues != nil {
-		baseValues = extraValues
+	if defaultValues != nil {
+		baseValues = defaultValues
 	}
 
 	// Load values from files if any
@@ -109,8 +118,17 @@ func HelmUpgradeOrInstall(
 		filesValueMap = mergeValuesMaps(filesValueMap, values.AsMap())
 	}
 
-	// Resolve final values map: use extraValues as base to allow files to override any defaults.
+	// Resolve final configurable values map: use defaultValues as base to allow files to override any defaults.
 	finalValueMap := mergeValuesMaps(baseValues, filesValueMap)
+
+	// Apply and verify requiredValues are honored
+	if requiredValues != nil {
+		err = checkRequiredValues(finalValueMap, requiredValues)
+		if err != nil {
+			return nil, fmt.Errorf("invalid values in helm value files %v: %w", valuesFiles, err)
+		}
+		finalValueMap = mergeValuesMaps(finalValueMap, requiredValues)
+	}
 
 	// Log values as YAML.
 	finalValuesYAML, err := yaml.Marshal(finalValueMap)
@@ -161,4 +179,43 @@ func mergeValuesMaps(base, override map[string]any) map[string]any {
 		combined[k] = v
 	}
 	return combined
+}
+
+// Check all values does not have conflicting declarations to required.
+// Specifically, any value in required must either have the same value in values
+// or be not present in values.
+func checkRequiredValues(values, required map[string]any) error {
+	return doCheckRequiredValues(values, required, "")
+}
+
+func doCheckRequiredValues(inspected, required map[string]any, path string) error {
+	for k, requiredV := range required {
+		// Check if not set in values
+		inspectedV, ok := inspected[k]
+		if !ok {
+			// Not in values, not conflicting. Ok
+			continue
+		}
+
+		// Recursively check mappings
+		inspectedVMap, isInspectedVMap := inspectedV.(map[string]any)
+		requiredVMap, isRequiredVMap := requiredV.(map[string]any)
+		if isInspectedVMap && isRequiredVMap {
+			err := doCheckRequiredValues(inspectedVMap, requiredVMap, path+k+".")
+			if err != nil {
+				return err
+			}
+			continue
+		} else if isInspectedVMap {
+			return fmt.Errorf("structural error, %q must be a scalar, not a mapping", path)
+		} else if isRequiredVMap {
+			return fmt.Errorf("structural error, %q must be a mapping, not a scalar", path)
+		}
+
+		// Check scalars are equal
+		if requiredV != inspectedV {
+			return fmt.Errorf("scalar %q must not be set or must be %q, but got %q", path+k, requiredV, inspectedV)
+		}
+	}
+	return nil
 }
