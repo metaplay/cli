@@ -331,6 +331,13 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 	allPodsReady := true
 	statusLines := []string{}
 	for _, shardPods := range podsByShard {
+		// To update a deployment, metaplay-operator first scales StatefulSets to replicas=0, waits for shutdown and then recreates
+		// the new setup. Hence, if StatefulSets.replicas = 0, we are still waiting for previous deployment to shut down.
+		if len(shardPods.Pods) == 0 {
+			statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' shutting down previous deployment", shardPods.ShardName))
+			allPodsReady = false
+			continue
+		}
 		// Check that all expected pods are found.
 		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardPods.ShardName, len(shardPods.Pods)))
 		for podNdx, pod := range shardPods.Pods {
