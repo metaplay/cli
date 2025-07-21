@@ -21,11 +21,8 @@ jobs:
 
       - name: Prepare Pages output
         run: |
-          # Copy files into 'site/'
-          # - Rename README.md to index.md so it becomes the homepage
-          # - Copy install.sh as is
+          # Copy install.sh into 'site/'
           mkdir site
-          cp README.md site/index.md
           cp install.sh site/
 
       - name: Configure Pages
