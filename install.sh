@@ -7,11 +7,11 @@
 # How to use:
 #
 # Install the latest version (auto-detect platform):
-# curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh | bash
+# curl -sSfL https://metaplay.github.io/cli/install.sh | bash
 # Install a specific version:
-# curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh | bash -s -- --version 1.2.3
+# curl -sSfL https://metaplay.github.io/cli/install.sh | bash -s -- --version 1.2.3
 # Enable verbose mode:
-# curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh | bash -s -- --verbose
+# curl -sSfL https://metaplay.github.io/cli/install.sh | bash -s -- --verbose
 
 { # this ensures the entire script is downloaded #
 

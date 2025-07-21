@@ -22,7 +22,7 @@ brew install metaplay
 Using install script:
 
 ```bash
-bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 ```
 
 ### On Windows
@@ -46,7 +46,7 @@ metaplay update cli
 Using install script:
 
 ```bash
-bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 ```
 
 ### Direct Download
