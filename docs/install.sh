@@ -4,4 +4,4 @@
 # Use https://metaplay.github.io/cli/install.sh to download install.sh via Pages.
 layout: null
 ---
-{% include_relative ../install.sh %}
+{%- include_relative ../install.sh -%}
