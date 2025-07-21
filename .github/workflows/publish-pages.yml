@@ -5,6 +5,10 @@ on:
     branches:
       - main
       - pages-ci
+    # Only run on changes to install.sh and publish-pages.yml
+    paths:
+      - install.sh
+      - .github/workflows/publish-pages.yml
 
 permissions:
   contents: read     # to checkout your code
@@ -21,17 +25,9 @@ jobs:
 
       - name: Prepare Pages output
         run: |
-          # 1) Clean slate
-          rm -rf site
+          # Copy install.sh into 'site/'
           mkdir site
-
-          # 2) Copy root files into 'site/'
-          #    - Rename README.md to index.md so it becomes the homepage
-          cp README.md site/index.md
           cp install.sh site/
-
-          # 3) Disable Jekyll to serve raw markdown / shell script
-          echo > site/.nojekyll
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
