@@ -213,6 +213,27 @@ cli$ go test ./...
 
 Most of the testing of the CLI is done using Metaplay's internal platform tests. The CLI does very little in isolation so there's not much that can be tested without the surrounding components.
 
+## Publishing and CI
+
+There are two types of releases published:
+
+* Pre-release versions (with `-dev.X` suffix), done for each commit to `main`.
+* Official releases (with no suffix), done for each version tag (e.g., `1.2.3`).
+
+### Steps to Publish
+
+1. Merge all relevant PRs into `main`.
+
+2. Wait for the pre-release version (e.g., `v1.2.3-dev.4`) to get published.
+
+3. Run the Metaplay internal [platform tests](https://github.com/metaplay/sdk/actions/workflows/platform-tests-new.yaml).
+
+    The latest CLI pre-release version is also covered by the platform tests.
+
+4. Tag the latest `main` (which was tested in the previous step) with the version number, e.g., `1.2.3` and push the tag.
+
+    This triggers the release process, which publishes the official release. It takes about 30min to publish.
+
 ## License
 
 This module and all files within are distributed under the Apache-2.0 license.
