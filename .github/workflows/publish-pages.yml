@@ -5,6 +5,10 @@ on:
     branches:
       - main
       - pages-ci
+    # Only run on changes to install.sh and publish-pages.yml
+    paths:
+      - install.sh
+      - .github/workflows/publish-pages.yml
 
 permissions:
   contents: read     # to checkout your code
