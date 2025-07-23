@@ -120,13 +120,18 @@ print_verbose "Install dir: $INSTALL_DIR"
 # If no VERSION specified, discover latest via GitHub API
 if [ -z "$VERSION" ]; then
   print_verbose "No version specified. Finding latest official release..."
-  VERSION=$(curl -sSfL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-  print_verbose "Latest official version is: $VERSION"
+  # Determine the latest version from the non-rate-limited URL (instead of api.github.com which is throttled).
+  # It responds with a 302 redirect to the latest release, e.g., https://github.com/metaplay/cli/releases/tag/1.4.4,
+  # which we then parse the actual version number from.
+  redirect_url=$(curl -sI -o /dev/null -w '%{redirect_url}' "https://github.com/${REPO}/releases/latest")
+  VERSION="${redirect_url##*/}"
+  print_verbose "Detected latest official version: $VERSION"
 elif [ "$VERSION" = "latest-dev" ]; then
   print_verbose "Version specified as 'latest-dev'. Finding latest development release..."
   # Fetch all releases (newest first), get the tag_name of the very first one
+  # Note: Uses a rate-limited URL but since this is for internal use only, it's fine.
   VERSION=$(curl -sSfL "https://api.github.com/repos/${REPO}/releases" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
-  print_verbose "Latest development version is: $VERSION"
+  print_verbose "Detected latest development version: $VERSION"
 fi
 
 # Validate that a version was determined
