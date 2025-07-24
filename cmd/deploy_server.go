@@ -345,7 +345,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
-	helmValues := map[string]any{
+	helmDefaultValues := map[string]any{
 		"environment":       envConfig.Name,
 		"environmentFamily": envConfig.GetEnvironmentFamily(),
 		"config": map[string]any{
@@ -360,10 +360,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"sdk": map[string]any{
 			"version": imageInfo.SdkVersion,
 		},
-		"image": map[string]any{
-			"tag": imageTag,
-		},
 		"shards": shardConfig,
+	}
+	helmRequiredValues := map[string]any{
+		"image": map[string]any{
+			"tag":        imageTag,
+			"repository": envDetails.Deployment.EcrRepo,
+		},
 	}
 
 	// Resolve Helm release name. If not specified, default to:
@@ -459,7 +462,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			helmChartPath,
 			useHelmChartVersion,
 			valuesFiles,
-			helmValues,
+			helmDefaultValues,
+			helmRequiredValues,
 			5*time.Minute)
 		return err
 	})
