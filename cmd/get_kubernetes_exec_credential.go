@@ -7,6 +7,8 @@ package cmd
 import (
 	"strings"
 
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -47,10 +49,23 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve environment.
-	_, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
-	if err != nil {
-		return err
+	// Resolve the authentication token to use for the target environment.
+	// \todo For environments using custom auth provider (not Metaplay Auth), we can only resolve the auth provider from the metaplay-project.yaml
+	//       and thus the `kubectl` operations using this invocation must be run in the project directory where the metaplay-project.yaml is available.
+	//       Fix this later by passing the auth provider info or the project config file location as an argument?
+	var tokenSet *auth.TokenSet
+	if project != nil {
+		// If metaplay-project.yaml was found, resolve the environment from it.
+		_, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
+		if err != nil {
+			return err
+		}
+	} else {
+		// If no metaplay-project.yaml was found, assume Metaplay Auth provider is being used.
+		tokenSet, err = tui.RequireLoggedIn(cmd.Context(), auth.NewMetaplayAuthProvider())
+		if err != nil {
+			return err
+		}
 	}
 
 	// \todo Fix stack domain hack
