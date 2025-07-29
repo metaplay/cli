@@ -64,7 +64,7 @@ var rootCmd = &cobra.Command{
 			useColors = false
 		} else {
 			if colorMode != "auto" {
-				fmt.Printf("ERROR: Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.\n", flagColorMode)
+				fmt.Fprintf(os.Stderr, "ERROR: Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.\n", flagColorMode)
 				os.Exit(2)
 			}
 			useColors = hasTerminal
@@ -336,9 +336,9 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		if hasPosArgs {
 			err := posArgs.Arguments().ParseCommandLine(args)
 			if err != nil {
-				log.Error().Msgf("Expected usage: %s", cmd.UseLine())
-				log.Warn().Msgf("%s", posArgs.args.GetHelpText())
-				log.Info().Msgf("Run with --help flag for full help.")
+				stderrLogger.Error().Msgf("Expected usage: %s", cmd.UseLine())
+				stderrLogger.Warn().Msgf("%s", posArgs.args.GetHelpText())
+				stderrLogger.Info().Msgf("Run with --help flag for full help.")
 				os.Exit(2)
 			}
 		} else {
@@ -348,15 +348,15 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
-			log.Info().Msgf("%s", cmd.UsageString())
-			log.Error().Msgf("USAGE ERROR: %v", err)
+			stderrLogger.Info().Msgf("%s", cmd.UsageString())
+			stderrLogger.Error().Msgf("USAGE ERROR: %v", err)
 			os.Exit(2)
 		}
 
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
-			log.Error().Msgf("ERROR: %v", err)
+			stderrLogger.Error().Msgf("ERROR: %v", err)
 			os.Exit(1)
 		}
 	}
