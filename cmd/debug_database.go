@@ -125,6 +125,10 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
 		}
 	}
+	// Non-interactive mode requires the query in the command line
+	if o.flagQuery == "" && !tui.IsInteractiveMode() {
+		return fmt.Errorf("in non-interactive mode, argument QUERY must be specified")
+	}
 	return nil
 }
 
