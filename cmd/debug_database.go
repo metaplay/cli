@@ -125,6 +125,10 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
 		}
 	}
+	// Non-interactive mode requires the query in the command line
+	if o.flagQuery == "" && !tui.IsInteractiveMode() {
+		return fmt.Errorf("in non-interactive mode, argument QUERY must be specified")
+	}
 	return nil
 }
 
@@ -160,13 +164,13 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	pod := &shardSetsWithPods[0].Pods[0]
 
 	// Fetch the infrastructure options YAML using the debug container
-	log.Debug().Msgf("Fetch infra options YAML from pod: %s", pod.Name)
+	stderrLogger.Debug().Msgf("Fetch infra options YAML from pod: %s", pod.Name)
 	yamlContent, err := o.fetchInfraOptionsYaml(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName)
 	if err != nil {
 		return err
 	}
 
-	log.Debug().Msgf("Infrastructure options YAML:\n%s", yamlContent)
+	stderrLogger.Debug().Msgf("Infrastructure options YAML:\n%s", yamlContent)
 
 	// Parse the infrastructure options (only database section)
 	var infra metaplayInfraOptions
@@ -226,10 +230,10 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	if o.flagReadWrite {
 		replicaType = "read-write"
 	}
-	log.Info().Msg("")
-	log.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
-	log.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
-	log.Info().Msg("")
+	stderrLogger.Info().Msg("")
+	stderrLogger.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	stderrLogger.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
+	stderrLogger.Info().Msg("")
 
 	// Connect to the database shard
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
@@ -240,12 +244,12 @@ func (o *debugDatabaseOpts) fetchInfraOptionsYaml(ctx context.Context, kubeCli *
 	// Use readFileFromPod with followSymlinks=true to handle symlinked files
 	contents, err := readFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
 	if err != nil {
-		log.Error().Msgf("Failed to read infrastructure options: %v", err)
+		stderrLogger.Error().Msgf("Failed to read infrastructure options: %v", err)
 		return "", fmt.Errorf("failed to read infrastructure options: %w", err)
 	}
 
 	if len(contents) == 0 {
-		log.Warn().Msg("Infrastructure options file is empty")
+		stderrLogger.Warn().Msg("Infrastructure options file is empty")
 	}
 
 	return string(contents), nil
@@ -271,7 +275,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		shard.DatabaseName)
 
 	if o.flagQuery != "" {
-		log.Info().Msgf("Run query: %s", o.flagQuery)
+		stderrLogger.Info().Msgf("Run query: %s", o.flagQuery)
 		mysqlCmd += fmt.Sprintf(" -e %q", o.flagQuery)
 	}
 
@@ -301,7 +305,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	if isInteractive {
 		// Put terminal in raw mode if needed
 		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			log.Debug().Msgf("Put terminal in raw mode")
+			stderrLogger.Debug().Msgf("Put terminal in raw mode")
 			state, err := term.MakeRaw(fd)
 			if err != nil {
 				return fmt.Errorf("failed to set terminal to raw mode: %v", err)
@@ -339,9 +343,9 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	}
 
 	// Start the stream to the mysql client
-	log.Debug().Msgf("Starting SPDY stream to mysql client")
+	stderrLogger.Debug().Msgf("Starting SPDY stream to mysql client")
 	err = exec.StreamWithContext(ctx, streamOptions)
-	log.Debug().Msgf("Stream terminated with result: %v", err)
+	stderrLogger.Debug().Msgf("Stream terminated with result: %v", err)
 	return err
 }
 
