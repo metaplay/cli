@@ -170,56 +170,52 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 		return fmt.Errorf("failed to create SPDY executor: %v", err)
 	}
 
-	t := term.TTY{
-		// \todo Parent??
-		In:  o.IOStreams.In,
-		Out: o.IOStreams.Out,
-		Raw: true,
-	}
-
+	// Setup TTY and handle terminal properly to prevent double echo
 	var terminalSizeQueue remotecommand.TerminalSizeQueue
-	terminalSizeQueue = t.MonitorSize(t.GetSize())
+	if o.TTY {
+		tty := term.TTY{
+			In:     o.IOStreams.In,
+			Out:    o.IOStreams.Out,
+			Raw:    true, // Enable raw mode to prevent double echo
+			Parent: nil,
+		}
+		terminalSizeQueue = tty.MonitorSize(tty.GetSize())
 
-	// Setup terminal
-	// var terminalSize *remotecommand.TerminalSize
-	// if o.TTY {
-	// 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-	// 		if width, height, err := term.GetSize(fd); err == nil {
-	// 			terminalSize = &remotecommand.TerminalSize{
-	// 				Width:  uint16(width),
-	// 				Height: uint16(height),
-	// 			}
-	// 		}
-	// 	}
-	// }
+		// Use TTY.Safe to properly handle terminal state
+		return tty.Safe(func() error {
+			// Create stream options inside Safe to ensure proper terminal handling
+			streamOptions := remotecommand.StreamOptions{
+				Stdin:             o.IOStreams.In,
+				Stdout:            o.IOStreams.Out,
+				Stderr:            nil, // In TTY mode, stderr is merged with stdout
+				Tty:               true,
+				TerminalSizeQueue: terminalSizeQueue,
+			}
 
-	// Create stream options
-	streamOptions := remotecommand.StreamOptions{
-		Stdin:             o.IOStreams.In,
-		Stdout:            o.IOStreams.Out,
-		Stderr:            o.IOStreams.ErrOut, // stderr goes to stdout with TTY?
-		Tty:               o.TTY,
-		TerminalSizeQueue: terminalSizeQueue,
+			// Start the stream to the attached container/shell
+			log.Debug().Msgf("Start the SPDY stream to target container")
+			log.Info().Msg("Press ENTER to continue..")
+			err := exec.StreamWithContext(ctx, streamOptions)
+			log.Debug().Msgf("Stream terminated with result: %v", err)
+			return err
+		})
+	} else {
+		// Non-TTY mode - simpler handling
+		streamOptions := remotecommand.StreamOptions{
+			Stdin:             o.IOStreams.In,
+			Stdout:            o.IOStreams.Out,
+			Stderr:            o.IOStreams.ErrOut,
+			Tty:               false,
+			TerminalSizeQueue: nil,
+		}
+
+		// Start the stream to the attached container/shell
+		log.Debug().Msgf("Start the SPDY stream to target container")
+		log.Info().Msg("Press ENTER to continue..")
+		err = exec.StreamWithContext(ctx, streamOptions)
+		log.Debug().Msgf("Stream terminated with result: %v", err)
+		return err
 	}
-
-	// Put terminal in raw mode if needed.
-	// if o.TTY {
-	// 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-	// 		log.Debug().Msgf("Put terminal in raw mode")
-	// 		state, err := term.MakeRaw(fd)
-	// 		if err != nil {
-	// 			return fmt.Errorf("failed to set terminal to raw mode: %v", err)
-	// 		}
-	// 		defer term.Restore(fd, state)
-	// 	}
-	// }
-
-	// Start the stream to the attached container/shell.
-	log.Debug().Msgf("Start the SPDY stream to target container")
-	log.Info().Msg("Press ENTER to continue..")
-	err = exec.StreamWithContext(ctx, streamOptions)
-	log.Debug().Msgf("Stream terminated with result: %v", err)
-	return err
 }
 
 func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*envapi.KubeClient, *corev1.Pod, error) {
