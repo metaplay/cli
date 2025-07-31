@@ -148,14 +148,14 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) error {
 	log.Debug().Msgf("Attaching to ephemeral debug container")
 
-	// Prepare the attach request (not exec)
+	// Prepare the attach request
 	req := kubeCli.RestClient.
 		Post().
 		Resource("pods").
 		Name(podName).
 		Namespace(kubeCli.Namespace).
 		SubResource("attach").
-		VersionedParams(&corev1.PodAttachOptions{
+		VersionedParams(&corev1.PodExecOptions{
 			Container: containerName,
 			Stdin:     o.Interactive,
 			Stdout:    true,
