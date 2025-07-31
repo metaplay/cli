@@ -7,7 +7,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -16,8 +15,6 @@ import (
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/remotecommand"
-	"k8s.io/kubectl/pkg/util/term"
 )
 
 // \todo Show instructions locally (based on which username server process runs on) instead of --rcfile
@@ -35,14 +32,6 @@ type debugShellOpts struct {
 	Image         string
 	Command       []string
 	Interactive   bool
-	TTY           bool
-
-	// IO options
-	IOStreams struct {
-		In     io.Reader
-		Out    io.Writer
-		ErrOut io.Writer
-	}
 }
 
 func init() {
@@ -51,7 +40,6 @@ func init() {
 		Image:         "metaplay/diagnostics:latest",
 		Command:       []string{"/bin/bash", "--rcfile", "/entrypoint.sh"},
 		Interactive:   true,
-		TTY:           true,
 	}
 
 	args := o.Arguments()
@@ -94,15 +82,6 @@ func init() {
 
 // Complete finishes parsing arguments for the command
 func (o *debugShellOpts) Prepare(cmd *cobra.Command, args []string) error {
-	if o.TTY && !o.Interactive {
-		return fmt.Errorf("cannot enable TTY without stdin")
-	}
-
-	// Setup IO streams
-	o.IOStreams.In = cmd.InOrStdin()
-	o.IOStreams.Out = cmd.OutOrStdout()
-	o.IOStreams.ErrOut = cmd.ErrOrStderr()
-
 	return nil
 }
 
@@ -140,12 +119,19 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 	defer cleanup()
 
+	// Setup IO streams
+	ioStreams := IOStreams{
+		In:     cmd.InOrStdin(),
+		Out:    cmd.OutOrStdout(),
+		ErrOut: cmd.ErrOrStderr(),
+	}
+
 	// Attach to the running shell in the container.
-	return o.attachToContainer(cmd.Context(), kubeCli, pod.Name, debugContainerName)
+	return o.attachToContainer(cmd.Context(), kubeCli, pod.Name, debugContainerName, ioStreams)
 }
 
 // attachToContainer attaches to the debug container
-func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) error {
+func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string, ioStreams IOStreams) error {
 	log.Debug().Msgf("Attaching to ephemeral debug container")
 
 	// Prepare the attach request
@@ -160,57 +146,11 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 			Stdin:     o.Interactive,
 			Stdout:    true,
 			Stderr:    true,
-			TTY:       o.TTY,
+			TTY:       o.Interactive,
 		}, scheme.ParameterCodec)
 
-	// Create SPDY executor
-	exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
-	if err != nil {
-		log.Debug().Msgf("Failed to create SPDY executor for attaching to pod")
-		return fmt.Errorf("failed to create SPDY executor: %v", err)
-	}
-
-	// Helper function to execute the stream with common logging
-	streamWithLogging := func(streamOptions remotecommand.StreamOptions) error {
-		log.Debug().Msgf("Start the SPDY stream to target container")
-		log.Info().Msg("Press ENTER to continue..")
-		err := exec.StreamWithContext(ctx, streamOptions)
-		log.Debug().Msgf("Stream terminated with result: %v", err)
-		return err
-	}
-
-	// Setup TTY and handle terminal properly to prevent double echo
-	if o.TTY {
-		tty := term.TTY{
-			In:     o.IOStreams.In,
-			Out:    o.IOStreams.Out,
-			Raw:    true, // Enable raw mode to prevent double echo
-			Parent: nil,
-		}
-		terminalSizeQueue := tty.MonitorSize(tty.GetSize())
-
-		// Use TTY.Safe to properly handle terminal state
-		return tty.Safe(func() error {
-			streamOptions := remotecommand.StreamOptions{
-				Stdin:             o.IOStreams.In,
-				Stdout:            o.IOStreams.Out,
-				Stderr:            nil, // In TTY mode, stderr is merged with stdout
-				Tty:               true,
-				TerminalSizeQueue: terminalSizeQueue,
-			}
-			return streamWithLogging(streamOptions)
-		})
-	} else {
-		// Non-TTY mode - simpler handling
-		streamOptions := remotecommand.StreamOptions{
-			Stdin:             o.IOStreams.In,
-			Stdout:            o.IOStreams.Out,
-			Stderr:            o.IOStreams.ErrOut,
-			Tty:               false,
-			TerminalSizeQueue: nil,
-		}
-		return streamWithLogging(streamOptions)
-	}
+	// Use shared remote command execution utility
+	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, o.Interactive)
 }
 
 func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*envapi.KubeClient, *corev1.Pod, error) {
