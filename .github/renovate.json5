@@ -29,8 +29,8 @@
     "enabled": true,
     "labels": ["security"]
   },
-  "prConcurrentLimit": 5,
-  "prHourlyLimit": 2,
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 4,
   "schedule": ["every saturday"],
   "timezone": "Europe/Berlin"
 }
