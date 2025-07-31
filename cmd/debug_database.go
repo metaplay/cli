@@ -314,23 +314,23 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		}
 
 		// Setup terminal size
-		var terminalSize *remotecommand.TerminalSize
-		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			if width, height, err := term.GetSize(fd); err == nil {
-				terminalSize = &remotecommand.TerminalSize{
-					Width:  uint16(width),
-					Height: uint16(height),
-				}
-			}
-		}
+		// var terminalSize *remotecommand.TerminalSize
+		// if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+		// 	if width, height, err := term.GetSize(fd); err == nil {
+		// 		terminalSize = &remotecommand.TerminalSize{
+		// 			Width:  uint16(width),
+		// 			Height: uint16(height),
+		// 		}
+		// 	}
+		// }
 
 		// Stream options for interactive mode.
 		streamOptions = remotecommand.StreamOptions{
-			Stdin:             os.Stdin,
-			Stdout:            os.Stdout,
-			Stderr:            os.Stderr,
-			Tty:               true,
-			TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Tty:    true,
+			// TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
 		}
 	} else {
 		// Stream options for non-interactive mode.

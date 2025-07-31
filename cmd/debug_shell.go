@@ -8,17 +8,16 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/kubectl/pkg/util/term"
 )
 
 // \todo Show instructions locally (based on which username server process runs on) instead of --rcfile
@@ -149,14 +148,14 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) error {
 	log.Debug().Msgf("Attaching to ephemeral debug container")
 
-	// Prepare the exec request
+	// Prepare the attach request (not exec)
 	req := kubeCli.RestClient.
 		Post().
 		Resource("pods").
 		Name(podName).
 		Namespace(kubeCli.Namespace).
 		SubResource("attach").
-		VersionedParams(&corev1.PodExecOptions{
+		VersionedParams(&corev1.PodAttachOptions{
 			Container: containerName,
 			Stdin:     o.Interactive,
 			Stdout:    true,
@@ -171,39 +170,49 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 		return fmt.Errorf("failed to create SPDY executor: %v", err)
 	}
 
-	// Setup terminal
-	var terminalSize *remotecommand.TerminalSize
-	if o.TTY {
-		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			if width, height, err := term.GetSize(fd); err == nil {
-				terminalSize = &remotecommand.TerminalSize{
-					Width:  uint16(width),
-					Height: uint16(height),
-				}
-			}
-		}
+	t := term.TTY{
+		// \todo Parent??
+		In:  o.IOStreams.In,
+		Out: o.IOStreams.Out,
+		Raw: true,
 	}
+
+	var terminalSizeQueue remotecommand.TerminalSizeQueue
+	terminalSizeQueue = t.MonitorSize(t.GetSize())
+
+	// Setup terminal
+	// var terminalSize *remotecommand.TerminalSize
+	// if o.TTY {
+	// 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+	// 		if width, height, err := term.GetSize(fd); err == nil {
+	// 			terminalSize = &remotecommand.TerminalSize{
+	// 				Width:  uint16(width),
+	// 				Height: uint16(height),
+	// 			}
+	// 		}
+	// 	}
+	// }
 
 	// Create stream options
 	streamOptions := remotecommand.StreamOptions{
 		Stdin:             o.IOStreams.In,
 		Stdout:            o.IOStreams.Out,
-		Stderr:            o.IOStreams.ErrOut,
+		Stderr:            o.IOStreams.ErrOut, // stderr goes to stdout with TTY?
 		Tty:               o.TTY,
-		TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
+		TerminalSizeQueue: terminalSizeQueue,
 	}
 
 	// Put terminal in raw mode if needed.
-	if o.TTY {
-		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			log.Debug().Msgf("Put terminal in raw mode")
-			state, err := term.MakeRaw(fd)
-			if err != nil {
-				return fmt.Errorf("failed to set terminal to raw mode: %v", err)
-			}
-			defer term.Restore(fd, state)
-		}
-	}
+	// if o.TTY {
+	// 	if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
+	// 		log.Debug().Msgf("Put terminal in raw mode")
+	// 		state, err := term.MakeRaw(fd)
+	// 		if err != nil {
+	// 			return fmt.Errorf("failed to set terminal to raw mode: %v", err)
+	// 		}
+	// 		defer term.Restore(fd, state)
+	// 	}
+	// }
 
 	// Start the stream to the attached container/shell.
 	log.Debug().Msgf("Start the SPDY stream to target container")
@@ -211,15 +220,6 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 	err = exec.StreamWithContext(ctx, streamOptions)
 	log.Debug().Msgf("Stream terminated with result: %v", err)
 	return err
-}
-
-// terminalSizeQueue implements remotecommand.TerminalSizeQueue
-type terminalSizeQueue struct {
-	size *remotecommand.TerminalSize
-}
-
-func (t terminalSizeQueue) Next() *remotecommand.TerminalSize {
-	return t.size
 }
 
 func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*envapi.KubeClient, *corev1.Pod, error) {
