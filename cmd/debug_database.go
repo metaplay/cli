@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 
@@ -15,11 +16,9 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	scheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/remotecommand"
 )
 
 // Structure to hold the database shard configuration parsed from the YAML file
@@ -295,58 +294,19 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	exec, err := remotecommand.NewSPDYExecutor(kubeCli.RestConfig, "POST", req.URL())
-	if err != nil {
-		return fmt.Errorf("failed to create SPDY executor: %v", err)
-	}
-
-	// Configure stream options and terminal mode for interactive or non-interactive mode.
-	var streamOptions remotecommand.StreamOptions
+	// Use shared remote command execution utility
+	var stdin io.Reader
 	if isInteractive {
-		// Put terminal in raw mode if needed
-		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			stderrLogger.Debug().Msgf("Put terminal in raw mode")
-			state, err := term.MakeRaw(fd)
-			if err != nil {
-				return fmt.Errorf("failed to set terminal to raw mode: %v", err)
-			}
-			defer term.Restore(fd, state)
-		}
-
-		// Setup terminal size
-		var terminalSize *remotecommand.TerminalSize
-		if fd := int(os.Stdin.Fd()); term.IsTerminal(fd) {
-			if width, height, err := term.GetSize(fd); err == nil {
-				terminalSize = &remotecommand.TerminalSize{
-					Width:  uint16(width),
-					Height: uint16(height),
-				}
-			}
-		}
-
-		// Stream options for interactive mode.
-		streamOptions = remotecommand.StreamOptions{
-			Stdin:             os.Stdin,
-			Stdout:            os.Stdout,
-			Stderr:            os.Stderr,
-			Tty:               true,
-			TerminalSizeQueue: terminalSizeQueue{size: terminalSize},
-		}
-	} else {
-		// Stream options for non-interactive mode.
-		streamOptions = remotecommand.StreamOptions{
-			Stdin:  nil,
-			Stdout: os.Stdout,
-			Stderr: os.Stderr,
-			Tty:    isInteractive,
-		}
+		stdin = os.Stdin
 	}
 
-	// Start the stream to the mysql client
-	stderrLogger.Debug().Msgf("Starting SPDY stream to mysql client")
-	err = exec.StreamWithContext(ctx, streamOptions)
-	stderrLogger.Debug().Msgf("Stream terminated with result: %v", err)
-	return err
+	ioStreams := IOStreams{
+		In:     stdin,
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+	}
+
+	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
 }
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
