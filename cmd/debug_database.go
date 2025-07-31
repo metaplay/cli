@@ -306,7 +306,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		ErrOut: os.Stderr,
 	}
 
-	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive)
+	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
 }
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.

@@ -150,7 +150,7 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 		}, scheme.ParameterCodec)
 
 	// Use shared remote command execution utility
-	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, o.Interactive)
+	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, o.Interactive, o.Interactive)
 }
 
 func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*envapi.KubeClient, *corev1.Pod, error) {

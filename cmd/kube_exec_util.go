@@ -25,7 +25,7 @@ type IOStreams struct {
 
 // execRemoteKubernetesCommand creates a SPDY executor and executes a remote command stream with proper terminal handling.
 // It handles both TTY and non-TTY modes, with proper terminal state management for TTY mode.
-func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Config, requestURL *url.URL, ioStreams IOStreams, interactive bool) error {
+func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Config, requestURL *url.URL, ioStreams IOStreams, interactive, showPressEnter bool) error {
 	// Create SPDY executor
 	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", requestURL)
 	if err != nil {
@@ -36,7 +36,7 @@ func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Con
 	streamWithLogging := func(streamOptions remotecommand.StreamOptions) error {
 		log.Debug().Msgf("Starting SPDY stream")
 
-		if interactive {
+		if showPressEnter {
 			log.Info().Msg("Press ENTER to continue..")
 		}
 
