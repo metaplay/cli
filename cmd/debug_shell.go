@@ -170,8 +170,16 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 		return fmt.Errorf("failed to create SPDY executor: %v", err)
 	}
 
+	// Helper function to execute the stream with common logging
+	streamWithLogging := func(streamOptions remotecommand.StreamOptions) error {
+		log.Debug().Msgf("Start the SPDY stream to target container")
+		log.Info().Msg("Press ENTER to continue..")
+		err := exec.StreamWithContext(ctx, streamOptions)
+		log.Debug().Msgf("Stream terminated with result: %v", err)
+		return err
+	}
+
 	// Setup TTY and handle terminal properly to prevent double echo
-	var terminalSizeQueue remotecommand.TerminalSizeQueue
 	if o.TTY {
 		tty := term.TTY{
 			In:     o.IOStreams.In,
@@ -179,11 +187,10 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 			Raw:    true, // Enable raw mode to prevent double echo
 			Parent: nil,
 		}
-		terminalSizeQueue = tty.MonitorSize(tty.GetSize())
+		terminalSizeQueue := tty.MonitorSize(tty.GetSize())
 
 		// Use TTY.Safe to properly handle terminal state
 		return tty.Safe(func() error {
-			// Create stream options inside Safe to ensure proper terminal handling
 			streamOptions := remotecommand.StreamOptions{
 				Stdin:             o.IOStreams.In,
 				Stdout:            o.IOStreams.Out,
@@ -191,13 +198,7 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 				Tty:               true,
 				TerminalSizeQueue: terminalSizeQueue,
 			}
-
-			// Start the stream to the attached container/shell
-			log.Debug().Msgf("Start the SPDY stream to target container")
-			log.Info().Msg("Press ENTER to continue..")
-			err := exec.StreamWithContext(ctx, streamOptions)
-			log.Debug().Msgf("Stream terminated with result: %v", err)
-			return err
+			return streamWithLogging(streamOptions)
 		})
 	} else {
 		// Non-TTY mode - simpler handling
@@ -208,13 +209,7 @@ func (o *debugShellOpts) attachToContainer(ctx context.Context, kubeCli *envapi.
 			Tty:               false,
 			TerminalSizeQueue: nil,
 		}
-
-		// Start the stream to the attached container/shell
-		log.Debug().Msgf("Start the SPDY stream to target container")
-		log.Info().Msg("Press ENTER to continue..")
-		err = exec.StreamWithContext(ctx, streamOptions)
-		log.Debug().Msgf("Stream terminated with result: %v", err)
-		return err
+		return streamWithLogging(streamOptions)
 	}
 }
 
