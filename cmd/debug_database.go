@@ -51,6 +51,7 @@ type debugDatabaseOpts struct {
 	parsedShardIndex int    // parsed and validated in Prepare
 	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
 	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
+	flagQueryFile    string // If set, read SQL query from this file and exit (non-interactive)
 
 	DiagnosticsImage string // Diagnostic container image name to use
 }
@@ -82,31 +83,48 @@ func init() {
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
 
-			Optionally, you can use --query to specify a SQL statement to execute immediately and print the result.
+			Optionally, you can use --query to specify a SQL statement to execute immediately and
+			print the result, or --query-file to read the SQL statement from a file.
 
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Connect to a database shard in the 'tough-falcons' environment using the first shard
-			metaplay debug database tough-falcons
+			# Connect to a database shard in the 'nimbly' environment using the first shard
+			metaplay debug database nimbly
 
-			# Connect to the second shard in the 'tough-falcons' environment (0-based indexing is used)
-			metaplay debug database tough-falcons 1
+			# Connect to the second shard in the 'nimbly' environment (0-based indexing is used)
+			metaplay debug database nimbly 1
 
 			# Connect to the read-write replica instead of the default read-only replica
-			metaplay debug database tough-falcons --read-write
+			metaplay debug database nimbly --read-write
 
 			# Run a query on the first shard and exit immediately after
-			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM Players"
+			metaplay debug database nimbly 0 --query "SELECT COUNT(*) FROM Players"
+
+			# Run a query from a file on the first shard and exit immediately after
+			metaplay debug database nimbly 0 --query-file ./my_query.sql
 		`),
 		Run: runCommand(&o),
 	}
 	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
 	cmd.Flags().StringVarP(&o.flagQuery, "query", "q", "", "Run this SQL query and exit (non-interactive)")
+	cmd.Flags().StringVar(&o.flagQueryFile, "query-file", "", "Read SQL query from a file and execute it (non-interactive)")
 	debugCmd.AddCommand(cmd)
 }
 
 func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Handle mutually exclusive query flags
+	if o.flagQuery != "" && o.flagQueryFile != "" {
+		return fmt.Errorf("only one of --query or --query-file may be specified")
+	}
+	if o.flagQueryFile != "" {
+		content, err := os.ReadFile(o.flagQueryFile)
+		if err != nil {
+			return fmt.Errorf("failed to read SQL query from file '%s': %v", o.flagQueryFile, err)
+		}
+		o.flagQuery = string(content)
+	}
+
 	// Parse shard index argument if provided
 	o.parsedShardIndex = 0 // default
 	if o.argShardIndex != "" {
