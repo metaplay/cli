@@ -83,25 +83,26 @@ func init() {
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
 
-			Optionally, you can use --query to specify a SQL statement to execute immediately and print the result, or --query-file to read the SQL statement from a file.
+			Optionally, you can use --query to specify a SQL statement to execute immediately and
+			print the result, or --query-file to read the SQL statement from a file.
 
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Connect to a database shard in the 'tough-falcons' environment using the first shard
-			metaplay debug database tough-falcons
+			# Connect to a database shard in the 'nimbly' environment using the first shard
+			metaplay debug database nimbly
 
-			# Connect to the second shard in the 'tough-falcons' environment (0-based indexing is used)
-			metaplay debug database tough-falcons 1
+			# Connect to the second shard in the 'nimbly' environment (0-based indexing is used)
+			metaplay debug database nimbly 1
 
 			# Connect to the read-write replica instead of the default read-only replica
-			metaplay debug database tough-falcons --read-write
+			metaplay debug database nimbly --read-write
 
 			# Run a query on the first shard and exit immediately after
-			metaplay debug database tough-falcons 0 --query "SELECT COUNT(*) FROM Players"
+			metaplay debug database nimbly 0 --query "SELECT COUNT(*) FROM Players"
 
 			# Run a query from a file on the first shard and exit immediately after
-			metaplay debug database tough-falcons 0 --query-file ./my_query.sql
+			metaplay debug database nimbly 0 --query-file ./my_query.sql
 		`),
 		Run: runCommand(&o),
 	}
@@ -119,7 +120,7 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagQueryFile != "" {
 		content, err := os.ReadFile(o.flagQueryFile)
 		if err != nil {
-			return fmt.Errorf("failed to read query file '%s': %v", o.flagQueryFile, err)
+			return fmt.Errorf("failed to read SQL query from file '%s': %v", o.flagQueryFile, err)
 		}
 		o.flagQuery = string(content)
 	}
