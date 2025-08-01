@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package auth
 
 import (
@@ -99,7 +100,8 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 			if r.URL.Path == "/callback" {
 				query := r.URL.Query()
 				if err := query.Get("error"); err != "" {
-					http.Error(w, "Authentication failed: "+err, http.StatusBadRequest)
+					errDescription := query.Get("error_description")
+					http.Error(w, fmt.Sprintf("Authentication failed: %s\nDescription: %s", err, errDescription), http.StatusBadRequest)
 					return
 				}
 
@@ -174,11 +176,11 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	return nil
 }
 
-func MachineLogin(authProvider *AuthProviderConfig, clientId, clientSecret string) error {
+func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret string) error {
 	// Get a fresh access token from Metaplay Auth.
 	params := url.Values{
 		"grant_type":    {"client_credentials"},
-		"client_id":     {clientId},
+		"client_id":     {clientID},
 		"client_secret": {clientSecret},
 		"scope":         {"openid email profile offline_access"},
 	}

@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -243,7 +244,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s]", portalEnv.HumanID)))
 	} else {
 		// Check that the specified environment ID is a valid human ID.
-		if err := metaproj.ValidateEnvironmentID(environment); err != nil {
+		if err := metaproj.ValidateEnvironmentID(portalapi.HostingTypeMetaplayHosted, environment); err != nil {
 			return nil, nil, fmt.Errorf("full environment ID must be specified when metaplay-project.yaml not found: %w", err)
 		}
 

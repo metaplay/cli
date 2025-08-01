@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package tui
 
 import (
@@ -26,7 +27,7 @@ func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error
 		return nil, err
 	}
 	if len(orgsAndProjects) == 0 {
-		return nil, fmt.Errorf("no accessible organizations found in the portal")
+		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
 	}
 
 	// Let the user choose their organization.
@@ -43,7 +44,7 @@ func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error
 	// Must have at least one project in the organization.
 	orgProjects := selectedOrg.Projects
 	if len(orgProjects) == 0 {
-		return nil, fmt.Errorf("no projects found in the chosen organization")
+		return nil, fmt.Errorf("no accessible projects found in the chosen organization; either create one in https://portal.metaplay.dev or request access to an existing one from your team")
 	}
 
 	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedOrg.Name)

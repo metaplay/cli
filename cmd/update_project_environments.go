@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -14,6 +15,7 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -69,7 +71,9 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msgf("Update environments in metaplay-project.yaml..")
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Update Environments from Portal"))
+	log.Info().Msg("")
 
 	// Fetch project information from the portal.
 	portalClient := portalapi.NewClient(tokenSet)
@@ -95,7 +99,8 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msgf("Successfully updated environments!")
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
 	return nil
 }
 
@@ -154,6 +159,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		// Initialize new project environment config (with fresh information from portal).
 		newEnvConfig := metaproj.ProjectEnvironmentConfig{
 			Name:        portalEnv.Name,
+			HostingType: portalEnv.HostingType,
 			HumanID:     portalEnv.HumanID,
 			StackDomain: portalEnv.StackDomain,
 			Type:        portalEnv.Type,
@@ -184,11 +190,25 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 		// Update an existing node or append a new node to the end.
 		if foundIndex == -1 {
-			log.Info().Msgf("Add new environment '%s'", portalEnv.HumanID)
+			log.Info().Msgf("%s Add new environment %s", styles.RenderSuccess("+"), styles.RenderTechnical(portalEnv.HumanID))
 			seqNode.Values = append(seqNode.Values, envAST.Docs[0].Body)
 		} else {
-			log.Info().Msgf("Update existing environment '%s'", portalEnv.HumanID)
+			log.Info().Msgf("%s Update existing environment %s", styles.RenderSuccess("*"), styles.RenderTechnical(portalEnv.HumanID))
 			seqNode.Values[foundIndex] = envAST.Docs[0].Body
+		}
+	}
+
+	// Find any deleted environments. Only show a message if there are any.
+	for _, envConfig := range project.Config.Environments {
+		found := false
+		for _, newEnv := range newPortalEnvironments {
+			if newEnv.HumanID == envConfig.HumanID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Info().Msgf("%s Environment %s does not exist in portal; remove manually from metaplay-project.yaml if not needed", styles.RenderError("-"), styles.RenderTechnical(envConfig.HumanID))
 		}
 	}
 
@@ -196,6 +216,9 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	if err := os.WriteFile(projectConfigFilePath, []byte(root.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write updated config: %v", err)
 	}
+
+	log.Info().Msg("")
+	log.Info().Msgf("%s Updated environments in %s", styles.RenderSuccess("✓"), styles.RenderTechnical("metaplay-project.yaml"))
 
 	return nil
 }

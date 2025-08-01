@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -117,11 +118,11 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	// Output based on format
 	if o.flagFormat == "json" {
 		// Pretty-print as JSON for full details
-		envInfoJson, err := json.MarshalIndent(envInfo, "", "  ")
+		envInfoJSON, err := json.MarshalIndent(envInfo, "", "  ")
 		if err != nil {
 			return err
 		}
-		log.Info().Msg(string(envInfoJson))
+		log.Info().Msg(string(envInfoJSON))
 	} else {
 		deployment := envInfo.Deployment
 		observability := envInfo.Observability
@@ -143,7 +144,7 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("")
 		log.Info().Msgf("OAuth2 client:")
 		log.Info().Msgf("  Domain:               %s", styles.RenderTechnical(oauth2Client.Domain))
-		log.Info().Msgf("  Client ID:            %s", styles.RenderTechnical(oauth2Client.ClientId))
+		log.Info().Msgf("  Client ID:            %s", styles.RenderTechnical(oauth2Client.ClientID))
 		log.Info().Msgf("  Email domain:         %s", styles.RenderTechnical(oauth2Client.EmailDomain))
 	}
 	return nil

@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -277,7 +278,11 @@ func readPodLogs(ctx context.Context, source *podLogSource, cutoffTime *time.Tim
 
 	// Kubernetes logs with 'Timestamps: true' are of the format "<timestamp> <message>",
 	// for example: "2024-12-23T15:04:05.999999999Z some log text".
+	// Create a scanner with increased buffer size to handle very long lines
 	scanner := bufio.NewScanner(bufio.NewReader(stream))
+	scannerBufSize := 1 * 1024 * 1024 // 1MB buffer
+	buf := make([]byte, scannerBufSize)
+	scanner.Buffer(buf, scannerBufSize)
 
 	for scanner.Scan() {
 		// Parse the timestamp and payload from the line. We assume Kubernetes format.
@@ -331,11 +336,11 @@ type entryWithSource struct {
 // min-heap for entryWithSource, sorted by entry.Timestamp
 type logEntryHeap []entryWithSource
 
-func (h logEntryHeap) Len() int            { return len(h) }
-func (h logEntryHeap) Less(i, j int) bool  { return h[i].entry.timestamp.Before(h[j].entry.timestamp) }
-func (h logEntryHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *logEntryHeap) Push(x interface{}) { *h = append(*h, x.(entryWithSource)) }
-func (h *logEntryHeap) Pop() interface{} {
+func (h logEntryHeap) Len() int           { return len(h) }
+func (h logEntryHeap) Less(i, j int) bool { return h[i].entry.timestamp.Before(h[j].entry.timestamp) }
+func (h logEntryHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *logEntryHeap) Push(x any)        { *h = append(*h, x.(entryWithSource)) }
+func (h *logEntryHeap) Pop() any {
 	old := *h
 	n := len(old)
 	item := old[n-1]

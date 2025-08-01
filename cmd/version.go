@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -13,26 +14,26 @@ import (
 )
 
 // Show the version info of the application.
-type VersionOpts struct {
+type versionOpts struct {
 	flagFormat string
 }
 
-var versionOpts = VersionOpts{}
+var versionOpt = versionOpts{}
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version information of this CLI",
-	Run:   runCommand(&versionOpts),
+	Run:   runCommand(&versionOpt),
 }
 
 func init() {
 	rootCmd.AddCommand(versionCmd)
 
 	flags := versionCmd.Flags()
-	flags.StringVar(&versionOpts.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
+	flags.StringVar(&versionOpt.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'")
 }
 
-func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *versionOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -40,7 +41,7 @@ func (o *VersionOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *VersionOpts) Run(cmd *cobra.Command) error {
+func (o *versionOpts) Run(cmd *cobra.Command) error {
 	if o.flagFormat == "json" {
 		// Create structured version info with exported fields
 		type VersionInfo struct {
@@ -55,12 +56,12 @@ func (o *VersionOpts) Run(cmd *cobra.Command) error {
 		}
 
 		// Marshal to JSON.
-		infoJson, err := json.MarshalIndent(info, "", "  ")
+		infoJSON, err := json.MarshalIndent(info, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal to JSON: %w", err)
 		}
 
-		log.Info().Msg(string(infoJson))
+		log.Info().Msg(string(infoJSON))
 	} else {
 		log.Info().Msgf("%s", version.AppVersion)
 	}

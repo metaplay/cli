@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -118,7 +119,8 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	switch credentialsType {
 	case "dynamic":
 		// Fetch the userinfo for an email.
-		userinfo, err := auth.FetchUserInfo(authProvider, tokenSet)
+		var userinfo *auth.UserInfoResponse
+		userinfo, err = auth.FetchUserInfo(authProvider, tokenSet)
 		if err != nil {
 			return err
 		}

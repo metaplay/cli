@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -12,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type MachineLoginOpts struct {
+type authMachineLoginOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
@@ -20,7 +21,7 @@ type MachineLoginOpts struct {
 }
 
 func init() {
-	o := MachineLoginOpts{}
+	o := authMachineLoginOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
@@ -45,11 +46,11 @@ func init() {
 	flags.StringVar(&o.flagCredentials, "dev-credentials", "", "Machine login credentials (prefer passing credentials via the environment variable METAPLAY_CREDENTIALS for better security)")
 }
 
-func (o *MachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *authMachineLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
+func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -77,11 +78,11 @@ func (o *MachineLoginOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	if clientId, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
+	if clientID, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
 		log.Error().Msg("Invalid format for credentials, you should copy-paste the value from the developer portal verbatim")
 		os.Exit(2)
 	} else {
-		err := auth.MachineLogin(authProvider, clientId, clientSecret)
+		err := auth.MachineLogin(authProvider, clientID, clientSecret)
 		if err != nil {
 			log.Error().Msgf("Machine login failed: %s", err)
 			os.Exit(1)

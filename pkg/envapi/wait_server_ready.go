@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package envapi
 
 import (
@@ -11,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,7 +39,7 @@ const (
 type GameServerPodStatus struct {
 	Phase   GameServerPodPhase `json:"phase"`
 	Message string             `json:"message"`
-	Details interface{}        `json:"details,omitempty"`
+	Details any                `json:"details,omitempty"`
 }
 
 // Fetch all game server stateful sets (belonging to a particular gameserver deployment).
@@ -88,6 +90,11 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 		}
 	}
 
+	// Sort the shard sets by name to ensure consistent order in output.
+	sort.Slice(ownedSets, func(i, j int) bool {
+		return ownedSets[i].Name < ownedSets[j].Name
+	})
+
 	log.Debug().Msgf("Found %d matching StatefulSets", len(ownedSets))
 	return ownedSets, nil
 }
@@ -107,18 +114,23 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 	return pods.Items, nil
 }
 
+// shardPodStates holds the shard name and its pod states in order.
+type shardPodStates struct {
+	ShardName string
+	Pods      []*corev1.Pod
+}
+
 // Fetch all game server pods from a namespace for the given shardSets.
-// Return a map of shardName->[]pods. The per-shard arrays are of the length of
-// the expected pods in each shard and can contain nil values (for missing pods).
-func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, shardSets []appsv1.StatefulSet) (map[string][]*corev1.Pod, error) {
+// Return a slice of (shardName, []pods) in the same order as shardSets.
+func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, shardSets []appsv1.StatefulSet) ([]shardPodStates, error) {
 	// Fetch all gameserver pods in the namespace
 	pods, err := FetchGameServerPods(ctx, kubeCli)
 	if err != nil {
 		return nil, err
 	}
 
-	// Resolve the pods for each shard set.
-	result := make(map[string][]*corev1.Pod, len(shardSets))
+	// Prepare ordered result
+	result := make([]shardPodStates, 0, len(shardSets))
 
 	// Check that all expected pods from StatefulSets exist.
 	for _, shardSet := range shardSets {
@@ -127,7 +139,6 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 
 		// Allocate a state for each expected pod in the stateful set.
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
-		result[shardSet.Name] = shardPods
 
 		// Check that all expected pods are found.
 		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
@@ -173,13 +184,18 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 						continue
 					}
 
+					// Store pod (found or not).
 					foundPod = &pod
+					break
 				}
 			}
-
-			// Store pod (found or not).
 			shardPods[shardNdx] = foundPod
 		}
+
+		result = append(result, shardPodStates{
+			ShardName: shardSet.Name,
+			Pods:      shardPods,
+		})
 	}
 
 	return result, nil
@@ -187,15 +203,35 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 
 // resolvePodStatus determines the game server pod's phase and status message.
 func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
-	if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
-		return GameServerPodStatus{
-			Phase:   PhaseUnknown,
-			Message: "ContainerStatuses is empty",
-		}
-	}
-
 	containerStatus := findShardServerContainer(pod)
 	if containerStatus == nil {
+		// If there is no container created yet, try to resolve the cause
+		if pod.Status.Phase == corev1.PodPending {
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+					if condition.Reason == "Unschedulable" {
+						return GameServerPodStatus{
+							Phase:   PhasePending,
+							Message: "Pod is Unschedulable",
+						}
+					}
+					return GameServerPodStatus{
+						Phase:   PhasePending,
+						Message: "Pod is not yet scheduled on any node",
+					}
+				}
+			}
+			return GameServerPodStatus{
+				Phase:   PhasePending,
+				Message: "Pod is Pending",
+			}
+		}
+		if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
+			return GameServerPodStatus{
+				Phase:   PhaseUnknown,
+				Message: "ContainerStatuses is empty",
+			}
+		}
 		return GameServerPodStatus{
 			Phase:   PhaseUnknown,
 			Message: "Shard server container not found",
@@ -217,7 +253,7 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 		}
 		return GameServerPodStatus{
 			Phase:   PhaseRunning,
-			Message: fmt.Sprintf("Container %s is running but not ready", containerStatus.Name),
+			Message: fmt.Sprintf("Container %s is running but not yet ready (app is starting)", containerStatus.Name),
 			Details: state.Running,
 		}
 
@@ -294,12 +330,19 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 	// Check that all pods belonging to all shards are ready.
 	allPodsReady := true
 	statusLines := []string{}
-	for shardSetName, shardSetPods := range podsByShard {
+	for _, shardPods := range podsByShard {
+		// To update a deployment, metaplay-operator first scales StatefulSets to replicas=0, waits for shutdown and then recreates
+		// the new setup. Hence, if StatefulSets.replicas = 0, we are still waiting for previous deployment to shut down.
+		if len(shardPods.Pods) == 0 {
+			statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' shutting down previous deployment", shardPods.ShardName))
+			allPodsReady = false
+			continue
+		}
 		// Check that all expected pods are found.
-		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardSetName, len(shardSetPods)))
-		for podNdx, pod := range shardSetPods {
+		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardPods.ShardName, len(shardPods.Pods)))
+		for podNdx, pod := range shardPods.Pods {
 			// Check that the pod is healthy & ready.
-			podName := fmt.Sprintf("%s-%d", shardSetName, podNdx)
+			podName := fmt.Sprintf("%s-%d", shardPods.ShardName, podNdx)
 			if pod != nil {
 				status := resolvePodStatus(*pod)
 				statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s]", podName, status.Phase, status.Message))
@@ -577,9 +620,14 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				defer resp.Body.Close()
-				// Accept 2xx (Success) and 3xx (Redirection) status codes.
-				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+				switch {
+				case resp.StatusCode >= 200 && resp.StatusCode < 300:
+					// Accept 2xx (Success) status codes.
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
+					return nil
+				case resp.StatusCode >= 300 && resp.StatusCode < 400:
+					// Accept 3xx (Redirection) status codes.
+					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
 					return nil
 				}
 				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)

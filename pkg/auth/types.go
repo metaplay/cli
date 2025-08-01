@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package auth
 
 // Type for Metaplay Auth. Get this using OAuth2 code exchange with

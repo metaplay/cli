@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -119,7 +120,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
-	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}); err != nil {
+	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
 		log.Error().Msgf("Failed to run 'pnpm install': %s", err)
 		os.Exit(1)
 	}
@@ -169,7 +170,7 @@ func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashb
 
 // Replace a target node with 'value' (marshaled into YAML).
 // Note: If the 'path' doesn't exist, this function does nothing.
-func updateYamlNode(root *ast.File, path string, value interface{}) error {
+func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)
 	if err != nil {

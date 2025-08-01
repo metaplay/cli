@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package metahttp
 
 import (
@@ -21,11 +22,12 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
-// NewClient creates a new HTTP client with the given auth token set and base URL.
-func NewClient(tokenSet *auth.TokenSet, baseURL string) *Client {
+// NewJSONClient creates a new HTTP client with the given auth token set and base URL.
+func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	restyClient := resty.New().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
+		SetHeader("accept", "application/json").
 		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))
 	return &Client{
 		TokenSet: tokenSet,
@@ -48,7 +50,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 }
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
-func Request[TResponse any](c *Client, method string, url string, body interface{}) (TResponse, error) {
+func Request[TResponse any](c *Client, method string, url string, body any) (TResponse, error) {
 	var result TResponse
 
 	// Perform the request
@@ -81,7 +83,11 @@ func Request[TResponse any](c *Client, method string, url string, body interface
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		return result, fmt.Errorf("%s request to %s%s failed with status code %d", method, c.BaseURL, url, response.StatusCode())
+		// Print error details before return the error to keep the log more readable.
+		errorBody := string(response.Body())
+		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
+		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, errorBody)
+		return result, fmt.Errorf("%s %s failed (see above for details)", method, requestURL)
 	}
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext
@@ -109,18 +115,18 @@ func Get[TResponse any](c *Client, url string) (TResponse, error) {
 
 // Make a HTTP POST to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Post[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Post[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPost, url, body)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Put[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Put[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPut, url, body)
 }
 
 // Make a HTTP DELETE to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Delete[TResponse any](c *Client, url string, body interface{}) (TResponse, error) {
+func Delete[TResponse any](c *Client, url string, body any) (TResponse, error) {
 	return Request[TResponse](c, http.MethodDelete, url, body)
 }

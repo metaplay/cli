@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -150,7 +151,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	var err error
 
 	// Download the specific version
-	sdkZipPath, err = portalClient.DownloadSdkByVersionId(tmpDir, versionInfo.ID)
+	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
@@ -368,14 +369,14 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	}
 
 	// Read the template file
-	templateJson, err := os.ReadFile(templatePath)
+	templateJSON, err := os.ReadFile(templatePath)
 	if err != nil {
 		return fmt.Errorf("failed to read template file: %v", err)
 	}
 
 	// Parse the template
 	var template installerTemplateProject
-	if err := json.Unmarshal(templateJson, &template); err != nil {
+	if err := json.Unmarshal(templateJSON, &template); err != nil {
 		return fmt.Errorf("failed to parse template file: %v", err)
 	}
 

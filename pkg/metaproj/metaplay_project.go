@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package metaproj
 
 import (
@@ -116,6 +117,12 @@ func LoadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 		return nil, err
 	}
 
+	// Apply defaults to project config.
+	err = ApplyProjectConfigDefaults(&projectConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to apply defaults to metaplay-project.yaml: %v", err)
+	}
+
 	// Validate the project config.
 	err = ValidateProjectConfig(projectDir, &projectConfig)
 	if err != nil {
@@ -189,6 +196,23 @@ func validateHelmChartVersion(fieldName string, chartVersion string) error {
 		_, err := version.NewVersion(chartVersion)
 		if err != nil {
 			return fmt.Errorf("invalid version string: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// Apply any defaults to the project config which are not required to be specified.
+func ApplyProjectConfigDefaults(config *ProjectConfig) error {
+	for ndx, envConfig := range config.Environments {
+		// Default value for hosting type depending on stack domain.
+		if envConfig.HostingType == "" {
+			// Stack domain with '.metaplay.' in it indicates Metaplay-hosted
+			hostingType := portalapi.HostingTypeSelfHosted
+			if strings.Contains(envConfig.StackDomain, ".metaplay.") {
+				hostingType = portalapi.HostingTypeMetaplayHosted
+			}
+			config.Environments[ndx].HostingType = hostingType
 		}
 	}
 
@@ -297,8 +321,9 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if authProviderCfg.Audience == "" {
 			return fmt.Errorf("authProviders[%s].audience is required", name)
 		}
-		if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(authProviderCfg.Audience) {
-			return fmt.Errorf("invalid authProviders[%s].audience: must contain only alphanumeric characters, underscores, dots, and hyphens", name)
+		// \note: The hyphen must be the last in the class to avoid getting parsed as A-B syntax
+		if !regexp.MustCompile(`^[a-zA-Z0-9_./:-]+$`).MatchString(authProviderCfg.Audience) {
+			return fmt.Errorf("invalid authProviders[%s].audience: must contain only alphanumeric characters, underscores, dots, colon, forward slashes, and hyphens", name)
 		}
 	}
 
@@ -326,7 +351,7 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.HumanID == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'humanId'", envName)
 		}
-		if err := ValidateEnvironmentID(envConfig.HumanID); err != nil {
+		if err := ValidateEnvironmentID(envConfig.HostingType, envConfig.HumanID); err != nil {
 			return fmt.Errorf("environment '%s' specified invalid 'humanId': %w", envName, err)
 		}
 		if envConfig.StackDomain == "" {
@@ -334,9 +359,6 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		}
 		if envConfig.Type == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
-		}
-		if err := ValidateEnvironmentID(envConfig.HumanID); err != nil {
-			return fmt.Errorf("environment '%s' specified invalid 'humanId': %w", envName, err)
 		}
 		if envConfig.ServerValuesFile != "" {
 			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
@@ -545,28 +567,60 @@ func ValidateProjectID(id string) error {
 	return nil
 }
 
-// validateEnvironmentID checks whether the given environment ID is valid.
-// The valid format must be dash-separated parts with alphanumeric characters
-// only. There can be either 2 to 4 segments. Eg, 'tiny-squids' or 'idler-develop5',
-// or 'yellow-gritty-tuna-jumps'.
-func ValidateEnvironmentID(id string) error {
+// ValidateEnvironmentID checks whether the given environment ID is valid.
+// Rules for all hosting types:
+// - Must be between 2 and 50 characters.
+// - Must only contain lowercase alphanumeric characters and dashes.
+// For Metaplay-hosted environments:
+// - Must be dash-separated segments, with 2 to 4 segments allowed.
+// - Each segment must consist of lowercase alphanumeric characters.
+// - Examples: 'tiny-squids' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
+// For self-hosted environments, only the global checks are applied.
+func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	if id == "" {
 		return fmt.Errorf("environment ID is empty")
 	}
 
-	// Split the string by dashes
-	parts := strings.Split(id, "-")
-
-	// Check number of parts (2-4 segments are allowed)
-	if len(parts) < 2 || len(parts) > 4 {
-		return fmt.Errorf("environment ID must have 2-4 dash-separated segments, got %d segments in '%s'", len(parts), id)
+	// Sanity check length.
+	if len(id) < 2 {
+		return fmt.Errorf("environment ID must be at least 2 characters long, got '%s'", id)
+	}
+	if len(id) > 50 {
+		return fmt.Errorf("environment ID must be at most 50 characters long, got '%s'", id)
 	}
 
-	// Validate each segment contains only alphanumeric characters
-	validSegment := regexp.MustCompile(`^[a-z0-9]+$`)
-	for i, part := range parts {
-		if !validSegment.MatchString(part) {
-			return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII alphanumeric characters (a-z, 0-9) are allowed", i+1, part)
+	// Only alphanumeric characters and dashes are allowed.
+	validChars := regexp.MustCompile(`^[a-z0-9-]+$`)
+	if !validChars.MatchString(id) {
+		return fmt.Errorf("environment ID '%s' contains invalid characters - only alphanumeric characters and dashes are allowed", id)
+	}
+
+	if hostingType == portalapi.HostingTypeMetaplayHosted {
+		// Split the string by dashes
+		parts := strings.Split(id, "-")
+
+		// Check number of parts (2-4 segments are allowed)
+		if len(parts) < 2 || len(parts) > 4 {
+			return fmt.Errorf("environment ID must have 2-4 dash-separated segments, got %d segments in '%s'", len(parts), id)
+		}
+
+		// Validate each segment contains only alphanumeric characters
+		validSegment := regexp.MustCompile(`^[a-z0-9]+$`)
+		for i, part := range parts {
+			if !validSegment.MatchString(part) {
+				return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII alphanumeric characters (a-z, 0-9) are allowed", i+1, part)
+			}
+		}
+	} else if hostingType == portalapi.HostingTypeSelfHosted {
+		// Cannot start or end with a dash.
+		if strings.HasPrefix(id, "-") {
+			return fmt.Errorf("environment ID '%s' cannot start with a dash", id)
+		}
+		if strings.HasSuffix(id, "-") {
+			return fmt.Errorf("environment ID '%s' cannot end with a dash", id)
+		}
+		if strings.Contains(id, "--") {
+			return fmt.Errorf("environment ID '%s' cannot contain consecutive dashes", id)
 		}
 	}
 
@@ -696,7 +750,7 @@ func validateHelmValuesFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to read file: %w", err)
 	}
-	var parsedData map[string]interface{}
+	var parsedData map[string]any
 	if err := yaml.Unmarshal(data, &parsedData); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
 	}

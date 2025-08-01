@@ -22,7 +22,7 @@ brew install metaplay
 Using install script:
 
 ```bash
-bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 ```
 
 ### On Windows
@@ -34,11 +34,11 @@ scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
 ```
 
-Using Chocolatey, with Metaplay as a custom package source (the package on the public feed is outdated due to the review process taking really long):
+Using Chocolatey the package installed from the public feed is most likely outdated, as the review process is manual and very slow. Therefore, we recommend running the CLI's built-in update command immediately after installing:
 
 ```bash
-choco source add --name metaplay --source https://github.com/metaplay/choco-packages
 choco install metaplay
+metaplay update cli
 ```
 
 ### On Linux
@@ -46,7 +46,7 @@ choco install metaplay
 Using install script:
 
 ```bash
-bash <(curl -sSfL https://raw.githubusercontent.com/metaplay/cli/main/install.sh)
+bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 ```
 
 ### Direct Download
@@ -212,6 +212,27 @@ cli$ go test ./...
 #### Platform Tests
 
 Most of the testing of the CLI is done using Metaplay's internal platform tests. The CLI does very little in isolation so there's not much that can be tested without the surrounding components.
+
+## Publishing and CI
+
+There are two types of releases published:
+
+* Pre-release versions (with `-dev.X` suffix), done for each commit to `main`.
+* Official releases (with no suffix), done for each version tag (e.g., `1.2.3`).
+
+### Steps to Publish
+
+1. Merge all relevant PRs into `main`.
+
+2. Wait for the pre-release version (e.g., `v1.2.3-dev.4`) to get published.
+
+3. Run the Metaplay internal [platform tests](https://github.com/metaplay/sdk/actions/workflows/platform-tests-new.yaml).
+
+    The latest CLI pre-release version is also covered by the platform tests.
+
+4. Tag the latest `main` (which was tested in the previous step) with the version number, e.g., `1.2.3` and push the tag.
+
+    This triggers the release process, which publishes the official release. It takes about 30min to publish.
 
 ## License
 

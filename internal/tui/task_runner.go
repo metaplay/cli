@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package tui
 
 import (
@@ -52,7 +53,7 @@ func (to *TaskOutput) AppendLine(line string) {
 }
 
 // AppendLinef appends a new formatted line at the end of the output using fmt.Sprintf.
-func (to *TaskOutput) AppendLinef(format string, a ...interface{}) {
+func (to *TaskOutput) AppendLinef(format string, a ...any) {
 	line := fmt.Sprintf(format, a...)
 	to.mu.Lock()
 	to.logLines = append(to.logLines, line)

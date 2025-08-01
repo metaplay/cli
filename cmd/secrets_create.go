@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -13,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type CreateSecretOpts struct {
+type secretsCreateOpts struct {
 	UsePositionalArgs
 
 	argEnvironment    string
@@ -25,7 +26,7 @@ type CreateSecretOpts struct {
 }
 
 func init() {
-	o := CreateSecretOpts{}
+	o := secretsCreateOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -58,10 +59,12 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Create a secret named 'user-mysecret' in environment 'tough-falcons' with two entries.
+			# Accessible with URLs 'kube-secret://user-mysecret#username' and 'kube-secret://user-mysecret#password'
 			metaplay secrets create tough-falcons user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
 
 			# Create a secret with entry payload read from a file.
-			metaplay secrets create tough-falcons user-mysecret --from-file=credentials.json=../../credentials-dev.json
+			# Accessible with URL 'kube-secret://user-mysecret#credentials'
+			metaplay secrets create tough-falcons user-mysecret --from-file=credentials=../../credentials-dev.json
 		`),
 	}
 
@@ -72,7 +75,7 @@ func init() {
 	flags.StringArrayVar(&o.flagFileValues, "from-file", []string{}, "Provide a key-value pair entry with the value read from a file (e.g., secret=../secret.txt)")
 }
 
-func (o *CreateSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Initialize key-value map.
 	o.payloadKeyValuePairs = map[string][]byte{}
 
@@ -123,7 +126,7 @@ func (o *CreateSecretOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *CreateSecretOpts) Run(cmd *cobra.Command) error {
+func (o *secretsCreateOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {

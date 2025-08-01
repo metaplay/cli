@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package styles
 
 func RenderBright(str string) string    { return StyleBright.Render(str) }

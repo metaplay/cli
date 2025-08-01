@@ -33,51 +33,13 @@ jobs:
         with:
           go-version: '1.24'
 
-      # Resolve tag for the release:
-      # - If latest release is an official one, bump its patch version by one and suffix with '-dev.1'
-      # - If latest release is a development one, increment the '-dev.N' suffix by one
+      # Resolve tag for the release. Writes the output into env variables NEXT_DEV_TAG and LATEST_RELEASE_TAG (in GITHUB_ENV).
       - name: Resolve tag for release
-        run: |
-          # Find the latest official release tag matching 'X.Y.Z' format
-          latest_official_tag=$(git tag --sort=v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | tail -n 1)
-          if [ -z "$latest_official_tag" ]; then
-            echo "Error: Latest official release tag (X.Y.Z) not found!"
-            exit 1
-          fi
-          echo "Latest official release tag: $latest_official_tag"
-          echo "LATEST_RELEASE_TAG=$latest_official_tag" >> $GITHUB_ENV
-
-          # Find the latest any release tag matching 'X.Y.Z.*' format
-          latest_tag=$(git tag --sort=v:refname | grep -E '^[0-9]+\.[0-9]+\.[0-9]+.*$' | tail -n 1)
-          if [ -z "$latest_tag" ]; then
-            echo "Error: Latest release tag (official or dev) not found!"
-            exit 1
-          fi
-
-          # Check if $latest_tag has the '-dev.n' suffix.
-          if [[ "$latest_tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-dev\.([0-9]+)$ ]]; then
-            # Bump the '-dev.N' suffix N by 1
-            base_version=${BASH_REMATCH[1]}
-            dev_num=${BASH_REMATCH[2]}
-            next_dev_num=$((dev_num + 1))
-            next_dev_tag="${base_version}-dev.${next_dev_num}"
-            echo "Computed next dev tag (incrementing dev number): $next_dev_tag"
-            echo "NEXT_DEV_TAG=$next_dev_tag" >> $GITHUB_ENV
-          else
-            # Parse tag using IFS and read
-            IFS='.' read -r major minor patch <<< "$latest_tag"
-
-            # Increment patch version and suffix with '-dev.1'
-            next_patch=$((patch + 1))
-            next_dev_tag="${major}.${minor}.${next_patch}-dev.1"
-            echo "Computed next dev tag: $next_dev_tag"
-            echo "NEXT_DEV_TAG=$next_dev_tag" >> $GITHUB_ENV
-          fi
+        run: python resolve_dev_version.py
 
       # Note: Not pushing tags due to lots of noise .. can still find versions from CI build history
       - name: Tag the version
-        run: |
-          git tag ${{ env.NEXT_DEV_TAG }}
+        run: git tag ${{ env.NEXT_DEV_TAG }}
 
       # Dev builds are not published to distribution channels, only available in Github as draft releases
       - name: Run GoReleaser (Development Build)

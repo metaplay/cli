@@ -1,16 +1,17 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -19,6 +20,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
@@ -127,6 +129,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
+	// Check that docker is installed and running
+	log.Debug().Msgf("Check if docker is available")
+	err = checkDockerAvailable()
+	if err != nil {
+		return err
+	}
+
 	// Validate Helm chart reference.
 	var chartVersionConstraints version.Constraints = nil
 	if o.flagHelmChartLocalPath != "" {
@@ -190,13 +199,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		o.argImageNameTag = localImages[0].RepoTag
 	}
 
-	// Push the image to the remote repository (if full name is specified).
+	// Resolve image tag and metadata from the local or remote image.
 	useLocalImage := strings.Contains(o.argImageNameTag, ":")
 	var imageTag string
-	var imageConfig *v1.ConfigFile
+	var imageInfo *envapi.MetaplayImageInfo
 	if useLocalImage {
 		// Resolve metadata from local image.
-		imageConfig, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
+		imageInfo, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
 		if err != nil {
 			return err
 		}
@@ -209,33 +218,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	} else {
 		imageTag = o.argImageNameTag
 
-		// Fetch the labels from the remote docker image.
+		// Fetch the image info from the remote docker image.
 		remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)
-		imageConfig, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+		imageInfo, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
 		if err != nil {
 			return err
 		}
 	}
-
-	// Determine the Metaplay SDK version, commit id, and build number from the docker image metadata.
-	imageLabels := imageConfig.Config.Labels
-	imageSdkVersion, found := imageLabels["io.metaplay.sdk_version"]
-	if !found {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.sdk_version' not found in the image metadata")
-	}
-	log.Debug().Msgf("Metaplay SDK version found in the image: %s", imageSdkVersion)
-
-	imageCommitId, hasCommitId := imageLabels["io.metaplay.commit_id"]
-	if !hasCommitId {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.commit_id' not found in the image metadata")
-	}
-	log.Debug().Msgf("Commit ID found in the image: %s", imageCommitId)
-
-	imageBuildNumber, hasBuildNumber := imageLabels["io.metaplay.build_number"]
-	if !hasBuildNumber {
-		return fmt.Errorf("invalid docker image: required label 'io.metaplay.build_number' not found in the image metadata")
-	}
-	log.Debug().Msgf("Build number found in the image: %s", imageBuildNumber)
 
 	// Resolve Helm chart to use (local or remote).
 	var helmChartPath string
@@ -306,26 +295,46 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
+	// For Metaplay-managed environments, check that the local env config (from metaplay-project.yaml)
+	// matches the one from portal.
+	if envConfig.HostingType == portalapi.HostingTypeMetaplayHosted {
+		portalClient := portalapi.NewClient(targetEnv.TokenSet)
+
+		// Fetch info from the portal.
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		if err != nil {
+			return err
+		}
+
+		// Environment type (prod, staging, development) must match that in the portal.
+		// Otherwise, the game server will be using wrong environment type-specific defaults.
+		if envConfig.Type != portalInfo.Type {
+			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
+			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
+			os.Exit(1)
+		}
+	}
+
 	// Default shard config based on environment type.
 	// \todo Auto-detect these from the infrastructure.
-	var shardConfig []map[string]interface{}
+	var shardConfig []map[string]any
 	if envConfig.Type == portalapi.EnvironmentTypeProduction || envConfig.Type == portalapi.EnvironmentTypeStaging {
-		shardConfig = []map[string]interface{}{
+		shardConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
-				"requests": map[string]interface{}{
+				"requests": map[string]any{
 					"cpu":    "1500m",
 					"memory": "3000M",
 				},
 			},
 		}
 	} else {
-		shardConfig = []map[string]interface{}{
+		shardConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
-				"requests": map[string]interface{}{
+				"requests": map[string]any{
 					"cpu":    "250m",
 					"memory": "500Mi",
 				},
@@ -336,25 +345,28 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
-	helmValues := map[string]interface{}{
+	helmDefaultValues := map[string]any{
 		"environment":       envConfig.Name,
 		"environmentFamily": envConfig.GetEnvironmentFamily(),
-		"config": map[string]interface{}{
+		"config": map[string]any{
 			"files": []string{
 				"./Config/Options.base.yaml",
 				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
 		},
-		"tenant": map[string]interface{}{
+		"tenant": map[string]any{
 			"discoveryEnabled": true,
 		},
-		"sdk": map[string]interface{}{
-			"version": imageSdkVersion,
-		},
-		"image": map[string]interface{}{
-			"tag": imageTag,
+		"sdk": map[string]any{
+			"version": imageInfo.SdkVersion,
 		},
 		"shards": shardConfig,
+	}
+	helmRequiredValues := map[string]any{
+		"image": map[string]any{
+			"tag":        imageTag,
+			"repository": envDetails.Deployment.EcrRepo,
+		},
 	}
 
 	// Resolve Helm release name. If not specified, default to:
@@ -392,10 +404,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	} else {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
 	}
-	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageBuildNumber))
-	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageCommitId))
-	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageConfig.Created.Time)))
-	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageSdkVersion))
+	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageInfo.BuildNumber))
+	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
+	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageInfo.CreatedTime)))
+	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageInfo.SdkVersion))
 	log.Info().Msgf("Deployment info:")
 	if o.flagHelmChartLocalPath != "" {
 		log.Info().Msgf("  Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
@@ -408,6 +420,18 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 	// \todo list of runtime options files
 	log.Info().Msg("")
+
+	// Check if the existing release is in some kind of pending state
+	if existingRelease != nil {
+		releaseName := existingRelease.Name
+		releaseStatus := existingRelease.Info.Status
+		if releaseStatus == release.StatusUninstalling {
+			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with 'metaplay remove server'", releaseName)
+		} else if releaseStatus.IsPending() {
+			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the server with 'metaplay remove server'", releaseName, releaseStatus)
+		}
+		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
+	}
 
 	taskRunner := tui.NewTaskRunner()
 
@@ -438,7 +462,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			helmChartPath,
 			useHelmChartVersion,
 			valuesFiles,
-			helmValues,
+			helmDefaultValues,
+			helmRequiredValues,
 			5*time.Minute)
 		return err
 	})
@@ -475,7 +500,7 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 		title,
 		localImages,
 		func(img *envapi.MetaplayImageInfo) (string, string) {
-			description := humanize.Time(img.ConfigFile.Created.Time)
+			description := humanize.Time(img.CreatedTime)
 			return img.RepoTag, description
 		})
 	if err != nil {

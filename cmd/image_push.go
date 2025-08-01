@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -14,7 +15,6 @@ import (
 
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -24,7 +24,7 @@ import (
 )
 
 // Push the (already built) docker image to the remote docker repository.
-type PushImageOptions struct {
+type imagePushOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -32,7 +32,7 @@ type PushImageOptions struct {
 }
 
 func init() {
-	o := PushImageOptions{}
+	o := imagePushOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
@@ -59,7 +59,7 @@ func init() {
 	imageCmd.AddCommand(cmd)
 }
 
-func (o *PushImageOptions) Prepare(cmd *cobra.Command, args []string) error {
+func (o *imagePushOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate docker image name: must be a repository:tag pair.
 	if !strings.Contains(o.argImageName, ":") {
 		return fmt.Errorf("IMAGE must be a full docker image name 'NAME:TAG', got '%s'", o.argImageName)
@@ -68,7 +68,7 @@ func (o *PushImageOptions) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *PushImageOptions) Run(cmd *cobra.Command) error {
+func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -144,12 +144,9 @@ func extractDockerImageTag(imageName string) (string, error) {
 // Output progress into the task output.
 func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
 	// Create a Docker client
-	// \todo This has been observed to fail on Tuomo's Mac with: "Cannot connect to the Docker daemon
-	// at unix:///var/run/docker.sock. Is the docker daemon running?"
-	// For details, see comments on https://github.com/metaplay/sdk/pull/3627
-	cli, err := client.NewClientWithOpts(client.WithAPIVersionNegotiation())
+	cli, err := envapi.NewDockerClient()
 	if err != nil {
-		return fmt.Errorf("failed to create Docker client: %w", err)
+		return err
 	}
 
 	// Extract tag from source image.

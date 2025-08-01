@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -17,19 +18,19 @@ import (
 )
 
 // Build docker image for the project.
-type buildDockerImageOpts struct {
+type buildImageOpts struct {
 	UsePositionalArgs
 
-	argImageName     string
-	extraArgs        []string
-	flagBuildEngine  string
-	flagArchitecture string
-	flagCommitID     string
-	flagBuildNumber  string
+	argImageName      string
+	extraArgs         []string
+	flagBuildEngine   string
+	flagArchitectures []string
+	flagCommitID      string
+	flagBuildNumber   string
 }
 
 func init() {
-	o := buildDockerImageOpts{}
+	o := buildImageOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
@@ -68,7 +69,10 @@ func init() {
 			metaplay build image mygame:364cff09 --engine=buildkit
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build image mygame:364cff09 --platform=arm64
+			metaplay build image mygame:364cff09 --architecture=arm64
+
+			# Build a multi-arch image for both amd64 and arm64 (only supported with 'buildx').
+			metaplay build image mygame:364cff09 --architecture=amd64,arm64
 
 			# Pass extra arguments to the docker build.
 			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
@@ -79,12 +83,12 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
-	flags.StringVar(&o.flagArchitecture, "architecture", "amd64", "Architecture of build target, 'amd64' or 'arm64'")
+	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64')")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
 }
 
-func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *buildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle image name.
 	if o.argImageName == "" {
 		o.argImageName = "<projectID>:<timestamp>"
@@ -98,7 +102,7 @@ func (o *buildDockerImageOpts) Prepare(cmd *cobra.Command, args []string) error 
 	return nil
 }
 
-func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
+func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Build Docker Image"))
 	log.Info().Msg("")
@@ -126,19 +130,19 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Auto-detect git commit ID
-	commitId := o.flagCommitID
-	commitIdBadge := ""
-	if commitId == "" {
-		commitId = detectEnvVar([]string{
+	commitID := o.flagCommitID
+	commitIDBadge := ""
+	if commitID == "" {
+		commitID = detectEnvVar([]string{
 			"GIT_COMMIT", "GITHUB_SHA", "CI_COMMIT_SHA", "CIRCLE_SHA1", "TRAVIS_COMMIT",
 			"BUILD_SOURCEVERSION", "BITBUCKET_COMMIT", "BUILD_VCS_NUMBER", "BUILDKITE_COMMIT", "DRONE_COMMIT_SHA",
 			"SEMAPHORE_GIT_SHA",
 		})
-		if commitId != "" {
-			commitIdBadge = styles.RenderMuted("(auto-detected)")
+		if commitID != "" {
+			commitIDBadge = styles.RenderMuted("(auto-detected)")
 		} else {
-			commitId = "none" // default if not specified
-			commitIdBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-id=<id>]")
+			commitID = "none" // default if not specified
+			commitIDBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-id=<id>]")
 		}
 	}
 
@@ -189,16 +193,8 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(2)
 	}
 
-	// Resolve target platform.
-	validArchitectures := []string{"amd64", "arm64"}
-	if !contains(validArchitectures, o.flagArchitecture) {
-		log.Error().Msgf("Invalid architecture '%s'. Must be one of %v.", o.flagArchitecture, validArchitectures)
-		os.Exit(2)
-	}
-	platform := fmt.Sprintf("linux/%s", o.flagArchitecture)
-
-	// Check that docker is installed and running with a 5 second timeout
-	log.Debug().Msgf("Check if docker is available")
+	// Check that docker is installed and running
+	log.Debug().Msgf("Check that docker is available")
 	err = checkDockerAvailable()
 	if err != nil {
 		return err
@@ -212,12 +208,43 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 
+	// Check that the build engine is available.
+	err = checkBuildEngineAvailable(buildEngine)
+	if err != nil {
+		return err
+	}
+
+	// Validate target architectures.
+	validArchitectures := []string{"amd64", "arm64"}
+	if len(o.flagArchitectures) == 0 {
+		log.Error().Msg("No architectures specified.")
+		os.Exit(2)
+	}
+	for _, arch := range o.flagArchitectures {
+		if !contains(validArchitectures, arch) {
+			log.Error().Msgf("Invalid architecture '%s' specified. Must be one of %v.", arch, validArchitectures)
+			os.Exit(2)
+		}
+	}
+
+	// Only buildx supports building multiple architectures at once.
+	if buildEngine == "buildkit" && len(o.flagArchitectures) > 1 {
+		log.Error().Msg("BuildKit does not support building multiple architectures at once. Please use '--engine=buildx' for multi-arch builds.")
+		os.Exit(2)
+	}
+
+	// Resolve target platforms.
+	platforms := []string{}
+	for _, arch := range o.flagArchitectures {
+		platforms = append(platforms, fmt.Sprintf("linux/%s", arch))
+	}
+
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
-	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitId), commitIdBadge)
+	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
-	log.Info().Msgf("Target platform:     %s", styles.RenderTechnical(platform))
+	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
 	// Rebase paths to be relative to docker build root.
@@ -275,7 +302,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"--pull",
 			"-t", imageName,
 			"-f", filepath.ToSlash(rebasedDockerFilePath),
-			"--platform", platform,
+			"--platform", strings.Join(platforms, ","),
 			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
 			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
@@ -283,7 +310,7 @@ func (o *buildDockerImageOpts) Run(cmd *cobra.Command) error {
 			"--build-arg", "METAPLAY_DOTNET_SDK_VERSION=" + projectDotnetVersion,
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
-			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitId),
+			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitID),
 		}...,
 	)
 	dockerArgs = append(dockerArgs, o.extraArgs...)
@@ -399,18 +426,47 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 // Check if docker is available and running. Uses a short timeout as 'docker' invocation
 // can sometimes hang indefinitely.
 func checkDockerAvailable() error {
+	// Run 'docker info' in background so we can handle timeouts (docker is known to hang
+	// indefinitely in some cases).
 	done := make(chan error)
 	go func() {
 		done <- checkCommand("docker", "info")
 	}()
 
+	// Wait for docker to respond .. print a waiting message after 1sec
 	select {
 	case err := <-done:
 		if err != nil {
 			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
 		}
-	case <-time.After(10 * time.Second):
-		return fmt.Errorf("timeout while checking for docker. Ensure docker is running and responsive.")
+		return nil
+	case <-time.After(time.Second):
+		log.Info().Msgf("Waiting for docker daemon to respond...")
+	}
+
+	// Wait for 9sec more (for total of 10sec) before timing out
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
+		}
+	case <-time.After(9 * time.Second):
+		return fmt.Errorf("timeout while invoking docker. Ensure docker is running and responsive.")
+	}
+
+	return nil
+}
+
+// Check that the specified docker build engine is available.
+func checkBuildEngineAvailable(buildEngine string) error {
+	log.Debug().Msgf("Check that build engine %s is available", buildEngine)
+
+	switch buildEngine {
+	case "buildx":
+		err := checkCommand("docker", "buildx", "version")
+		if err != nil {
+			return fmt.Errorf("Docker buildx is not available. Ensure docker buildx is properly installed.")
+		}
 	}
 
 	return nil

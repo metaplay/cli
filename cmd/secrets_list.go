@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -14,7 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-type ListSecretsOpts struct {
+type secretsListOpts struct {
 	UsePositionalArgs
 
 	argEnvironment string
@@ -23,7 +24,7 @@ type ListSecretsOpts struct {
 }
 
 func init() {
-	o := ListSecretsOpts{}
+	o := secretsListOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -67,7 +68,7 @@ func init() {
 	flags.StringVar(&o.flagFormat, "format", "text", "Output format. Valid values are 'text' or 'json'. JSON format always shows values.")
 }
 
-func (o *ListSecretsOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *secretsListOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate format
 	if o.flagFormat != "text" && o.flagFormat != "json" {
 		return fmt.Errorf("invalid format %q, must be either 'text' or 'json'", o.flagFormat)
@@ -76,7 +77,7 @@ func (o *ListSecretsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *ListSecretsOpts) Run(cmd *cobra.Command) error {
+func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -100,12 +101,12 @@ func (o *ListSecretsOpts) Run(cmd *cobra.Command) error {
 
 	// Output the secrets in desired format.
 	if o.flagFormat == "json" {
-		secretsJson, err := json.MarshalIndent(secrets, "", "  ")
+		secretsJSON, err := json.MarshalIndent(secrets, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)
 		}
 
-		log.Info().Msgf("%s", string(secretsJson))
+		log.Info().Msgf("%s", string(secretsJSON))
 	} else {
 		if len(secrets) == 0 {
 			log.Info().Msgf("No secrets found in the environment")

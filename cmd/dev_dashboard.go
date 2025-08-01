@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 import (
@@ -62,13 +63,13 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}); err != nil {
+	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
 		return fmt.Errorf("failed to build the LiveOps Dashboard: %s", err)
 	}
 
 	// Run the dashboard project in dev mode
 	devArgs := append([]string{"dev"}, o.extraArgs...)
-	if err := execChildInteractive(dashboardPath, "pnpm", devArgs); err != nil {
+	if err := execChildInteractive(dashboardPath, "pnpm", devArgs, nil); err != nil {
 		return fmt.Errorf("failed to run the LiveOps Dashboard: %s", err)
 	}
 

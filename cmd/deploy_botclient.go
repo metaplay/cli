@@ -1,6 +1,7 @@
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
+
 package cmd
 
 // \todo More configurability: number of replicas, number of bots, etc.
@@ -18,6 +19,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 const metaplayLoadTestChartName = "metaplay-loadtest"
@@ -78,7 +80,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-botclients.yaml'")
 }
 
 func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -95,7 +97,7 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
-	project, err := tryResolveProject()
+	project, err := resolveProject()
 	if err != nil {
 		return err
 	}
@@ -122,7 +124,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
-		helmChartVersion := project.Config.ServerChartVersion
+		helmChartVersion := project.Config.BotClientChartVersion
 		if o.flagHelmChartVersion != "" {
 			helmChartVersion = o.flagHelmChartVersion
 		}
@@ -187,7 +189,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
-	helmValues := map[string]interface{}{
+	helmDefaultValues := map[string]any{
 		"environmentFamily": "Development", // not really but shouldn't matter in botclient
 		"botclients": map[string]any{
 			"targetPort":         9339,
@@ -219,6 +221,14 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			},
 		},
 	}
+	helmRequiredValues := map[string]any{
+		"botclients": map[string]any{
+			"image": map[string]any{
+				"repository": envDetails.Deployment.EcrRepo,
+				"tag":        o.argImageTag,
+			},
+		},
+	}
 
 	// Resolve Helm release name. If not specified, default to:
 	// - Earlier name if a deployment already exists.
@@ -236,15 +246,28 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Show info.
-	log.Info().Msgf("Environment ID:     %s", styles.RenderTechnical(envConfig.HumanID))
-	log.Info().Msgf("Environment name:   %s", styles.RenderTechnical(envConfig.Name))
-	log.Info().Msgf("Environment type:   %s", styles.RenderTechnical(string(envConfig.Type)))
-	log.Info().Msgf("Docker image tag:   %s", styles.RenderTechnical(o.argImageTag))
-	log.Info().Msgf("Helm chart version: %s", styles.RenderTechnical(useHelmChartVersion))
-	log.Info().Msgf("Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
-	log.Info().Msgf("Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
-	log.Info().Msgf("Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
+	log.Info().Msg("Target environment:")
+	log.Info().Msgf("  Name:               %s", styles.RenderTechnical(envConfig.Name))
+	log.Info().Msgf("  ID:                 %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("  Type:               %s", styles.RenderTechnical(string(envConfig.Type)))
+	log.Info().Msg("Build information:")
+	log.Info().Msgf("  Image tag:          %s", styles.RenderTechnical(o.argImageTag))
+	log.Info().Msgf("Deployment info:")
+	log.Info().Msgf("  Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
+	log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(coalesceString(strings.Join(valuesFiles, ", "), "none")))
 	log.Info().Msg("")
+
+	// Check if the existing release is in some kind of pending state
+	if existingRelease != nil {
+		releaseName := existingRelease.Name
+		releaseStatus := existingRelease.Info.Status
+		if releaseStatus == release.StatusUninstalling {
+			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the botclient with 'metaplay remove botclient'", releaseName)
+		} else if releaseStatus.IsPending() {
+			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the botclient with 'metaplay remove botclient'", releaseName, releaseStatus)
+		}
+		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
+	}
 
 	taskRunner := tui.NewTaskRunner()
 
@@ -259,7 +282,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			helmChartPath,
 			useHelmChartVersion,
 			valuesFiles,
-			helmValues,
+			helmDefaultValues,
+			helmRequiredValues,
 			5*time.Minute)
 		return err
 	})
