@@ -52,6 +52,7 @@ type debugDatabaseOpts struct {
 	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
 	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
 	flagQueryFile    string // If set, read SQL query from this file and exit (non-interactive)
+	flagOutput       string // If set, write output to this file instead of stdout
 
 	DiagnosticsImage string // Diagnostic container image name to use
 }
@@ -83,8 +84,11 @@ func init() {
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
 
-			Optionally, you can use --query to specify a SQL statement to execute immediately and
-			print the result, or --query-file to read the SQL statement from a file.
+			Optionally, you can use --query <sql> to specify a SQL statement to execute immediately
+			and output the result, or --query-file <filename> to read the SQL statement from a file.
+
+			When running non-interactive queries (using --query or --query-file), you can use
+			--output <filename> to write the output to a file instead of stdout.
 
 			{Arguments}
 		`),
@@ -101,6 +105,9 @@ func init() {
 			# Run a query on the first shard and exit immediately after
 			metaplay debug database nimbly 0 --query "SELECT COUNT(*) FROM Players"
 
+			# Run a query on the first shard and write the output to a file
+			metaplay debug database nimbly 0 --query "SELECT COUNT(*) FROM Players" --output count.txt
+
 			# Run a query from a file on the first shard and exit immediately after
 			metaplay debug database nimbly 0 --query-file ./my_query.sql
 		`),
@@ -109,6 +116,7 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagReadWrite, "read-write", false, "Connect to the read-write replica (default: read-only)")
 	cmd.Flags().StringVarP(&o.flagQuery, "query", "q", "", "Run this SQL query and exit (non-interactive)")
 	cmd.Flags().StringVar(&o.flagQueryFile, "query-file", "", "Read SQL query from a file and execute it (non-interactive)")
+	cmd.Flags().StringVar(&o.flagOutput, "output", "", "Write output to a file instead of stdout (non-interactive)")
 	debugCmd.AddCommand(cmd)
 }
 
@@ -284,6 +292,11 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	// Determine whether to run in interactive mode or a single query
 	isInteractive := o.flagQuery == ""
 
+	// Use of --output is only allowed with a non-interactive query
+	if o.flagOutput != "" && isInteractive {
+		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
+	}
+
 	// Determine command for starting MySQL CLI.
 	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
 		host,
@@ -318,13 +331,31 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		stdin = os.Stdin
 	}
 
+	// Setup output channel to stdout or file
+	var out io.Writer = os.Stdout
+	var file *os.File
+	if o.flagOutput != "" && !isInteractive {
+		var err error
+		file, err = os.Create(o.flagOutput)
+		if err != nil {
+			return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+		}
+		defer file.Close()
+		out = file
+	}
+
 	ioStreams := IOStreams{
 		In:     stdin,
-		Out:    os.Stdout,
+		Out:    out,
 		ErrOut: os.Stderr,
 	}
 
-	return execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
+	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
+	if err == nil && o.flagOutput != "" && !isInteractive {
+		stderrLogger.Info().Msg("")
+		stderrLogger.Info().Msgf("✅ Wrote output to %s", styles.RenderTechnical(o.flagOutput))
+	}
+	return err
 }
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
