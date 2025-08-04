@@ -114,6 +114,17 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Update the environment configs JSON file.
+	// - Resolve where EnvironmentConfigs.json is located.
+	//   * By default, it's at <UnityClient>/ProjectSettings/Metaplay/EnvironmentConfigs.json.
+	//   * TODO: Can we move the file to outside of Unity? Where would we like to keep it?
+	//           Specify its location in metaplay-project.yaml to help find it from any directory?
+	// - Update each environment's config by merging the new config with the existing config.
+	//   * Use the ServerHost as the key to match the configs? Should be more robust than EnvironmentId (which is actually name).
+	//   * Use untyped JSON to perform the merges -- there can be userland data in the payload, so we can't know its structure.
+	//   * Report any changes that were made, including unknown/failed environments.
+	//   * Write updated EnvironmentConfigs.json back to disk.
+
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
 	return nil
