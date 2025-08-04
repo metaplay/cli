@@ -93,6 +93,21 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Found following environments for project: %+v", projectEnvironments)
 
+	// Fetch project environment client configs from the portal.
+	// \todo why make two requests? can we combine this with the previous fetch?
+	projectEnvClientConfigs, err := portalClient.FetchProjectEnvironmentClientConfigs(projectInfo.UUID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch project environment client configs from the portal: %w", err)
+	}
+	log.Debug().Msgf("Found following environment client configs for project: %d environments", len(projectEnvClientConfigs))
+	for _, config := range projectEnvClientConfigs {
+		if config.ClientConfig != nil {
+			log.Debug().Msgf("  %s %s: %+v", styles.RenderSuccess("✓"), styles.RenderTechnical(config.EnvironmentHumanID), config.ClientConfig)
+		} else {
+			log.Debug().Msgf("  %s %s: %s", styles.RenderError("✗"), styles.RenderTechnical(config.EnvironmentHumanID), *config.Error)
+		}
+	}
+
 	// Update the environments in metaplay-project.yaml.
 	err = o.updateProjectConfigEnvironments(project, projectEnvironments)
 	if err != nil {

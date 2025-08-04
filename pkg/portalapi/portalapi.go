@@ -196,6 +196,19 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	return &envInfos[0], nil
 }
 
+// \todo Handle error response as well
+func (c *Client) FetchProjectEnvironmentClientConfigs(projectUUID string) ([]EnvironmentClientConfigResponse, error) {
+	url := fmt.Sprintf("/api/v1/environments/client_configs?projectId=%s", projectUUID)
+	log.Debug().Msgf("Fetch project environment client configs by UUID from %s%s", c.httpClient.BaseURL, url)
+	environmentInfos, err := metahttp.Get[[]EnvironmentClientConfigResponse](c.httpClient, url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
+	}
+
+	log.Debug().Msgf("Environment client configs response from portal: %+v", environmentInfos)
+	return environmentInfos, nil
+}
+
 // GetLatestSdkVersionInfo retrieves information about the latest SDK version.
 func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
 	sdkInfo, err := metahttp.Get[SdkVersionInfo](c.httpClient, "/api/v1/sdk/latest")

@@ -94,6 +94,36 @@ type EnvironmentInfo struct {
 	// Slug        string          `json:"slug"`         // Slug for the environment (simplified version of name)
 }
 
+// EnvironmtneClientConfig contains the configuration information required by the
+// client to connect to the environment.
+// \todo Tighten up the optionality on the OAuth2 params where possible.
+type EnvironmentClientConfig struct {
+	EnvironmentFamily               string `json:"EnvironmentFamily"`
+	EnvironmentName                 string `json:"EnvironmentId"` // Note: For legacy reasons, the JSON field is named incorrectly.
+	ServerHost                      string `json:"ServerHost"`
+	ServerPorts                     []int  `json:"ServerPorts"`
+	ServerPortsForWebSocket         []int  `json:"ServerPortsForWebSocket"`
+	EnableTls                       bool   `json:"EnableTls"`
+	CdnBaseUrl                      string `json:"CdnBaseUrl"`
+	AdminApiBaseUrl                 string `json:"AdminApiBaseUrl"`
+	AdminApiUseOpenIdConnectIdToken bool   `json:"AdminApiUseOpenIdConnectIdToken"`
+	OAuth2ClientID                  string `json:"OAuth2ClientID,omitempty"`
+	OAuth2ClientSecret              string `json:"OAuth2ClientSecret,omitempty"`
+	OAuth2Audience                  string `json:"OAuth2Audience,omitempty"`
+	OAuth2AuthorizationEndpoint     string `json:"OAuth2AuthorizationEndpoint"`
+	OAuth2TokenEndpoint             string `json:"OAuth2TokenEndpoint"`
+	OAuth2LocalCallback             string `json:"OAuth2LocalCallback,omitempty"`
+	OAuth2UseStateParameter         bool   `json:"OAuth2UseStateParameter"`
+}
+
+// EnvironmentClientConfigResponse is the response from the portal for a single environment's client config.
+// Each entry contains either the client config or an error, but not both.
+type EnvironmentClientConfigResponse struct {
+	EnvironmentHumanID string                   `json:"environment_human_id"`
+	ClientConfig       *EnvironmentClientConfig `json:"client_config"`
+	Error              *string                  `json:"error"`
+}
+
 // SdkVersionInfo represents information about an SDK version
 type SdkVersionInfo struct {
 	ID              string  `json:"id"`
