@@ -53,7 +53,8 @@ func init() {
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: renderExample(`
-			# Build Docker image, produces image named '<projectID>:<timestamp>'.
+			# Build Docker image, produces image named '<projectID>:<timestamp>'. Only recommended when
+			# building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
 			# Specify only the tag, produces image named '<projectID>:364cff09'.
