@@ -46,11 +46,6 @@ func init() {
 			The built image contains both the game server (C# project), the LiveOps
 			Dashboard, and the BotClient.
 
-			If the image tag is not explicitly specified, the command tries to identify the commit ID/SHA
-			from well-known environment variables used by CI systems such as 'GIT_COMMIT' and uses that
-			as the tag. If no such environment variable is found, usually when running the command locally,
-			the tag is set to the current time.
-
 			{Arguments}
 
 			Related commands:
@@ -58,7 +53,7 @@ func init() {
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: renderExample(`
-			# Build Docker image, produces image named '<projectID>:<tag>'. See full help for details on <tag>.
+			# Build Docker image, produces image named '<projectID>:<timestamp>'.
 			metaplay build image
 
 			# Specify only the tag, produces image named '<projectID>:364cff09'.
