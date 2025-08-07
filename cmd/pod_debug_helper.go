@@ -83,6 +83,11 @@ func createDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 			Stdin:           interactive,
 			TTY:             tty,
 			Command:         command,
+			SecurityContext: &corev1.SecurityContext{
+				Capabilities: &corev1.Capabilities{
+					Add: []corev1.Capability{"SYS_PTRACE"},
+				},
+			},
 			Env: []corev1.EnvVar{
 				{
 					Name:  "TERM",
