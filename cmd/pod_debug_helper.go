@@ -85,6 +85,7 @@ func createDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 			Command:         command,
 			SecurityContext: &corev1.SecurityContext{
 				Capabilities: &corev1.Capabilities{
+					// Enable ptrace to allow debugging/tracing. Should be equivalent to 'kubectl debug --profile=general'.
 					Add: []corev1.Capability{"SYS_PTRACE"},
 				},
 			},
