@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - pages-ci
+      - docs-dump # \todo temp
     # Only run on changes to install.sh and publish-pages.yml
     paths:
       - install.sh
@@ -28,6 +29,11 @@ jobs:
           # Copy install.sh into 'site/'
           mkdir site
           cp install.sh site/
+
+      # Write the full command reference into the directory
+      - name: Write command reference
+        run: |
+          go run . dev show-commands --output-docs site/command-reference.md
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
