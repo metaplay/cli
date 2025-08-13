@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/pkg/metaproj"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
 
@@ -30,9 +31,7 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 
 	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
 	installedVersionStr := strings.TrimSpace(out.String())
-	if strings.HasPrefix(installedVersionStr, "v") {
-		installedVersionStr = installedVersionStr[1:]
-	}
+	installedVersionStr = strings.TrimPrefix(installedVersionStr, "v")
 
 	// Parse installed Node version
 	installedVersion, err := version.NewVersion(installedVersionStr)
@@ -45,25 +44,22 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
 	}
 
-	// Handle cases where the installed version is more recent than recommended:
-	// - If installed major version is more recent, fail.
-	// - If installed minor version is more recent, warn.
-	// - If installer patch version is more recent, log.
+	// If installed major version is more recent than expected, fail.
 	installedMajorVersion := installedVersion.Segments()[0]
-	installedMinorVersion := installedVersion.Segments()[1]
-	installedPatchVersion := installedVersion.Segments()[2]
 	requiredMajorVersion := recommendedVersion.Segments()[0]
-	requiredMinorVersion := recommendedVersion.Segments()[1]
-	requiredPatchVersion := recommendedVersion.Segments()[2]
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("installed Node.js version %s is too recent; version v%d.x.y", installedVersion, requiredMajorVersion)
-	} else if installedMinorVersion > requiredMinorVersion {
-		log.Warn().Msgf("Installed Node.js version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", installedVersion, requiredMajorVersion, requiredMinorVersion)
-	} else if installedPatchVersion > requiredPatchVersion {
-		log.Info().Msgf("Installed Node.js version %s is more recent than recommended version %s", installedVersion, recommendedVersion)
-	} else {
-		log.Info().Msgf("Installed Node.js version %s matches the recommended version exactly", installedVersion)
+		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
 	}
+
+	// Print the info.
+	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", recommendedVersion))
+	installedMinorVersion := installedVersion.Segments()[1]
+	requiredMinorVersion := recommendedVersion.Segments()[1]
+	if installedMinorVersion > requiredMinorVersion {
+		badge = badge + " " + styles.RenderWarning("[minor version is more recent; downgrade if you encounter any problems]")
+	}
+
+	log.Info().Msgf("%s Node.js detected: %s %s", styles.RenderSuccess("✓"), styles.RenderTechnical(installedVersion.String()), badge)
 
 	return nil
 }
@@ -86,30 +82,29 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 		return fmt.Errorf("failed to parse pnpm version from '%s': %v", installedVersionStr, err)
 	}
 
-	// Fail if version older than recommended.
+	// Fail if installed version is older than required.
 	if installedVersion.LessThan(recommendedVersion) {
 		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm!", recommendedVersion, installedVersion)
 	}
 
-	// Handle cases where the installed version is more recent than recommended:
-	// - If installed major version is more recent, fail.
-	// - If installed minor version is more recent, warn.
-	// - If installer patch version is more recent, log.
+	// Grab versions.
 	installedMajorVersion := installedVersion.Segments()[0]
 	installedMinorVersion := installedVersion.Segments()[1]
-	installedPatchVersion := installedVersion.Segments()[2]
 	requiredMajorVersion := recommendedVersion.Segments()[0]
 	requiredMinorVersion := recommendedVersion.Segments()[1]
-	requiredPatchVersion := recommendedVersion.Segments()[2]
+
+	// If installed major version is more recent than expected, fail.
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("installed pnpm version %s is too recent; version v%d.x.y", installedVersion, requiredMajorVersion)
-	} else if installedMinorVersion > requiredMinorVersion {
-		log.Warn().Msgf("Installed pnpm version %s minor version is more recent than recommended; if you encounter any problems, downgrade to version v%d.%d.x", installedVersion, requiredMajorVersion, requiredMinorVersion)
-	} else if installedPatchVersion > requiredPatchVersion {
-		log.Info().Msgf("Installed pnpm version %s is more recent than recommended version %s", installedVersion, recommendedVersion)
-	} else {
-		log.Info().Msgf("Installed pnpm version %s matches the recommended version exactly", installedVersion)
+		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
 	}
+
+	// Print the info.
+	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", recommendedVersion))
+	if installedMinorVersion > requiredMinorVersion {
+		badge = badge + " " + styles.RenderWarning("[warning: minor version is more recent; downgrade if you encounter any problems]")
+	}
+
+	log.Info().Msgf("%s pnpm detected:    %s %s", styles.RenderSuccess("✓"), styles.RenderTechnical(installedVersion.String()), badge)
 
 	return nil
 }
@@ -124,6 +119,8 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	if err := checkPnpmVersion(project.VersionMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
+
+	log.Info().Msg("")
 
 	return nil
 }
