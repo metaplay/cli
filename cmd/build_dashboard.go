@@ -46,7 +46,7 @@ func init() {
 
 			If you want to include the a pre-built version of the dashboard in your version
 			control, so that it can be served locally without the Node/pnpm tooling installed,
-			use the --prebuilt flag to place the build output in Backend/PrebuiltDashboard/.
+			use the --output-prebuilt flag to place the build output in Backend/PrebuiltDashboard/.
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
 			version control.
 
@@ -60,7 +60,7 @@ func init() {
 			metaplay build dashboard
 
 			# Output pre-built dashboard (see help text for explanations)
-			metaplay build dashboard --prebuilt
+			metaplay build dashboard --output-prebuilt
 
 			# Skip dependency installation (faster builds if deps already installed)
 			metaplay build dashboard --skip-install
@@ -72,7 +72,7 @@ func init() {
 
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-install", false, "Skip the pnpm install step")
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-pnpm", false, "Skip the pnpm install step (deprecated, use --skip-install)")
-	buildDashboardCmd.Flags().BoolVar(&o.flagOutputPrebuilt, "prebuilt", false, "Output pre-built version of the dashboard (see help text)")
+	buildDashboardCmd.Flags().BoolVar(&o.flagOutputPrebuilt, "output-prebuilt", false, "Output pre-built version of the dashboard (see help text)")
 
 	buildCmd.AddCommand(buildDashboardCmd)
 }
@@ -130,8 +130,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
 	}
 
-	// Build with pnpm. If --prebuilt flag is set, output build results to Backend/PrebuiltDashboard (instead
-	// of the default Backend/Dashboard/dist/).
+	// Build with pnpm. If --output-prebuilt flag is set, output build results to Backend/PrebuiltDashboard,
+	// intended to be committed to version control.
 	buildArgs := []string{"build"}
 	if o.flagOutputPrebuilt {
 		buildArgs = append(buildArgs, "--outDir", "../PrebuiltDashboard")
@@ -146,42 +146,14 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		os.Exit(1)
 	}
 
-	// // Build TypeScript.
-	// buildTypeScriptArgs := []string{"exec", "vue-tsc", "--build"}
-	// log.Info().Msg("")
-	// log.Info().Msg("Build TypeScript...")
-	// log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(buildTypeScriptArgs, " "))))
-	// err = execChildInteractive(dashboardPath, "pnpm", buildTypeScriptArgs, nil)
-	// if err != nil {
-	// 	log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
-	// 	os.Exit(1)
-	// }
-
-	// // If --prebuilt flag is set, configure build output to go to Backend/PrebuiltDashboard (instead
-	// // of the default Dashboard/dist/).
-	// viteBuildArgs := []string{"exec", "vite", "build"}
-	// if o.flagOutputPrebuilt {
-	// 	viteBuildArgs = append(viteBuildArgs, "--outDir", "../PrebuiltDashboard")
-	// }
-
-	// // Append user args for Vite build.
-	// viteBuildArgs = append(viteBuildArgs, o.extraArgs...)
-	// log.Info().Msg("")
-	// log.Info().Msg("Execute Vite build...")
-	// log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(viteBuildArgs, " "))))
-	// if err := execChildInteractive(dashboardPath, "pnpm", viteBuildArgs, nil); err != nil {
-	// 	log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
-	// 	os.Exit(1)
-	// }
-
-	// Built done
+	// Build done.
 	log.Info().Msg("")
 	log.Info().Msgf("✅ Dashboard built successfully")
 	log.Info().Msg("")
 	if o.flagOutputPrebuilt {
 		log.Info().Msgf("%s", styles.RenderPrompt("You should commit the modified files in Backend/PrebuiltDashboard/ to your version control."))
 	} else {
-		log.Info().Msg("The game server will serve the build dashboard on http://localhost:5550")
+		log.Info().Msg("The game server will serve the built dashboard on http://localhost:5550")
 	}
 	return nil
 }
