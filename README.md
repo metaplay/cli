@@ -179,23 +179,23 @@ It is highly recommended to use the latest official release, so should you decid
 
 #### Build Locally
 
-There is a simple `Makefile` which builds the CLI into the `dist/` directory when run:
+There is a simple `Makefile` which produces the CLI binary as `dist/metaplay` (or `dist/metaplay.exe` on Windows):
 
 ```bash
 cli$ make
 ```
 
-It can be convenient to set the `cli/dist` directory to your `PATH` to make it easier to run the CLI from any directory.
+You can add the `dist/` directory to your `PATH` to enable running the locally built CLI binary from any directory.
 
 #### Run Locally
 
-While developing the CLI itself, it's often most convenient to run the binary from source and direct it to operate on a project with the `-p` flag, e.g.:
+While developing the CLI itself, it's often most convenient to run the CLI without building it. You can run it on a project with the `-p` flag, e.g.:
 
 ```bash
 cli$ go run . -p ../MyProject debug shell
 ```
 
-When working on authentication-related features on Windows, you can avoid the network confirm dialog from being asked each with the following:
+When working on Windows, you can avoid the network confirm dialog from being asked each with the following:
 
 ```bash
 cli$ go build . && cli.exe auth login
