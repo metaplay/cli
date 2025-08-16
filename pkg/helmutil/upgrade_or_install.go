@@ -58,6 +58,7 @@ func HelmUpgradeOrInstall(
 	// Determine if install or upgrade based on existence of release:
 	// - Use install if no previous Helm release exists
 	// - Use upgrade if a previous Helm release exists
+	// \todo Enable schema validation (don't set SkipSchemaValidation) once we have updated the chart to use a recent version of Helm.
 	if existingRelease == nil {
 		output.AppendLine("No existing release found, install new release")
 		installCmd = action.NewInstall(actionConfig)
@@ -66,7 +67,8 @@ func HelmUpgradeOrInstall(
 		installCmd.Namespace = namespace
 		installCmd.Wait = true
 		installCmd.Timeout = timeout
-		installCmd.Devel = true // If version is development, accept it
+		installCmd.Devel = true                // If version is development, accept it
+		installCmd.SkipSchemaValidation = true // Disable schema validation for legacy charts
 		chartPathOptions = &installCmd.ChartPathOptions
 	} else {
 		output.AppendLinef("Existing release found (version %s), upgrade existing release", existingRelease.Chart.Metadata.Version)
@@ -75,10 +77,11 @@ func HelmUpgradeOrInstall(
 		upgradeCmd.Namespace = namespace
 		upgradeCmd.Wait = true
 		upgradeCmd.Timeout = timeout
-		upgradeCmd.MaxHistory = 10      // Keep 10 releases max
-		upgradeCmd.Devel = true         // If version is development, accept it
-		upgradeCmd.Atomic = false       // Don't rollback on failures to not hide errors
-		upgradeCmd.CleanupOnFail = true // Clean resources on failure
+		upgradeCmd.MaxHistory = 10             // Keep 10 releases max
+		upgradeCmd.Devel = true                // If version is development, accept it
+		upgradeCmd.Atomic = false              // Don't rollback on failures to not hide errors
+		upgradeCmd.CleanupOnFail = true        // Clean resources on failure
+		upgradeCmd.SkipSchemaValidation = true // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
 	}
 
