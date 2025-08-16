@@ -1,8 +1,6 @@
 module github.com/metaplay/cli
 
-go 1.24.0
-
-toolchain go1.24.6
+go 1.25
 
 require (
 	github.com/Masterminds/semver/v3 v3.4.0
