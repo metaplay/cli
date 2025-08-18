@@ -346,6 +346,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// This happens because Helm, or https://github.com/santhosh-tekuri/jsonschema where the inputs are validated,
 	// doesn't allow []map[string]any. Its typeOf() function only accepts `[]any` as array types, not other types
 	// of arrays, like []map[string]any.
+	// Bug report in Helm: https://github.com/helm/helm/issues/31148 -- if the issue gets fixed, this code can be removed.
 	untypedShardsConfig := make([]any, len(shardsConfig))
 	for i, v := range shardsConfig {
 		untypedShardsConfig[i] = v
