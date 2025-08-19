@@ -284,7 +284,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			valuesFiles,
 			helmDefaultValues,
 			helmRequiredValues,
-			5*time.Minute)
+			5*time.Minute,
+			true)
 		return err
 	})
 

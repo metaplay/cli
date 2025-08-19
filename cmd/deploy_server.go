@@ -317,9 +317,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Default shard config based on environment type.
 	// \todo Auto-detect these from the infrastructure.
-	var shardConfig []map[string]any
+	var shardsConfig []map[string]any
 	if envConfig.Type == portalapi.EnvironmentTypeProduction || envConfig.Type == portalapi.EnvironmentTypeStaging {
-		shardConfig = []map[string]any{
+		shardsConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
@@ -330,7 +330,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			},
 		}
 	} else {
-		shardConfig = []map[string]any{
+		shardsConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
@@ -340,6 +340,16 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				},
 			},
 		}
+	}
+
+	// Convert shardConfig to []any to avoid JSON schema validation type errors.
+	// This happens because Helm, or https://github.com/santhosh-tekuri/jsonschema where the inputs are validated,
+	// doesn't allow []map[string]any. Its typeOf() function only accepts `[]any` as array types, not other types
+	// of arrays, like []map[string]any.
+	// Bug report in Helm: https://github.com/helm/helm/issues/31148 -- if the issue gets fixed, this code can be removed.
+	untypedShardsConfig := make([]any, len(shardsConfig))
+	for i, v := range shardsConfig {
+		untypedShardsConfig[i] = v
 	}
 
 	// Default Helm values. The user Helm values files are applied on top so
@@ -360,7 +370,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"sdk": map[string]any{
 			"version": imageInfo.SdkVersion,
 		},
-		"shards": shardConfig,
+		"shards": untypedShardsConfig,
 	}
 	helmRequiredValues := map[string]any{
 		"image": map[string]any{
@@ -451,6 +461,50 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		})
 	}
 
+	// Figure out whether the values file JSON schema can be validated:
+	// - v0.9+ (including v1.x+, v0.10.x+, and prereleases) can be validated.
+	// - v0.8.1+ (including prereleases) can be validated, but v0.8.0 cannot.
+	// - v0.7.x and earlier cannot be validated.
+	// - Local charts are validated (we assume recent versions are used).
+	validateJsonSchema := false
+	if useHelmChartVersion != "local" {
+		chartVersion, err := semver.NewVersion(useHelmChartVersion)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to parse Helm chart version '%s', skipping schema validation", useHelmChartVersion)
+			validateJsonSchema = false
+		} else {
+			major := chartVersion.Major()
+			minor := chartVersion.Minor()
+			patch := chartVersion.Patch()
+
+			if major >= 1 || (major == 0 && minor >= 9) {
+				// v0.9 and later can be validated (including v0.10.x, v1.x.x and later, and v0.9.x-pre versions)
+				validateJsonSchema = true
+			} else if major == 0 && minor == 8 {
+				// For v0.8 series: don't validate for v0.8.0, but do validate for >=v0.8.1 (including pre releases)
+				if patch == 0 {
+					// Exactly v0.8.0 cannot be validated
+					validateJsonSchema = false
+				} else {
+					// v0.8.1+ (including prereleases) can be validated
+					validateJsonSchema = true
+				}
+			} else {
+				// v0.7 and earlier cannot be validated
+				log.Warn().Msgf("Helm chart version '%s' is below minimum supported version, skipping schema validation", useHelmChartVersion)
+				validateJsonSchema = false
+			}
+
+			log.Debug().Msgf("Helm chart version '%s': schema validation %s", useHelmChartVersion,
+				map[bool]string{true: "enabled", false: "disabled"}[validateJsonSchema])
+		}
+	} else {
+		// For local charts, we assume recent versions, and enable validation.
+		// \todo Add flag for disabling this, if needed.
+		log.Debug().Msg("Using local Helm chart, enable schema validation")
+		validateJsonSchema = true
+	}
+
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
@@ -464,7 +518,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			valuesFiles,
 			helmDefaultValues,
 			helmRequiredValues,
-			5*time.Minute)
+			5*time.Minute,
+			validateJsonSchema)
 		return err
 	})
 
