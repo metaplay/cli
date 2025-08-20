@@ -462,7 +462,7 @@ func copyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		os.Remove(destPath)
 
 		if attempt < numAttempts {
-			log.Warn().Msgf("Attempt %d failed: %w, retrying...", attempt, lastErr)
+			log.Warn().Msgf("Attempt %d failed: %v, retrying...", attempt, lastErr)
 		}
 	}
 
