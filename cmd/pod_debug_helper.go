@@ -402,14 +402,8 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	return nil, nil, 0, fmt.Errorf("file %s not found in tar stream", fileName)
 }
 
-// copyFileFromDebugPod copies a file from a pod using a tar pipe, similar to how kubectl cp works internally.
-// Only works with the ephemeral debug container as this requires shell on the target pod.
-func copyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string) error {
-	// Create the destination directory if it doesn't exist
-	destDir := filepath.Dir(destPath)
-	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %v", err)
-	}
+// attemptFileCopy performs a single file copy attempt
+func attemptFileCopy(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string) error {
 	// Create destination file
 	destFile, err := os.Create(destPath)
 	if err != nil {
@@ -439,6 +433,40 @@ func copyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		return fmt.Errorf("failed to copy file contents: %v", err)
 	}
 	return nil
+}
+
+// copyFileFromDebugPod copies a file from a pod using a tar pipe, similar to how kubectl cp works internally.
+// Only works with the ephemeral debug container as this requires shell on the target pod, which the game server
+// pods don't have. Use numAttempts > 1 to retry the copy operation in case of failure.
+func copyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, numAttempts int) error {
+	if numAttempts < 1 {
+		return fmt.Errorf("numAttempts must be at least 1")
+	}
+
+	// Create the destination directory if it doesn't exist
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %v", err)
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= numAttempts; attempt++ {
+		// Attempt the file copy
+		lastErr = attemptFileCopy(ctx, kubeCli, podName, containerName, srcDir, fileName, destPath)
+		if lastErr == nil {
+			log.Info().Msgf("File copy completed successfully on attempt %d", attempt)
+			return nil
+		}
+
+		// Remove output file on failures
+		os.Remove(destPath)
+
+		if attempt < numAttempts {
+			log.Warn().Msgf("Attempt %d failed: %w, retrying...", attempt, lastErr)
+		}
+	}
+
+	return fmt.Errorf("file copy failed after %d attempts: %w", numAttempts, lastErr)
 }
 
 // readFileFromPod fetches a file from a pod without using compression.
