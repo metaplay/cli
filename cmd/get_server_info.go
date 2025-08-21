@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
@@ -19,7 +18,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"helm.sh/helm/v3/pkg/action"
-	corev1 "k8s.io/api/core/v1"
+	"helm.sh/helm/v3/pkg/release"
 )
 
 type getServerInfoOpts struct {
@@ -67,15 +66,12 @@ func init() {
 		Long: renderLong(&o, `
 			PREVIEW: This command is currently in preview and may change in future releases.
 
-			Get comprehensive information about the game server deployment in the target environment.
-
-			This command shows details about the Helm release, image information, and pod status for the
-			deployed game server.
+			This command shows details about the game server deployment running in the cloud,
+			including information about the Helm release and the deployed container image.
 
 			By default, displays the most relevant information in a human-readable text format.
 			Use --format=json to get the complete server information in JSON format.
-
-			WARNING: The JSON output is also subject to change, do not rely on it!
+			WARNING: The JSON output is subject to change!
 
 			{Arguments}
 
@@ -196,8 +192,14 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	}
 	serverInfo.HelmRelease = helmInfo
 
+	// Get the existing release for image info extraction
+	existingRelease, err := helmutil.GetExistingRelease(actionConfig, metaplayGameServerChartName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get existing Helm release: %w", err)
+	}
+
 	// Gather image information
-	imageInfo, err := o.getImageInfo(ctx, targetEnv)
+	imageInfo, err := o.getImageInfo(ctx, targetEnv, existingRelease)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get image info: %w", err)
 	}
@@ -206,6 +208,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	return serverInfo, nil
 }
 
+// Get information about the Helm release used to deploy the game server.
 func (o *getServerInfoOpts) getHelmReleaseInfo(actionConfig *action.Configuration) (*helmReleaseInfo, error) {
 	// Use the constant from deploy_server.go
 	existingRelease, err := helmutil.GetExistingRelease(actionConfig, metaplayGameServerChartName)
@@ -233,86 +236,41 @@ func (o *getServerInfoOpts) getHelmReleaseInfo(actionConfig *action.Configuratio
 	return helmInfo, nil
 }
 
-func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment) (*deploymentImageInfo, error) {
-	// Get environment details for ECR repository and credentials
-	envDetails, err := targetEnv.GetDetails()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get environment details: %w", err)
-	}
-
-	// Get game server to access pods
-	gameServer, err := targetEnv.GetGameServer(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get game server: %w", err)
-	}
-
-	// Get all shard sets with pods to extract image information
-	shardSetsWithPods, err := gameServer.GetAllShardSetsWithPods()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get shard sets with pods: %w", err)
-	}
-
-	// Find the first running pod to extract image information
-	var currentImage string
-	for _, shardSet := range shardSetsWithPods {
-		for _, pod := range shardSet.Pods {
-			if pod.Status.Phase == corev1.PodRunning && len(pod.Spec.Containers) > 0 {
-				// Get the main container image (usually the first one)
-				currentImage = pod.Spec.Containers[0].Image
-				break
+// Extract information about the docker image used in the game server deployment.
+func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment, existingRelease *release.Release) (*deploymentImageInfo, error) {
+	// Extract image information from Helm release values.
+	var imageTag, fullImageRef string
+	if existingRelease.Config != nil {
+		if imageConfig, ok := existingRelease.Config["image"].(map[string]any); ok {
+			if tag, ok := imageConfig["tag"].(string); ok {
+				imageTag = tag
+			}
+			if repository, ok := imageConfig["repository"].(string); ok && imageTag != "" {
+				fullImageRef = fmt.Sprintf("%s:%s", repository, imageTag)
 			}
 		}
-		if currentImage != "" {
-			break
-		}
+	} else {
+		return nil, fmt.Errorf("no image information found in Helm release")
 	}
 
-	if currentImage == "" {
-		// Fallback: return basic info if no running pods found
-		return &deploymentImageInfo{
-			ImageTag:     "N/A",
-			BuildNumber:  "N/A",
-			CommitID:     "N/A",
-			SdkVersion:   "N/A",
-			CreationTime: time.Time{},
-		}, nil
+	// Get environment details.
+	envDetails, err := targetEnv.GetDetails()
+	if err != nil {
+		return nil, err
 	}
 
-	// Extract repository and tag from the full image name
-	// Format is typically: <repository>:<tag>
-	parts := strings.Split(currentImage, ":")
-	tag := "latest"
-	if len(parts) >= 2 {
-		tag = parts[len(parts)-1]
-	}
-
-	// Try to fetch detailed metadata from the remote image
+	// Get docker credentials for the image registry.
 	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
 	if err != nil {
-		log.Debug().Err(err).Msg("Failed to get Docker credentials, using basic image info")
-		return &deploymentImageInfo{
-			ImageTag:     tag,
-			BuildNumber:  "Unable to fetch (no credentials)",
-			CommitID:     "Unable to fetch (no credentials)",
-			SdkVersion:   "Unable to fetch (no credentials)",
-			CreationTime: time.Time{},
-		}, nil
+		return nil, err
 	}
 
-	// Fetch detailed metadata from the remote image
-	imageMetadata, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, currentImage)
+	// Fetch image metadata from the remote docker repository.
+	imageMetadata, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, fullImageRef)
 	if err != nil {
-		log.Debug().Err(err).Msgf("Failed to fetch remote image metadata for %s", currentImage)
-		return &deploymentImageInfo{
-			ImageTag:     tag,
-			BuildNumber:  "Unable to fetch metadata",
-			CommitID:     "Unable to fetch metadata",
-			SdkVersion:   "Unable to fetch metadata",
-			CreationTime: time.Time{},
-		}, nil
+		return nil, err
 	}
 
-	// Extract information from the metadata
 	return &deploymentImageInfo{
 		ImageTag:     imageMetadata.Tag,
 		BuildNumber:  imageMetadata.BuildNumber,
