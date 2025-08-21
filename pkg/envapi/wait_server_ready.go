@@ -295,39 +295,6 @@ func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 	return nil
 }
 
-// GetPodStatus determines if a pod is ready and provides a status message
-func GetPodStatus(pod corev1.Pod) (ready bool, statusMessage string) {
-	// Check if pod is ready
-	ready = false
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-			ready = true
-			break
-		}
-	}
-
-	// Determine status message
-	statusMessage = string(pod.Status.Phase)
-	if pod.Status.Message != "" {
-		statusMessage = pod.Status.Message
-	} else if len(pod.Status.ContainerStatuses) > 0 {
-		containerStatus := pod.Status.ContainerStatuses[0]
-		if containerStatus.State.Waiting != nil {
-			statusMessage = containerStatus.State.Waiting.Reason
-			if containerStatus.State.Waiting.Message != "" {
-				statusMessage += ": " + containerStatus.State.Waiting.Message
-			}
-		} else if containerStatus.State.Terminated != nil {
-			statusMessage = containerStatus.State.Terminated.Reason
-			if containerStatus.State.Terminated.Message != "" {
-				statusMessage += ": " + containerStatus.State.Terminated.Message
-			}
-		}
-	}
-
-	return ready, statusMessage
-}
-
 // Check if the given gameserver CR (old or new) is ready.
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
