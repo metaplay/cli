@@ -42,6 +42,10 @@ func init() {
 			Use --format=json to get the complete environment information in JSON format.
 
 			{Arguments}
+
+			Related commands:
+			- 'metaplay get server-info ...' to get information about the game server deployment.
+			- 'metaplay debug server-status ...' to get diagnostics about the health of the deployment.
 		`),
 		Example: renderExample(`
 			# Show relevant environment information in text format (default)
