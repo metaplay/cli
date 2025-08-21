@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -16,29 +17,31 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	scheme "k8s.io/client-go/kubernetes/scheme"
 )
 
-// Structure to hold the database shard configuration parsed from the YAML file
+// Configuration for a single database shard.
 type databaseShardConfig struct {
-	ShardIndex    int    // added via code, not in the YAML file
-	DatabaseName  string `yaml:"DatabaseName"`
-	Password      string `yaml:"Password"`
-	ReadOnlyHost  string `yaml:"ReadOnlyHost"`
-	ReadWriteHost string `yaml:"ReadWriteHost"`
-	UserId        string `yaml:"UserId"`
+	ShardIndex    int    // added via code, not in the JSON
+	DatabaseName  string `json:"DatabaseName"`
+	Password      string `json:"Password"`
+	ReadOnlyHost  string `json:"ReadOnlyHost"`
+	ReadWriteHost string `json:"ReadWriteHost"`
+	UserId        string `json:"UserId"`
 }
 
+// Configuration for the environment's database and shards.
 type metaplayInfraDatabase struct {
-	Backend         string                `yaml:"Backend"`
-	NumActiveShards int                   `yaml:"NumActiveShards"`
-	Shards          []databaseShardConfig `yaml:"Shards"`
+	Backend         string                `json:"Backend"`
+	NumActiveShards int                   `json:"NumActiveShards"`
+	Shards          []databaseShardConfig `json:"Shards"`
 }
 
+// Contents of the 'options.json' field in the 'metaplay-deployment-runtime-options' Kubernetes secret.
 type metaplayInfraOptions struct {
-	Database metaplayInfraDatabase `yaml:"Database"`
+	Database metaplayInfraDatabase `json:"Database"`
 }
 
 // debugDatabaseOpts holds the options for the 'debug database' command
@@ -188,25 +191,14 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	kubeCli := shardSetsWithPods[0].ShardSet.Cluster.KubeClient
 	pod := &shardSetsWithPods[0].Pods[0]
 
-	// Fetch the infrastructure options YAML using the debug container
-	stderrLogger.Debug().Msgf("Fetch infra options YAML from pod: %s", pod.Name)
-	yamlContent, err := o.fetchInfraOptionsYaml(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName)
+	// Fetch the database shard configuration from Kubernetes secret
+	shards, err := fetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, pod.Namespace)
 	if err != nil {
 		return err
 	}
 
-	stderrLogger.Debug().Msgf("Infrastructure options YAML:\n%s", yamlContent)
-
-	// Parse the infrastructure options (only database section)
-	var infra metaplayInfraOptions
-	err = yaml.Unmarshal([]byte(yamlContent), &infra)
-	if err != nil {
-		return fmt.Errorf("failed to parse infrastructure options YAML: %v", err)
-	}
-
-	shards := infra.Database.Shards
 	if len(shards) == 0 {
-		return fmt.Errorf("no database shards found in infrastructure configuration")
+		return fmt.Errorf("no database shards found in infra configuration")
 	}
 
 	// Fill in shard indices
@@ -264,20 +256,32 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
 }
 
-// Helper function to fetch the infrastructure options YAML from the pod
-func (o *debugDatabaseOpts) fetchInfraOptionsYaml(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) (string, error) {
-	// Use readFileFromPod with followSymlinks=true to handle symlinked files
-	contents, err := readFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
+// fetchDatabaseShardsFromSecret fetches database shard configuration from the 'metaplay-deployment-runtime-options' Kubernetes secret.
+// \todo Move to some shared util (to share with other db commands)
+func fetchDatabaseShardsFromSecret(ctx context.Context, kubeCli *envapi.KubeClient, namespace string) ([]databaseShardConfig, error) {
+	// Get the metaplay-deployment-runtime-options secret.
+	log.Debug().Msg("Fetching Kubernetes secret 'metaplay-deployment-runtime-options'...")
+	secret, err := kubeCli.Clientset.CoreV1().Secrets(namespace).Get(ctx, "metaplay-deployment-runtime-options", metav1.GetOptions{})
 	if err != nil {
-		stderrLogger.Error().Msgf("Failed to read infrastructure options: %v", err)
-		return "", fmt.Errorf("failed to read infrastructure options: %w", err)
+		return nil, fmt.Errorf("failed to get Kubernetes secret 'metaplay-deployment-runtime-options': %w", err)
 	}
 
-	if len(contents) == 0 {
-		stderrLogger.Warn().Msg("Infrastructure options file is empty")
+	// Get the options.json data from the secret.
+	optionsJSON, exists := secret.Data["options.json"]
+	if !exists {
+		return nil, fmt.Errorf("options.json not found in secret")
 	}
+	log.Debug().Msgf("Found infrastructure options.json in secret: %s", string(optionsJSON))
 
-	return string(contents), nil
+	// Parse contents of options.json.
+	var runtimeOptions metaplayInfraOptions
+	if err := json.Unmarshal(optionsJSON, &runtimeOptions); err != nil {
+		return nil, fmt.Errorf("failed to parse runtime options JSON: %w", err)
+	}
+	log.Debug().Msgf("Parsed infrastructure options.json: %+v", runtimeOptions)
+
+	log.Debug().Msgf("Found %d database shard(s) in infra options.json", len(runtimeOptions.Database.Shards))
+	return runtimeOptions.Database.Shards, nil
 }
 
 // Helper function to connect to the database shard
