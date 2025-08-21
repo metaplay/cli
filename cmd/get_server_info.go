@@ -14,6 +14,7 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/metaproj"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -30,8 +31,9 @@ type getServerInfoOpts struct {
 
 // serverInfo represents the complete server deployment information
 type serverInfo struct {
-	HelmRelease *helmReleaseInfo     `json:"helm_release,omitempty"`
-	ImageInfo   *deploymentImageInfo `json:"image_info,omitempty"`
+	PortalInfo  *portalapi.EnvironmentInfo `json:"portal_info,omitempty"`
+	HelmRelease *helmReleaseInfo           `json:"helm_release,omitempty"`
+	ImageInfo   *deploymentImageInfo       `json:"image_info,omitempty"`
 }
 
 type helmReleaseInfo struct {
@@ -139,17 +141,28 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg(styles.RenderTitle("Deployed Server Info"))
 		log.Info().Msg("")
 
+		// Portal Information (if available)
+		if info.PortalInfo != nil {
+			log.Info().Msg("Portal information:")
+			log.Info().Msgf("  %-19s %s", "Name:", styles.RenderTechnical(info.PortalInfo.Name))
+			log.Info().Msgf("  %-19s %s", "Human ID:", styles.RenderTechnical(info.PortalInfo.HumanID))
+			log.Info().Msgf("  %-19s %s", "Environment family:", styles.RenderTechnical(string(info.PortalInfo.Type)))
+			log.Info().Msgf("  %-19s %s", "Hosting type:", styles.RenderTechnical(string(info.PortalInfo.HostingType)))
+			log.Info().Msgf("  %-19s %s", "Stack domain:", styles.RenderTechnical(info.PortalInfo.StackDomain))
+		}
+		log.Info().Msg("")
+
 		// Helm Release Information
 		if info.HelmRelease != nil {
 			log.Info().Msg("Helm release:")
-			log.Info().Msgf("  %-15s %s", "Chart name:", styles.RenderTechnical(info.HelmRelease.ChartName))
-			log.Info().Msgf("  %-15s %s", "Chart version:", styles.RenderTechnical(info.HelmRelease.ChartVersion))
-			log.Info().Msgf("  %-15s %s", "Release name:", styles.RenderTechnical(info.HelmRelease.Name))
-			log.Info().Msgf("  %-15s %s", "Status:", styles.RenderTechnical(info.HelmRelease.Status))
-			log.Info().Msgf("  %-15s %s", "Namespace:", styles.RenderTechnical(info.HelmRelease.Namespace))
-			log.Info().Msgf("  %-15s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", info.HelmRelease.Revision)))
+			log.Info().Msgf("  %-19s %s", "Chart name:", styles.RenderTechnical(info.HelmRelease.ChartName))
+			log.Info().Msgf("  %-19s %s", "Chart version:", styles.RenderTechnical(info.HelmRelease.ChartVersion))
+			log.Info().Msgf("  %-19s %s", "Release name:", styles.RenderTechnical(info.HelmRelease.Name))
+			log.Info().Msgf("  %-19s %s", "Status:", styles.RenderTechnical(info.HelmRelease.Status))
+			log.Info().Msgf("  %-19s %s", "Namespace:", styles.RenderTechnical(info.HelmRelease.Namespace))
+			log.Info().Msgf("  %-19s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", info.HelmRelease.Revision)))
 			if !info.HelmRelease.LastDeployed.IsZero() {
-				log.Info().Msgf("  %-15s %s", "Last Deployed:", styles.RenderTechnical(humanize.Time(info.HelmRelease.LastDeployed)))
+				log.Info().Msgf("  %-19s %s", "Last Deployed:", styles.RenderTechnical(humanize.Time(info.HelmRelease.LastDeployed)))
 			}
 		} else {
 			log.Info().Msg("No game server deployment found")
@@ -159,11 +172,11 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 		// Image Information
 		if info.ImageInfo != nil {
 			log.Info().Msg("Image information:")
-			log.Info().Msgf("  %-15s %s", "Image tag:", styles.RenderTechnical(info.ImageInfo.ImageTag))
-			log.Info().Msgf("  %-15s %s", "Commit ID:", styles.RenderTechnical(info.ImageInfo.CommitID))
-			log.Info().Msgf("  %-15s %s", "Build number:", styles.RenderTechnical(info.ImageInfo.BuildNumber))
-			log.Info().Msgf("  %-15s %s", "SDK version:", styles.RenderTechnical(info.ImageInfo.SdkVersion))
-			log.Info().Msgf("  %-15s %s", "Created:", styles.RenderTechnical(humanize.Time(info.ImageInfo.CreationTime)))
+			log.Info().Msgf("  %-19s %s", "Image tag:", styles.RenderTechnical(info.ImageInfo.ImageTag))
+			log.Info().Msgf("  %-19s %s", "Commit ID:", styles.RenderTechnical(info.ImageInfo.CommitID))
+			log.Info().Msgf("  %-19s %s", "Build number:", styles.RenderTechnical(info.ImageInfo.BuildNumber))
+			log.Info().Msgf("  %-19s %s", "SDK version:", styles.RenderTechnical(info.ImageInfo.SdkVersion))
+			log.Info().Msgf("  %-19s %s", "Created:", styles.RenderTechnical(humanize.Time(info.ImageInfo.CreationTime)))
 		}
 	}
 
@@ -172,6 +185,18 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 
 func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment, envConfig *metaproj.ProjectEnvironmentConfig) (*serverInfo, error) {
 	serverInfo := &serverInfo{}
+
+	// Fetch portal information if targeting a managed stack
+	authProviderName := coalesceString(envConfig.AuthProvider, "metaplay")
+	if authProviderName == "metaplay" {
+		portalClient := portalapi.NewClient(targetEnv.TokenSet)
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to fetch portal environment info")
+		} else {
+			serverInfo.PortalInfo = portalInfo
+		}
+	}
 
 	// Get Kubernetes client
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
