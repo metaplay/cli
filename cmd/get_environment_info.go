@@ -100,14 +100,16 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Only fetch portal info if targeting a managed stack.
+	var portalInfo *portalapi.EnvironmentInfo
 	authProviderName := coalesceString(envConfig.AuthProvider, "metaplay")
 	if authProviderName == "metaplay" {
 		// Fetch information from the portal.
 		portalClient := portalapi.NewClient(tokenSet)
-		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		info, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
 		if err != nil {
 			return err
 		}
+		portalInfo = info
 		portalInfoJSON, err := json.MarshalIndent(portalInfo, "", "  ")
 		if err != nil {
 			return err
@@ -128,8 +130,21 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		observability := envInfo.Observability
 		oauth2Client := envInfo.OAuth2Client
 
+		// Portal information (if available)
+		if portalInfo != nil {
+			log.Info().Msgf("")
+			log.Info().Msgf("Portal information:")
+			log.Info().Msgf("  Name:                 %s", styles.RenderTechnical(portalInfo.Name))
+			log.Info().Msgf("  Human ID:             %s", styles.RenderTechnical(portalInfo.HumanID))
+			log.Info().Msgf("  Environment family:   %s", styles.RenderTechnical(string(portalInfo.Type)))
+			log.Info().Msgf("  Hosting type:         %s", styles.RenderTechnical(string(portalInfo.HostingType)))
+			log.Info().Msgf("  Stack domain:         %s", styles.RenderTechnical(portalInfo.StackDomain))
+		} else {
+			log.Info().Msgf("Environment information not available in Metaplay portal")
+		}
+		log.Info().Msg("")
+
 		// Print relevant information in text format
-		log.Info().Msgf("")
 		log.Info().Msgf("Environment details:")
 		log.Info().Msgf("  Admin hostname:       %s", styles.RenderTechnical(deployment.AdminHostname))
 		log.Info().Msgf("  Server hostname:      %s", styles.RenderTechnical(deployment.ServerHostname))
