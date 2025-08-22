@@ -39,7 +39,7 @@ type debugDatabaseOpts struct {
 
 func init() {
 	o := debugDatabaseOpts{
-		DiagnosticsImage: "metaplay/diagnostics:latest",
+		DiagnosticsImage: "joseluisq/alpine-mysql-client:1.8",
 	}
 
 	args := o.Arguments()
