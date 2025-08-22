@@ -33,14 +33,10 @@ type debugDatabaseOpts struct {
 	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
 	flagQueryFile    string // If set, read SQL query from this file and exit (non-interactive)
 	flagOutput       string // If set, write output to this file instead of stdout
-
-	DiagnosticsImage string // Diagnostic container image name to use
 }
 
 func init() {
-	o := debugDatabaseOpts{
-		DiagnosticsImage: "metaplay/diagnostics:latest",
-	}
+	o := debugDatabaseOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
@@ -53,9 +49,9 @@ func init() {
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Connect to a database shard for the specified environment using MySQL CLI.
+			Connect to a database shard for the specified environment using MariaDB CLI.
 
-			This command starts a temporary debug pod and runs the MySQL client inside it, connecting
+			This command starts a temporary debug pod and runs an SQL client inside it, connecting
 			to the specified database replica (read-only or read-write), and shard.
 
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
@@ -172,6 +168,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
 		kubeCli,
+		"joseluisq/alpine-mysql-client:1.8",
 		false,
 		false,
 		[]string{"sleep", "3600"},
@@ -231,8 +228,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
 	}
 
-	// Determine command for starting MySQL CLI.
-	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
+	// Determine command for starting SQL CLI.
+	sqlcliCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
 		host,
 		shard.UserId,
 		shard.Password,
@@ -240,7 +237,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 	if o.flagQuery != "" {
 		stderrLogger.Info().Msgf("Run query: %s", o.flagQuery)
-		mysqlCmd += fmt.Sprintf(" -e %q", o.flagQuery)
+		sqlcliCmd += fmt.Sprintf(" -e %q", o.flagQuery)
 	}
 
 	req := kubeCli.Clientset.CoreV1().
@@ -252,7 +249,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/bash", "-c", mysqlCmd},
+			Command:   []string{"/bin/sh", "-c", sqlcliCmd},
 			Stdin:     isInteractive,
 			Stdout:    true,
 			Stderr:    true,

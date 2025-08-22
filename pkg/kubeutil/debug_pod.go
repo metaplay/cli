@@ -22,14 +22,14 @@ import (
 )
 
 // Helper function to create and start a standalone debug pod.
-func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, interactive bool, tty bool, command []string) (string, func(), error) {
+func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image string, interactive bool, tty bool, command []string) (string, func(), error) {
 	// Create name for debug pod.
 	debugPodName, err := createDebugContainerName()
 	if err != nil {
 		return "", nil, err
 	}
 	debugPodName = "debug-pod-" + debugPodName
-	log.Debug().Msgf("Create debug pod %s: interactive=%v, tty=%v, command='%s'", debugPodName, interactive, tty, strings.Join(command, " "))
+	log.Debug().Msgf("Create debug pod %s: image=%s, interactive=%v, tty=%v, command='%s'", debugPodName, image, interactive, tty, strings.Join(command, " "))
 
 	// Define the debug pod
 	debugPod := &corev1.Pod{
@@ -46,7 +46,7 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, interactive
 			Containers: []corev1.Container{
 				{
 					Name:            "debug",
-					Image:           "metaplay/diagnostics:latest",
+					Image:           image,
 					ImagePullPolicy: corev1.PullAlways,
 					Stdin:           interactive,
 					TTY:             tty,
