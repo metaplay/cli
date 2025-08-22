@@ -153,11 +153,6 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Fill in shard indices
-	for shardNdx := range shards {
-		shards[shardNdx].ShardIndex = shardNdx
-	}
-
 	// Create a debug container to run MySQL client
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),

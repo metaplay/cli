@@ -64,6 +64,11 @@ func FetchDatabaseShardsFromSecret(ctx context.Context, kubeCli *envapi.KubeClie
 		return nil, fmt.Errorf("no database shards found in infra configuration")
 	}
 
+	// Fill in shard indices.
+	for shardNdx := range infraOptions.Database.Shards {
+		infraOptions.Database.Shards[shardNdx].ShardIndex = shardNdx
+	}
+
 	log.Debug().Msgf("Found %d database shard(s) in infra options.json", len(infraOptions.Database.Shards))
 	return infraOptions.Database.Shards, nil
 }
