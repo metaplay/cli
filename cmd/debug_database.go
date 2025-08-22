@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -100,13 +101,6 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle mutually exclusive query flags
 	if o.flagQuery != "" && o.flagQueryFile != "" {
 		return fmt.Errorf("only one of --query or --query-file may be specified")
-	}
-	if o.flagQueryFile != "" {
-		content, err := os.ReadFile(o.flagQueryFile)
-		if err != nil {
-			return fmt.Errorf("failed to read SQL query from file '%s': %v", o.flagQueryFile, err)
-		}
-		o.flagQuery = string(content)
 	}
 
 	// Parse shard index argument if provided
@@ -221,14 +215,14 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	}
 
 	// Determine whether to run in interactive mode or a single query
-	isInteractive := o.flagQuery == ""
+	isInteractive := o.flagQuery == "" && o.flagQueryFile == ""
 
 	// Use of --output is only allowed with a non-interactive query
 	if o.flagOutput != "" && isInteractive {
 		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
 	}
 
-	// Determine command for starting SQL CLI.
+	// Determine command for starting SQL CLI (note: optional query is piped to mariadb)
 	sqlcliCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
 		host,
 		shard.UserId,
@@ -237,7 +231,6 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 	if o.flagQuery != "" {
 		stderrLogger.Info().Msgf("Run query: %s", o.flagQuery)
-		sqlcliCmd += fmt.Sprintf(" -e %q", o.flagQuery)
 	}
 
 	req := kubeCli.Clientset.CoreV1().
@@ -250,16 +243,27 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
 			Command:   []string{"/bin/sh", "-c", sqlcliCmd},
-			Stdin:     isInteractive,
+			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
 			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Use shared remote command execution utility
+	// Setup stdin for piping queries or interactive mode
 	var stdin io.Reader
 	if isInteractive {
 		stdin = os.Stdin
+	} else if o.flagQuery != "" {
+		// Pipe the query to mariadb stdin
+		stdin = strings.NewReader(o.flagQuery)
+	} else if o.flagQueryFile != "" {
+		// Stream query file directly to mariadb stdin
+		queryFile, err := os.Open(o.flagQueryFile)
+		if err != nil {
+			return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+		}
+		defer queryFile.Close()
+		stdin = queryFile
 	}
 
 	// Setup output channel to stdout or file
