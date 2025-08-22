@@ -176,30 +176,15 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-	gameServer, err := targetEnv.GetGameServer(cmd.Context())
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
-
-	// Get all shard sets and pods from all clusters associated with the game server.
-	shardSetsWithPods, err := gameServer.GetAllShardSetsWithPods()
-	if err != nil {
-		return err
-	}
-	if len(shardSetsWithPods) == 0 || len(shardSetsWithPods[0].Pods) == 0 {
-		return fmt.Errorf("no pods found in any shard set")
-	}
-	kubeCli := shardSetsWithPods[0].ShardSet.Cluster.KubeClient
-	pod := &shardSetsWithPods[0].Pods[0]
 
 	// Fetch the database shard configuration from Kubernetes secret
-	shards, err := fetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, pod.Namespace)
+	shards, err := fetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
 	if err != nil {
 		return err
-	}
-
-	if len(shards) == 0 {
-		return fmt.Errorf("no database shards found in infra configuration")
 	}
 
 	// Fill in shard indices
@@ -208,11 +193,9 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create a debug container to run MySQL client
-	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(
+	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
 		kubeCli,
-		pod.Name,
-		metaplayServerContainerName,
 		false,
 		false,
 		[]string{"sleep", "3600"},
@@ -244,17 +227,15 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	targetShard := shards[shardIndex]
 
 	// Show info
-	replicaType := "read-only"
-	if o.flagReadWrite {
-		replicaType = "read-write"
-	}
+	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
 	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
-	stderrLogger.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
+	stderrLogger.Info().Msg("Database info:")
+	stderrLogger.Info().Msgf("  Shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	stderrLogger.Info().Msgf("  Replica: %s", styles.RenderTechnical(replicaType))
 	stderrLogger.Info().Msg("")
 
 	// Connect to the database shard
-	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
+	return o.connectToDatabaseShard(cmd.Context(), kubeCli, podName, "debug", targetShard)
 }
 
 // fetchDatabaseShardsFromSecret fetches database shard configuration from the 'metaplay-deployment-runtime-options' Kubernetes secret.
@@ -275,14 +256,19 @@ func fetchDatabaseShardsFromSecret(ctx context.Context, kubeCli *envapi.KubeClie
 	log.Debug().Msgf("Found infrastructure options.json in secret: %s", string(optionsJSON))
 
 	// Parse contents of options.json.
-	var runtimeOptions metaplayInfraOptions
-	if err := json.Unmarshal(optionsJSON, &runtimeOptions); err != nil {
+	var infraOptions metaplayInfraOptions
+	if err := json.Unmarshal(optionsJSON, &infraOptions); err != nil {
 		return nil, fmt.Errorf("failed to parse runtime options JSON: %w", err)
 	}
-	log.Debug().Msgf("Parsed infrastructure options.json: %+v", runtimeOptions)
+	log.Debug().Msgf("Parsed infrastructure options.json: %+v", infraOptions)
 
-	log.Debug().Msgf("Found %d database shard(s) in infra options.json", len(runtimeOptions.Database.Shards))
-	return runtimeOptions.Database.Shards, nil
+	// Must have at least one shard.
+	if len(infraOptions.Database.Shards) == 0 {
+		return nil, fmt.Errorf("no database shards found in infra configuration")
+	}
+
+	log.Debug().Msgf("Found %d database shard(s) in infra options.json", len(infraOptions.Database.Shards))
+	return infraOptions.Database.Shards, nil
 }
 
 // Helper function to connect to the database shard

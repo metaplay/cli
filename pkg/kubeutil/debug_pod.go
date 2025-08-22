@@ -4,11 +4,11 @@
 
 package kubeutil
 
-/*
 import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
+	watchtools "k8s.io/client-go/tools/watch"
 )
 
 // Helper function to create and start a standalone debug pod.
@@ -151,8 +152,12 @@ func waitForPodReady(ctx context.Context, kubeCli *envapi.KubeClient, podName st
 		return false, nil
 	}
 
+	// Set up a 60-second timeout context for the watch operation
+	ctx, cancel := watchtools.ContextWithOptionalTimeout(ctx, time.Second*60)
+	defer cancel()
+
 	// Wait for the pod to be ready
-	_, err := cache.UntilWithSync(ctx, listWatch, &corev1.Pod{}, preconditionFunc, func(event watch.Event) (bool, error) {
+	_, err := watchtools.UntilWithSync(ctx, listWatch, &corev1.Pod{}, preconditionFunc, func(event watch.Event) (bool, error) {
 		pod, ok := event.Object.(*corev1.Pod)
 		if !ok {
 			return false, fmt.Errorf("expected Pod object, got %T", event.Object)
@@ -184,4 +189,3 @@ func waitForPodReady(ctx context.Context, kubeCli *envapi.KubeClient, podName st
 
 	return err
 }
-*/
