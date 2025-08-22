@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"html"
 	"os"
 	"strings"
 
@@ -63,15 +64,27 @@ func (o *showCommandsOpts) generateMarkdownDocs(filename string) error {
 	}
 	defer file.Close()
 
-	// Write introduction
-	_, err = file.WriteString(`# Metaplay CLI Command Reference
+	// Write frontmatter and introduction
+	_, err = file.WriteString(`---
+title: CLI Command Reference
+description: Complete reference for all Metaplay CLI commands and their usage.
+---
 
-This document provides full reference documentation of all available commands in the Metaplay CLI.
+<!-- This file is auto-generated using the Metaplay CLI. DO NOT EDIT MANUALLY!! -->
+<!-- To regenerate this file, run: metaplay dev show-commands --output-docs <filename> -->
 
-## Command Structure
+<!-- markdownlint-disable MD007 --> <!-- Unordered list indentation -->
+<!-- markdownlint-disable MD010 --> <!-- Hard tabs -->
+<!-- markdownlint-disable MD012 --> <!-- Multiple consecutive blank lines -->
+<!-- markdownlint-disable MD026 --> <!-- Trailing punctuation in headings -->
+<!-- markdownlint-disable MD029 --> <!-- Ordered list item prefix -->
+<!-- markdownlint-disable MD032 --> <!-- Lists should be surrounded by blank lines -->
 
-The Metaplay CLI follows a hierarchical command structure with the root command 'metaplay'
-followed by subcommands and their respective options and arguments.
+## Overview
+
+This page provides a comprehensive reference for all Metaplay CLI commands.
+
+You can find the CLI project on GitHub at [https://github.com/metaplay/cli](https://github.com/metaplay/cli).
 
 ## Available Commands
 
@@ -107,7 +120,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write description
 	if cmd.Short != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Description:** %s\n\n", cmd.Short))
+		_, err = file.WriteString(fmt.Sprintf("**Description:** %s\n\n", html.EscapeString(cmd.Short)))
 		if err != nil {
 			return err
 		}
@@ -123,7 +136,11 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write aliases if any
 	if len(cmd.Aliases) > 0 {
-		_, err = file.WriteString(fmt.Sprintf("**Aliases:** %s\n\n", strings.Join(cmd.Aliases, ", ")))
+		escapedAliases := make([]string, len(cmd.Aliases))
+		for i, alias := range cmd.Aliases {
+			escapedAliases[i] = html.EscapeString(alias)
+		}
+		_, err = file.WriteString(fmt.Sprintf("**Aliases:** %s\n\n", strings.Join(escapedAliases, ", ")))
 		if err != nil {
 			return err
 		}
@@ -131,7 +148,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write long description if available
 	if cmd.Long != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Detailed Description:**\n\n%s\n\n", cmd.Long))
+		_, err = file.WriteString(fmt.Sprintf("**Detailed Description:**\n\n%s\n\n", html.EscapeString(cmd.Long)))
 		if err != nil {
 			return err
 		}
@@ -139,7 +156,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write examples if available
 	if cmd.Example != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Examples:**\n\n```shell\n%s\n```\n\n", cmd.Example))
+		_, err = file.WriteString(fmt.Sprintf("**Examples:**\n\n```shell\n%s\n```\n\n", html.EscapeString(cmd.Example)))
 		if err != nil {
 			return err
 		}
@@ -154,16 +171,16 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 		cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 			if !flag.Hidden {
-				flagDesc := fmt.Sprintf("- `--%s", flag.Name)
+				flagDesc := fmt.Sprintf("- **`--%s", html.EscapeString(flag.Name))
 				if flag.Shorthand != "" {
-					flagDesc += fmt.Sprintf(", -%s", flag.Shorthand)
+					flagDesc += fmt.Sprintf(", -%s", html.EscapeString(flag.Shorthand))
 				}
 				if flag.Value.Type() != "bool" {
-					flagDesc += fmt.Sprintf(" <%s>", flag.Value.Type())
+					flagDesc += fmt.Sprintf(" <%s>", html.EscapeString(flag.Value.Type()))
 				}
-				flagDesc += fmt.Sprintf("`**: %s", flag.Usage)
+				flagDesc += fmt.Sprintf("`**: %s", html.EscapeString(flag.Usage))
 				if flag.DefValue != "" && flag.DefValue != "false" {
-					flagDesc += fmt.Sprintf(" (default: %s)", flag.DefValue)
+					flagDesc += fmt.Sprintf(" (default: %s)", html.EscapeString(flag.DefValue))
 				}
 				flagDesc += "\n"
 				file.WriteString(flagDesc)
