@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,31 +18,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	scheme "k8s.io/client-go/kubernetes/scheme"
 )
-
-// Configuration for a single database shard.
-type databaseShardConfig struct {
-	ShardIndex    int    // added via code, not in the JSON
-	DatabaseName  string `json:"DatabaseName"`
-	Password      string `json:"Password"`
-	ReadOnlyHost  string `json:"ReadOnlyHost"`
-	ReadWriteHost string `json:"ReadWriteHost"`
-	UserId        string `json:"UserId"`
-}
-
-// Configuration for the environment's database and shards.
-type metaplayInfraDatabase struct {
-	Backend         string                `json:"Backend"`
-	NumActiveShards int                   `json:"NumActiveShards"`
-	Shards          []databaseShardConfig `json:"Shards"`
-}
-
-// Contents of the 'options.json' field in the 'metaplay-deployment-runtime-options' Kubernetes secret.
-type metaplayInfraOptions struct {
-	Database metaplayInfraDatabase `json:"Database"`
-}
 
 // debugDatabaseOpts holds the options for the 'debug database' command
 type debugDatabaseOpts struct {
@@ -182,7 +158,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Fetch the database shard configuration from Kubernetes secret
-	shards, err := fetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
+	shards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
 	if err != nil {
 		return err
 	}
@@ -238,41 +214,8 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	return o.connectToDatabaseShard(cmd.Context(), kubeCli, podName, "debug", targetShard)
 }
 
-// fetchDatabaseShardsFromSecret fetches database shard configuration from the 'metaplay-deployment-runtime-options' Kubernetes secret.
-// \todo Move to some shared util (to share with other db commands)
-func fetchDatabaseShardsFromSecret(ctx context.Context, kubeCli *envapi.KubeClient, namespace string) ([]databaseShardConfig, error) {
-	// Get the metaplay-deployment-runtime-options secret.
-	log.Debug().Msg("Fetching Kubernetes secret 'metaplay-deployment-runtime-options'...")
-	secret, err := kubeCli.Clientset.CoreV1().Secrets(namespace).Get(ctx, "metaplay-deployment-runtime-options", metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Kubernetes secret 'metaplay-deployment-runtime-options': %w", err)
-	}
-
-	// Get the options.json data from the secret.
-	optionsJSON, exists := secret.Data["options.json"]
-	if !exists {
-		return nil, fmt.Errorf("options.json not found in secret")
-	}
-	log.Debug().Msgf("Found infrastructure options.json in secret: %s", string(optionsJSON))
-
-	// Parse contents of options.json.
-	var infraOptions metaplayInfraOptions
-	if err := json.Unmarshal(optionsJSON, &infraOptions); err != nil {
-		return nil, fmt.Errorf("failed to parse runtime options JSON: %w", err)
-	}
-	log.Debug().Msgf("Parsed infrastructure options.json: %+v", infraOptions)
-
-	// Must have at least one shard.
-	if len(infraOptions.Database.Shards) == 0 {
-		return nil, fmt.Errorf("no database shards found in infra configuration")
-	}
-
-	log.Debug().Msgf("Found %d database shard(s) in infra options.json", len(infraOptions.Database.Shards))
-	return infraOptions.Database.Shards, nil
-}
-
 // Helper function to connect to the database shard
-func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard databaseShardConfig) error {
+func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) error {
 	var host string
 	if o.flagReadWrite {
 		host = shard.ReadWriteHost
@@ -351,7 +294,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
 // The 'shards' argument should be a slice of databaseShardConfig.
-func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []databaseShardConfig) (*databaseShardConfig, error) {
+func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 	if !tui.IsInteractiveMode() {
 		return nil, fmt.Errorf("in non-interactive mode, database shard must be explicitly specified")
 	}
@@ -359,7 +302,7 @@ func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []databaseShardConf
 	selected, err := tui.ChooseFromListDialog(
 		"Select Database Shard",
 		shards,
-		func(shard *databaseShardConfig) (string, string) {
+		func(shard *kubeutil.DatabaseShardConfig) (string, string) {
 			indexStr := fmt.Sprintf("#%d", shard.ShardIndex)
 			if o.flagReadWrite {
 				return indexStr, shard.ReadWriteHost
