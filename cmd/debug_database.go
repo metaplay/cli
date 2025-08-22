@@ -55,11 +55,8 @@ func init() {
 
 			Connect to a database shard for the specified environment using MySQL CLI.
 
-			This command starts an ephemeral debug container and runs the MySQL client inside
-			it, connecting to the desired database replica (read-only or read-write) and database
-			shard.
-
-			If a shard name is not specified, the first shard (index 0) will be used.
+			This command starts a temporary debug pod and runs the MySQL client inside it, connecting
+			to the specified database replica (read-only or read-write), and shard.
 
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
@@ -71,6 +68,9 @@ func init() {
 			--output <filename> to write the output to a file instead of stdout.
 
 			{Arguments}
+
+			Related commands:
+			- 'metaplay debug shell' starts a debug shell in a running game server pod.
 		`),
 		Example: renderExample(`
 			# Connect to a database shard in the 'nimbly' environment using the first shard
