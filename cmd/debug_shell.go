@@ -10,6 +10,7 @@ import (
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -113,7 +114,7 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create and attach to debug container
-	debugContainerName, cleanup, err := createDebugContainer(cmd.Context(), kubeCli, pod.Name, o.ContainerName, true, true, o.Command)
+	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, o.ContainerName, true, true, o.Command)
 	if err != nil {
 		return err
 	}

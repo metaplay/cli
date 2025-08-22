@@ -13,6 +13,7 @@ import (
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -215,7 +216,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create a debug container to run MySQL client
-	debugContainerName, cleanup, err := createDebugContainer(
+	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(
 		cmd.Context(),
 		kubeCli,
 		pod.Name,
@@ -267,7 +268,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 // Helper function to fetch the infrastructure options YAML from the pod
 func (o *debugDatabaseOpts) fetchInfraOptionsYaml(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) (string, error) {
 	// Use readFileFromPod with followSymlinks=true to handle symlinked files
-	contents, err := readFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
+	contents, err := kubeutil.ReadFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
 	if err != nil {
 		stderrLogger.Error().Msgf("Failed to read infrastructure options: %v", err)
 		return "", fmt.Errorf("failed to read infrastructure options: %w", err)
