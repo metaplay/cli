@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -140,20 +141,20 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 
 	// Create and manage debug container in the server pod.
 	// Keep the container alive for an hour to avoid leaks.
-	debugContainerName, cleanup, err := createDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
+	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	// Get information about the running server process.
-	processInfo, err := getServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
+	processInfo, err := kubeutil.GetServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
 	if err != nil {
 		return err
 	}
 
-	estimatedDurationSeconds := processInfo.memoryGB * 10 // assume 100MB/s (from empirical testing)
-	log.Info().Msgf("Game server process heap size is %.2f GB.", processInfo.memoryGB)
+	estimatedDurationSeconds := processInfo.MemoryGB * 10 // assume 100MB/s (from empirical testing)
+	log.Info().Msgf("Game server process heap size is %.2f GB.", processInfo.MemoryGB)
 	log.Info().Msgf("Estimated time to complete the operation is: %s", formatDuration(int(estimatedDurationSeconds)))
 
 	// Warn about process freezing unless --yes is used
@@ -181,10 +182,10 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve heap dump - Uses Kubernetes API for exec
-func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
+func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo) error {
 	// Set healthz probe to always return success before collecting dump
 	log.Info().Msgf("Setting healthz probe to Success mode...")
-	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		"curl localhost:8585/setOverride/healthz?mode=Success",
 	)
 	if err != nil {
@@ -197,13 +198,13 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	startTime := time.Now()
 
 	// Construct the command to collect the heap dump.
-	collectCmd := fmt.Sprintf("dotnet-%s collect -p %d -o /tmp/%s", o.flagCollectMode, processInfo.pid, filepath.Base(o.flagOutputPath))
-	if processInfo.username != "root" {
-		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.username, collectCmd)
+	collectCmd := fmt.Sprintf("dotnet-%s collect -p %d -o /tmp/%s", o.flagCollectMode, processInfo.Pid, filepath.Base(o.flagOutputPath))
+	if processInfo.Username != "root" {
+		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.Username, collectCmd)
 	}
 	log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
 	dumpDuration := time.Since(startTime)
 	if err != nil {
 		log.Error().Msgf("Failed to collect heap dump: %v", err) // Removed stderr
@@ -212,7 +213,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Reset healthz probe back to passthrough mode
 	log.Info().Msgf("Resetting healthz probe to Passthrough mode...")
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		"curl localhost:8585/setOverride/healthz?mode=Passthrough",
 	)
 	if err != nil {
@@ -222,12 +223,12 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Calculate and print the dump rate
 	dumpSeconds := dumpDuration.Seconds()
-	dumpRate := processInfo.memoryGB / dumpSeconds
+	dumpRate := processInfo.MemoryGB / dumpSeconds
 	log.Info().Msgf("Heap dump took %.1f seconds (%.2f GB/s)", dumpSeconds, dumpRate)
 
 	// Copy the heap dump file from the debug container using tar pipe (using Kubernetes API)
 	log.Info().Msgf("Retrieving heap dump to local file %s...", o.flagOutputPath)
-	err = copyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
+	err = kubeutil.CopyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 	if err != nil {
 		log.Error().Msgf("Failed to copy heap dump: %v", err)
 		return err
@@ -235,7 +236,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Remove the heap dump file from the debug container
 	log.Debug().Msgf("Remove heap dump file /tmp/%s from debug container...", filepath.Base(o.flagOutputPath))
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		fmt.Sprintf("rm /tmp/%s", filepath.Base(o.flagOutputPath)),
 	)
 	if err != nil {
@@ -262,33 +263,4 @@ func formatDuration(seconds int) string {
 	} else {
 		return fmt.Sprintf("%ds", s)
 	}
-}
-
-// validateUnixUsername checks if a username follows standard Unix/Linux username conventions:
-// - Only contains alphanumeric characters, underscores, and hyphens
-// - Starts with a letter or underscore
-// - Length between 1 and 32 characters
-func validateUnixUsername(username string) error {
-	if len(username) == 0 {
-		return fmt.Errorf("username cannot be empty")
-	}
-	if len(username) > 32 {
-		return fmt.Errorf("username cannot be longer than 32 characters")
-	}
-
-	// Check first character
-	first := username[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
-		return fmt.Errorf("username must start with a letter or underscore")
-	}
-
-	// Check remaining characters
-	for i := 1; i < len(username); i++ {
-		c := username[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
-			return fmt.Errorf("username can only contain letters, numbers, underscores, and hyphens")
-		}
-	}
-
-	return nil
 }

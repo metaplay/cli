@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -167,19 +168,19 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 
 	// Create and manage debug container in the server pod.
 	// Keep the container alive for an hour to avoid leaks.
-	debugContainerName, cleanup, err := createDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
+	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	// Get information about the running server process.
-	processInfo, err := getServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
+	processInfo, err := kubeutil.GetServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Game server process found with PID %d, running as user %s.", processInfo.pid, processInfo.username)
+	log.Info().Msgf("Game server process found with PID %d, running as user %s.", processInfo.Pid, processInfo.Username)
 	log.Info().Msgf("CPU profiling will run for %d seconds (%02d:%02d:%02d).",
 		o.flagDuration,
 		o.flagDuration/3600,
@@ -197,10 +198,10 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve CPU profile - Uses Kubernetes API for exec
-func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
+func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo) error {
 	// Set healthz probe to always return success before collecting profile
 	log.Info().Msgf("Setting healthz probe to Success mode...")
-	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		"curl localhost:8585/setOverride/healthz?mode=Success",
 	)
 	if err != nil {
@@ -219,7 +220,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	// Convert duration to a proper TimeSpan format (e.g., "00:00:30" for 30 seconds)
 	durationStr := fmt.Sprintf("%02d:%02d:%02d", o.flagDuration/3600, (o.flagDuration%3600)/60, o.flagDuration%60)
 	collectCmd := fmt.Sprintf("dotnet-trace collect --process-id %d --output /tmp/%s --format %s --duration %s",
-		processInfo.pid, remoteFileName, o.flagFormat, durationStr)
+		processInfo.Pid, remoteFileName, o.flagFormat, durationStr)
 
 	// Add any extra arguments
 	if len(o.extrArgs) > 0 {
@@ -228,14 +229,14 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	}
 
 	// Run as the appropriate user if not root
-	if processInfo.username != "root" {
-		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.username, collectCmd)
+	if processInfo.Username != "root" {
+		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.Username, collectCmd)
 	}
 
 	log.Info().Msgf("Executing dotnet-trace with format=%s, duration=%s", o.flagFormat, durationStr)
 	log.Debug().Msgf("Full command: %s", collectCmd)
 
-	stdout, stderr, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
+	stdout, stderr, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
 	profileDuration := time.Since(startTime)
 
 	// Log the output regardless of error
@@ -252,7 +253,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	}
 
 	// Check if the output file was created
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		fmt.Sprintf("test -f /tmp/%s && echo 'File exists'", remoteFileName))
 	if err != nil {
 		log.Error().Msgf("Output file was not created: %v", err)
@@ -261,7 +262,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Reset healthz probe back to passthrough mode
 	log.Info().Msgf("Resetting healthz probe to Passthrough mode...")
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		"curl localhost:8585/setOverride/healthz?mode=Passthrough",
 	)
 	if err != nil {
@@ -274,7 +275,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Copy the CPU profile file from the debug container
 	log.Info().Msgf("Retrieving CPU profile to local file %s...", o.flagOutputPath)
-	err = copyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", remoteFileName, o.flagOutputPath, 3)
+	err = kubeutil.CopyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", remoteFileName, o.flagOutputPath, 3)
 	if err != nil {
 		log.Error().Msgf("Failed to copy CPU profile: %v", err)
 		return err
@@ -282,7 +283,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Remove the CPU profile file from the debug container
 	log.Debug().Msgf("Remove CPU profile file /tmp/%s from debug container...", remoteFileName)
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 		fmt.Sprintf("rm /tmp/%s", remoteFileName),
 	)
 	if err != nil {
