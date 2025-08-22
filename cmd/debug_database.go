@@ -102,13 +102,6 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagQuery != "" && o.flagQueryFile != "" {
 		return fmt.Errorf("only one of --query or --query-file may be specified")
 	}
-	if o.flagQueryFile != "" {
-		content, err := os.ReadFile(o.flagQueryFile)
-		if err != nil {
-			return fmt.Errorf("failed to read SQL query from file '%s': %v", o.flagQueryFile, err)
-		}
-		o.flagQuery = string(content)
-	}
 
 	// Parse shard index argument if provided
 	o.parsedShardIndex = 0 // default
