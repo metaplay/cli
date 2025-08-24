@@ -160,7 +160,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 			return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database reset operation")
 		}
 
-		log.Info().Msgf(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY DELETE ALL DATA in the database!"))
+		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY DELETE ALL DATA in the database!"))
 		log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
 		log.Info().Msgf("   Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
 		log.Info().Msg("")
