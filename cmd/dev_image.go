@@ -39,8 +39,6 @@ func init() {
 
 			The LiveOps Dashboard is served at http://localhost:5550.
 
-			Prometheus metrics are served at http://localhost:9090/metrics.
-
 			{Arguments}
 
 			Related commands:
