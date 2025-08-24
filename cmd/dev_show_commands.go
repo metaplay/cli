@@ -5,8 +5,9 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
-	"html"
+	"io"
 	"os"
 	"strings"
 
@@ -58,14 +59,11 @@ func (o *showCommandsOpts) Run(cmd *cobra.Command) error {
 
 // generateMarkdownDocs generates comprehensive markdown documentation for all visible commands
 func (o *showCommandsOpts) generateMarkdownDocs(filename string) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return fmt.Errorf("failed to create documentation file: %w", err)
-	}
-	defer file.Close()
+	// Generate documentation into a buffer first
+	var buf bytes.Buffer
 
 	// Write frontmatter and introduction
-	_, err = file.WriteString(`---
+	_, err := buf.WriteString(`---
 title: CLI Command Reference
 description: Complete reference for all Metaplay CLI commands and their usage.
 ---
@@ -82,21 +80,37 @@ description: Complete reference for all Metaplay CLI commands and their usage.
 
 ## Overview
 
-This page provides a comprehensive reference for all Metaplay CLI commands.
-
-You can find the CLI project on GitHub at [https://github.com/metaplay/cli](https://github.com/metaplay/cli).
+This page provides a comprehensive reference for all [Metaplay CLI](https://github.com/metaplay/cli) commands.
 
 ## Available Commands
 
 `)
 	if err != nil {
-		return fmt.Errorf("failed to write introduction: %w", err)
+		return fmt.Errorf("failed to write introduction to buffer: %w", err)
 	}
 
 	// Generate documentation for all visible commands
-	err = o.writeCommandDocs(file, rootCmd, 0)
+	err = o.writeCommandDocs(&buf, rootCmd, 0)
 	if err != nil {
 		return fmt.Errorf("failed to write command documentation: %w", err)
+	}
+
+	// Replace tabs with two spaces
+	content := strings.ReplaceAll(buf.String(), "\t", "  ")
+
+	// Remove double empty lines
+	content = strings.ReplaceAll(content, "\n\n\n", "\n\n")
+
+	// Now write the processed content to file
+	file, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("failed to create documentation file: %w", err)
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(content)
+	if err != nil {
+		return fmt.Errorf("failed to write documentation to file: %w", err)
 	}
 
 	log.Info().Msg("")
@@ -105,7 +119,7 @@ You can find the CLI project on GitHub at [https://github.com/metaplay/cli](http
 }
 
 // writeCommandDocs recursively writes documentation for a command and its subcommands
-func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, depth int) error {
+func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command, depth int) error {
 	// Skip hidden commands
 	if cmd.Hidden {
 		return nil
@@ -113,14 +127,14 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write command header
 	cmdPath := o.getCommandPath(cmd)
-	_, err := file.WriteString(fmt.Sprintf("### %s\n\n", cmdPath))
+	_, err := fmt.Fprintf(writer, "### `%s`\n\n", cmdPath)
 	if err != nil {
 		return err
 	}
 
 	// Write description
 	if cmd.Short != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Description:** %s\n\n", html.EscapeString(cmd.Short)))
+		_, err = fmt.Fprintf(writer, "**Description:** %s\n\n", escapeMarkdownCharacters(cmd.Short))
 		if err != nil {
 			return err
 		}
@@ -128,7 +142,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write usage
 	if cmd.Use != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Usage:**\n\n```shell\n%s\n```\n\n", cmd.UseLine()))
+		_, err = fmt.Fprintf(writer, "**Usage:** `%s`\n\n", cmd.UseLine())
 		if err != nil {
 			return err
 		}
@@ -138,9 +152,9 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 	if len(cmd.Aliases) > 0 {
 		escapedAliases := make([]string, len(cmd.Aliases))
 		for i, alias := range cmd.Aliases {
-			escapedAliases[i] = html.EscapeString(alias)
+			escapedAliases[i] = "`" + escapeMarkdownCharacters(alias) + "`"
 		}
-		_, err = file.WriteString(fmt.Sprintf("**Aliases:** %s\n\n", strings.Join(escapedAliases, ", ")))
+		_, err = fmt.Fprintf(writer, "**Aliases:** %s\n\n", strings.Join(escapedAliases, ", "))
 		if err != nil {
 			return err
 		}
@@ -148,7 +162,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write long description if available
 	if cmd.Long != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Detailed Description:**\n\n%s\n\n", html.EscapeString(cmd.Long)))
+		_, err = fmt.Fprintf(writer, "**Detailed Description:**\n\n%s\n\n", escapeMarkdownCharacters(cmd.Long))
 		if err != nil {
 			return err
 		}
@@ -156,7 +170,7 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write examples if available
 	if cmd.Example != "" {
-		_, err = file.WriteString(fmt.Sprintf("**Examples:**\n\n```shell\n%s\n```\n\n", html.EscapeString(cmd.Example)))
+		_, err = fmt.Fprintf(writer, "**Examples:**\n\n```shell\n%s\n```\n\n", escapeMarkdownCharacters(cmd.Example))
 		if err != nil {
 			return err
 		}
@@ -164,49 +178,57 @@ func (o *showCommandsOpts) writeCommandDocs(file *os.File, cmd *cobra.Command, d
 
 	// Write flags if any
 	if cmd.HasAvailableFlags() {
-		_, err = file.WriteString("**Flags:**\n\n")
+		_, err = fmt.Fprintf(writer, "**Flags:**\n\n")
 		if err != nil {
 			return err
 		}
 
 		cmd.Flags().VisitAll(func(flag *pflag.Flag) {
 			if !flag.Hidden {
-				flagDesc := fmt.Sprintf("- **`--%s", html.EscapeString(flag.Name))
+				flagDesc := fmt.Sprintf("- **`--%s", escapeMarkdownCharacters(flag.Name))
 				if flag.Shorthand != "" {
-					flagDesc += fmt.Sprintf(", -%s", html.EscapeString(flag.Shorthand))
+					flagDesc += fmt.Sprintf(", -%s", escapeMarkdownCharacters(flag.Shorthand))
 				}
 				if flag.Value.Type() != "bool" {
-					flagDesc += fmt.Sprintf(" <%s>", html.EscapeString(flag.Value.Type()))
+					flagDesc += fmt.Sprintf(" <%s>", escapeMarkdownCharacters(flag.Value.Type()))
 				}
-				flagDesc += fmt.Sprintf("`**: %s", html.EscapeString(flag.Usage))
+				flagDesc += fmt.Sprintf("`**: %s", escapeMarkdownCharacters(flag.Usage))
 				if flag.DefValue != "" && flag.DefValue != "false" {
-					flagDesc += fmt.Sprintf(" (default: %s)", html.EscapeString(flag.DefValue))
+					flagDesc += fmt.Sprintf(" (default: %s)", escapeMarkdownCharacters(flag.DefValue))
 				}
 				flagDesc += "\n"
-				file.WriteString(flagDesc)
+				fmt.Fprint(writer, flagDesc)
 			}
 		})
-		_, err = file.WriteString("\n")
+		_, err = fmt.Fprintf(writer, "\n")
 		if err != nil {
 			return err
 		}
 	}
 
 	// Add separator between commands
-	_, err = file.WriteString("---\n\n")
+	_, err = fmt.Fprintf(writer, "---\n\n")
 	if err != nil {
 		return err
 	}
 
 	// Recursively process subcommands
 	for _, subCmd := range cmd.Commands() {
-		err = o.writeCommandDocs(file, subCmd, depth+1)
+		err = o.writeCommandDocs(writer, subCmd, depth+1)
 		if err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// escapeMarkdownCharacters escapes markdown special characters with backslashes
+func escapeMarkdownCharacters(s string) string {
+	// Escape markdown special characters
+	s = strings.ReplaceAll(s, "<", "\\<")
+	s = strings.ReplaceAll(s, ">", "\\>")
+	return s
 }
 
 // getCommandPath returns the full command path (e.g., "metaplay build image")
