@@ -22,6 +22,9 @@ import (
 	scheme "k8s.io/client-go/kubernetes/scheme"
 )
 
+// Image to use for database operations
+const debugDatabaseImage = "joseluisq/alpine-mysql-client:1.8"
+
 // debugDatabaseOpts holds the options for the 'debug database' command
 type debugDatabaseOpts struct {
 	UsePositionalArgs
@@ -153,16 +156,11 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Fill in shard indices
-	for shardNdx := range shards {
-		shards[shardNdx].ShardIndex = shardNdx
-	}
-
 	// Create a debug container to run MySQL client
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
 		kubeCli,
-		"joseluisq/alpine-mysql-client:1.8",
+		debugDatabaseImage,
 		false,
 		false,
 		[]string{"sleep", "3600"},
