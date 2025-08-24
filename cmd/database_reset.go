@@ -29,7 +29,8 @@ type databaseResetOpts struct {
 	argEnvironment string
 
 	// Flags
-	flagYes bool
+	flagYes   bool
+	flagForce bool
 }
 
 func init() {
@@ -64,11 +65,15 @@ func init() {
 
 			# Auto-accept reset without confirmation prompt
 			metaplay database reset nimbly --yes
+
+			# Force reset even if game servers are deployed
+			metaplay database reset nimbly --force --yes
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with reset")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if game server deployments are active")
 
 	databaseCmd.AddCommand(cmd)
 }
@@ -122,11 +127,18 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
 	}
 
-	if len(helmReleases) > 0 {
-		return fmt.Errorf("cannot reset database: %d active game server deployment(s) detected in environment '%s'. Remove all game server deployments before resetting the database", len(helmReleases), o.argEnvironment)
-	}
+	// Check if there's a game server deployed.
 	log.Info().Msg("")
-	log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database reset")
+	if len(helmReleases) > 0 {
+		if !o.flagForce {
+			return fmt.Errorf("cannot reset database: active game server deployment detected in environment '%s'. Remove the game server deployment before resetting the database, or use --force to proceed anyway", o.argEnvironment)
+		}
+
+		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Info().Msgf("   Proceeding with database reset due to --force flag")
+	} else {
+		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database reset")
+	}
 	log.Info().Msg("")
 
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
@@ -143,18 +155,23 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 
 	// Show warning and get confirmation
 	if !o.flagYes {
-		stderrLogger.Info().Msgf(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY DELETE ALL DATA in the database!"))
-		stderrLogger.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
-		stderrLogger.Info().Msgf("   Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
-		stderrLogger.Info().Msg("")
-		stderrLogger.Info().Msg("This operation cannot be undone. Make sure you have backups if needed.")
-		stderrLogger.Info().Msg("")
+		// Check if we're in non-interactive mode - fail if we can't prompt
+		if !tui.IsInteractiveMode() {
+			return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database reset operation")
+		}
+
+		log.Info().Msgf(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY DELETE ALL DATA in the database!"))
+		log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
+		log.Info().Msgf("   Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
+		log.Info().Msg("")
+		log.Info().Msg("This operation cannot be undone. Make sure you have backups if needed.")
+		log.Info().Msg("")
 
 		fmt.Print("Type 'yes' to confirm database reset: ")
 		var confirmation string
 		fmt.Scanln(&confirmation)
 		if strings.ToLower(confirmation) != "yes" {
-			stderrLogger.Info().Msg("Database reset cancelled.")
+			log.Info().Msg("Database reset cancelled.")
 			return nil
 		}
 	}
@@ -177,27 +194,65 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("environment", o.argEnvironment).Msg("Starting database reset process")
-	return o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
+
+	// Get table names from all shards once at the beginning
+	allShardTables, err := o.getAllShardTables(cmd.Context(), kubeCli, podName, "debug", shards)
+	if err != nil {
+		return fmt.Errorf("failed to get table information from shards: %v", err)
+	}
+
+	// Check if database is already empty
+	totalTables := 0
+	for _, tables := range allShardTables {
+		totalTables += len(tables)
+	}
+
+	if totalTables == 0 {
+		log.Info().Msgf("✅ Database is already empty - no reset needed")
+		log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
+		return nil
+	}
+
+	return o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards, allShardTables)
+}
+
+// getAllShardTables gets table names from all shards once and returns a map of shard index to table names
+func (o *databaseResetOpts) getAllShardTables(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) (map[int][]string, error) {
+	allShardTables := make(map[int][]string)
+
+	for _, shard := range shards {
+		tables, err := o.getTableNames(ctx, kubeCli, podName, debugContainerName, shard)
+		if err != nil {
+			// If we can't connect to a shard or it doesn't exist, consider it empty
+			log.Debug().Int("shard_index", shard.ShardIndex).Err(err).Msg("Failed to get table names from shard, considering it empty")
+			allShardTables[shard.ShardIndex] = []string{}
+			continue
+		}
+
+		allShardTables[shard.ShardIndex] = tables
+		log.Debug().Int("shard_index", shard.ShardIndex).Int("table_count", len(tables)).Msg("Retrieved table names from shard")
+	}
+
+	return allShardTables, nil
 }
 
 // Main function to reset database contents - implements the two-phase reset logic
-func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
-	stderrLogger.Info().Msgf("Starting database reset...")
-
-	// \todo Check whether the database exists at all (MetaInfo table exists on shard 0).
+func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig, allShardTables map[int][]string) error {
+	log.Info().Msgf("Starting database reset...")
 
 	// Phase 0: Mark reset in progress by setting MasterVersion to -4004
-	stderrLogger.Info().Msg("Phase 0: Mark reset in progress...")
+	log.Info().Msg("Phase 0: Mark reset in progress...")
 	err := o.markResetInProgress(ctx, kubeCli, podName, debugContainerName, shards[0])
 	if err != nil {
 		return fmt.Errorf("failed to mark reset in progress: %v", err)
 	}
 
 	// Phase 1: Drop all tables except MetaInfo in all shards
-	stderrLogger.Info().Msg("Phase 1: Drop all tables except MetaInfo...")
+	log.Info().Msg("Phase 1: Drop all tables except MetaInfo...")
 	for _, shard := range shards {
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard reset phase 1")
-		err := o.resetShardPhase1(ctx, kubeCli, podName, debugContainerName, shard)
+		tables := allShardTables[shard.ShardIndex]
+		err := o.resetShardPhase1(ctx, kubeCli, podName, debugContainerName, shard, tables)
 		if err != nil {
 			return fmt.Errorf("failed to reset shard %d phase 1: %v", shard.ShardIndex, err)
 		}
@@ -205,7 +260,7 @@ func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *
 	}
 
 	// Phase 2: Drop MetaInfo tables in reverse shard order
-	stderrLogger.Info().Msg("Phase 2: Drop MetaInfo tables in reverse order...")
+	log.Info().Msg("Phase 2: Drop MetaInfo tables in reverse order...")
 	// Iterate shards in reverse order (highest index first)
 	for i := len(shards) - 1; i >= 0; i-- {
 		shard := shards[i]
@@ -217,10 +272,9 @@ func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *
 		log.Debug().Int("shard_index", shard.ShardIndex).Msg("Shard reset phase 2 completed")
 	}
 
-	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msgf("✅ Database reset completed successfully")
-	stderrLogger.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
-	stderrLogger.Info().Msgf("   All tables dropped from %d shards", len(shards))
+	log.Info().Msgf("✅ Database reset completed successfully")
+	log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("   All tables dropped from %d shards", len(shards))
 
 	return nil
 }
@@ -245,13 +299,7 @@ func (o *databaseResetOpts) markResetInProgress(ctx context.Context, kubeCli *en
 }
 
 // Helper function to reset a single shard - Phase 1: Drop all tables except MetaInfo
-func (o *databaseResetOpts) resetShardPhase1(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) error {
-	// Get list of all tables in the shard
-	tables, err := o.getTableNames(ctx, kubeCli, podName, debugContainerName, shard)
-	if err != nil {
-		return fmt.Errorf("failed to get table names: %v", err)
-	}
-
+func (o *databaseResetOpts) resetShardPhase1(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig, tables []string) error {
 	// Filter out MetaInfo table (case-insensitive)
 	var tablesToDrop []string
 	for _, table := range tables {
