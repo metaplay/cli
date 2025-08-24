@@ -236,7 +236,8 @@ func (o *databaseResetOpts) getAllShardTables(ctx context.Context, kubeCli *enva
 	return allShardTables, nil
 }
 
-// Main function to reset database contents - implements the two-phase reset logic
+// Reset the database in the target environment. Uses the same sequence as the game server
+// does for a resumable reset flow.
 func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig, allShardTables map[int][]string) error {
 	log.Info().Msgf("Starting database reset...")
 
