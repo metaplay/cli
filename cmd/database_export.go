@@ -133,7 +133,7 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
 		kubeCli,
-		"joseluisq/alpine-mysql-client:1.8",
+		debugDatabaseImage,
 		false,
 		false,
 		[]string{"sleep", "3600"},
