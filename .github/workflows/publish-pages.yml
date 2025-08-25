@@ -35,14 +35,6 @@ jobs:
           mkdir site
           cp install.sh site/
 
-      # Write the full command reference into the directory.
-      # The docs are available at https://metaplay.github.io/cli/command-reference.md.
-      # This is mainly intended for the documentation crawlers to have access to the CLI's
-      # full command reference.
-      - name: Write command reference
-        run: |
-          go run . dev show-commands --output-docs site/command-reference.md
-
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
