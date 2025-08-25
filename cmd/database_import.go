@@ -262,7 +262,7 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 }
 
 // Helper function to open zip file and validate metadata and shard files
-func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseExportMetadata, []*zip.File, error) {
+func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, []*zip.File, error) {
 	// Open zip file
 	zipReader, err := zip.OpenReader(o.argInputFile)
 	if err != nil {
@@ -300,7 +300,7 @@ func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.Data
 		return nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
 	}
 
-	var metadata DatabaseExportMetadata
+	var metadata DatabaseSnapshotMetadata
 	err = json.Unmarshal(metadataBytes, &metadata)
 	if err != nil {
 		zipReader.Close()
@@ -329,7 +329,7 @@ func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.Data
 }
 
 // Helper function to validate metadata compatibility
-func (o *databaseImportOpts) validateMetadata(metadata *DatabaseExportMetadata, targetShards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportOpts) validateMetadata(metadata *DatabaseSnapshotMetadata, targetShards []kubeutil.DatabaseShardConfig) error {
 	// Check version compatibility
 	if metadata.Version != 1 {
 		return fmt.Errorf("unsupported dump version %d, expected version 1", metadata.Version)
