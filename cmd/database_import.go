@@ -14,6 +14,7 @@ import (
 
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -26,8 +27,9 @@ type databaseImportOpts struct {
 	UsePositionalArgs
 
 	// Environment and input file
-	argEnvironment string
-	argInputFile   string
+	argEnvironment        string
+	argInputFile          string
+	flagConfirmProduction bool
 }
 
 func init() {
@@ -69,6 +71,9 @@ func init() {
 		`),
 		Run: runCommand(&o),
 	}
+
+	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when importing to production environments")
+
 	databaseCmd.AddCommand(cmd)
 }
 
@@ -94,6 +99,11 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
+	}
+
+	// Check if this is a production environment and require additional confirmation
+	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
+		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when importing to production environments", envConfig.Name)
 	}
 
 	// Resolve target environment & game server

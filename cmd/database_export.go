@@ -58,6 +58,7 @@ func init() {
 			{Arguments}
 
 			Related commands:
+			- 'metaplay database import' imports a database dump into an environment.
 			- 'metaplay debug database' connects to a database shard interactively.
 		`),
 		Example: renderExample(`
