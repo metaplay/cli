@@ -71,6 +71,11 @@ func init() {
 			The compressed SQL dumps are streamed directly to the target database without
 			decompression on the client side, maintaining network efficiency.
 
+			NOTE: The import operation can fail when the target environment has a different type of
+			database than the one exported. This is caused by the __EFMigrationsHistory table having
+			a collation that is not compatible across different database types. This is a known issue
+			and will be addressed in the future.
+
 			{Arguments}
 
 			Related commands:

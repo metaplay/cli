@@ -34,7 +34,7 @@ func init() {
 	o := databaseExportOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database snapshot. Defaults to 'database-snapshot-${env}-${timestamp}.mdb' if not specified.")
 
 	cmd := &cobra.Command{
@@ -76,10 +76,6 @@ func init() {
 }
 
 func (o *databaseExportOpts) Prepare(cmd *cobra.Command, args []string) error {
-	// Environment argument is required
-	if o.argEnvironment == "" {
-		return fmt.Errorf("ENVIRONMENT argument is required")
-	}
 	// Generate default output file if not specified
 	if o.argOutputFile == "" {
 		timestamp := time.Now().Format("20060102-150405")
@@ -126,12 +122,12 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Show info
-	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msg("Database export info:")
-	stderrLogger.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
-	stderrLogger.Info().Msgf("  Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
-	stderrLogger.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.argOutputFile))
-	stderrLogger.Info().Msg("")
+	log.Info().Msg("")
+	log.Info().Msg("Database export info:")
+	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("  Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
+	log.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.argOutputFile))
+	log.Info().Msg("")
 
 	// Create a debug container to run mariadb-dump
 	log.Debug().Msg("Creating debug pod for database export")
@@ -168,7 +164,7 @@ type DatabaseSnapshotMetadata struct {
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
 func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
-	stderrLogger.Info().Msgf("Exporting database...")
+	log.Info().Msgf("Exporting database...")
 	exportOptions := "--single-transaction --routines --triggers --no-tablespaces"
 
 	// Create output zip file
@@ -191,7 +187,7 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 	}
 
 	// Export each shard
-	var dumpFileNames []string
+	var shardFileNames []string
 	for _, shard := range shards {
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard export")
 		dumpFileName, err := o.exportDatabaseShard(ctx, zipWriter, kubeCli, podName, debugContainerName, exportOptions, shard)
@@ -199,11 +195,11 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 			return fmt.Errorf("failed to export shard %d: %v", shard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("dump_file", dumpFileName).Msg("Shard export completed")
-		dumpFileNames = append(dumpFileNames, dumpFileName)
+		shardFileNames = append(shardFileNames, dumpFileName)
 	}
 
-	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msgf("✅ Database export completed successfully")
+	log.Info().Msg("")
+	log.Info().Msgf("✅ Database export completed successfully")
 
 	return nil
 }
