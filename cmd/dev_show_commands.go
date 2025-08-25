@@ -74,15 +74,11 @@ description: Complete reference for all Metaplay CLI commands and their usage.
 <!-- markdownlint-disable MD007 --> <!-- Unordered list indentation -->
 <!-- markdownlint-disable MD010 --> <!-- Hard tabs -->
 <!-- markdownlint-disable MD012 --> <!-- Multiple consecutive blank lines -->
-<!-- markdownlint-disable MD026 --> <!-- Trailing punctuation in headings -->
+<!-- markdownlint-disable MD024 --> <!-- Duplicate headers -->
+<!-- markdownlint-disable MD026 --> <!-- Colons in headers -->
 <!-- markdownlint-disable MD029 --> <!-- Ordered list item prefix -->
 <!-- markdownlint-disable MD032 --> <!-- Lists should be surrounded by blank lines -->
-
-## Overview
-
-This page provides a comprehensive reference for all [Metaplay CLI](https://github.com/metaplay/cli) commands.
-
-## Available Commands
+<!-- markdownlint-disable MD034 --> <!-- Allow bare URLs -->
 
 `)
 	if err != nil {
@@ -132,9 +128,15 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 		return err
 	}
 
-	// Write description
-	if cmd.Short != "" {
-		_, err = fmt.Fprintf(writer, "**Description:** %s\n\n", escapeMarkdownCharacters(cmd.Short))
+	// Write long description if available
+	cmdDescription := ""
+	if cmd.Long != "" {
+		cmdDescription = cmd.Long
+	} else if cmd.Short != "" {
+		cmdDescription = cmd.Short
+	}
+	if cmdDescription != "" {
+		_, err = fmt.Fprintf(writer, "%s\n\n", escapeMarkdownCharacters(cmdDescription))
 		if err != nil {
 			return err
 		}
@@ -142,7 +144,7 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 
 	// Write usage
 	if cmd.Use != "" {
-		_, err = fmt.Fprintf(writer, "**Usage:** `%s`\n\n", cmd.UseLine())
+		_, err = fmt.Fprintf(writer, "#### Usage\n\n`%s`\n\n", cmd.UseLine())
 		if err != nil {
 			return err
 		}
@@ -154,15 +156,7 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 		for i, alias := range cmd.Aliases {
 			escapedAliases[i] = "`" + escapeMarkdownCharacters(alias) + "`"
 		}
-		_, err = fmt.Fprintf(writer, "**Aliases:** %s\n\n", strings.Join(escapedAliases, ", "))
-		if err != nil {
-			return err
-		}
-	}
-
-	// Write long description if available
-	if cmd.Long != "" {
-		_, err = fmt.Fprintf(writer, "**Detailed Description:**\n\n%s\n\n", escapeMarkdownCharacters(cmd.Long))
+		_, err = fmt.Fprintf(writer, "#### Aliases\n\n%s\n\n", strings.Join(escapedAliases, ", "))
 		if err != nil {
 			return err
 		}
@@ -170,7 +164,7 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 
 	// Write examples if available
 	if cmd.Example != "" {
-		_, err = fmt.Fprintf(writer, "**Examples:**\n\n```shell\n%s\n```\n\n", escapeMarkdownCharacters(cmd.Example))
+		_, err = fmt.Fprintf(writer, "#### Examples\n\n```shell\n%s\n```\n\n", escapeMarkdownCharacters(cmd.Example))
 		if err != nil {
 			return err
 		}
@@ -178,7 +172,7 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 
 	// Write flags if any
 	if cmd.HasAvailableFlags() {
-		_, err = fmt.Fprintf(writer, "**Flags:**\n\n")
+		_, err = fmt.Fprintf(writer, "#### Flags\n\n")
 		if err != nil {
 			return err
 		}
