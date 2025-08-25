@@ -121,9 +121,17 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 		return nil
 	}
 
+	// Add separator between commands
+	_, err := fmt.Fprintf(writer, "---\n\n")
+	if err != nil {
+		return err
+	}
+
 	// Write command header
-	cmdPath := o.getCommandPath(cmd)
-	_, err := fmt.Fprintf(writer, "### `%s`\n\n", cmdPath)
+	if cmd.Use == "" {
+		panic("command has no use?!")
+	}
+	_, err = fmt.Fprintf(writer, "### `%s`\n\n", cmd.UseLine())
 	if err != nil {
 		return err
 	}
@@ -137,14 +145,6 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 	}
 	if cmdDescription != "" {
 		_, err = fmt.Fprintf(writer, "%s\n\n", escapeMarkdownCharacters(cmdDescription))
-		if err != nil {
-			return err
-		}
-	}
-
-	// Write usage
-	if cmd.Use != "" {
-		_, err = fmt.Fprintf(writer, "#### Usage\n\n`%s`\n\n", cmd.UseLine())
 		if err != nil {
 			return err
 		}
@@ -198,12 +198,6 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 		if err != nil {
 			return err
 		}
-	}
-
-	// Add separator between commands
-	_, err = fmt.Fprintf(writer, "---\n\n")
-	if err != nil {
-		return err
 	}
 
 	// Recursively process subcommands
