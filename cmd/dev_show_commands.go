@@ -164,7 +164,7 @@ func (o *showCommandsOpts) writeCommandDocs(writer io.Writer, cmd *cobra.Command
 
 	// Write examples if available
 	if cmd.Example != "" {
-		_, err = fmt.Fprintf(writer, "#### Examples\n\n```shell\n%s\n```\n\n", escapeMarkdownCharacters(cmd.Example))
+		_, err = fmt.Fprintf(writer, "#### Examples\n\n```shell\n%s\n```\n\n", trimIndent(escapeMarkdownCharacters(cmd.Example), 0))
 		if err != nil {
 			return err
 		}
