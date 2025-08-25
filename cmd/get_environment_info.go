@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -103,6 +104,29 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Get Kubernetes client to fetch database information
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
+	if err != nil {
+		log.Debug().Err(err).Msg("Failed to get Kubernetes client for database info")
+		kubeCli = nil // Continue without database info
+	}
+
+	// Fetch database shard configuration if Kubernetes client is available
+	var shards []kubeutil.DatabaseShardConfig
+	if kubeCli != nil {
+		log.Debug().Str("namespace", kubeCli.Namespace).Msg("Fetching database shard configuration")
+		shards, err = kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
+		if err != nil {
+			log.Debug().Err(err).Msg("Failed to fetch database shard configuration")
+			shards = nil // Continue without database info
+		} else {
+			// Fill in shard indices
+			for shardNdx := range shards {
+				shards[shardNdx].ShardIndex = shardNdx
+			}
+		}
+	}
+
 	// Only fetch portal info if targeting a managed stack.
 	var portalInfo *portalapi.EnvironmentInfo
 	authProviderName := coalesceString(envConfig.AuthProvider, "metaplay")
@@ -165,6 +189,17 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Domain:               %s", styles.RenderTechnical(oauth2Client.Domain))
 		log.Info().Msgf("  Client ID:            %s", styles.RenderTechnical(oauth2Client.ClientID))
 		log.Info().Msgf("  Email domain:         %s", styles.RenderTechnical(oauth2Client.EmailDomain))
+		log.Info().Msgf("")
+
+		// Database information
+		// \todo Show high-level information like the database type (eg, local Maria vs Aurora RDS)
+		shard0 := shards[0]
+		shardBadge := styles.RenderMuted("[shard #0]")
+		log.Info().Msgf("Database:")
+		log.Info().Msgf("  Shards:               %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
+		log.Info().Msgf("  Database name:        %s", styles.RenderTechnical(shard0.DatabaseName))
+		log.Info().Msgf("  Read-write host:      %s %s", styles.RenderTechnical(shard0.ReadWriteHost), shardBadge)
+		log.Info().Msgf("  Read-only host:       %s %s", styles.RenderTechnical(shard0.ReadOnlyHost), shardBadge)
 	}
 	return nil
 }
