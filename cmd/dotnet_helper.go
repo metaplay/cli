@@ -21,7 +21,11 @@ import (
 )
 
 // Environment variables to pass to all dotnet commands.
-var commonDotnetEnvVars = []string{"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true"}
+var commonDotnetEnvVars = []string{
+	"DOTNET_NOLOGO=1",                                // Hide the welcome/telemetry banner
+	"DOTNET_SKIP_WORKLOAD_INTEGRITY_CHECK=1",         // Skip the first-run workload integrity check
+	"DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE=true", // Don't notify about updates to workloads
+}
 
 // Provide installation instructions based on the operating system
 func getDotnetInstallInstructions() string {
