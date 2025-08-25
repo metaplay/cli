@@ -31,11 +31,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "list ENVIRONMENT [flags]",
-		Short: "[preview] List the user secrets in the target environment",
+		Short: "List the user secrets in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Show all user-created secrets in the target environment.
 
 			In the default output mode, the secrets are sanitized to avoid accidentally showing

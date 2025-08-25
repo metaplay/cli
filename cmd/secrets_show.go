@@ -30,11 +30,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "show ENVIRONMENT NAME [flags]",
-		Short: "[preview] Show a user secret in the target environment",
+		Short: "Show a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Show the contents of a single user secret.
 
 			By default, a human-readable text format is used. When using in a script, use
