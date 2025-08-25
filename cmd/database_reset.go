@@ -14,6 +14,7 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -29,8 +30,9 @@ type databaseResetOpts struct {
 	argEnvironment string
 
 	// Flags
-	flagYes   bool
-	flagForce bool
+	flagYes               bool
+	flagForce             bool
+	flagConfirmProduction bool
 }
 
 func init() {
@@ -66,14 +68,15 @@ func init() {
 			# Auto-accept reset without confirmation prompt
 			metaplay database reset nimbly --yes
 
-			# Force reset even if game servers are deployed
+			# Force reset even if a game server is deployed (dangerous!)
 			metaplay database reset nimbly --force --yes
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with reset")
-	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if game server deployments are active")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed")
+	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when resetting production environments")
 
 	databaseCmd.AddCommand(cmd)
 }
@@ -103,6 +106,11 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
+	}
+
+	// Check if this is a production environment and require additional confirmation
+	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
+		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when resetting production environments", envConfig.Name)
 	}
 
 	// Resolve target environment & game server
