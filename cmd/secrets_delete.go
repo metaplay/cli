@@ -26,11 +26,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "delete ENVIRONMENT NAME [flags]",
-		Short: "[preview] Delete a user secret in the target environment",
+		Short: "Delete a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Delete a user-created secret with the given name from the target environment.
 
 			{Arguments}
