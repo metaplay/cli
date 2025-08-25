@@ -68,14 +68,14 @@ func init() {
 			# Auto-accept reset without confirmation prompt
 			metaplay database reset nimbly --yes
 
-			# Force reset even if game servers are deployed
+			# Force reset even if a game server is deployed (dangerous!)
 			metaplay database reset nimbly --force --yes
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with reset")
-	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if game server deployments are active")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when resetting production environments")
 
 	databaseCmd.AddCommand(cmd)

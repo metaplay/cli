@@ -11,8 +11,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -27,8 +30,12 @@ type databaseImportOpts struct {
 	UsePositionalArgs
 
 	// Environment and input file
-	argEnvironment        string
-	argInputFile          string
+	argEnvironment string
+	argInputFile   string
+
+	// Flags
+	flagYes               bool
+	flagForce             bool
 	flagConfirmProduction bool
 }
 
@@ -63,15 +70,23 @@ func init() {
 			- 'metaplay database export' creates database dump archives.
 		`),
 		Example: renderExample(`
-			# Import database from zip file to 'staging' environment
-			metaplay database import staging database_dump.zip
+			# Import database from zip file to 'nimbly' environment (asks for manual confirmation)
+			metaplay database import nimbly database_dump.zip
 
-			# Import with specific file path
-			metaplay database import production /path/to/backup_20240122.zip
+			# Auto-accept import without confirmation prompt
+			metaplay database import nimbly database_dump.zip --yes
+
+			# Force import even if a game server is deployed (dangerous!)
+			metaplay database import nimbly database_dump.zip --force --yes
+
+			# Import to production environment (requires additional confirmation)
+			metaplay database import production backup.zip --yes --confirm-production
 		`),
 		Run: runCommand(&o),
 	}
 
+	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with import")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with import even if a game server is deployed")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when importing to production environments")
 
 	databaseCmd.AddCommand(cmd)
@@ -85,6 +100,12 @@ func (o *databaseImportOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argInputFile == "" {
 		return fmt.Errorf("INPUT_FILE argument is required")
 	}
+
+	// In non-interactive mode, --yes flag is required for safety
+	if !tui.IsInteractiveMode() && !o.flagYes {
+		return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database import operation")
+	}
+
 	return nil
 }
 
@@ -108,9 +129,65 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+
+	// Get kubeconfig to access the environment for Helm operations
+	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return fmt.Errorf("failed to get kubeconfig: %v", err)
+	}
+	log.Debug().Msg("Resolved kubeconfig to access environment")
+
+	// Configure Helm to check for active deployments
+	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
+	if err != nil {
+		return fmt.Errorf("failed to initialize Helm config: %v", err)
+	}
+
+	// Check for any active game server Helm deployments - refuse to import if found
+	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
+	if err != nil {
+		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+	}
+
+	// Check if there's a game server deployed.
+	log.Info().Msg("")
+	if len(helmReleases) > 0 {
+		if !o.flagForce {
+			return fmt.Errorf("cannot import database: active game server deployment detected in environment '%s'. Remove the game server deployment before importing the database, or use --force to proceed anyway", o.argEnvironment)
+		}
+
+		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Info().Msgf("   Proceeding with database import due to --force flag")
+	} else {
+		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database import")
+	}
+	log.Info().Msg("")
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
+	}
+
+	// Show warning and get confirmation
+	if !o.flagYes {
+		// Check if we're in non-interactive mode - fail if we can't prompt
+		if !tui.IsInteractiveMode() {
+			return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database import operation")
+		}
+
+		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the database!"))
+		log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
+		log.Info().Msgf("   Import file: %s", styles.RenderTechnical(o.argInputFile))
+		log.Info().Msg("")
+		log.Info().Msg("This operation cannot be undone. Make sure this is the correct environment.")
+		log.Info().Msg("")
+
+		fmt.Print("Type 'yes' to confirm database import: ")
+		var confirmation string
+		fmt.Scanln(&confirmation)
+		if strings.ToLower(confirmation) != "yes" {
+			log.Info().Msg("Database import cancelled.")
+			return nil
+		}
 	}
 
 	// Fetch the database shard configuration from Kubernetes secret
@@ -153,7 +230,7 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
 func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShards []kubeutil.DatabaseShardConfig) error {
-	stderrLogger.Info().Msgf("Starting database import...")
+	stderrLogger.Info().Msgf("Importing database...")
 
 	// Open and validate zip file
 	zipReader, metadata, shardFiles, err := o.openAndValidateZipFile(targetShards)

@@ -147,7 +147,7 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	// Export the database
-	log.Debug().Str("output_file", o.argOutputFile).Msg("Starting database export process")
+	log.Debug().Str("output_file", o.argOutputFile).Msg("Start database export")
 	return o.exportDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
 }
 
@@ -164,7 +164,7 @@ type DatabaseExportMetadata struct {
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
 func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
-	stderrLogger.Info().Msgf("Starting database export...")
+	stderrLogger.Info().Msgf("Exporting database...")
 	exportOptions := "--single-transaction --routines --triggers --no-tablespaces"
 
 	// Create output zip file
