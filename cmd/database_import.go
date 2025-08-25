@@ -43,8 +43,8 @@ func init() {
 	o := databaseImportOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argInputFile, "INPUT_FILE", "Input file path containing database snapshot (eg, 'database-snapshot.mdb').")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
+	args.AddStringArgument(&o.argInputFile, "INPUT_FILE", "Input file path containing database snapshot (eg, 'database-snapshot.mdb').")
 
 	cmd := &cobra.Command{
 		Use:     "import [ENVIRONMENT] [INPUT_FILE] [flags]",
@@ -57,6 +57,12 @@ func init() {
 
 			WARNING: This is a destructive operation and will PERMANENTLY OVERWRITE ALL DATA in the
 			target environment's database!
+
+			Safety protections:
+			- By default, requires manual confirmation before proceeding
+			- Use --yes to skip overwrite confirmation (intended for automation)
+			- Use --force to bypass game server deployment checks (can put the database in an inconsistent state!)
+			- Use --confirm-production when importing to production environments
 
 			For multi-shard environments, each shard snapshot will be restored to the corresponding
 			shard in the target environment (shard_0.sql.gz → shard 0, etc.). The target environment
@@ -163,12 +169,14 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database import")
 	}
 	log.Info().Msg("")
+
+	// Create Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
 
-	// Show warning and get confirmation
+	// Show warning and get confirmation.
 	if !o.flagYes {
 		// Check if we're in non-interactive mode - fail if we can't prompt
 		if !tui.IsInteractiveMode() {
@@ -231,7 +239,7 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
 func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShards []kubeutil.DatabaseShardConfig) error {
-	stderrLogger.Info().Msgf("Importing database...")
+	log.Info().Msgf("Importing database...")
 
 	// Open and validate zip file
 	zipReader, metadata, shardFiles, err := o.openAndValidateZipFile(targetShards)
@@ -254,10 +262,8 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Shard import completed")
 	}
 
-	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msgf("✅ Database import completed successfully")
-	stderrLogger.Info().Msgf("   Imported from: %s", styles.RenderTechnical(o.argInputFile))
-	stderrLogger.Info().Msgf("   Target environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msg("")
+	log.Info().Msgf("✅ Database import completed successfully")
 
 	return nil
 }

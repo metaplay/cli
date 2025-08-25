@@ -204,7 +204,6 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 
 	stderrLogger.Info().Msg("")
 	stderrLogger.Info().Msgf("✅ Database export completed successfully")
-	stderrLogger.Info().Msgf("   Output written to: %s", styles.RenderTechnical(o.argOutputFile))
 
 	return nil
 }
