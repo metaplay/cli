@@ -35,7 +35,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
-	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database dump.")
+	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database dump. Defaults to 'database-snapshot-${env}-${timestamp}.mdb' if not specified.")
 
 	cmd := &cobra.Command{
 		Use:     "export [ENVIRONMENT] [OUTPUT_FILE] [flags]",
@@ -43,6 +43,9 @@ func init() {
 		Short:   "[preview] Export database dump from an environment",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
+
+			DISCLAIMER: This operation is not a a real backup and is intended for ad hoc database
+			exports only.
 
 			Export a full database dump from the specified environment using mariadb-dump.
 
@@ -62,11 +65,11 @@ func init() {
 			- 'metaplay debug database' connects to a database shard interactively.
 		`),
 		Example: renderExample(`
-			# Export database from 'nimbly' environment to a local zip file
-			metaplay database export nimbly database_dump.zip
+			# Export database from 'nimbly' environment (uses default filename)
+			metaplay database export nimbly
 
-			# Export to a file with timestamp
-			metaplay database export nimbly "dump_$(date +%Y%m%d_%H%M%S).zip"
+			# Export database to a specific file
+			metaplay database export nimbly my_database_snapshot.mdb
 		`),
 		Run: runCommand(&o),
 	}
@@ -74,12 +77,14 @@ func init() {
 }
 
 func (o *databaseExportOpts) Prepare(cmd *cobra.Command, args []string) error {
-	// Both arguments are required
+	// Environment argument is required
 	if o.argEnvironment == "" {
 		return fmt.Errorf("ENVIRONMENT argument is required")
 	}
+	// Generate default output file if not specified
 	if o.argOutputFile == "" {
-		return fmt.Errorf("OUTPUT_FILE argument is required")
+		timestamp := time.Now().Format("20060102-150405")
+		o.argOutputFile = fmt.Sprintf("database-snapshot-%s-%s.mdb", o.argEnvironment, timestamp)
 	}
 	return nil
 }
