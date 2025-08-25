@@ -43,23 +43,24 @@ func init() {
 	o := databaseImportOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
-	args.AddStringArgumentOpt(&o.argInputFile, "INPUT_FILE", "Input zip file path containing database dumps.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
+	args.AddStringArgumentOpt(&o.argInputFile, "INPUT_FILE", "Input file path containing database snapshot (eg, 'database-snapshot.mdb').")
 
 	cmd := &cobra.Command{
 		Use:     "import [ENVIRONMENT] [INPUT_FILE] [flags]",
 		Aliases: []string{"restore"},
-		Short:   "[preview] Import database from a zip archive",
+		Short:   "[preview] Import database snapshot from a file",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Import database contents from a zip archive created by 'database export'.
+			Import database snapshot from a file created by 'database export'.
 
-			This command restores database dumps from a zip archive into the target environment.
-			The import validates metadata compatibility and shard count before proceeding.
+			WARNING: This is a destructive operation and will PERMANENTLY OVERWRITE ALL DATA in the
+			target environment's database!
 
-			For multi-shard environments, each shard dump will be restored to the corresponding
-			shard in the target environment (shard_0.sql.gz → shard 0, etc.).
+			For multi-shard environments, each shard snapshot will be restored to the corresponding
+			shard in the target environment (shard_0.sql.gz → shard 0, etc.). The target environment
+			must have the same number of shards as the snapshot, or otherwise the command will fail.
 
 			The compressed SQL dumps are streamed directly to the target database without
 			decompression on the client side, maintaining network efficiency.
@@ -67,20 +68,20 @@ func init() {
 			{Arguments}
 
 			Related commands:
-			- 'metaplay database export' creates database dump archives.
+			- 'metaplay database export' creates database snapshot archives.
 		`),
 		Example: renderExample(`
-			# Import database from zip file to 'nimbly' environment (asks for manual confirmation)
-			metaplay database import nimbly database_dump.zip
+			# Import database snapshot to 'nimbly' environment (asks for manual confirmation)
+			metaplay database import nimbly snapshot.mdb
 
 			# Auto-accept import without confirmation prompt
-			metaplay database import nimbly database_dump.zip --yes
+			metaplay database import nimbly snapshot.mdb --yes
 
 			# Force import even if a game server is deployed (dangerous!)
-			metaplay database import nimbly database_dump.zip --force --yes
+			metaplay database import nimbly snapshot.mdb --force --yes
 
 			# Import to production environment (requires additional confirmation)
-			metaplay database import production backup.zip --yes --confirm-production
+			metaplay database import production snapshot.mdb --yes --confirm-production
 		`),
 		Run: runCommand(&o),
 	}
