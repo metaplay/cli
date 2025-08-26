@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -67,12 +68,19 @@ func (o *secretsDeleteOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
+	// Print secret info.
+	log.Info().Msg("")
+	log.Info().Msgf("Delete secret:")
+	log.Info().Msgf("  Target environment: %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("  Secret name:        %s", styles.RenderTechnical(o.argSecretName))
+	log.Info().Msg("")
+
 	// Delete the secret.
 	err = targetEnv.DeleteSecret(cmd.Context(), o.argSecretName)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Secret %s deleted", o.argSecretName)
+	log.Info().Msgf("✅ Secret %s deleted", o.argSecretName)
 	return nil
 }

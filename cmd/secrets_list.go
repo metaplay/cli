@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -106,6 +107,7 @@ func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 
 		log.Info().Msgf("%s", string(secretsJSON))
 	} else {
+		log.Info().Msg("")
 		if len(secrets) == 0 {
 			log.Info().Msgf("No secrets found in the environment")
 		} else {
@@ -160,14 +162,14 @@ func formatAge(duration time.Duration) string {
 
 func logSecret(secret *corev1.Secret, showValues bool) {
 	age := time.Now().Sub(secret.CreationTimestamp.Time)
-	log.Info().Msgf("Name: %s", secret.Name)
-	log.Info().Msgf("Age: %s", formatAge(age))
+	log.Info().Msgf("Name: %s", styles.RenderTechnical(secret.Name))
+	log.Info().Msgf("Age:  %s", styles.RenderTechnical(formatAge(age)))
 	log.Info().Msgf("Data:")
 	for key, value := range secret.Data {
 		// Censor values unless they're requested to be shown.
 		if !showValues {
 			value = []byte("*****")
 		}
-		log.Info().Msgf("  %s: %s", key, value)
+		log.Info().Msgf("  %s: %s", styles.RenderTechnical(key), value)
 	}
 }
