@@ -395,11 +395,6 @@ func (o *databaseImportOpts) validateMetadata(metadata *DatabaseSnapshotMetadata
 		}
 	}
 
-	// Check compression format
-	if metadata.Compression != "gzip" {
-		return fmt.Errorf("unsupported compression format '%s', expected 'gzip'", metadata.Compression)
-	}
-
 	return nil
 }
 
@@ -462,8 +457,8 @@ func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipRea
 	}
 	defer shardReader.Close()
 
-	// Build mariadb import command with gunzip decompression
-	importCmd := fmt.Sprintf("gunzip -c | mariadb -h %s -u %s -p%s %s",
+	// Build mariadb import command for uncompressed SQL
+	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
 		targetShard.ReadWriteHost, // Use primary host for writes
 		targetShard.UserId,
 		targetShard.Password,
@@ -471,7 +466,7 @@ func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipRea
 
 	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msg("Executing mariadb import command")
 
-	// Execute mariadb import command and stream compressed data directly
+	// Execute mariadb import command and stream uncompressed SQL data directly
 	req := kubeCli.Clientset.CoreV1().
 		RESTClient().
 		Post().
@@ -489,7 +484,7 @@ func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipRea
 		}, scheme.ParameterCodec)
 
 	ioStreams := IOStreams{
-		In:     shardReader, // Stream compressed data directly from zip
+		In:     shardReader, // Stream uncompressed SQL data directly from zip
 		Out:    os.Stdout,
 		ErrOut: os.Stderr,
 	}

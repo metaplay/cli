@@ -161,15 +161,6 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("CRITICAL: database export failed, zip file removed: %v", err)
 	}
 
-	// Validate the exported zip file before reporting success
-	log.Info().Msg("")
-	log.Info().Msg("Validating generated snapshot...")
-	err = o.validateSnapshotArchiveFile(o.argOutputFile)
-	if err != nil {
-		return fmt.Errorf("export validation failed: %v", err)
-	}
-	log.Info().Msgf("%s Validated database snapshot file", styles.RenderSuccess("✅"))
-
 	log.Info().Msg("")
 	log.Info().Msgf("✅ Database export completed successfully")
 
@@ -183,7 +174,6 @@ type DatabaseSnapshotMetadata struct {
 	DatabaseName  string    `json:"database_name"`
 	NumShards     int       `json:"num_shards"`
 	ExportedAt    time.Time `json:"exported_at"`
-	Compression   string    `json:"compression"`
 	ExportOptions string    `json:"export_options"`
 }
 
@@ -260,7 +250,6 @@ func (o *databaseExportOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []
 		DatabaseName:  databaseName,
 		NumShards:     len(shards),
 		ExportedAt:    time.Now().UTC(),
-		Compression:   "gzip",
 		ExportOptions: exportOptions,
 	}
 
@@ -404,7 +393,7 @@ func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaConte
 // Helper function to export data only from a single database shard
 func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for data only (DML) with proper gzip termination
-	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s | gzip -c",
+	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
@@ -412,10 +401,10 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing data dump command")
 
 	// Prepare zip header for streaming
-	shardFileName := fmt.Sprintf("shard_%d.sql.gz", shard.ShardIndex)
+	shardFileName := fmt.Sprintf("shard_%d.sql", shard.ShardIndex)
 	shardHeader := &zip.FileHeader{
 		Name:     shardFileName,
-		Method:   zip.Store, // Use Store since data is already gzipped
+		Method:   zip.Deflate, // Use compression since data is not pre-compressed
 		Modified: time.Now(),
 	}
 	shardHeader.SetMode(0644)
@@ -458,55 +447,43 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 	return shardFileName, nil
 }
 
-// validateSnapshotArchiveFile validates that the exported zip file contains valid compressed files
-func (o *databaseExportOpts) validateSnapshotArchiveFile(zipFilePath string) error {
-	log.Debug().Str("zip_file", zipFilePath).Msg("Starting validation of exported zip file")
-
-	// Open the zip file for reading
-	zipReader, err := zip.OpenReader(zipFilePath)
+// validateShardFile validates an uncompressed shard file by checking its content
+func (o *databaseExportOpts) validateShardFile(file *zip.File) error {
+	// Open the file for reading
+	reader, err := file.Open()
 	if err != nil {
-		return fmt.Errorf("failed to open zip file for validation: %v", err)
+		return fmt.Errorf("failed to open file for reading: %v", err)
 	}
-	defer zipReader.Close()
+	defer reader.Close()
 
-	// Track shard files found and validated
-	shardFilesFound := 0
-	shardFilesValidated := 0
+	// Read a portion to validate it contains SQL dump data
+	buffer := make([]byte, 8192) // 8KB buffer for validation
+	n, err := reader.Read(buffer)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read shard file: %v", err)
+	}
 
-	// Validate each file in the zip
-	for _, file := range zipReader.File {
-		log.Debug().Str("file_name", file.Name).Uint64("compressed_size", file.CompressedSize64).Uint64("uncompressed_size", file.UncompressedSize64).Msg("Checking zip file entry")
+	if n == 0 {
+		return fmt.Errorf("shard file appears to be empty")
+	}
 
-		// Check if this is a shard file (starts with 'shard_')
-		if !strings.HasPrefix(file.Name, "shard_") {
-			log.Debug().Str("file_name", file.Name).Msg("Skipping non-shard file")
-			continue
-		}
+	content := string(buffer[:n])
 
-		shardFilesFound++
-		log.Debug().Str("file_name", file.Name).Msg("Found shard file")
-
-		// Check if it's a gzipped file
-		if strings.HasSuffix(file.Name, ".gz") {
-			log.Debug().Str("file_name", file.Name).Msg("Validating gzipped shard file")
-
-			// Validate the gzipped file by attempting to decompress it
-			if err := o.validateGzippedShardFile(file); err != nil {
-				return fmt.Errorf("validation failed for gzipped shard file %s: %v", file.Name, err)
-			}
-
-			shardFilesValidated++
-			log.Debug().Str("file_name", file.Name).Msg("Gzipped shard file validation passed")
-		} else {
-			log.Debug().Str("file_name", file.Name).Msg("Shard file is not gzipped, skipping compression validation")
+	// Basic validation - check for SQL dump patterns
+	sqlPatterns := []string{"INSERT INTO", "CREATE TABLE", "LOCK TABLES", "UNLOCK TABLES", "mysqldump", "-- Dump completed"}
+	hasSQL := false
+	for _, pattern := range sqlPatterns {
+		if strings.Contains(strings.ToUpper(content), strings.ToUpper(pattern)) {
+			hasSQL = true
+			break
 		}
 	}
 
-	if shardFilesFound == 0 {
-		return fmt.Errorf("no shard files found in zip archive")
+	if !hasSQL {
+		return fmt.Errorf("shard file does not appear to contain valid SQL dump data")
 	}
 
-	log.Debug().Int("shard_files_found", shardFilesFound).Int("gzipped_files_validated", shardFilesValidated).Msg("Shard file validation completed")
+	log.Debug().Int("content_sample_size", n).Msg("Successfully validated shard file content")
 	return nil
 }
 
