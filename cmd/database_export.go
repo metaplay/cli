@@ -7,11 +7,14 @@ package cmd
 import (
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
@@ -157,6 +160,19 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 		log.Error().Err(err).Msg("Database export failed - removing incomplete zip file")
 		return fmt.Errorf("CRITICAL: database export failed, zip file removed: %v", err)
 	}
+
+	// Validate the exported zip file before reporting success
+	log.Info().Msg("")
+	log.Info().Msg("Validating generated snapshot...")
+	err = o.validateSnapshotArchiveFile(o.argOutputFile)
+	if err != nil {
+		return fmt.Errorf("export validation failed: %v", err)
+	}
+	log.Info().Msgf("%s Validated database snapshot file", styles.RenderSuccess("✅"))
+
+	log.Info().Msg("")
+	log.Info().Msgf("✅ Database export completed successfully")
+
 	return nil
 }
 
@@ -223,15 +239,7 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 		shardFileNames = append(shardFileNames, shardFileName)
 	}
 
-	// Validate the exported zip file before reporting success
-	err = o.validateExportedZipFile(o.argOutputFile, shardFileNames)
-	if err != nil {
-		return fmt.Errorf("export validation failed: %v", err)
-	}
-
-	log.Info().Msg("")
-	log.Info().Msgf("✅ Database export completed successfully")
-
+	log.Info().Msgf("%s Wrote database snapshot file", styles.RenderSuccess("✅"))
 	return nil
 }
 
@@ -448,4 +456,206 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 	log.Debug().Str("file", shardFileName).Msg("Shard data streamed directly to zip archive")
 
 	return shardFileName, nil
+}
+
+// validateSnapshotArchiveFile validates that the exported zip file contains valid compressed files
+func (o *databaseExportOpts) validateSnapshotArchiveFile(zipFilePath string) error {
+	log.Debug().Str("zip_file", zipFilePath).Msg("Starting validation of exported zip file")
+
+	// Open the zip file for reading
+	zipReader, err := zip.OpenReader(zipFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open zip file for validation: %v", err)
+	}
+	defer zipReader.Close()
+
+	// Track shard files found and validated
+	shardFilesFound := 0
+	shardFilesValidated := 0
+
+	// Validate each file in the zip
+	for _, file := range zipReader.File {
+		log.Debug().Str("file_name", file.Name).Uint64("compressed_size", file.CompressedSize64).Uint64("uncompressed_size", file.UncompressedSize64).Msg("Checking zip file entry")
+
+		// Check if this is a shard file (starts with 'shard_')
+		if !strings.HasPrefix(file.Name, "shard_") {
+			log.Debug().Str("file_name", file.Name).Msg("Skipping non-shard file")
+			continue
+		}
+
+		shardFilesFound++
+		log.Debug().Str("file_name", file.Name).Msg("Found shard file")
+
+		// Check if it's a gzipped file
+		if strings.HasSuffix(file.Name, ".gz") {
+			log.Debug().Str("file_name", file.Name).Msg("Validating gzipped shard file")
+
+			// Validate the gzipped file by attempting to decompress it
+			if err := o.validateGzippedShardFile(file); err != nil {
+				return fmt.Errorf("validation failed for gzipped shard file %s: %v", file.Name, err)
+			}
+
+			shardFilesValidated++
+			log.Debug().Str("file_name", file.Name).Msg("Gzipped shard file validation passed")
+		} else {
+			log.Debug().Str("file_name", file.Name).Msg("Shard file is not gzipped, skipping compression validation")
+		}
+	}
+
+	if shardFilesFound == 0 {
+		return fmt.Errorf("no shard files found in zip archive")
+	}
+
+	log.Debug().Int("shard_files_found", shardFilesFound).Int("gzipped_files_validated", shardFilesValidated).Msg("Shard file validation completed")
+	return nil
+}
+
+// validateGzippedShardFile validates a gzipped shard file by attempting to decompress it
+func (o *databaseExportOpts) validateGzippedShardFile(file *zip.File) error {
+	// Open the file for reading
+	reader, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open file for reading: %v", err)
+	}
+	defer reader.Close()
+
+	// Create a gzip reader to decompress the content (equivalent to 'gzip -d')
+	gzipReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %v", err)
+	}
+	defer gzipReader.Close()
+
+	// Read through the entire file to validate it can be decompressed
+	// This is equivalent to running 'gzip -d' and checking for errors
+	buffer := make([]byte, 65536) // 64KB buffer for efficient reading
+	totalBytes := int64(0)
+
+	for {
+		n, err := gzipReader.Read(buffer)
+		if err != nil {
+			if err == io.EOF {
+				break // End of file reached successfully
+			}
+			return fmt.Errorf("failed to decompress gzipped file: %v", err)
+		}
+		totalBytes += int64(n)
+	}
+
+	if totalBytes == 0 {
+		return fmt.Errorf("gzipped file appears to be empty after decompression")
+	}
+
+	log.Debug().Int64("decompressed_bytes", totalBytes).Msg("Successfully validated gzipped file integrity")
+	return nil
+}
+
+// validateZipFileEntry validates a single file entry in the zip archive
+func (o *databaseExportOpts) validateZipFileEntry(file *zip.File) error {
+	// Open the file for reading
+	reader, err := file.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open file for reading: %v", err)
+	}
+	defer reader.Close()
+
+	// Validate based on file type
+	switch {
+	case file.Name == "export_metadata.json":
+		return o.validateMetadataFile(reader)
+	case file.Name == "schema.sql":
+		return o.validateSchemaFile(reader)
+	case regexp.MustCompile(`^shard_\d+\.sql\.gz$`).MatchString(file.Name):
+		return o.validateGzippedSQLFile(reader, file.Name)
+	default:
+		log.Warn().Str("file_name", file.Name).Msg("Unknown file type, skipping validation")
+		return nil
+	}
+}
+
+// validateMetadataFile validates the JSON metadata file
+func (o *databaseExportOpts) validateMetadataFile(reader io.ReadCloser) error {
+	// Try to decode the JSON to ensure it's valid
+	var metadata map[string]interface{}
+	decoder := json.NewDecoder(reader)
+	if err := decoder.Decode(&metadata); err != nil {
+		return fmt.Errorf("invalid JSON metadata: %v", err)
+	}
+
+	// Check for required fields
+	requiredFields := []string{"environment", "timestamp", "export_options"}
+	for _, field := range requiredFields {
+		if _, exists := metadata[field]; !exists {
+			return fmt.Errorf("missing required field '%s' in metadata", field)
+		}
+	}
+
+	return nil
+}
+
+// validateSchemaFile validates the SQL schema file
+func (o *databaseExportOpts) validateSchemaFile(reader io.ReadCloser) error {
+	// Read a small portion to check if it looks like SQL
+	buffer := make([]byte, 1024)
+	n, err := reader.Read(buffer)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to read schema file: %v", err)
+	}
+
+	content := string(buffer[:n])
+
+	// Basic validation - check for SQL keywords
+	sqlKeywords := []string{"CREATE", "TABLE", "INSERT", "DROP", "ALTER"}
+	hasSQL := false
+	for _, keyword := range sqlKeywords {
+		if strings.Contains(strings.ToUpper(content), keyword) {
+			hasSQL = true
+			break
+		}
+	}
+
+	if !hasSQL {
+		return fmt.Errorf("schema file does not appear to contain valid SQL")
+	}
+
+	return nil
+}
+
+// validateGzippedSQLFile validates a gzipped SQL file
+func (o *databaseExportOpts) validateGzippedSQLFile(reader io.ReadCloser, fileName string) error {
+	// Create a gzip reader to decompress the content
+	gzipReader, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("failed to create gzip reader: %v", err)
+	}
+	defer gzipReader.Close()
+
+	// Read a small portion to validate it's decompressible and contains SQL
+	buffer := make([]byte, 1024)
+	n, err := gzipReader.Read(buffer)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("failed to decompress gzipped file: %v", err)
+	}
+
+	if n == 0 {
+		return fmt.Errorf("gzipped file appears to be empty")
+	}
+
+	content := string(buffer[:n])
+
+	// Basic validation - check for SQL dump patterns
+	sqlPatterns := []string{"INSERT INTO", "CREATE TABLE", "LOCK TABLES", "UNLOCK TABLES", "mysqldump"}
+	hasSQL := false
+	for _, pattern := range sqlPatterns {
+		if strings.Contains(strings.ToUpper(content), strings.ToUpper(pattern)) {
+			hasSQL = true
+			break
+		}
+	}
+
+	if !hasSQL {
+		return fmt.Errorf("gzipped file does not appear to contain valid SQL dump data")
+	}
+
+	return nil
 }
