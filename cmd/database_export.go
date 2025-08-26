@@ -150,7 +150,14 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 
 	// Export the database
 	log.Debug().Str("output_file", o.argOutputFile).Msg("Start database export")
-	return o.exportDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
+	err = o.exportDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
+	if err != nil {
+		// Hard failure - remove incomplete file
+		os.Remove(o.argOutputFile)
+		log.Error().Err(err).Msg("Database export failed - removing incomplete zip file")
+		return fmt.Errorf("CRITICAL: database export failed, zip file removed: %v", err)
+	}
+	return nil
 }
 
 // DatabaseSnapshotMetadata contains information about the database export
@@ -214,6 +221,12 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("shard_file", shardFileName).Msg("Shard data export completed")
 		shardFileNames = append(shardFileNames, shardFileName)
+	}
+
+	// Validate the exported zip file before reporting success
+	err = o.validateExportedZipFile(o.argOutputFile, shardFileNames)
+	if err != nil {
+		return fmt.Errorf("export validation failed: %v", err)
 	}
 
 	log.Info().Msg("")
@@ -309,7 +322,8 @@ func (o *databaseExportOpts) extractDatabaseSchema(ctx context.Context, kubeCli 
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return "", fmt.Errorf("schema extraction failed: %v", err)
+		log.Error().Err(err).Msg("Schema extraction failed - aborting export")
+		return "", fmt.Errorf("CRITICAL: schema extraction failed: %v", err)
 	}
 
 	schemaContent := schemaBuffer.String()
@@ -381,8 +395,8 @@ func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaConte
 
 // Helper function to export data only from a single database shard
 func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
-	// Build mariadb-dump command for data only (DML)
-	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s | gzip",
+	// Build mariadb-dump command for data only (DML) with proper gzip termination
+	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s | gzip -c",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
@@ -390,9 +404,9 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing data dump command")
 
 	// Prepare zip header for streaming
-	snapshotFileName := fmt.Sprintf("shard_%d.sql.gz", shard.ShardIndex)
+	shardFileName := fmt.Sprintf("shard_%d.sql.gz", shard.ShardIndex)
 	shardHeader := &zip.FileHeader{
-		Name:     snapshotFileName,
+		Name:     shardFileName,
 		Method:   zip.Store, // Use Store since data is already gzipped
 		Modified: time.Now(),
 	}
@@ -429,9 +443,9 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 
 	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return "", fmt.Errorf("data export failed: %v", err)
+		return "", fmt.Errorf("shard %d data export failed: %v", shard.ShardIndex, err)
 	}
-	log.Debug().Str("file", snapshotFileName).Msg("Shard data streamed directly to zip archive")
+	log.Debug().Str("file", shardFileName).Msg("Shard data streamed directly to zip archive")
 
-	return snapshotFileName, nil
+	return shardFileName, nil
 }

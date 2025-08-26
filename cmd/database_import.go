@@ -162,6 +162,7 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
 	}
 
+	log.Info().Msg("")
 	log.Info().Msg("Database import:")
 	log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
 	log.Info().Msgf("   Import file: %s", styles.RenderTechnical(o.argInputFile))
@@ -462,7 +463,7 @@ func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipRea
 	defer shardReader.Close()
 
 	// Build mariadb import command with gunzip decompression
-	importCmd := fmt.Sprintf("gunzip | mariadb -h %s -u %s -p%s %s",
+	importCmd := fmt.Sprintf("gunzip -c | mariadb -h %s -u %s -p%s %s",
 		targetShard.ReadWriteHost, // Use primary host for writes
 		targetShard.UserId,
 		targetShard.Password,
