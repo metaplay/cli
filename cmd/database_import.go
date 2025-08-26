@@ -164,8 +164,8 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg("")
 	log.Info().Msg("Database import:")
-	log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
-	log.Info().Msgf("   Import file: %s", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("  Import file: %s", styles.RenderTechnical(o.argInputFile))
 	log.Info().Msg("")
 
 	// Check if there's a game server deployed.

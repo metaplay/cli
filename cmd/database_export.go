@@ -229,7 +229,6 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 		shardFileNames = append(shardFileNames, shardFileName)
 	}
 
-	log.Info().Msgf("%s Wrote database snapshot file", styles.RenderSuccess("✅"))
 	return nil
 }
 
@@ -393,7 +392,8 @@ func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaConte
 // Helper function to export data only from a single database shard
 func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for data only (DML) with proper gzip termination
-	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s",
+	// Note: Using --hex-blob as raw binary causes failures on import.
+	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --hex-blob --skip-triggers %s",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
