@@ -105,6 +105,7 @@ func (o *secretsShowOpts) Run(cmd *cobra.Command) error {
 
 		log.Info().Msgf("%s", string(secretJSON))
 	} else {
+		log.Info().Msg("")
 		logSecret(secret, true)
 	}
 
