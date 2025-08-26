@@ -142,7 +142,7 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		[]string{"sleep", "3600"},
+		[]string{"sleep", "600"}, // 10min is enough for modestly-sized databases
 	)
 	if err != nil {
 		return err
