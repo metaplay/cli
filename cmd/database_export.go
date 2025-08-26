@@ -6,10 +6,12 @@ package cmd
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
@@ -165,7 +167,7 @@ type DatabaseSnapshotMetadata struct {
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
 func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Exporting database...")
-	exportOptions := "--single-transaction --routines --triggers --no-tablespaces"
+	exportOptions := "--routines --triggers --no-tablespaces"
 
 	// Create output zip file
 	log.Debug().Str("zip_file", o.argOutputFile).Msg("Creating output zip file")
@@ -186,16 +188,32 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 		return fmt.Errorf("failed to write metadata: %v", err)
 	}
 
-	// Export each shard
+	// Extract schema from shard #0 first
+	log.Debug().Msg("Extracting database schema from shard #0")
+	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, exportOptions, shards[0])
+	if err != nil {
+		return fmt.Errorf("failed to extract schema: %v", err)
+	}
+
+	// Apply schema fixups
+	schemaContent = o.applySchemaFixups(schemaContent)
+
+	// Write schema to zip file
+	err = o.writeSchemaToZip(zipWriter, schemaContent)
+	if err != nil {
+		return fmt.Errorf("failed to write schema to zip: %v", err)
+	}
+
+	// Export data from each shard
 	var shardFileNames []string
 	for _, shard := range shards {
-		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard export")
-		dumpFileName, err := o.exportDatabaseShard(ctx, zipWriter, kubeCli, podName, debugContainerName, exportOptions, shard)
+		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard data export")
+		shardFileName, err := o.exportDatabaseShardData(ctx, zipWriter, kubeCli, podName, debugContainerName, shard)
 		if err != nil {
-			return fmt.Errorf("failed to export shard %d: %v", shard.ShardIndex, err)
+			return fmt.Errorf("failed to export shard %d data: %v", shard.ShardIndex, err)
 		}
-		log.Debug().Int("shard_index", shard.ShardIndex).Str("dump_file", dumpFileName).Msg("Shard export completed")
-		shardFileNames = append(shardFileNames, dumpFileName)
+		log.Debug().Int("shard_index", shard.ShardIndex).Str("shard_file", shardFileName).Msg("Shard data export completed")
+		shardFileNames = append(shardFileNames, shardFileName)
 	}
 
 	log.Info().Msg("")
@@ -232,7 +250,7 @@ func (o *databaseExportOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []
 	}
 
 	// Write metadata file to zip
-	metadataFileName := "export_metadata.json"
+	metadataFileName := "metadata.json"
 	metadataHeader := &zip.FileHeader{
 		Name:     metadataFileName,
 		Method:   zip.Store, // No compression for small metadata file
@@ -252,31 +270,138 @@ func (o *databaseExportOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []
 	return nil
 }
 
-// Helper function to export a single database shard using mariadb-dump and write directly to zip
-func (o *databaseExportOpts) exportDatabaseShard(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
-	// Build mariadb-dump command with gzip compression
-	// Note: Only gzip supported on the used image, something like zstandard would be better
-	dumpCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s %s %s | gzip",
+// Helper function to extract database schema from shard #0 into memory
+func (o *databaseExportOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
+	// Build mariadb-dump command for schema only (DDL) - no gzip compression for in-memory processing
+	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-data %s %s",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
 		exportOptions,
 		shard.DatabaseName)
-	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing mariadb-dump command")
+	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing schema dump command")
+
+	// Capture output in memory buffer
+	var schemaBuffer bytes.Buffer
+
+	// Execute schema dump command
+	req := kubeCli.Clientset.CoreV1().
+		RESTClient().
+		Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(kubeCli.Namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: debugContainerName,
+			Command:   []string{"/bin/sh", "-c", schemaCmd},
+			Stdin:     false,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	ioStreams := IOStreams{
+		In:     nil,
+		Out:    &schemaBuffer, // Capture to memory buffer
+		ErrOut: os.Stderr,
+	}
+
+	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
+	if err != nil {
+		return "", fmt.Errorf("schema extraction failed: %v", err)
+	}
+
+	schemaContent := schemaBuffer.String()
+	log.Debug().Int("schema_size", len(schemaContent)).Msg("Schema extracted to memory successfully")
+
+	return schemaContent, nil
+}
+
+// Helper function to apply schema modifications and fixups
+func (o *databaseExportOpts) applySchemaFixups(schemaContent string) string {
+	log.Debug().Msgf("Original schema from mariadb-dump:\n%s", schemaContent)
+
+	// Ensure all tables use utf8mb4_bin collation
+	schemaContent = o.enforceUtf8mb4BinCollation(schemaContent)
+
+	log.Debug().Msg("Applied schema fixups")
+	return schemaContent
+}
+
+// Helper function to enforce utf8mb4_bin collation on all tables
+func (o *databaseExportOpts) enforceUtf8mb4BinCollation(schemaContent string) string {
+	// Simple approach: replace all collation references with utf8mb4_bin
+
+	// 1. Replace table-level collation in CREATE TABLE statements
+	tableCollationPattern := regexp.MustCompile(`(?i)DEFAULT\s+CHARSET=\w+\s+COLLATE=\w+`)
+	result := tableCollationPattern.ReplaceAllString(schemaContent, "DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin")
+
+	// 2. Replace column-level collation specifications
+	columnCollationPattern := regexp.MustCompile(`(?i)CHARACTER\s+SET\s+\w+\s+COLLATE\s+\w+`)
+	result = columnCollationPattern.ReplaceAllString(result, "CHARACTER SET utf8mb4 COLLATE utf8mb4_bin")
+
+	// 3. Replace standalone COLLATE clauses
+	standaloneCollatePattern := regexp.MustCompile(`(?i)COLLATE\s+\w+`)
+	result = standaloneCollatePattern.ReplaceAllString(result, "COLLATE utf8mb4_bin")
+
+	// 4. Replace standalone CHARSET clauses
+	standaloneCharsetPattern := regexp.MustCompile(`(?i)CHARSET=\w+`)
+	result = standaloneCharsetPattern.ReplaceAllString(result, "CHARSET=utf8mb4")
+
+	log.Debug().Msg("Enforced utf8mb4_bin collation on all tables and columns")
+	return result
+}
+
+// Helper function to write schema content to zip file
+func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaContent string) error {
+	// Prepare zip header for schema file
+	schemaHeader := &zip.FileHeader{
+		Name:     "schema.sql",
+		Method:   zip.Deflate, // Use compression since we're not pre-compressing
+		Modified: time.Now(),
+	}
+	schemaHeader.SetMode(0644)
+
+	// Create zip writer for schema file
+	schemaWriter, err := zipWriter.CreateHeader(schemaHeader)
+	if err != nil {
+		return fmt.Errorf("failed to create schema writer: %v", err)
+	}
+
+	// Write schema content to zip
+	_, err = schemaWriter.Write([]byte(schemaContent))
+	if err != nil {
+		return fmt.Errorf("failed to write schema content: %v", err)
+	}
+
+	log.Debug().Msg("Schema written to schema.sql in zip archive")
+	return nil
+}
+
+// Helper function to export data only from a single database shard
+func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
+	// Build mariadb-dump command for data only (DML)
+	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --skip-triggers %s | gzip",
+		shard.ReadOnlyHost, // Use read-only replica
+		shard.UserId,
+		shard.Password,
+		shard.DatabaseName)
+	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing data dump command")
 
 	// Prepare zip header for streaming
-	dumpFileName := fmt.Sprintf("shard_%d.sql.gz", shard.ShardIndex)
-	dumpHeader := &zip.FileHeader{
-		Name:     dumpFileName,
+	snapshotFileName := fmt.Sprintf("shard_%d.sql.gz", shard.ShardIndex)
+	shardHeader := &zip.FileHeader{
+		Name:     snapshotFileName,
 		Method:   zip.Store, // Use Store since data is already gzipped
 		Modified: time.Now(),
 	}
-	dumpHeader.SetMode(0644)
+	shardHeader.SetMode(0644)
 
 	// Create zip writer for this file - stream directly without buffering
-	dumpWriter, err := zipWriter.CreateHeader(dumpHeader)
+	shardFileWriter, err := zipWriter.CreateHeader(shardHeader)
 	if err != nil {
-		return "", fmt.Errorf("failed to create dump writer: %v", err)
+		return "", fmt.Errorf("failed to create zip writer: %v", err)
 	}
 
 	// Execute mariadb-dump command and stream output directly to zip
@@ -289,7 +414,7 @@ func (o *databaseExportOpts) exportDatabaseShard(ctx context.Context, zipWriter 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/sh", "-c", dumpCmd},
+			Command:   []string{"/bin/sh", "-c", dataCmd},
 			Stdin:     false,
 			Stdout:    true,
 			Stderr:    true,
@@ -298,15 +423,15 @@ func (o *databaseExportOpts) exportDatabaseShard(ctx context.Context, zipWriter 
 
 	ioStreams := IOStreams{
 		In:     nil,
-		Out:    dumpWriter, // Stream directly to zip writer
+		Out:    shardFileWriter, // Stream directly to zip writer
 		ErrOut: os.Stderr,
 	}
 
 	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return "", fmt.Errorf("database export failed: %v", err)
+		return "", fmt.Errorf("data export failed: %v", err)
 	}
-	log.Debug().Str("dump_file", dumpFileName).Msg("Dump streamed directly to zip archive")
+	log.Debug().Str("file", snapshotFileName).Msg("Shard data streamed directly to zip archive")
 
-	return dumpFileName, nil
+	return snapshotFileName, nil
 }

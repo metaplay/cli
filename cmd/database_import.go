@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -161,8 +162,12 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
 	}
 
-	// Check if there's a game server deployed.
+	log.Info().Msg("Database import:")
+	log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("   Import file: %s", styles.RenderTechnical(o.argInputFile))
 	log.Info().Msg("")
+
+	// Check if there's a game server deployed.
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
 			return fmt.Errorf("cannot import database: active game server deployment detected in environment '%s'. Remove the game server deployment before importing the database, or use --force to proceed anyway", o.argEnvironment)
@@ -189,8 +194,6 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 		}
 
 		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the database!"))
-		log.Info().Msgf("   Environment: %s", styles.RenderTechnical(o.argEnvironment))
-		log.Info().Msgf("   Import file: %s", styles.RenderTechnical(o.argInputFile))
 		log.Info().Msg("")
 		log.Info().Msg("This operation cannot be undone. Make sure this is the correct environment.")
 		log.Info().Msg("")
@@ -202,6 +205,7 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 			log.Info().Msg("Database import cancelled.")
 			return nil
 		}
+		log.Info().Msg("")
 	}
 
 	// Fetch the database shard configuration from Kubernetes secret
@@ -247,7 +251,7 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 	log.Info().Msgf("Importing database...")
 
 	// Open and validate zip file
-	zipReader, metadata, shardFiles, err := o.openAndValidateZipFile(targetShards)
+	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile(targetShards)
 	if err != nil {
 		return fmt.Errorf("failed to validate zip file: %v", err)
 	}
@@ -255,16 +259,28 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 
 	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
 
-	// Import each shard
+	// Apply schema to all shards first
+	log.Debug().Msg("Apply schema to all shards")
+	for _, targetShard := range targetShards {
+		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
+		err := o.importDatabaseSchema(ctx, zipReader, schemaFile, kubeCli, podName, debugContainerName, targetShard)
+		if err != nil {
+			return fmt.Errorf("failed to apply schema to shard %d: %v", targetShard.ShardIndex, err)
+		}
+		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Schema applied to shard")
+	}
+
+	// Import data to each shard
+	log.Debug().Msg("Importing data to all shards")
 	for i, shardFile := range shardFiles {
 		targetShard := targetShards[i]
-		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Starting shard import")
+		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Start shard data import")
 
-		err := o.importDatabaseShard(ctx, zipReader, shardFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importDatabaseShardData(ctx, zipReader, shardFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
-			return fmt.Errorf("failed to import shard %d: %v", targetShard.ShardIndex, err)
+			return fmt.Errorf("failed to import shard %d data: %v", targetShard.ShardIndex, err)
 		}
-		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Shard import completed")
+		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Shard data import completed")
 	}
 
 	log.Info().Msg("")
@@ -273,71 +289,82 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 	return nil
 }
 
-// Helper function to open zip file and validate metadata and shard files
-func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, []*zip.File, error) {
+// Helper function to open zip file and validate metadata, schema, and shard files
+func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, *zip.File, []*zip.File, error) {
 	// Open zip file
 	zipReader, err := zip.OpenReader(o.argInputFile)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to open zip file: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open zip file: %v", err)
 	}
 
-	// Find and read metadata file
+	// Find and read metadata file, schema file, and shard files
 	var metadataFile *zip.File
+	var schemaFile *zip.File
 	var shardFiles []*zip.File
 
+	// Pattern to match shard files: shard_{int}.sql[.suffix]
+	shardPattern := regexp.MustCompile(`^shard_\d+\.sql(?:\..+)?$`)
+
 	for _, file := range zipReader.File {
-		if file.Name == "export_metadata.json" {
+		if file.Name == "metadata.json" {
 			metadataFile = file
-		} else if len(file.Name) > 4 && file.Name[len(file.Name)-7:] == ".sql.gz" {
+		} else if file.Name == "schema.sql" {
+			schemaFile = file
+		} else if shardPattern.MatchString(file.Name) {
 			shardFiles = append(shardFiles, file)
 		}
 	}
 
 	if metadataFile == nil {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("metadata file 'export_metadata.json' not found in zip archive")
+		return nil, nil, nil, nil, fmt.Errorf("metadata file 'metadata.json' not found in zip archive")
+	}
+
+	if schemaFile == nil {
+		zipReader.Close()
+		return nil, nil, nil, nil, fmt.Errorf("schema file 'schema.sql' not found in zip archive")
 	}
 
 	// Read and parse metadata
 	metadataReader, err := metadataFile.Open()
 	if err != nil {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("failed to open metadata file: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open metadata file: %v", err)
 	}
 	defer metadataReader.Close()
 
 	metadataBytes, err := io.ReadAll(metadataReader)
 	if err != nil {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
 	}
 
 	var metadata DatabaseSnapshotMetadata
 	err = json.Unmarshal(metadataBytes, &metadata)
 	if err != nil {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("failed to parse metadata: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse metadata: %v", err)
 	}
 
 	// Validate metadata
 	err = o.validateMetadata(&metadata, targetShards)
 	if err != nil {
 		zipReader.Close()
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// Validate shard files
 	if len(shardFiles) != metadata.NumShards {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("expected %d shard files, found %d", metadata.NumShards, len(shardFiles))
+		return nil, nil, nil, nil, fmt.Errorf("expected %d shard files, found %d", metadata.NumShards, len(shardFiles))
 	}
 
 	if len(shardFiles) != len(targetShards) {
 		zipReader.Close()
-		return nil, nil, nil, fmt.Errorf("shard count mismatch: dump has %d shards, target environment has %d", len(shardFiles), len(targetShards))
+		return nil, nil, nil, nil, fmt.Errorf("shard count mismatch: dump has %d shards, target environment has %d", len(shardFiles), len(targetShards))
 	}
 
-	return zipReader, &metadata, shardFiles, nil
+	return zipReader, &metadata, schemaFile, shardFiles, nil
 }
 
 // Helper function to validate metadata compatibility
@@ -375,8 +402,58 @@ func (o *databaseImportOpts) validateMetadata(metadata *DatabaseSnapshotMetadata
 	return nil
 }
 
-// Helper function to import a single database shard by streaming compressed data to remote execution
-func (o *databaseImportOpts) importDatabaseShard(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+// Helper function to import database schema to a single shard
+func (o *databaseImportOpts) importDatabaseSchema(ctx context.Context, zipReader *zip.ReadCloser, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+	// Open schema file from zip
+	schemaReader, err := schemaFile.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open schema file %s: %v", schemaFile.Name, err)
+	}
+	defer schemaReader.Close()
+
+	// Build mariadb import command for schema
+	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
+		targetShard.ReadWriteHost, // Use primary host for writes
+		targetShard.UserId,
+		targetShard.Password,
+		targetShard.DatabaseName)
+
+	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msg("Executing schema import command")
+
+	// Execute mariadb import command and stream schema directly
+	req := kubeCli.Clientset.CoreV1().
+		RESTClient().
+		Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(kubeCli.Namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: debugContainerName,
+			Command:   []string{"/bin/sh", "-c", importCmd},
+			Stdin:     true,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	ioStreams := IOStreams{
+		In:     schemaReader, // Stream schema directly from zip
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+	}
+
+	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
+	if err != nil {
+		return fmt.Errorf("schema import failed: %v", err)
+	}
+	log.Debug().Str("schema_file", schemaFile.Name).Msg("Schema imported successfully")
+
+	return nil
+}
+
+// Helper function to import shard data by streaming compressed data to remote execution
+func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open shard file from zip
 	shardReader, err := shardFile.Open()
 	if err != nil {
