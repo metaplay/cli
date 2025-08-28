@@ -47,13 +47,12 @@ func init() {
 	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database snapshot. Defaults to 'database-snapshot-${env}-${timestamp}.mdb' if not specified.")
 
 	cmd := &cobra.Command{
-		Use:     "export [ENVIRONMENT] [OUTPUT_FILE] [flags]",
-		Aliases: []string{"exp"},
-		Short:   "[preview] Export database snapshot from an environment",
+		Use:   "export [ENVIRONMENT] [OUTPUT_FILE] [flags]",
+		Short: "[preview] Export database snapshot from an environment",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Export a full database snapshot from the specified environment using mariadb-dump.
+			Export a database snapshot from the specified environment into a file.
 
 			DISCLAIMER: This operation is not a a real backup and is intended for ad hoc database
 			exports only. This operation should only be used for relatively small databases as it

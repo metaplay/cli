@@ -48,21 +48,22 @@ func init() {
 	args.AddStringArgument(&o.argInputFile, "INPUT_FILE", "Input file path containing database snapshot (eg, 'database-snapshot.mdb').")
 
 	cmd := &cobra.Command{
-		Use:     "import [ENVIRONMENT] [INPUT_FILE] [flags]",
-		Aliases: []string{"restore"},
-		Short:   "[preview] Import database snapshot from a file",
+		Use:   "import [ENVIRONMENT] [INPUT_FILE] [flags]",
+		Short: "[preview] Import database snapshot from a file",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Import database snapshot from a file created by 'database export'.
+			Import database snapshot from a file created by 'database export' into the target
+			environment.
 
-			WARNING: This is a destructive operation and will PERMANENTLY OVERWRITE ALL DATA in the
-			target environment's database!
+			WARNING: This is a destructive operation and will PERMANENTLY OVERWRITE ALL DATA in
+			the target environment's database!
 
 			Safety protections:
 			- By default, requires manual confirmation before proceeding
 			- Use --yes to skip overwrite confirmation (intended for automation)
-			- Use --force to bypass game server deployment checks (can put the database in an inconsistent state!)
+			- Use --force to bypass game server deployment checks (can put the database in an
+			  inconsistent state!)
 			- Use --confirm-production when importing to production environments
 
 			For multi-shard environments, each shard snapshot will be restored to the corresponding
@@ -89,7 +90,7 @@ func init() {
 			# Auto-accept import without confirmation prompt
 			metaplay database import nimbly snapshot.mdb --yes
 
-			# Force import even if a game server is deployed (dangerous!)
+			# Force import even if a game server is deployed (DANGEROUS!)
 			metaplay database import nimbly snapshot.mdb --force --yes
 
 			# Import to production environment (requires additional confirmation)
