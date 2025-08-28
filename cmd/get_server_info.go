@@ -18,7 +18,6 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
 )
 
@@ -31,9 +30,9 @@ type getServerInfoOpts struct {
 
 // serverInfo represents the complete server deployment information
 type serverInfo struct {
-	PortalInfo  *portalapi.EnvironmentInfo `json:"portal_info,omitempty"`
-	HelmRelease *helmReleaseInfo           `json:"helm_release,omitempty"`
-	ImageInfo   *deploymentImageInfo       `json:"image_info,omitempty"`
+	PortalInfo  *portalapi.EnvironmentInfo `json:"portal_info"`
+	HelmRelease *helmReleaseInfo           `json:"helm_release"`
+	ImageInfo   *deploymentImageInfo       `json:"image_info"`
 }
 
 type helmReleaseInfo struct {
@@ -150,10 +149,10 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 			log.Info().Msgf("  %-19s %s", "Hosting type:", styles.RenderTechnical(string(info.PortalInfo.HostingType)))
 			log.Info().Msgf("  %-19s %s", "Stack domain:", styles.RenderTechnical(info.PortalInfo.StackDomain))
 		}
-		log.Info().Msg("")
 
 		// Helm Release Information
 		if info.HelmRelease != nil {
+			log.Info().Msg("")
 			log.Info().Msg("Helm release:")
 			log.Info().Msgf("  %-19s %s", "Chart name:", styles.RenderTechnical(info.HelmRelease.ChartName))
 			log.Info().Msgf("  %-19s %s", "Chart version:", styles.RenderTechnical(info.HelmRelease.ChartVersion))
@@ -167,10 +166,10 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 		} else {
 			log.Info().Msg("No game server deployment found")
 		}
-		log.Info().Msg("")
 
 		// Image Information
 		if info.ImageInfo != nil {
+			log.Info().Msg("")
 			log.Info().Msg("Image information:")
 			log.Info().Msgf("  %-19s %s", "Image tag:", styles.RenderTechnical(info.ImageInfo.ImageTag))
 			log.Info().Msgf("  %-19s %s", "Commit ID:", styles.RenderTechnical(info.ImageInfo.CommitID))
@@ -184,17 +183,16 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 }
 
 func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment, envConfig *metaproj.ProjectEnvironmentConfig) (*serverInfo, error) {
-	serverInfo := &serverInfo{}
+	var err error
 
 	// Fetch portal information if targeting a managed stack
 	authProviderName := coalesceString(envConfig.AuthProvider, "metaplay")
+	var portalInfo *portalapi.EnvironmentInfo
 	if authProviderName == "metaplay" {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
-		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
 		if err != nil {
 			log.Debug().Err(err).Msg("Failed to fetch portal environment info")
-		} else {
-			serverInfo.PortalInfo = portalInfo
 		}
 	}
 
@@ -210,52 +208,48 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 		return nil, fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
-	// Gather Helm release information
-	helmInfo, err := o.getHelmReleaseInfo(actionConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Helm release info: %w", err)
-	}
-	serverInfo.HelmRelease = helmInfo
-
 	// Get the existing release for image info extraction
 	existingRelease, err := helmutil.GetExistingRelease(actionConfig, metaplayGameServerChartName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get existing Helm release: %w", err)
 	}
 
-	// Gather image information
-	imageInfo, err := o.getImageInfo(ctx, targetEnv, existingRelease)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get image info: %w", err)
-	}
-	serverInfo.ImageInfo = imageInfo
+	// Extract detailed release information, if a release exists.
+	var helmInfo *helmReleaseInfo
+	var imageInfo *deploymentImageInfo
+	if existingRelease != nil {
+		helmInfo, err = o.getHelmReleaseInfo(existingRelease)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get Helm release info: %w", err)
+		}
 
-	return serverInfo, nil
+		imageInfo, err = o.getImageInfo(ctx, targetEnv, existingRelease)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get image info: %w", err)
+		}
+	}
+
+	// Return the combined info
+	return &serverInfo{
+		PortalInfo:  portalInfo,
+		HelmRelease: helmInfo,
+		ImageInfo:   imageInfo,
+	}, nil
 }
 
-// Get information about the Helm release used to deploy the game server.
-func (o *getServerInfoOpts) getHelmReleaseInfo(actionConfig *action.Configuration) (*helmReleaseInfo, error) {
-	// Use the constant from deploy_server.go
-	existingRelease, err := helmutil.GetExistingRelease(actionConfig, metaplayGameServerChartName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Helm release: %w", err)
-	}
-
-	if existingRelease == nil {
-		return nil, fmt.Errorf("no game server deployment found")
-	}
-
+// Extract the Helm release information from a release object into a simpler info class.
+func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*helmReleaseInfo, error) {
 	helmInfo := &helmReleaseInfo{
-		Name:         existingRelease.Name,
-		Status:       existingRelease.Info.Status.String(),
-		Namespace:    existingRelease.Namespace,
-		Revision:     existingRelease.Version,
-		LastDeployed: existingRelease.Info.LastDeployed.Time,
+		Name:         releaseInfo.Name,
+		Status:       releaseInfo.Info.Status.String(),
+		Namespace:    releaseInfo.Namespace,
+		Revision:     releaseInfo.Version,
+		LastDeployed: releaseInfo.Info.LastDeployed.Time,
 	}
 
-	if existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
-		helmInfo.ChartName = existingRelease.Chart.Metadata.Name
-		helmInfo.ChartVersion = existingRelease.Chart.Metadata.Version
+	if releaseInfo.Chart != nil && releaseInfo.Chart.Metadata != nil {
+		helmInfo.ChartName = releaseInfo.Chart.Metadata.Name
+		helmInfo.ChartVersion = releaseInfo.Chart.Metadata.Version
 	}
 
 	return helmInfo, nil
@@ -273,6 +267,12 @@ func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.
 			if repository, ok := imageConfig["repository"].(string); ok && imageTag != "" {
 				fullImageRef = fmt.Sprintf("%s:%s", repository, imageTag)
 			}
+		}
+
+		// Bail out if unable to determine image reference -- this happens with legacy SDK versions.
+		// \todo Figure out a more robust implementation; grab from the GameServer resource directly?
+		if fullImageRef == "" {
+			return nil, fmt.Errorf("no image information found in Helm release; operation is not supported for Helm chart versions earlier than v0.8.0")
 		}
 	} else {
 		return nil, fmt.Errorf("no image information found in Helm release")
