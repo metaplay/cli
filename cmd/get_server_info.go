@@ -151,8 +151,8 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 		}
 
 		// Helm Release Information
+		log.Info().Msg("")
 		if info.HelmRelease != nil {
-			log.Info().Msg("")
 			log.Info().Msg("Helm release:")
 			log.Info().Msgf("  %-19s %s", "Chart name:", styles.RenderTechnical(info.HelmRelease.ChartName))
 			log.Info().Msgf("  %-19s %s", "Chart version:", styles.RenderTechnical(info.HelmRelease.ChartVersion))
