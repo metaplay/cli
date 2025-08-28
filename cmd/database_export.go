@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -33,6 +34,9 @@ type databaseExportOpts struct {
 	// Environment and output file
 	argEnvironment string
 	argOutputFile  string
+
+	// Flags
+	flagForce bool
 }
 
 func init() {
@@ -62,6 +66,11 @@ func init() {
 			This command starts a temporary debug pod and runs mariadb-dump inside it, connects
 			to the read-only replica of each shard of the database and creates a complete snapshot.
 
+			WARNING: It is DANGEROUS to export a database while a game server is deployed. When
+			exporting a database that is under load, it is possible for the database server's
+			purge queue to start growing unboundedly. Do not use the --force on a database with
+			non-trivial load on it!
+
 			{Arguments}
 
 			Related commands:
@@ -77,6 +86,9 @@ func init() {
 		`),
 		Run: runCommand(&o),
 	}
+
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with export even if a game server is deployed (DANGEROUS!)")
+
 	databaseCmd.AddCommand(cmd)
 }
 
@@ -104,6 +116,26 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+
+	// Get kubeconfig to access the environment for Helm operations
+	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return fmt.Errorf("failed to get kubeconfig: %v", err)
+	}
+	log.Debug().Msg("Resolved kubeconfig to access environment")
+
+	// Configure Helm to check for active deployments
+	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
+	if err != nil {
+		return fmt.Errorf("failed to initialize Helm config: %v", err)
+	}
+
+	// Check for any active game server Helm deployments - refuse to export if found
+	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
+	if err != nil {
+		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+	}
+
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
@@ -128,10 +160,23 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 
 	// Show info
 	log.Info().Msg("")
-	log.Info().Msg("Database export info:")
+	log.Info().Msg("Database export:")
 	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
 	log.Info().Msgf("  Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
 	log.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.argOutputFile))
+	log.Info().Msg("")
+
+	// Check if there's a game server deployed.
+	if len(helmReleases) > 0 {
+		if !o.flagForce {
+			return fmt.Errorf("cannot export database: active game server deployment detected in environment '%s'. Remove the game server deployment before exporting the database", o.argEnvironment)
+		}
+
+		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Info().Msgf("   Proceeding with database export due to --force flag")
+	} else {
+		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database export")
+	}
 	log.Info().Msg("")
 
 	// Create a debug container to run mariadb-dump
@@ -142,7 +187,7 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		[]string{"sleep", "600"}, // 10min is enough for modestly-sized databases
+		[]string{"sleep", "3600"},
 	)
 	if err != nil {
 		return err
