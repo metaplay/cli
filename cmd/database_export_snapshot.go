@@ -7,7 +7,6 @@ package cmd
 import (
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -201,18 +200,16 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 
 // DatabaseSnapshotMetadata contains information about the database export
 type DatabaseSnapshotMetadata struct {
-	Version       int       `json:"version"`
-	Environment   string    `json:"environment"`
-	DatabaseName  string    `json:"database_name"`
-	NumShards     int       `json:"num_shards"`
-	ExportedAt    time.Time `json:"exported_at"`
-	ExportOptions string    `json:"export_options"`
+	Version      int       `json:"version"`
+	Environment  string    `json:"environment"`
+	DatabaseName string    `json:"database_name"`
+	NumShards    int       `json:"num_shards"`
+	ExportedAt   time.Time `json:"exported_at"`
 }
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
 func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Exporting database...")
-	exportOptions := "--routines --triggers --no-tablespaces"
 
 	// Create output zip file
 	log.Debug().Str("zip_file", o.argOutputFile).Msg("Creating output zip file")
@@ -228,14 +225,14 @@ func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context,
 
 	// Write metadata to zip
 	log.Debug().Msg("Writing metadata to zip file")
-	err = o.writeMetadataToZip(zipWriter, shards, exportOptions)
+	err = o.writeMetadataToZip(zipWriter, shards)
 	if err != nil {
 		return fmt.Errorf("failed to write metadata: %v", err)
 	}
 
 	// Extract schema from shard #0 first
 	log.Debug().Msg("Extracting database schema from shard #0")
-	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, exportOptions, shards[0])
+	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, shards[0])
 	if err != nil {
 		return fmt.Errorf("failed to extract schema: %v", err)
 	}
@@ -265,7 +262,7 @@ func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context,
 }
 
 // Helper function to write metadata to zip file
-func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig, exportOptions string) error {
+func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig) error {
 
 	// Use first shard for database name (all shards should have same database name)
 	databaseName := ""
@@ -276,12 +273,11 @@ func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, s
 	// Create metadata
 	log.Debug().Str("database_name", databaseName).Int("num_shards", len(shards)).Msg("Creating export metadata")
 	metadata := DatabaseSnapshotMetadata{
-		Version:       1,
-		Environment:   o.argEnvironment,
-		DatabaseName:  databaseName,
-		NumShards:     len(shards),
-		ExportedAt:    time.Now().UTC(),
-		ExportOptions: exportOptions,
+		Version:      1,
+		Environment:  o.argEnvironment,
+		DatabaseName: databaseName,
+		NumShards:    len(shards),
+		ExportedAt:   time.Now().UTC(),
 	}
 
 	// Create metadata JSON in memory
@@ -312,13 +308,12 @@ func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, s
 }
 
 // Helper function to extract database schema from shard #0 into memory
-func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
+func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for schema only (DDL) - no gzip compression for in-memory processing
-	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-data %s %s",
+	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-tablespaces --no-data --routines --triggers %s",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
-		exportOptions,
 		shard.DatabaseName)
 	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing schema dump command")
 
@@ -364,7 +359,9 @@ func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, 
 func (o *databaseExportSnapshotOpts) applySchemaFixups(schemaContent string) string {
 	log.Debug().Msgf("Original schema from mariadb-dump:\n%s", schemaContent)
 
-	// Ensure all tables use utf8mb4_bin collation
+	// Ensure all tables use utf8mb4_bin collation; Metaplay SDK versions before R34 left
+	// the __EFMigrationsHisotry table in the database's default collation, which may not
+	// be compatible across different database types and versions (e.g., MariaDB vs MySQL).
 	schemaContent = o.enforceUtf8mb4BinCollation(schemaContent)
 
 	log.Debug().Msg("Applied schema fixups")
@@ -515,47 +512,7 @@ func (o *databaseExportSnapshotOpts) validateShardFile(file *zip.File) error {
 		return fmt.Errorf("shard file does not appear to contain valid SQL dump data")
 	}
 
-	log.Debug().Int("content_sample_size", n).Msg("Successfully validated shard file content")
-	return nil
-}
-
-// validateGzippedShardFile validates a gzipped shard file by attempting to decompress it
-func (o *databaseExportSnapshotOpts) validateGzippedShardFile(file *zip.File) error {
-	// Open the file for reading
-	reader, err := file.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open file for reading: %v", err)
-	}
-	defer reader.Close()
-
-	// Create a gzip reader to decompress the content (equivalent to 'gzip -d')
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %v", err)
-	}
-	defer gzipReader.Close()
-
-	// Read through the entire file to validate it can be decompressed
-	// This is equivalent to running 'gzip -d' and checking for errors
-	buffer := make([]byte, 65536) // 64KB buffer for efficient reading
-	totalBytes := int64(0)
-
-	for {
-		n, err := gzipReader.Read(buffer)
-		if err != nil {
-			if err == io.EOF {
-				break // End of file reached successfully
-			}
-			return fmt.Errorf("failed to decompress gzipped file: %v", err)
-		}
-		totalBytes += int64(n)
-	}
-
-	if totalBytes == 0 {
-		return fmt.Errorf("gzipped file appears to be empty after decompression")
-	}
-
-	log.Debug().Int64("decompressed_bytes", totalBytes).Msg("Successfully validated gzipped file integrity")
+	log.Debug().Int("file_size", n).Msg("Successfully validated shard file content")
 	return nil
 }
 
@@ -574,8 +531,8 @@ func (o *databaseExportSnapshotOpts) validateZipFileEntry(file *zip.File) error 
 		return o.validateMetadataFile(reader)
 	case file.Name == "schema.sql":
 		return o.validateSchemaFile(reader)
-	case regexp.MustCompile(`^shard_\d+\.sql\.gz$`).MatchString(file.Name):
-		return o.validateGzippedSQLFile(reader, file.Name)
+	case regexp.MustCompile(`^shard_\d+\.sql$`).MatchString(file.Name):
+		return o.validateShardFile(file)
 	default:
 		log.Warn().Str("file_name", file.Name).Msg("Unknown file type, skipping validation")
 		return nil
@@ -625,45 +582,6 @@ func (o *databaseExportSnapshotOpts) validateSchemaFile(reader io.ReadCloser) er
 
 	if !hasSQL {
 		return fmt.Errorf("schema file does not appear to contain valid SQL")
-	}
-
-	return nil
-}
-
-// validateGzippedSQLFile validates a gzipped SQL file
-func (o *databaseExportSnapshotOpts) validateGzippedSQLFile(reader io.ReadCloser, fileName string) error {
-	// Create a gzip reader to decompress the content
-	gzipReader, err := gzip.NewReader(reader)
-	if err != nil {
-		return fmt.Errorf("failed to create gzip reader: %v", err)
-	}
-	defer gzipReader.Close()
-
-	// Read a small portion to validate it's decompressible and contains SQL
-	buffer := make([]byte, 1024)
-	n, err := gzipReader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to decompress gzipped file: %v", err)
-	}
-
-	if n == 0 {
-		return fmt.Errorf("gzipped file appears to be empty")
-	}
-
-	content := string(buffer[:n])
-
-	// Basic validation - check for SQL dump patterns
-	sqlPatterns := []string{"INSERT INTO", "CREATE TABLE", "LOCK TABLES", "UNLOCK TABLES", "mysqldump"}
-	hasSQL := false
-	for _, pattern := range sqlPatterns {
-		if strings.Contains(strings.ToUpper(content), strings.ToUpper(pattern)) {
-			hasSQL = true
-			break
-		}
-	}
-
-	if !hasSQL {
-		return fmt.Errorf("gzipped file does not appear to contain valid SQL dump data")
 	}
 
 	return nil

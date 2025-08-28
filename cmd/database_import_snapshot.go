@@ -70,14 +70,6 @@ func init() {
 			shard in the target environment (shard_0.sql.gz → shard 0, etc.). The target environment
 			must have the same number of shards as the snapshot, or otherwise the command will fail.
 
-			The compressed SQL dumps are streamed directly to the target database without
-			decompression on the client side, maintaining network efficiency.
-
-			NOTE: The import operation can fail when the target environment has a different type of
-			database than the one exported. This is caused by the __EFMigrationsHistory table having
-			a collation that is not compatible across different database types. This is a known issue
-			and will be addressed in the future.
-
 			{Arguments}
 
 			Related commands:
@@ -149,7 +141,7 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 
 	// Fetch the database shard configuration from Kubernetes secret
 	log.Debug().Str("namespace", kubeCli.Namespace).Msg("Fetching database shard configuration")
-	shards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
+	dbShards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
 	if err != nil {
 		return err
 	}
@@ -169,13 +161,14 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg("")
 	log.Info().Msg("Import database snapshot:")
-	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("  Environment:     %s", styles.RenderTechnical(o.argEnvironment))
 	if hasGameServer {
-		log.Info().Msgf("  Game server: %s", styles.RenderWarning("⚠️ deployed"))
+		log.Info().Msgf("  Game server:     %s", styles.RenderWarning("⚠️ deployed"))
 	} else {
-		log.Info().Msgf("  Game server: %s", styles.RenderSuccess("✓ not deployed"))
+		log.Info().Msgf("  Game server:     %s", styles.RenderSuccess("✓ not deployed"))
 	}
-	log.Info().Msgf("  Import file: %s", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msgf("  Database shards: %s", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
+	log.Info().Msgf("  Import file:     %s", styles.RenderTechnical(o.argInputFile))
 	log.Info().Msg("")
 
 	// Check if there's a game server deployed.
@@ -229,25 +222,29 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("input_file", o.argInputFile).Msg("Starting database import process")
-	return o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
+	return o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards)
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
-func (o *databaseImportSnapshotOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportSnapshotOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Importing database...")
 
 	// Open and validate zip file
-	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile(targetShards)
+	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
 	if err != nil {
 		return fmt.Errorf("failed to validate zip file: %v", err)
 	}
 	defer zipReader.Close()
-
 	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
+
+	// Number of shards must match
+	if len(shardFiles) != len(dbShards) {
+		return fmt.Errorf("shard count mismatch: snapshot has %d shards, target environment has %d", metadata.NumShards, len(dbShards))
+	}
 
 	// Apply schema to all shards first
 	log.Debug().Msg("Apply schema to all shards")
-	for _, targetShard := range targetShards {
+	for _, targetShard := range dbShards {
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
 		err := o.importDatabaseSchema(ctx, zipReader, schemaFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
@@ -259,7 +256,7 @@ func (o *databaseImportSnapshotOpts) importDatabaseContents(ctx context.Context,
 	// Import data to each shard
 	log.Debug().Msg("Importing data to all shards")
 	for i, shardFile := range shardFiles {
-		targetShard := targetShards[i]
+		targetShard := dbShards[i]
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Start shard data import")
 
 		err := o.importDatabaseShardData(ctx, zipReader, shardFile, kubeCli, podName, debugContainerName, targetShard)
@@ -276,7 +273,7 @@ func (o *databaseImportSnapshotOpts) importDatabaseContents(ctx context.Context,
 }
 
 // Helper function to open zip file and validate metadata, schema, and shard files
-func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, *zip.File, []*zip.File, error) {
+func (o *databaseImportSnapshotOpts) openAndValidateZipFile() (*zip.ReadCloser, *DatabaseSnapshotMetadata, *zip.File, []*zip.File, error) {
 	// Open zip file
 	zipReader, err := zip.OpenReader(o.argInputFile)
 	if err != nil {
@@ -288,8 +285,8 @@ func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeu
 	var schemaFile *zip.File
 	var shardFiles []*zip.File
 
-	// Pattern to match shard files: shard_{int}.sql[.suffix]
-	shardPattern := regexp.MustCompile(`^shard_\d+\.sql(?:\..+)?$`)
+	// Pattern to match shard files: shard_{int}.sql
+	shardPattern := regexp.MustCompile(`^shard_\d+\.sql$`)
 
 	for _, file := range zipReader.File {
 		if file.Name == "metadata.json" {
@@ -319,12 +316,14 @@ func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeu
 	}
 	defer metadataReader.Close()
 
+	// Read metadata.json.
 	metadataBytes, err := io.ReadAll(metadataReader)
 	if err != nil {
 		zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
 	}
 
+	// Parse snapshot metadata.
 	var metadata DatabaseSnapshotMetadata
 	err = json.Unmarshal(metadataBytes, &metadata)
 	if err != nil {
@@ -332,11 +331,10 @@ func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeu
 		return nil, nil, nil, nil, fmt.Errorf("failed to parse metadata: %v", err)
 	}
 
-	// Validate metadata
-	err = o.validateMetadata(&metadata, targetShards)
-	if err != nil {
+	// Check version compatibility
+	if metadata.Version != 1 {
 		zipReader.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, fmt.Errorf("unsupported snapshot version %d, expected version 1", metadata.Version)
 	}
 
 	// Validate shard files
@@ -345,42 +343,7 @@ func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeu
 		return nil, nil, nil, nil, fmt.Errorf("expected %d shard files, found %d", metadata.NumShards, len(shardFiles))
 	}
 
-	if len(shardFiles) != len(targetShards) {
-		zipReader.Close()
-		return nil, nil, nil, nil, fmt.Errorf("shard count mismatch: dump has %d shards, target environment has %d", len(shardFiles), len(targetShards))
-	}
-
 	return zipReader, &metadata, schemaFile, shardFiles, nil
-}
-
-// Helper function to validate metadata compatibility
-func (o *databaseImportSnapshotOpts) validateMetadata(metadata *DatabaseSnapshotMetadata, targetShards []kubeutil.DatabaseShardConfig) error {
-	// Check version compatibility
-	if metadata.Version != 1 {
-		return fmt.Errorf("unsupported dump version %d, expected version 1", metadata.Version)
-	}
-
-	// Check shard count
-	if metadata.NumShards != len(targetShards) {
-		return fmt.Errorf("shard count mismatch: dump has %d shards, target environment has %d", metadata.NumShards, len(targetShards))
-	}
-
-	// Check database name consistency (all target shards should have same database name)
-	if len(targetShards) > 0 {
-		expectedDBName := targetShards[0].DatabaseName
-		for _, shard := range targetShards {
-			if shard.DatabaseName != expectedDBName {
-				return fmt.Errorf("target environment has inconsistent database names")
-			}
-		}
-
-		// Warn if database names differ (but don't fail)
-		if metadata.DatabaseName != expectedDBName {
-			log.Warn().Str("dump_db", metadata.DatabaseName).Str("target_db", expectedDBName).Msg("Database name mismatch - proceeding anyway")
-		}
-	}
-
-	return nil
 }
 
 // Helper function to import database schema to a single shard
