@@ -388,8 +388,6 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	}
 
 	dstRoot := filepath.Join(project.RelativeDir, dstPath)
-	projectName := getProjectName(project)
-	backendSolutionFileName := fmt.Sprintf("%s-Server.sln", projectName)
 	unityProjectDir := project.Config.UnityProjectDir
 	if unityProjectDir == "." {
 		unityProjectDir = ""
@@ -397,11 +395,14 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 		unityProjectDir = unityProjectDir + "/"
 	}
 
+	// Use human ID as technical project name (eg, GlobalOptions.ProjectName)
+	projectName := project.Config.ProjectHumanID
+	backendSolutionFileName := "Server.sln"
+
 	// Template replace rules.
 	relativePathToSdk := project.Config.SdkRootDir
-	projectNameLower := strings.ToLower(projectName)
 	log.Debug().Msgf("Template replace:")
-	log.Debug().Msgf("  PROJECT_NAME: %s", projectNameLower)
+	log.Debug().Msgf("  PROJECT_NAME: %s", projectName)
 	log.Debug().Msgf("  PROJECT_HUMAN_ID: %s", project.Config.ProjectHumanID)
 	log.Debug().Msgf("  BACKEND_SOLUTION_FILENAME: %s", backendSolutionFileName)
 	log.Debug().Msgf("  RELATIVE_PATH_TO_SDK: %s", relativePathToSdk)
@@ -428,7 +429,7 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 			log.Debug().Msgf("Write: %s text", dstPath)
 			content := file.Text
 			content = strings.ReplaceAll(content, "{{{RELATIVE_PATH_TO_SDK}}}", relativePathToSdk)
-			content = strings.ReplaceAll(content, "{{{PROJECT_NAME}}}", projectNameLower)
+			content = strings.ReplaceAll(content, "{{{PROJECT_NAME}}}", projectName)
 			content = strings.ReplaceAll(content, "{{{PROJECT_HUMAN_ID}}}", project.Config.ProjectHumanID)
 			content = strings.ReplaceAll(content, "{{{UNITY_PROJECT_DIR}}}", unityProjectDir)
 			if strings.Contains(content, "{{{") || strings.Contains(content, "}}}") {
@@ -474,26 +475,6 @@ func readUnityProductName(unityProjectPath string) (string, error) {
 	}
 	log.Debug().Msgf("Project name from Unity PlayerSettings: %s", settings.PlayerSettings.ProductName)
 	return settings.PlayerSettings.ProductName, nil
-}
-
-func getProjectName(project *metaproj.MetaplayProject) string {
-	// Try reading product name from Unity PlayerSettings
-	productName, err := readUnityProductName(project.GetUnityProjectDir())
-	if err != nil {
-		// Fallback to using name of project parent dir
-		log.Warn().Msgf("Unable to read project name from Unity PlayerSettings, using parent directory name")
-		absPath, err := filepath.Abs(project.RelativeDir)
-		if err != nil {
-			log.Panic().Msgf("Could not read parent directory name: %v", err)
-		}
-		productName = filepath.Base(absPath)
-	}
-
-	// Replace whitespace with hyphen
-	productName = strings.ReplaceAll(productName, " ", "-")
-	// Only accept letters, digits and '-'
-	productName = filterInvalidFileNameChars(productName)
-	return productName
 }
 
 func filterInvalidFileNameChars(productName string) string {
