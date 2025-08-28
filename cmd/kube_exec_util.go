@@ -34,8 +34,6 @@ func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Con
 
 	// Helper function for common streaming logic
 	streamWithLogging := func(streamOptions remotecommand.StreamOptions) error {
-		log.Debug().Msgf("Starting SPDY stream")
-
 		if showPressEnter {
 			log.Info().Msg("Press ENTER to continue..")
 		}
