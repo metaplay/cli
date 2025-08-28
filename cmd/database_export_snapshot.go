@@ -201,18 +201,16 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 
 // DatabaseSnapshotMetadata contains information about the database export
 type DatabaseSnapshotMetadata struct {
-	Version       int       `json:"version"`
-	Environment   string    `json:"environment"`
-	DatabaseName  string    `json:"database_name"`
-	NumShards     int       `json:"num_shards"`
-	ExportedAt    time.Time `json:"exported_at"`
-	ExportOptions string    `json:"export_options"`
+	Version      int       `json:"version"`
+	Environment  string    `json:"environment"`
+	DatabaseName string    `json:"database_name"`
+	NumShards    int       `json:"num_shards"`
+	ExportedAt   time.Time `json:"exported_at"`
 }
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
 func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Exporting database...")
-	exportOptions := "--routines --triggers --no-tablespaces"
 
 	// Create output zip file
 	log.Debug().Str("zip_file", o.argOutputFile).Msg("Creating output zip file")
@@ -228,14 +226,14 @@ func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context,
 
 	// Write metadata to zip
 	log.Debug().Msg("Writing metadata to zip file")
-	err = o.writeMetadataToZip(zipWriter, shards, exportOptions)
+	err = o.writeMetadataToZip(zipWriter, shards)
 	if err != nil {
 		return fmt.Errorf("failed to write metadata: %v", err)
 	}
 
 	// Extract schema from shard #0 first
 	log.Debug().Msg("Extracting database schema from shard #0")
-	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, exportOptions, shards[0])
+	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, shards[0])
 	if err != nil {
 		return fmt.Errorf("failed to extract schema: %v", err)
 	}
@@ -265,7 +263,7 @@ func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context,
 }
 
 // Helper function to write metadata to zip file
-func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig, exportOptions string) error {
+func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig) error {
 
 	// Use first shard for database name (all shards should have same database name)
 	databaseName := ""
@@ -276,12 +274,11 @@ func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, s
 	// Create metadata
 	log.Debug().Str("database_name", databaseName).Int("num_shards", len(shards)).Msg("Creating export metadata")
 	metadata := DatabaseSnapshotMetadata{
-		Version:       1,
-		Environment:   o.argEnvironment,
-		DatabaseName:  databaseName,
-		NumShards:     len(shards),
-		ExportedAt:    time.Now().UTC(),
-		ExportOptions: exportOptions,
+		Version:      1,
+		Environment:  o.argEnvironment,
+		DatabaseName: databaseName,
+		NumShards:    len(shards),
+		ExportedAt:   time.Now().UTC(),
 	}
 
 	// Create metadata JSON in memory
@@ -312,13 +309,12 @@ func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, s
 }
 
 // Helper function to extract database schema from shard #0 into memory
-func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
+func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for schema only (DDL) - no gzip compression for in-memory processing
-	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-data %s %s",
+	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-tablespaces --no-data --routines --triggers %s",
 		shard.ReadOnlyHost, // Use read-only replica
 		shard.UserId,
 		shard.Password,
-		exportOptions,
 		shard.DatabaseName)
 	log.Debug().Str("host", shard.ReadOnlyHost).Str("database", shard.DatabaseName).Msg("Executing schema dump command")
 
