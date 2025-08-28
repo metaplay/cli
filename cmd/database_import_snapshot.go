@@ -337,12 +337,6 @@ func (o *databaseImportSnapshotOpts) openAndValidateZipFile() (*zip.ReadCloser, 
 		return nil, nil, nil, nil, fmt.Errorf("unsupported snapshot version %d, expected version 1", metadata.Version)
 	}
 
-	// Validate shard files
-	if len(shardFiles) != metadata.NumShards {
-		zipReader.Close()
-		return nil, nil, nil, nil, fmt.Errorf("expected %d shard files, found %d", metadata.NumShards, len(shardFiles))
-	}
-
 	return zipReader, &metadata, schemaFile, shardFiles, nil
 }
 
