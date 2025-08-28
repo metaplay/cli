@@ -27,8 +27,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 )
 
-// databaseExportOpts holds the options for the 'database export' command
-type databaseExportOpts struct {
+// databaseExportSnapshotOpts holds the options for the 'database export' command
+type databaseExportSnapshotOpts struct {
 	UsePositionalArgs
 
 	// Environment and output file
@@ -40,14 +40,14 @@ type databaseExportOpts struct {
 }
 
 func init() {
-	o := databaseExportOpts{}
+	o := databaseExportSnapshotOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database snapshot. Defaults to 'database-snapshot-${env}-${timestamp}.mdb' if not specified.")
 
 	cmd := &cobra.Command{
-		Use:   "export [ENVIRONMENT] [OUTPUT_FILE] [flags]",
+		Use:   "export-snapshot [ENVIRONMENT] [OUTPUT_FILE] [flags]",
 		Short: "[preview] Export database snapshot from an environment",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
@@ -73,15 +73,15 @@ func init() {
 			{Arguments}
 
 			Related commands:
-			- 'metaplay database import' imports a database snapshot into an environment.
+			- 'metaplay database import-snapshot' imports a database snapshot into an environment.
 			- 'metaplay debug database' connects to a database shard interactively.
 		`),
 		Example: renderExample(`
 			# Export database from 'nimbly' environment (uses default filename)
-			metaplay database export nimbly
+			metaplay database export-snapshot nimbly
 
 			# Export database to a specific file
-			metaplay database export nimbly my_database_snapshot.mdb
+			metaplay database export-snapshot nimbly my_database_snapshot.mdb
 		`),
 		Run: runCommand(&o),
 	}
@@ -91,7 +91,7 @@ func init() {
 	databaseCmd.AddCommand(cmd)
 }
 
-func (o *databaseExportOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *databaseExportSnapshotOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Generate default output file if not specified
 	if o.argOutputFile == "" {
 		timestamp := time.Now().Format("20060102-150405")
@@ -100,7 +100,7 @@ func (o *databaseExportOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
+func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 	// Resolve the project & auth provider
 	project, err := tryResolveProject()
 	if err != nil {
@@ -116,15 +116,14 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get kubeconfig to access the environment for Helm operations
-	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	// Create Kubernetes client.
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
-		return fmt.Errorf("failed to get kubeconfig: %v", err)
+		return err
 	}
-	log.Debug().Msg("Resolved kubeconfig to access environment")
 
 	// Configure Helm to check for active deployments
-	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
+	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
 		return fmt.Errorf("failed to initialize Helm config: %v", err)
 	}
@@ -134,11 +133,7 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
 	}
-
-	kubeCli, err := targetEnv.GetPrimaryKubeClient()
-	if err != nil {
-		return err
-	}
+	hasGameServer := len(helmReleases) > 0
 
 	// Fetch the database shard configuration from Kubernetes secret
 	log.Debug().Str("namespace", kubeCli.Namespace).Msg("Fetching database shard configuration")
@@ -147,36 +142,29 @@ func (o *databaseExportOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Validate that we have at least one shard
-	if len(shards) == 0 {
-		return fmt.Errorf("no database shards found in environment")
-	}
-
-	// Fill in shard indices
-	for shardNdx := range shards {
-		shards[shardNdx].ShardIndex = shardNdx
-	}
-
 	// Show info
 	log.Info().Msg("")
-	log.Info().Msg("Database export:")
+	log.Info().Msg("Export database snapshot:")
 	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	if hasGameServer {
+		log.Info().Msgf("  Game server: %s", styles.RenderWarning("⚠️ deployed"))
+	} else {
+		log.Info().Msgf("  Game server: %s", styles.RenderSuccess("✓ not deployed"))
+	}
 	log.Info().Msgf("  Shards:      %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shards))))
 	log.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.argOutputFile))
 	log.Info().Msg("")
 
 	// Check if there's a game server deployed.
-	if len(helmReleases) > 0 {
+	if hasGameServer {
 		if !o.flagForce {
 			return fmt.Errorf("cannot export database: active game server deployment detected in environment '%s'. Remove the game server deployment before exporting the database", o.argEnvironment)
 		}
 
 		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
 		log.Info().Msgf("   Proceeding with database export due to --force flag")
-	} else {
-		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database export")
+		log.Info().Msg("")
 	}
-	log.Info().Msg("")
 
 	// Create a debug container to run mariadb-dump
 	log.Debug().Msg("Creating debug pod for database export")
@@ -222,7 +210,7 @@ type DatabaseSnapshotMetadata struct {
 }
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
-func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseExportSnapshotOpts) exportDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Exporting database...")
 	exportOptions := "--routines --triggers --no-tablespaces"
 
@@ -277,7 +265,7 @@ func (o *databaseExportOpts) exportDatabaseContents(ctx context.Context, kubeCli
 }
 
 // Helper function to write metadata to zip file
-func (o *databaseExportOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig, exportOptions string) error {
+func (o *databaseExportSnapshotOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig, exportOptions string) error {
 
 	// Use first shard for database name (all shards should have same database name)
 	databaseName := ""
@@ -324,7 +312,7 @@ func (o *databaseExportOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []
 }
 
 // Helper function to extract database schema from shard #0 into memory
-func (o *databaseExportOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
+func (o *databaseExportSnapshotOpts) extractDatabaseSchema(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, exportOptions string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for schema only (DDL) - no gzip compression for in-memory processing
 	schemaCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-db --no-data %s %s",
 		shard.ReadOnlyHost, // Use read-only replica
@@ -373,7 +361,7 @@ func (o *databaseExportOpts) extractDatabaseSchema(ctx context.Context, kubeCli 
 }
 
 // Helper function to apply schema modifications and fixups
-func (o *databaseExportOpts) applySchemaFixups(schemaContent string) string {
+func (o *databaseExportSnapshotOpts) applySchemaFixups(schemaContent string) string {
 	log.Debug().Msgf("Original schema from mariadb-dump:\n%s", schemaContent)
 
 	// Ensure all tables use utf8mb4_bin collation
@@ -384,7 +372,7 @@ func (o *databaseExportOpts) applySchemaFixups(schemaContent string) string {
 }
 
 // Helper function to enforce utf8mb4_bin collation on all tables
-func (o *databaseExportOpts) enforceUtf8mb4BinCollation(schemaContent string) string {
+func (o *databaseExportSnapshotOpts) enforceUtf8mb4BinCollation(schemaContent string) string {
 	// Simple approach: replace all collation references with utf8mb4_bin
 
 	// 1. Replace table-level collation in CREATE TABLE statements
@@ -408,7 +396,7 @@ func (o *databaseExportOpts) enforceUtf8mb4BinCollation(schemaContent string) st
 }
 
 // Helper function to write schema content to zip file
-func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaContent string) error {
+func (o *databaseExportSnapshotOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaContent string) error {
 	// Prepare zip header for schema file
 	schemaHeader := &zip.FileHeader{
 		Name:     "schema.sql",
@@ -434,7 +422,7 @@ func (o *databaseExportOpts) writeSchemaToZip(zipWriter *zip.Writer, schemaConte
 }
 
 // Helper function to export data only from a single database shard
-func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
+func (o *databaseExportSnapshotOpts) exportDatabaseShardData(ctx context.Context, zipWriter *zip.Writer, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) (string, error) {
 	// Build mariadb-dump command for data only (DML) with proper gzip termination
 	// Note: Using --hex-blob as raw binary causes failures on import.
 	dataCmd := fmt.Sprintf("mariadb-dump -h %s -u %s -p%s --no-create-info --no-tablespaces --single-transaction --hex-blob --skip-triggers %s",
@@ -492,7 +480,7 @@ func (o *databaseExportOpts) exportDatabaseShardData(ctx context.Context, zipWri
 }
 
 // validateShardFile validates an uncompressed shard file by checking its content
-func (o *databaseExportOpts) validateShardFile(file *zip.File) error {
+func (o *databaseExportSnapshotOpts) validateShardFile(file *zip.File) error {
 	// Open the file for reading
 	reader, err := file.Open()
 	if err != nil {
@@ -532,7 +520,7 @@ func (o *databaseExportOpts) validateShardFile(file *zip.File) error {
 }
 
 // validateGzippedShardFile validates a gzipped shard file by attempting to decompress it
-func (o *databaseExportOpts) validateGzippedShardFile(file *zip.File) error {
+func (o *databaseExportSnapshotOpts) validateGzippedShardFile(file *zip.File) error {
 	// Open the file for reading
 	reader, err := file.Open()
 	if err != nil {
@@ -572,7 +560,7 @@ func (o *databaseExportOpts) validateGzippedShardFile(file *zip.File) error {
 }
 
 // validateZipFileEntry validates a single file entry in the zip archive
-func (o *databaseExportOpts) validateZipFileEntry(file *zip.File) error {
+func (o *databaseExportSnapshotOpts) validateZipFileEntry(file *zip.File) error {
 	// Open the file for reading
 	reader, err := file.Open()
 	if err != nil {
@@ -595,7 +583,7 @@ func (o *databaseExportOpts) validateZipFileEntry(file *zip.File) error {
 }
 
 // validateMetadataFile validates the JSON metadata file
-func (o *databaseExportOpts) validateMetadataFile(reader io.ReadCloser) error {
+func (o *databaseExportSnapshotOpts) validateMetadataFile(reader io.ReadCloser) error {
 	// Try to decode the JSON to ensure it's valid
 	var metadata map[string]interface{}
 	decoder := json.NewDecoder(reader)
@@ -615,7 +603,7 @@ func (o *databaseExportOpts) validateMetadataFile(reader io.ReadCloser) error {
 }
 
 // validateSchemaFile validates the SQL schema file
-func (o *databaseExportOpts) validateSchemaFile(reader io.ReadCloser) error {
+func (o *databaseExportSnapshotOpts) validateSchemaFile(reader io.ReadCloser) error {
 	// Read a small portion to check if it looks like SQL
 	buffer := make([]byte, 1024)
 	n, err := reader.Read(buffer)
@@ -643,7 +631,7 @@ func (o *databaseExportOpts) validateSchemaFile(reader io.ReadCloser) error {
 }
 
 // validateGzippedSQLFile validates a gzipped SQL file
-func (o *databaseExportOpts) validateGzippedSQLFile(reader io.ReadCloser, fileName string) error {
+func (o *databaseExportSnapshotOpts) validateGzippedSQLFile(reader io.ReadCloser, fileName string) error {
 	// Create a gzip reader to decompress the content
 	gzipReader, err := gzip.NewReader(reader)
 	if err != nil {

@@ -26,8 +26,8 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 )
 
-// databaseImportOpts holds the options for the 'database import' command
-type databaseImportOpts struct {
+// databaseImportSnapshotOpts holds the options for the 'database import' command
+type databaseImportSnapshotOpts struct {
 	UsePositionalArgs
 
 	// Environment and input file
@@ -41,14 +41,14 @@ type databaseImportOpts struct {
 }
 
 func init() {
-	o := databaseImportOpts{}
+	o := databaseImportSnapshotOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argInputFile, "INPUT_FILE", "Input file path containing database snapshot (eg, 'database-snapshot.mdb').")
 
 	cmd := &cobra.Command{
-		Use:   "import [ENVIRONMENT] [INPUT_FILE] [flags]",
+		Use:   "import-snapshot [ENVIRONMENT] [INPUT_FILE] [flags]",
 		Short: "[preview] Import database snapshot from a file",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
@@ -81,32 +81,29 @@ func init() {
 			{Arguments}
 
 			Related commands:
-			- 'metaplay database export' creates database snapshot archives.
+			- 'metaplay database export-snapshot' exports a database snapshot.
 		`),
 		Example: renderExample(`
 			# Import database snapshot to 'nimbly' environment (asks for manual confirmation)
-			metaplay database import nimbly snapshot.mdb
+			metaplay database import-snapshot nimbly snapshot.mdb
 
 			# Auto-accept import without confirmation prompt
-			metaplay database import nimbly snapshot.mdb --yes
-
-			# Force import even if a game server is deployed (DANGEROUS!)
-			metaplay database import nimbly snapshot.mdb --force --yes
+			metaplay database import-snapshot nimbly snapshot.mdb --yes
 
 			# Import to production environment (requires additional confirmation)
-			metaplay database import production snapshot.mdb --yes --confirm-production
+			metaplay database import-snapshot production snapshot.mdb --yes --confirm-production
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with import")
-	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with import even if a game server is deployed")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with import even if a game server is deployed (DANGEROUS!)")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when importing to production environments")
 
 	databaseCmd.AddCommand(cmd)
 }
 
-func (o *databaseImportOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *databaseImportSnapshotOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Both arguments are required
 	if o.argEnvironment == "" {
 		return fmt.Errorf("ENVIRONMENT argument is required")
@@ -123,7 +120,7 @@ func (o *databaseImportOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
+func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	// Resolve the project & auth provider
 	project, err := tryResolveProject()
 	if err != nil {
@@ -144,48 +141,52 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get kubeconfig to access the environment for Helm operations
-	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
-	if err != nil {
-		return fmt.Errorf("failed to get kubeconfig: %v", err)
-	}
-	log.Debug().Msg("Resolved kubeconfig to access environment")
-
-	// Configure Helm to check for active deployments
-	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
-	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
-	}
-
-	// Check for any active game server Helm deployments - refuse to import if found
-	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
-	if err != nil {
-		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
-	}
-
-	log.Info().Msg("")
-	log.Info().Msg("Database import:")
-	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
-	log.Info().Msgf("  Import file: %s", styles.RenderTechnical(o.argInputFile))
-	log.Info().Msg("")
-
-	// Check if there's a game server deployed.
-	if len(helmReleases) > 0 {
-		if !o.flagForce {
-			return fmt.Errorf("cannot import database: active game server deployment detected in environment '%s'. Remove the game server deployment before importing the database, or use --force to proceed anyway", o.argEnvironment)
-		}
-
-		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
-		log.Info().Msgf("   Proceeding with database import due to --force flag")
-	} else {
-		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database import")
-	}
-	log.Info().Msg("")
-
 	// Create Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
+	}
+
+	// Fetch the database shard configuration from Kubernetes secret
+	log.Debug().Str("namespace", kubeCli.Namespace).Msg("Fetching database shard configuration")
+	shards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
+	if err != nil {
+		return err
+	}
+
+	// Configure Helm to check for active deployments
+	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
+	if err != nil {
+		return fmt.Errorf("failed to initialize Helm config: %v", err)
+	}
+
+	// Check for a game server is deployed - dangerous to import if there is a deployment
+	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
+	if err != nil {
+		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+	}
+	hasGameServer := len(helmReleases) > 0
+
+	log.Info().Msg("")
+	log.Info().Msg("Import database snapshot:")
+	log.Info().Msgf("  Environment: %s", styles.RenderTechnical(o.argEnvironment))
+	if hasGameServer {
+		log.Info().Msgf("  Game server: %s", styles.RenderWarning("⚠️ deployed"))
+	} else {
+		log.Info().Msgf("  Game server: %s", styles.RenderSuccess("✓ not deployed"))
+	}
+	log.Info().Msgf("  Import file: %s", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msg("")
+
+	// Check if there's a game server deployed.
+	if hasGameServer {
+		if !o.flagForce {
+			return fmt.Errorf("cannot import database: active game server deployment detected in environment '%s'. Remove the game server deployment before importing the database", o.argEnvironment)
+		}
+
+		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Info().Msgf("   Proceeding with database import due to --force flag")
+		log.Info().Msg("")
 	}
 
 	// Show warning and get confirmation.
@@ -210,23 +211,6 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 	}
 
-	// Fetch the database shard configuration from Kubernetes secret
-	log.Debug().Str("namespace", kubeCli.Namespace).Msg("Fetching database shard configuration")
-	shards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
-	if err != nil {
-		return err
-	}
-
-	// Validate that we have at least one shard
-	if len(shards) == 0 {
-		return fmt.Errorf("no database shards found in environment")
-	}
-
-	// Fill in shard indices
-	for shardNdx := range shards {
-		shards[shardNdx].ShardIndex = shardNdx
-	}
-
 	// Create a debug container to run mariadb import
 	log.Debug().Msg("Creating debug pod for database import")
 	podName, cleanup, err := kubeutil.CreateDebugPod(
@@ -249,7 +233,7 @@ func (o *databaseImportOpts) Run(cmd *cobra.Command) error {
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
-func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportSnapshotOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShards []kubeutil.DatabaseShardConfig) error {
 	log.Info().Msgf("Importing database...")
 
 	// Open and validate zip file
@@ -292,7 +276,7 @@ func (o *databaseImportOpts) importDatabaseContents(ctx context.Context, kubeCli
 }
 
 // Helper function to open zip file and validate metadata, schema, and shard files
-func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, *zip.File, []*zip.File, error) {
+func (o *databaseImportSnapshotOpts) openAndValidateZipFile(targetShards []kubeutil.DatabaseShardConfig) (*zip.ReadCloser, *DatabaseSnapshotMetadata, *zip.File, []*zip.File, error) {
 	// Open zip file
 	zipReader, err := zip.OpenReader(o.argInputFile)
 	if err != nil {
@@ -370,7 +354,7 @@ func (o *databaseImportOpts) openAndValidateZipFile(targetShards []kubeutil.Data
 }
 
 // Helper function to validate metadata compatibility
-func (o *databaseImportOpts) validateMetadata(metadata *DatabaseSnapshotMetadata, targetShards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportSnapshotOpts) validateMetadata(metadata *DatabaseSnapshotMetadata, targetShards []kubeutil.DatabaseShardConfig) error {
 	// Check version compatibility
 	if metadata.Version != 1 {
 		return fmt.Errorf("unsupported dump version %d, expected version 1", metadata.Version)
@@ -400,7 +384,7 @@ func (o *databaseImportOpts) validateMetadata(metadata *DatabaseSnapshotMetadata
 }
 
 // Helper function to import database schema to a single shard
-func (o *databaseImportOpts) importDatabaseSchema(ctx context.Context, zipReader *zip.ReadCloser, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportSnapshotOpts) importDatabaseSchema(ctx context.Context, zipReader *zip.ReadCloser, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open schema file from zip
 	schemaReader, err := schemaFile.Open()
 	if err != nil {
@@ -450,7 +434,7 @@ func (o *databaseImportOpts) importDatabaseSchema(ctx context.Context, zipReader
 }
 
 // Helper function to import shard data by streaming compressed data to remote execution
-func (o *databaseImportOpts) importDatabaseShardData(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportSnapshotOpts) importDatabaseShardData(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open shard file from zip
 	shardReader, err := shardFile.Open()
 	if err != nil {
