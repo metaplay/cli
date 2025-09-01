@@ -212,7 +212,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 
 // Helper function to collect and retrieve heap dump using task runner
 func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) error {
-	// Task 1: Set healthz probe to success mode
+	// Set healthz probe to success mode
 	runner.AddTask("Disable health checks", func(output *tui.TaskOutput) error {
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Success",
@@ -223,7 +223,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		return nil
 	})
 
-	// Task 2: Collect heap dump
+	// Collect heap dump
 	var dumpDuration time.Duration
 	runner.AddTask(fmt.Sprintf("Collect %s dump", o.flagCollectMode), func(output *tui.TaskOutput) error {
 		startTime := time.Now()
@@ -253,7 +253,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		return nil
 	})
 
-	// Task 3: Reset healthz probe
+	// Reset healthz probe
 	runner.AddTask("Re-enable health checks", func(output *tui.TaskOutput) error {
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
@@ -264,36 +264,30 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		return nil
 	})
 
-	// Task 4: Copy heap dump to local machine
+	// With mode==gcdump, the dump file gets written to /tmp.
+	// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
+	remoteDumpDir := "/tmp"
+	if o.flagCollectMode == "dump" {
+		// Access the target container filesystem via the server process root
+		remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
+	}
+
+	// Copy heap dump to local machine & remove the remote file (regardless of copy success)
 	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
-		// With mode==gcdump, the dump file gets written to /tmp.
-		// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
-		remoteDumpDir := "/tmp"
-		if o.flagCollectMode == "dump" {
-			// Access the target container filesystem via the server process root
-			remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
-		}
+		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 
-		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
-		if err != nil {
-			return fmt.Errorf("failed to copy heap dump: %v", err)
-		}
-		return nil
-	})
-
-	// Task 5: Clean up remote file
-	runner.AddTask("Clean up remote file", func(output *tui.TaskOutput) error {
-		rmDir := "/tmp"
-		if o.flagCollectMode == "dump" {
-			rmDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
-		}
-		log.Debug().Msgf("Remove heap dump file %s/%s from debug container...", rmDir, filepath.Base(o.flagOutputPath))
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-			fmt.Sprintf("rm %s/%s", rmDir, filepath.Base(o.flagOutputPath)),
+		// Remove the remove file.
+		log.Debug().Msgf("Remove heap dump file %s/%s from debug container...", remoteDumpDir, filepath.Base(o.flagOutputPath))
+		_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+			fmt.Sprintf("rm %s/%s", remoteDumpDir, filepath.Base(o.flagOutputPath)),
 		)
-		if err != nil {
+		if removeErr != nil {
 			// Don't fail the task for cleanup errors, just log a warning
-			log.Warn().Msgf("Failed to remove heap dump from debug container: %v", err)
+			output.AppendLinef("Failed to remove heap dump from debug container: %v", removeErr)
+		}
+
+		if copyErr != nil {
+			return fmt.Errorf("failed to copy heap dump: %v", copyErr)
 		}
 		return nil
 	})
