@@ -187,35 +187,42 @@ func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) 
 		return nil, nil, fmt.Errorf("no stateful sets exist in the gameserver")
 	}
 
-	// Let the user choose the target shard set.
-	selectedShardSet, err := tui.ChooseFromListDialog(
-		"Select Target Shard Set",
-		shardSetsWithPods,
-		func(shardSet *envapi.ShardSetWithPods) (string, string) {
-			// \todo show some useful status?
-			return shardSet.ShardSet.Name, ""
-		},
-	)
-	if err != nil {
-		return nil, nil, err
+	// Create a flattened list of all pods with their shard set context
+	type podWithContext struct {
+		pod      *corev1.Pod
+		shardSet *envapi.ShardSetWithPods
 	}
 
-	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedShardSet.ShardSet.Name)
+	var allPods []podWithContext
+	for i := range shardSetsWithPods {
+		shardSet := &shardSetsWithPods[i]
+		for j := range shardSet.Pods {
+			allPods = append(allPods, podWithContext{
+				pod:      &shardSet.Pods[j],
+				shardSet: shardSet,
+			})
+		}
+	}
 
-	// Let the user choose the target shard pod in the shard set.
-	selectedPod, err := tui.ChooseFromListDialog[corev1.Pod](
+	if len(allPods) == 0 {
+		return nil, nil, fmt.Errorf("no pods found in any shard set")
+	}
+
+	// Let the user choose from the flattened pod list
+	selectedPodWithContext, err := tui.ChooseFromListDialog(
 		"Select Target Pod",
-		selectedShardSet.Pods,
-		func(pod *corev1.Pod) (string, string) {
-			return pod.Name, tui.GetPodDescription(pod)
+		allPods,
+		func(pwc *podWithContext) (string, string) {
+			podDesc := tui.GetPodDescription(pwc.pod)
+			return pwc.pod.Name, podDesc
 		},
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedPod.Name)
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedPodWithContext.pod.Name)
 	log.Info().Msg("")
 
-	return selectedShardSet.ShardSet.Cluster.KubeClient, selectedPod, nil
+	return selectedPodWithContext.shardSet.ShardSet.Cluster.KubeClient, selectedPodWithContext.pod, nil
 }
