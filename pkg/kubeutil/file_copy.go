@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
@@ -21,9 +22,10 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// progressTracker wraps an io.Writer and reports progress
-type progressTracker struct {
-	w                 io.Writer
+// ioProgressTracker wraps an io.Writer and reports progress
+type ioProgressTracker struct {
+	outWriter         io.Writer
+	progressOutput    *tui.TaskOutput
 	numProcessed      int64
 	totalSize         int64
 	lastProgress      int
@@ -31,8 +33,8 @@ type progressTracker struct {
 	minUpdateInterval time.Duration
 }
 
-func (pt *progressTracker) Write(p []byte) (int, error) {
-	n, err := pt.w.Write(p)
+func (pt *ioProgressTracker) Write(p []byte) (int, error) {
+	n, err := pt.outWriter.Write(p)
 	if err != nil {
 		return n, err
 	}
@@ -53,7 +55,7 @@ func (pt *progressTracker) Write(p []byte) (int, error) {
 	if isComplete || (intervalElapsed && percentComplete > pt.lastProgress) {
 		pt.lastUpdateTime = time.Now()
 		pt.lastProgress = percentComplete
-		log.Info().Msgf("Copying: %d%%", percentComplete)
+		pt.progressOutput.AppendLinef("Copy progress: %d%% (%s / %s)", percentComplete, humanizeFileSize(pt.numProcessed), humanizeFileSize(pt.totalSize))
 	}
 
 	return n, nil
@@ -64,12 +66,9 @@ func (pt *progressTracker) Write(p []byte) (int, error) {
 // Always follows symlinks (uses -h)
 func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName string, useCompression bool) (io.Reader, func() error, int64, error) {
 	// Construct the tar command to stream the file from the pod (with or without compression).
-	var command []string
-	if useCompression {
-		command = []string{"tar", "chfz", "-", "-C", srcDir, fileName}
-	} else {
-		command = []string{"tar", "chf", "-", "-C", srcDir, fileName}
-	}
+	tarFlags := map[bool]string{true: "chfz", false: "chf"}[useCompression]
+	// command := []string{"tar", tarFlags, "-", "-C", srcDir, fileName}
+	command := []string{"sh", "-c", fmt.Sprintf("tar %s - -C %s %s", tarFlags, srcDir, fileName)}
 
 	reader, outStream := io.Pipe()
 
@@ -144,7 +143,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 }
 
 // attemptFileCopy performs a single file copy attempt
-func attemptFileCopy(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string) error {
+func attemptFileCopy(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string) error {
 	// Create destination file
 	destFile, err := os.Create(destPath)
 	if err != nil {
@@ -152,25 +151,35 @@ func attemptFileCopy(ctx context.Context, kubeCli *envapi.KubeClient, podName, c
 	}
 	defer destFile.Close()
 
-	// Default to using compression for backward compatibility, don't follow symlinks by default
+	// Copy file from pod with compression enabled for faster copying.
 	tr, closer, fileSize, err := streamFileFromPod(ctx, kubeCli, podName, containerName, srcDir, fileName, true)
 	if err != nil {
 		return err
 	}
 	defer closer()
 
-	log.Info().Msgf("File size: %s", humanizeFileSize(fileSize))
-	progressWriter := io.Writer(destFile)
-	if fileSize > 0 {
-		progressWriter = &progressTracker{
-			w:                 destFile,
-			totalSize:         fileSize,
-			minUpdateInterval: time.Second / 5,
-			lastUpdateTime:    time.Now(),
-		}
+	output.SetHeaderLines([]string{
+		fmt.Sprintf("File size: %s", humanizeFileSize(fileSize)),
+	})
+
+	// Determine update interval: faster in interactive mode, slower in non-interactive mode
+	interval := map[bool]time.Duration{
+		true:  time.Second / 5,
+		false: time.Second,
+	}[tui.IsInteractiveMode()]
+
+	// Create progress tracker for the file copying.
+	progressTracker := &ioProgressTracker{
+		outWriter:         destFile,
+		progressOutput:    output,
+		totalSize:         fileSize,
+		minUpdateInterval: interval,
+		lastUpdateTime:    time.Now(),
 	}
 
-	if _, err := io.Copy(progressWriter, tr); err != nil {
+	// Copy the file & track progress.
+	if _, err := io.Copy(progressTracker, tr); err != nil {
+		output.AppendLinef("Failed to copy file contents: %v (copied %d out of %d bytes)", err, progressTracker.numProcessed, fileSize)
 		return fmt.Errorf("failed to copy file contents: %v", err)
 	}
 	return nil
@@ -179,7 +188,7 @@ func attemptFileCopy(ctx context.Context, kubeCli *envapi.KubeClient, podName, c
 // copyFileFromDebugPod copies a file from a pod using a tar pipe, similar to how kubectl cp works internally.
 // Only works with the ephemeral debug container as this requires shell on the target pod, which the game server
 // pods don't have. Use numAttempts > 1 to retry the copy operation in case of failure.
-func CopyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, numAttempts int) error {
+func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, numAttempts int) error {
 	if numAttempts < 1 {
 		return fmt.Errorf("numAttempts must be at least 1")
 	}
@@ -193,9 +202,9 @@ func CopyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	var lastErr error
 	for attempt := 1; attempt <= numAttempts; attempt++ {
 		// Attempt the file copy
-		lastErr = attemptFileCopy(ctx, kubeCli, podName, containerName, srcDir, fileName, destPath)
+		lastErr = attemptFileCopy(ctx, output, kubeCli, podName, containerName, srcDir, fileName, destPath)
 		if lastErr == nil {
-			log.Info().Msgf("File copy completed successfully on attempt %d", attempt)
+			log.Debug().Msgf("File copy completed successfully on attempt %d", attempt)
 			return nil
 		}
 
@@ -203,7 +212,7 @@ func CopyFileFromDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		os.Remove(destPath)
 
 		if attempt < numAttempts {
-			log.Warn().Msgf("Attempt %d failed: %v, retrying...", attempt, lastErr)
+			output.AppendLinef("Attempt %d failed: %v, retrying...", attempt, lastErr)
 		}
 	}
 
