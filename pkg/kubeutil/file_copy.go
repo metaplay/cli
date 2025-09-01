@@ -63,13 +63,11 @@ func (pt *progressTracker) Write(p []byte) (int, error) {
 // If useCompression is true, will use gzip compression (requires shell in the container)
 // Always follows symlinks (uses -h)
 func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName string, useCompression bool) (io.Reader, func() error, int64, error) {
+	// Construct the tar command to stream the file from the pod (with or without compression).
 	var command []string
 	if useCompression {
-		// For compression, we need a shell to handle piping
-		tarCmd := fmt.Sprintf("tar chzf - -C %s %s", srcDir, fileName)
-		command = []string{"sh", "-c", tarCmd}
+		command = []string{"tar", "chfz", "-", "-C", srcDir, fileName}
 	} else {
-		// Without compression, we can call tar directly without a shell
 		command = []string{"tar", "chf", "-", "-C", srcDir, fileName}
 	}
 
@@ -161,7 +159,7 @@ func attemptFileCopy(ctx context.Context, kubeCli *envapi.KubeClient, podName, c
 	}
 	defer closer()
 
-	log.Info().Msgf("Heap dump file size: %s", humanizeFileSize(fileSize))
+	log.Info().Msgf("File size: %s", humanizeFileSize(fileSize))
 	progressWriter := io.Writer(destFile)
 	if fileSize > 0 {
 		progressWriter = &progressTracker{
