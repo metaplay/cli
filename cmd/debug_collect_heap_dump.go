@@ -43,13 +43,14 @@ func init() {
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Collect a heap dump from a running .NET server pod using dotnet-gcdump.
+			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
 			WARNING: This operation is very intrusive as it completely freeze the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
 
-			This command will create a debug container, collect the heap dump using dotnet-gcdump,
+			This command will create a debug container, collect the heap dump using the specified
+			mode (dotnet-gcdump for managed heap only, or dotnet-dump for full process dump),
 			and copy it back to your local machine.
 
 			The health probes will be temporarily modified to always return a success value to
@@ -65,11 +66,12 @@ func init() {
 			# Collect heap dump from pod 'service-0'.
 			metaplay debug collect-heap-dump tough-falcons service-0
 
-			# Use 'dotnet-dump' instead of 'dotnet-gcdump'.
+			# Use 'dotnet-dump' for full process dump instead of 'dotnet-gcdump'.
 			metaplay debug collect-heap-dump tough-falcons --mode dump
 
-			# Specify custom output path on your disk. The .gcdump suffix must be used with dotnet-gcdump!
+			# Specify custom output path. Use .gcdump extension for gcdump mode, and no extension for dump mode.
 			metaplay debug collect-heap-dump tough-falcons -o /path/to/output.gcdump
+			metaplay debug collect-heap-dump tough-falcons --mode dump -o /path/to/core_250901_093000
 
 			# Don't ask for confirmation on the operation.
 			metaplay debug collect-heap-dump tough-falcons --yes
@@ -78,11 +80,8 @@ func init() {
 	}
 	debugCmd.AddCommand(cmd)
 
-	// FORCE --mode=gcdump as 'dotnet-dump' doesn't produce an output file
-	o.flagCollectMode = "gcdump"
-
-	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump)")
-	// cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' or 'dump' (default: gcdump)")
+	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump for gcdump mode, core_YYMMDD_HHMMSS for dump mode)")
+	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump) (default: gcdump)")
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip heap size warning and proceed with dump")
 }
 
@@ -92,21 +91,28 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
 	}
 
-	// Resolve expected file name extension depending on type.
-	extension := "gcdump"
-	if o.flagCollectMode == "dump" {
-		extension = ""
-	}
-
 	// Set default output path if not specified
 	if o.flagOutputPath == "" {
-		timestamp := time.Now().Format("20060102-150405")
-		o.flagOutputPath = fmt.Sprintf("dump-%s.%s", timestamp, extension)
+		if o.flagCollectMode == "gcdump" {
+			// YYYYMMDD-hhmmss for gcdump
+			timestamp := time.Now().Format("20060102-150405")
+			o.flagOutputPath = fmt.Sprintf("dump-%s.gcdump", timestamp)
+		} else {
+			// core_YYMMDD_HHMMSS for dump mode (Linux)
+			timestamp := time.Now().Format("060102_150405")
+			o.flagOutputPath = fmt.Sprintf("core_%s", timestamp)
+		}
 	} else {
-		// Check the file extension
+		// Validate file extension based on mode
 		actualExtension := filepath.Ext(o.flagOutputPath)
-		if actualExtension != "."+extension {
-			return fmt.Errorf("invalid extension for output file: expected '.%s' but got '%s'", extension, actualExtension)
+		if o.flagCollectMode == "gcdump" {
+			if actualExtension != ".gcdump" {
+				return fmt.Errorf("invalid extension for gcdump mode: expected '.gcdump' but got '%s'", actualExtension)
+			}
+		} else if o.flagCollectMode == "dump" {
+			if actualExtension != "" {
+				return fmt.Errorf("dump mode must not have a file extension, but got '%s'", actualExtension)
+			}
 		}
 	}
 
@@ -159,7 +165,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 
 	// Warn about process freezing unless --yes is used
 	if !o.flagYes {
-		log.Warn().Msgf("This operation may take a long time and will completely freeze the server process for the duration!")
+		log.Warn().Msgf("This operation will completely freeze the server process for the duration!")
 		log.Warn().Msg("Use --yes to skip this check.")
 
 		// Ask for confirmation
@@ -198,7 +204,12 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	startTime := time.Now()
 
 	// Construct the command to collect the heap dump.
-	collectCmd := fmt.Sprintf("dotnet-%s collect -p %d -o /tmp/%s", o.flagCollectMode, processInfo.Pid, filepath.Base(o.flagOutputPath))
+	var collectCmd string
+	if o.flagCollectMode == "gcdump" {
+		collectCmd = fmt.Sprintf("dotnet-gcdump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
+	} else {
+		collectCmd = fmt.Sprintf("dotnet-dump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
+	}
 	if processInfo.Username != "root" {
 		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.Username, collectCmd)
 	}
@@ -226,18 +237,26 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	dumpRate := processInfo.MemoryGB / dumpSeconds
 	log.Info().Msgf("Heap dump took %.1f seconds (%.2f GB/s)", dumpSeconds, dumpRate)
 
-	// Copy the heap dump file from the debug container using tar pipe (using Kubernetes API)
+	// With mode==gcdump, the dump file gets written to /tmp.
+	// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
+	remoteDumpDir := "/tmp"
+	if o.flagCollectMode == "dump" {
+		// Access the target container filesystem via the server process root
+		remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
+	}
+
+	// Copy the heap dump file from the debug container
 	log.Info().Msgf("Retrieving heap dump to local file %s...", o.flagOutputPath)
-	err = kubeutil.CopyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
+	err = kubeutil.CopyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 	if err != nil {
 		log.Error().Msgf("Failed to copy heap dump: %v", err)
 		return err
 	}
 
 	// Remove the heap dump file from the debug container
-	log.Debug().Msgf("Remove heap dump file /tmp/%s from debug container...", filepath.Base(o.flagOutputPath))
+	log.Debug().Msgf("Remove heap dump file %s/%s from debug container...", remoteDumpDir, filepath.Base(o.flagOutputPath))
 	_, _, err = kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-		fmt.Sprintf("rm /tmp/%s", filepath.Base(o.flagOutputPath)),
+		fmt.Sprintf("rm %s/%s", remoteDumpDir, filepath.Base(o.flagOutputPath)),
 	)
 	if err != nil {
 		log.Warn().Msgf("Failed to remove heap dump from debug container: %v", err) // Removed stderr
