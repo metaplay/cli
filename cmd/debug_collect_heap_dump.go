@@ -176,8 +176,8 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 
 	// Warn about process freezing unless --yes is used
 	if !o.flagYes {
-		log.Warn().Msg(styles.RenderAttention("⚠️  WARNING: This operation will completely freeze the server process!"))
-		log.Warn().Msg("The process will be unresponsive for the entire duration of the dump collection.")
+		log.Warn().Msg(styles.RenderAttention("⚠️ WARNING: This operation will completely freeze the server process!"))
+		log.Warn().Msg("The process will be unresponsive for the entire duration of the operation.")
 		log.Warn().Msg("")
 
 		// Ask for confirmation
@@ -205,9 +205,8 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("✅ Heap dump collected successfully!"))
-	log.Info().Msgf("Output file: %s", styles.RenderTechnical(o.flagOutputPath))
+	log.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.flagOutputPath))
 	return nil
 }
 
@@ -275,7 +274,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 			remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
 		}
 
-		err := kubeutil.CopyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 		if err != nil {
 			return fmt.Errorf("failed to copy heap dump: %v", err)
 		}
