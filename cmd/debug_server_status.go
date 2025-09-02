@@ -47,6 +47,7 @@ func init() {
 
 			Related commands:
 			- 'metaplay deploy server ...' deploys a game server and runs these checks.
+			- 'metaplay get server-info ...' shows information about the game server deployment.
 		`),
 		Example: renderExample(`
 			# Let the CLI ask for the target environment to check deployment status.

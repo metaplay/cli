@@ -11,7 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -37,18 +40,21 @@ func init() {
 	args.AddStringArgumentOpt(&o.argPodName, "POD", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 
 	cmd := &cobra.Command{
-		Use:   "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
-		Short: "[preview] Collect a heap dump from a running server pod",
+		Use:     "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
+		Aliases: []string{"heap-dump"},
+		Short:   "[preview] Collect a heap dump from a running server pod",
+		Run:     runCommand(&o),
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Collect a heap dump from a running .NET server pod using dotnet-gcdump.
+			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
 			WARNING: This operation is very intrusive as it completely freeze the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
 
-			This command will create a debug container, collect the heap dump using dotnet-gcdump,
+			This command will create a debug container, collect the heap dump using the specified
+			mode (dotnet-gcdump for managed heap only, or dotnet-dump for full process dump),
 			and copy it back to your local machine.
 
 			The health probes will be temporarily modified to always return a success value to
@@ -64,24 +70,21 @@ func init() {
 			# Collect heap dump from pod 'service-0'.
 			metaplay debug collect-heap-dump tough-falcons service-0
 
-			# Use 'dotnet-dump' instead of 'dotnet-gcdump'.
+			# Use 'dotnet-dump' for full process dump instead of 'dotnet-gcdump'.
 			metaplay debug collect-heap-dump tough-falcons --mode dump
 
-			# Specify custom output path on your disk. The .gcdump suffix must be used with dotnet-gcdump!
+			# Specify custom output path. Use .gcdump extension for gcdump mode, and no extension for dump mode.
 			metaplay debug collect-heap-dump tough-falcons -o /path/to/output.gcdump
+			metaplay debug collect-heap-dump tough-falcons --mode dump -o /path/to/core_250901_093000
 
 			# Don't ask for confirmation on the operation.
 			metaplay debug collect-heap-dump tough-falcons --yes
 		`),
-		Run: runCommand(&o),
 	}
 	debugCmd.AddCommand(cmd)
 
-	// FORCE --mode=gcdump as 'dotnet-dump' doesn't produce an output file
-	o.flagCollectMode = "gcdump"
-
-	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump)")
-	// cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' or 'dump' (default: gcdump)")
+	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump for gcdump mode, core_YYMMDD_HHMMSS for dump mode)")
+	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump) (default: gcdump)")
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip heap size warning and proceed with dump")
 }
 
@@ -91,21 +94,28 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
 	}
 
-	// Resolve expected file name extension depending on type.
-	extension := "gcdump"
-	if o.flagCollectMode == "dump" {
-		extension = ""
-	}
-
 	// Set default output path if not specified
 	if o.flagOutputPath == "" {
-		timestamp := time.Now().Format("20060102-150405")
-		o.flagOutputPath = fmt.Sprintf("dump-%s.%s", timestamp, extension)
+		if o.flagCollectMode == "gcdump" {
+			// YYYYMMDD-hhmmss for gcdump
+			timestamp := time.Now().Format("20060102-150405")
+			o.flagOutputPath = fmt.Sprintf("dump-%s.gcdump", timestamp)
+		} else {
+			// core_YYMMDD_HHMMSS for dump mode (Linux)
+			timestamp := time.Now().Format("060102_150405")
+			o.flagOutputPath = fmt.Sprintf("core_%s", timestamp)
+		}
 	} else {
-		// Check the file extension
+		// Validate file extension based on mode
 		actualExtension := filepath.Ext(o.flagOutputPath)
-		if actualExtension != "."+extension {
-			return fmt.Errorf("invalid extension for output file: expected '.%s' but got '%s'", extension, actualExtension)
+		if o.flagCollectMode == "gcdump" {
+			if actualExtension != ".gcdump" {
+				return fmt.Errorf("invalid extension for gcdump mode: expected '.gcdump' but got '%s'", actualExtension)
+			}
+		} else if o.flagCollectMode == "dump" {
+			if actualExtension != "" {
+				return fmt.Errorf("dump mode must not have a file extension, but got '%s'", actualExtension)
+			}
 		}
 	}
 
@@ -140,108 +150,147 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 
 	// Create and manage debug container in the server pod.
 	// Keep the container alive for an hour to avoid leaks.
-	debugContainerName, cleanup, err := createDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
+	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
 	// Get information about the running server process.
-	processInfo, err := getServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
+	processInfo, err := kubeutil.GetServerProcessInformation(cmd.Context(), kubeCli, pod.Name, debugContainerName)
 	if err != nil {
 		return err
 	}
 
-	estimatedDurationSeconds := processInfo.memoryGB * 10 // assume 100MB/s (from empirical testing)
-	log.Info().Msgf("Game server process heap size is %.2f GB.", processInfo.memoryGB)
-	log.Info().Msgf("Estimated time to complete the operation is: %s", formatDuration(int(estimatedDurationSeconds)))
+	estimatedDurationSeconds := processInfo.MemoryGB * 10 // assume 100MB/s (from empirical testing)
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Collect Heap Dump"))
+	log.Info().Msg("")
+	log.Info().Msgf("Target pod:         %s", styles.RenderTechnical(pod.Name))
+	log.Info().Msgf("Collection mode:    %s", styles.RenderTechnical(o.flagCollectMode))
+	log.Info().Msgf("Process heap size:  %s", styles.RenderTechnical(fmt.Sprintf("%.2f GB", processInfo.MemoryGB)))
+	log.Info().Msgf("Estimated duration: %s", styles.RenderTechnical(formatDuration(int(estimatedDurationSeconds))))
+	log.Info().Msgf("Output file:        %s", styles.RenderTechnical(o.flagOutputPath))
+	log.Info().Msg("")
 
 	// Warn about process freezing unless --yes is used
 	if !o.flagYes {
-		log.Warn().Msgf("This operation may take a long time and will completely freeze the server process for the duration!")
-		log.Warn().Msg("Use --yes to skip this check.")
+		log.Warn().Msg(styles.RenderAttention("⚠️ WARNING: This operation will completely freeze the server process!"))
+		log.Warn().Msg("The process will be unresponsive for the entire duration of the operation.")
+		log.Warn().Msg("")
 
 		// Ask for confirmation
 		fmt.Print("Are you sure you want to continue? [y/N] ")
 		var response string
 		fmt.Scanln(&response)
 		if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
+			log.Info().Msg(styles.RenderError("❌ Operation canceled"))
 			return fmt.Errorf("heap dump collection cancelled by user")
 		}
+		log.Info().Msg("")
 	}
 
-	// Collect and retrieve heap dump
-	err = o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo)
+	// Create task runner for the collection process
+	runner := tui.NewTaskRunner()
+
+	// Collect and retrieve heap dump using task runner
+	err = o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Successfully wrote %s", o.flagOutputPath)
+	// Run the tasks
+	if err := runner.Run(); err != nil {
+		return err
+	}
+
+	log.Info().Msg(styles.RenderSuccess("✅ Heap dump collected successfully!"))
+	log.Info().Msgf("  Output file: %s", styles.RenderTechnical(o.flagOutputPath))
 	return nil
 }
 
-// Helper function to collect and retrieve heap dump - Uses Kubernetes API for exec
-func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *serverProcessInfo) error {
-	// Set healthz probe to always return success before collecting dump
-	log.Info().Msgf("Setting healthz probe to Success mode...")
-	_, _, err := execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-		"curl localhost:8585/setOverride/healthz?mode=Success",
-	)
-	if err != nil {
-		log.Error().Msgf("Failed to set healthz probe mode: %v", err) // Removed stderr
-		return err
+// Helper function to collect and retrieve heap dump using task runner
+func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) error {
+	// Set healthz probe to success mode
+	runner.AddTask("Disable health checks", func(output *tui.TaskOutput) error {
+		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+			"curl localhost:8585/setOverride/healthz?mode=Success",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to set healthz probe mode: %v", err)
+		}
+		return nil
+	})
+
+	// Collect heap dump
+	var dumpDuration time.Duration
+	runner.AddTask(fmt.Sprintf("Collect %s dump", o.flagCollectMode), func(output *tui.TaskOutput) error {
+		startTime := time.Now()
+
+		// Construct the command to collect the heap dump.
+		var collectCmd string
+		if o.flagCollectMode == "gcdump" {
+			collectCmd = fmt.Sprintf("dotnet-gcdump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
+		} else {
+			collectCmd = fmt.Sprintf("dotnet-dump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
+		}
+		if processInfo.Username != "root" {
+			collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.Username, collectCmd)
+		}
+		log.Debug().Msgf("Execute on remote: %s", collectCmd)
+
+		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
+		dumpDuration = time.Since(startTime)
+		if err != nil {
+			return fmt.Errorf("failed to collect heap dump: %v", err)
+		}
+
+		// Calculate and log dump rate
+		dumpSeconds := dumpDuration.Seconds()
+		dumpRate := processInfo.MemoryGB / dumpSeconds
+		output.AppendLinef("Collection took %.1f seconds (%.2f GB/s)", dumpSeconds, dumpRate)
+		return nil
+	})
+
+	// Reset healthz probe
+	runner.AddTask("Re-enable health checks", func(output *tui.TaskOutput) error {
+		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to reset healthz probe mode: %v", err)
+		}
+		return nil
+	})
+
+	// With mode==gcdump, the dump file gets written to /tmp.
+	// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
+	remoteDumpDir := "/tmp"
+	if o.flagCollectMode == "dump" {
+		// Access the target container filesystem via the server process root
+		remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
 	}
 
-	// Collect heap dump using dotnet tools in the debug container
-	log.Info().Msgf("Collecting heap dump...")
-	startTime := time.Now()
+	// Copy heap dump to local machine & remove the remote file (regardless of copy success)
+	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
+		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 
-	// Construct the command to collect the heap dump.
-	collectCmd := fmt.Sprintf("dotnet-%s collect -p %d -o /tmp/%s", o.flagCollectMode, processInfo.pid, filepath.Base(o.flagOutputPath))
-	if processInfo.username != "root" {
-		collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.username, collectCmd)
-	}
-	log.Debug().Msgf("Execute on remote: %s", collectCmd)
+		// Remove the remove file.
+		log.Debug().Msgf("Remove heap dump file %s/%s from debug container...", remoteDumpDir, filepath.Base(o.flagOutputPath))
+		_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+			fmt.Sprintf("rm %s/%s", remoteDumpDir, filepath.Base(o.flagOutputPath)),
+		)
+		if removeErr != nil {
+			// Don't fail the task for cleanup errors, just log a warning
+			output.AppendLinef("Failed to remove heap dump from debug container: %v", removeErr)
+		}
 
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
-	dumpDuration := time.Since(startTime)
-	if err != nil {
-		log.Error().Msgf("Failed to collect heap dump: %v", err) // Removed stderr
-		return err
-	}
-
-	// Reset healthz probe back to passthrough mode
-	log.Info().Msgf("Resetting healthz probe to Passthrough mode...")
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-		"curl localhost:8585/setOverride/healthz?mode=Passthrough",
-	)
-	if err != nil {
-		log.Error().Msgf("Failed to reset healthz probe mode: %v", err) // Removed stderr
-		return err
-	}
-
-	// Calculate and print the dump rate
-	dumpSeconds := dumpDuration.Seconds()
-	dumpRate := processInfo.memoryGB / dumpSeconds
-	log.Info().Msgf("Heap dump took %.1f seconds (%.2f GB/s)", dumpSeconds, dumpRate)
-
-	// Copy the heap dump file from the debug container using tar pipe (using Kubernetes API)
-	log.Info().Msgf("Retrieving heap dump to local file %s...", o.flagOutputPath)
-	err = copyFileFromDebugPod(ctx, kubeCli, podName, debugContainerName, "/tmp", filepath.Base(o.flagOutputPath), o.flagOutputPath)
-	if err != nil {
-		log.Error().Msgf("Failed to copy heap dump: %v", err)
-		return err
-	}
-
-	// Remove the heap dump file from the debug container
-	log.Debug().Msgf("Remove heap dump file /tmp/%s from debug container...", filepath.Base(o.flagOutputPath))
-	_, _, err = execInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-		fmt.Sprintf("rm /tmp/%s", filepath.Base(o.flagOutputPath)),
-	)
-	if err != nil {
-		log.Warn().Msgf("Failed to remove heap dump from debug container: %v", err) // Removed stderr
-		// Don't return error here as the main operation was successful
-	}
+		if copyErr != nil {
+			return fmt.Errorf("failed to copy heap dump: %v", copyErr)
+		}
+		return nil
+	})
 
 	return nil
 }
@@ -262,33 +311,4 @@ func formatDuration(seconds int) string {
 	} else {
 		return fmt.Sprintf("%ds", s)
 	}
-}
-
-// validateUnixUsername checks if a username follows standard Unix/Linux username conventions:
-// - Only contains alphanumeric characters, underscores, and hyphens
-// - Starts with a letter or underscore
-// - Length between 1 and 32 characters
-func validateUnixUsername(username string) error {
-	if len(username) == 0 {
-		return fmt.Errorf("username cannot be empty")
-	}
-	if len(username) > 32 {
-		return fmt.Errorf("username cannot be longer than 32 characters")
-	}
-
-	// Check first character
-	first := username[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
-		return fmt.Errorf("username must start with a letter or underscore")
-	}
-
-	// Check remaining characters
-	for i := 1; i < len(username); i++ {
-		c := username[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
-			return fmt.Errorf("username can only contain letters, numbers, underscores, and hyphens")
-		}
-	}
-
-	return nil
 }

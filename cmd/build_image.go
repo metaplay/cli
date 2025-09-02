@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,10 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
+
+// Recommended minimum Docker engine version. Old versions have problems with
+// cross-architecture builds. 28.0.0 was published in Feb 2025.
+var recommendedDockerEngineVersion = semver.MustParse("28.0.0")
 
 // Build docker image for the project.
 type buildImageOpts struct {
@@ -53,7 +59,8 @@ func init() {
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: renderExample(`
-			# Build Docker image, produces image named '<projectID>:<timestamp>'.
+			# Build Docker image, produces image named '<projectID>:<timestamp>'. Only recommended when
+			# building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
 			# Specify only the tag, produces image named '<projectID>:364cff09'.
@@ -83,7 +90,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
-	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64')")
+	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64'")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
 }
@@ -200,6 +207,12 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Check Docker version: warn if using old versions
+	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion()
+	if err != nil {
+		log.Warn().Msgf("Warning: Failed to check Docker version: %v", err)
+	}
+
 	// Resolve docker build engine
 	log.Debug().Msg("Resolve docker build engine")
 	buildEngine, err := resolveBuildEngine(o.flagBuildEngine)
@@ -246,6 +259,15 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
 	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
+
+	// Print Docker version and show update recommendation (if have any)
+	dockerBadge := ""
+	if dockerVersionInfo == nil {
+		dockerBadge = styles.RenderWarning("[unable to check version]")
+	} else if dockerUpgradeRecommended {
+		dockerBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+	}
+	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionInfo.Server.Version), dockerBadge)
 
 	// Rebase paths to be relative to docker build root.
 	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
@@ -470,4 +492,59 @@ func checkBuildEngineAvailable(buildEngine string) error {
 	}
 
 	return nil
+}
+
+// dockerVersionInfo represents the JSON output from docker version command
+type dockerVersionInfo struct {
+	Client struct {
+		Version    string `json:"Version"`
+		ApiVersion string `json:"ApiVersion"`
+		GitCommit  string `json:"GitCommit"`
+		GoVersion  string `json:"GoVersion"`
+		Os         string `json:"Os"`
+		Arch       string `json:"Arch"`
+		BuildTime  string `json:"BuildTime"`
+	} `json:"Client"`
+	Server struct {
+		Platform struct {
+			Name string `json:"Name"`
+		} `json:"Platform"`
+		Version       string `json:"Version"`
+		ApiVersion    string `json:"ApiVersion"`
+		MinAPIVersion string `json:"MinAPIVersion"`
+		GitCommit     string `json:"GitCommit"`
+		GoVersion     string `json:"GoVersion"`
+		Os            string `json:"Os"`
+		Arch          string `json:"Arch"`
+		KernelVersion string `json:"KernelVersion"`
+		BuildTime     string `json:"BuildTime"`
+	} `json:"Server"`
+}
+
+// Check Docker version and return parsed server version
+func checkDockerVersion() (*dockerVersionInfo, bool, error) {
+	// Get Docker version in JSON format to access server version
+	cmd := exec.Command("docker", "version", "--format", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
+	}
+
+	var versionInfo dockerVersionInfo
+	if err := json.Unmarshal(output, &versionInfo); err != nil {
+		log.Debug().Err(err).Msgf("Could not parse Docker version JSON output")
+		return nil, false, nil // Don't fail the build if we can't parse the version
+	}
+
+	log.Debug().Msgf("Docker server version: %s", versionInfo.Server.Version)
+	engineVersion, err := semver.NewVersion(versionInfo.Server.Version)
+	if err != nil {
+		log.Debug().Err(err).Msgf("Could not parse server version string: %s", versionInfo.Server.Version)
+		return nil, false, nil
+	}
+
+	// Recommend upgrade for old versions
+	upgradeRecommended := engineVersion.LessThan(recommendedDockerEngineVersion)
+
+	return &versionInfo, upgradeRecommended, nil
 }

@@ -155,6 +155,11 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
 func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*MetaplayImageInfo, error) {
+	log.Debug().Msgf("Fetch image metadata for a remote container image: %s", imageRef)
+	if imageRef == "" {
+		return nil, fmt.Errorf("empty image reference")
+	}
+
 	// Create a registry authenticator using the provided credentials
 	authenticator := authn.FromConfig(authn.AuthConfig{
 		Username: creds.Username,
@@ -164,23 +169,23 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 	// Parse the image reference (name + tag or digest)
 	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse remote docker image reference: %w", err)
+		return nil, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
 	}
 
 	// Retrieve the image manifest and associated metadata
 	desc, err := remote.Get(ref, remote.WithAuth(authenticator))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image descriptor: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image descriptor '%s': %w", imageRef, err)
 	}
 
 	// Fetch the image configuration blob
 	img, err := desc.Image()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image from descriptor: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image from descriptor '%s': %w", imageRef, err)
 	}
 	cfg, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image config file: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image config file '%s': %w", imageRef, err)
 	}
 
 	// Use the helper function to convert config file data to MetaplayImageInfo

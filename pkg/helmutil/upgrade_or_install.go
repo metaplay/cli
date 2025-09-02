@@ -38,6 +38,7 @@ func HelmUpgradeOrInstall(
 	defaultValues map[string]any,
 	requiredValues map[string]any,
 	timeout time.Duration,
+	validateValuesSchema bool,
 ) (*release.Release, error) {
 	// Show header at top
 	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
@@ -66,7 +67,8 @@ func HelmUpgradeOrInstall(
 		installCmd.Namespace = namespace
 		installCmd.Wait = true
 		installCmd.Timeout = timeout
-		installCmd.Devel = true // If version is development, accept it
+		installCmd.Devel = true                                 // If version is development, accept it
+		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &installCmd.ChartPathOptions
 	} else {
 		output.AppendLinef("Existing release found (version %s), upgrade existing release", existingRelease.Chart.Metadata.Version)
@@ -75,10 +77,11 @@ func HelmUpgradeOrInstall(
 		upgradeCmd.Namespace = namespace
 		upgradeCmd.Wait = true
 		upgradeCmd.Timeout = timeout
-		upgradeCmd.MaxHistory = 10      // Keep 10 releases max
-		upgradeCmd.Devel = true         // If version is development, accept it
-		upgradeCmd.Atomic = false       // Don't rollback on failures to not hide errors
-		upgradeCmd.CleanupOnFail = true // Clean resources on failure
+		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
+		upgradeCmd.Devel = true                                 // If version is development, accept it
+		upgradeCmd.Atomic = false                               // Don't rollback on failures to not hide errors
+		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
+		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
 	}
 
@@ -135,7 +138,7 @@ func HelmUpgradeOrInstall(
 	if err != nil {
 		log.Warn().Msgf("Failed to marshal values as YAML: %+v", finalValueMap)
 	} else {
-		log.Debug().Msgf("Default Helm values:\n%s", finalValuesYAML)
+		log.Debug().Msgf("Final Helm values:\n%s", finalValuesYAML)
 	}
 
 	// Run install or upgrade install

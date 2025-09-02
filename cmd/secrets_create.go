@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -34,11 +35,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "create ENVIRONMENT NAME [flags]",
-		Short: "[preview] Create a user secret in the target environment",
+		Short: "Create a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Create a user secret in the target environment with the given name and payload.
 
 			Secret name must start with 'user-'. This avoids conflicts with other secrets.
@@ -142,12 +141,24 @@ func (o *secretsCreateOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
+	// Print secret info.
+	log.Info().Msg("")
+	log.Info().Msgf("Create secret:")
+	log.Info().Msgf("  Target environment: %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("  Secret name:        %s", styles.RenderTechnical(o.argSecretName))
+	secretKeys := make([]string, 0, len(o.payloadKeyValuePairs))
+	for key := range o.payloadKeyValuePairs {
+		secretKeys = append(secretKeys, key)
+	}
+	log.Info().Msgf("  Secret keys:        %s", styles.RenderListTechnical(secretKeys))
+	log.Info().Msg("")
+
 	// Create the secret.
 	err = targetEnv.CreateSecret(cmd.Context(), o.argSecretName, o.payloadKeyValuePairs)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Secret %s created", o.argSecretName)
+	log.Info().Msgf("✅ Secret %s created", o.argSecretName)
 	return nil
 }

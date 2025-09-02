@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
@@ -31,7 +31,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       # Resolve tag for the release. Writes the output into env variables NEXT_DEV_TAG and LATEST_RELEASE_TAG (in GITHUB_ENV).
       - name: Resolve tag for release

@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - main
-      - pages-ci
-    # Only run on changes to install.sh and publish-pages.yml
+      - dev/pages-ci # dev branch for easier iteration
+    # Run on changes to install.sh and publish-pages.yml. Keeps the install.sh public URL up-to-date.
     paths:
       - install.sh
       - .github/workflows/publish-pages.yml
+    # Trigger on version tags for official releases like '1.2.3' (but not for dev releases like '1.2.3-xyz').
+    # Keeps the command reference up-to-date with latest official release.
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: read     # to checkout your code
@@ -21,8 +25,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
+      # Copy the install.sh to be available publicly at https://metaplay.github.io/cli/install.sh.
+      # GitHub Pages isn't throttled like the https://raw.githubusercontent.com/metaplay/cli/main/install.sh.
       - name: Prepare Pages output
         run: |
           # Copy install.sh into 'site/'
@@ -33,7 +39,7 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: site
 

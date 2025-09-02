@@ -190,6 +190,7 @@ func init() {
 	updateCmd.GroupID = "project"
 
 	// Manage resources:
+	databaseCmd.GroupID = "manage"
 	getCmd.GroupID = "manage"
 	imageCmd.GroupID = "manage"
 	secretsCmd.GroupID = "manage"
