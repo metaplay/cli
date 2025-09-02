@@ -30,7 +30,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:     "project-environments [flags]",
-		Aliases: []string{"project-envs"},
+		Aliases: []string{"project-envs", "environments"},
 		Short:   "Update the project's environments in the metaplay-project.yaml",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
