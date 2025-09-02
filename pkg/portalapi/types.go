@@ -122,6 +122,7 @@ type EnvironmentClientConfig struct {
 // EnvironmentClientConfigResponse is the response from the portal for a single environment's client config.
 // Each entry contains either the client config or an error, but not both.
 type EnvironmentClientConfigResponse struct {
+	UUID               string                   `json:"id"`
 	EnvironmentHumanID string                   `json:"environment_human_id"`
 	ClientConfig       *EnvironmentClientConfig `json:"client_config"`
 	Error              *string                  `json:"error"`
