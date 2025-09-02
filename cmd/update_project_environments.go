@@ -115,15 +115,10 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Update the environment configs JSON file.
-	// - Resolve where EnvironmentConfigs.json is located.
-	//   * By default, it's at <UnityClient>/ProjectSettings/Metaplay/EnvironmentConfigs.json.
-	//   * TODO: Can we move the file to outside of Unity? Where would we like to keep it?
-	//           Specify its location in metaplay-project.yaml to help find it from any directory?
-	// - Update each environment's config by merging the new config with the existing config.
-	//   * Use the ServerHost as the key to match the configs? Should be more robust than EnvironmentId (which is actually name).
-	//   * Use untyped JSON to perform the merges -- there can be userland data in the payload, so we can't know its structure.
-	//   * Report any changes that were made, including unknown/failed environments.
-	//   * Write updated EnvironmentConfigs.json back to disk.
+	err = o.updateEnvironmentConfigs(project, projectEnvClientConfigs)
+	if err != nil {
+		return err
+	}
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
@@ -246,5 +241,39 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	log.Info().Msg("")
 	log.Info().Msgf("%s Updated environments in %s", styles.RenderSuccess("✓"), styles.RenderTechnical("metaplay-project.yaml"))
 
+	return nil
+}
+
+// updateEnvironmentConfigs finds and updates the EnvironmentConfigs.json file with new client configs
+func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metaproj.MetaplayProject, clientConfigs []portalapi.EnvironmentClientConfigResponse) error {
+	// Try to find EnvironmentConfigs.json in the expected Unity location
+	environmentConfigsPath := filepath.Join(project.GetUnityProjectDir(), "ProjectSettings", "Metaplay", "EnvironmentConfigs.json")
+
+	// Check if the file exists
+	if _, err := os.Stat(environmentConfigsPath); os.IsNotExist(err) {
+		log.Warn().Msgf("EnvironmentConfigs.json not found at %s", environmentConfigsPath)
+		log.Warn().Msg("Skipping environment configs update. To enable this feature, ensure the file exists in your Unity project.")
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("failed to check EnvironmentConfigs.json: %w", err)
+	}
+
+	log.Info().Msgf("Found EnvironmentConfigs.json at %s", environmentConfigsPath)
+
+	// TODO: Update each environment's config by merging the new config with the existing config:
+	// - Use the ServerHost as the key to match the configs? Should be more robust than EnvironmentId (which is actually name).
+	// - Use untyped JSON to perform the merges -- there can be userland data in the payload, so we can't know its structure.
+	// - Report any changes that were made, including unknown/failed environments.
+	// - Write updated EnvironmentConfigs.json back to disk.
+
+	// TODO: Implement the actual update logic here:
+	// 1. Read existing EnvironmentConfigs.json
+	// 2. Parse as untyped JSON to preserve user data
+	// 3. Match configs by ServerHost (more robust than EnvironmentId)
+	// 4. Merge new configs with existing ones
+	// 5. Report changes made
+	// 6. Write updated file back to disk
+
+	log.Info().Msg("Environment configs update logic not yet implemented")
 	return nil
 }
