@@ -198,7 +198,7 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 
 // \todo Handle error response as well
 func (c *Client) FetchProjectEnvironmentClientConfigs(projectUUID string) ([]EnvironmentClientConfigResponse, error) {
-	url := fmt.Sprintf("/api/v1/environments/client_configs?projectId=%s", projectUUID)
+	url := fmt.Sprintf("/api/external/cli/v1/environments?projectId=%s", projectUUID)
 	log.Debug().Msgf("Fetch project environment client configs by UUID from %s%s", c.httpClient.BaseURL, url)
 	environmentInfos, err := metahttp.Get[[]EnvironmentClientConfigResponse](c.httpClient, url)
 	if err != nil {
