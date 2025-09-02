@@ -98,8 +98,11 @@ type EnvironmentInfo struct {
 // client to connect to the environment.
 // \todo Tighten up the optionality on the OAuth2 params where possible.
 type EnvironmentClientConfig struct {
+	Version                         int    `json:"Version"`
+	HumanId                         string `json:"HumanId"`
+	DisplayName                     string `json:"DisplayName"`
 	EnvironmentFamily               string `json:"EnvironmentFamily"`
-	EnvironmentName                 string `json:"EnvironmentId"` // Note: For legacy reasons, the JSON field is named incorrectly.
+	LegacyEnvironmentId             string `json:"EnvironmentId"` // Not to be used anymore, has the same value as DisplayName.
 	ServerHost                      string `json:"ServerHost"`
 	ServerPorts                     []int  `json:"ServerPorts"`
 	ServerPortsForWebSocket         []int  `json:"ServerPortsForWebSocket"`
@@ -107,12 +110,12 @@ type EnvironmentClientConfig struct {
 	CdnBaseUrl                      string `json:"CdnBaseUrl"`
 	AdminApiBaseUrl                 string `json:"AdminApiBaseUrl"`
 	AdminApiUseOpenIdConnectIdToken bool   `json:"AdminApiUseOpenIdConnectIdToken"`
-	OAuth2ClientID                  string `json:"OAuth2ClientID,omitempty"`
-	OAuth2ClientSecret              string `json:"OAuth2ClientSecret,omitempty"`
-	OAuth2Audience                  string `json:"OAuth2Audience,omitempty"`
+	OAuth2ClientID                  string `json:"OAuth2ClientID"`
+	OAuth2ClientSecret              string `json:"OAuth2ClientSecret"`
+	OAuth2Audience                  string `json:"OAuth2Audience"`
 	OAuth2AuthorizationEndpoint     string `json:"OAuth2AuthorizationEndpoint"`
 	OAuth2TokenEndpoint             string `json:"OAuth2TokenEndpoint"`
-	OAuth2LocalCallback             string `json:"OAuth2LocalCallback,omitempty"`
+	OAuth2LocalCallback             string `json:"OAuth2LocalCallback"`
 	OAuth2UseStateParameter         bool   `json:"OAuth2UseStateParameter"`
 }
 
