@@ -347,7 +347,12 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 		// Copy files from the template.
 		log.Debug().Msgf("Initialize SDK resources in the project")
-		err = installFromTemplate(project, ".", "project_template.json")
+		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
+			"PROJECT_HUMAN_ID":          targetProject.HumanID,
+			"PROJECT_DISPLAY_NAME":      targetProject.Name,    // Added in R34
+			"PROJECT_NAME":              targetProject.HumanID, // Remove in R34
+			"BACKEND_SOLUTION_FILENAME": "Server.sln",
+		})
 		if err != nil {
 			return fmt.Errorf("failed to run SDK installer: %w", err)
 		}
