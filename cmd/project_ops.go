@@ -144,8 +144,8 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 // applyReplacements replaces placeholder tokens of the form {{{KEY}}} in the input string
 // using the provided replacements map. It logs discovered placeholders and whether a
 // replacement was provided. Returns the updated string and an error if unreplaced placeholders remain.
-// Example: input "Assets/{{{UNITY_PROJECT_DIR}}}/Foo" with map{"UNITY_PROJECT_DIR": "Game/"}
-// becomes "Assets/Game/Foo".
+// Example: input "Assets/{{{UNITY_PROJECT_DIR}}}/Foo" with map{"UNITY_PROJECT_DIR": "UnityClient"}
+// becomes "Assets/UnityClient/Foo".
 func applyReplacements(input string, replacements map[string]string) (string, error) {
 	// Detect all triple-braced placeholders in the input and print them.
 	// Pattern matches {{{SOME_TOKEN}}}, capturing the token name in group 1.
