@@ -20,7 +20,6 @@ import (
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/sjson"
-	"gopkg.in/yaml.v3"
 )
 
 // Check if the specified path is a valid directory.
@@ -496,40 +495,6 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	}
 
 	return nil
-}
-
-func readUnityProductName(unityProjectPath string) (string, error) {
-	// Derive path to the Unity ProjectSettings asset file
-	projectSettingsPath := filepath.Join(unityProjectPath, "ProjectSettings", "ProjectSettings.asset")
-
-	// Read the file content.
-	content, err := os.ReadFile(projectSettingsPath)
-	if err != nil {
-		return "", err
-	}
-
-	type PlayerSettings struct {
-		ProductName string `yaml:"productName"`
-	}
-	var settings struct {
-		PlayerSettings PlayerSettings `yaml:"PlayerSettings"`
-	}
-
-	if err := yaml.Unmarshal(content, &settings); err != nil {
-		return "", err
-	}
-	log.Debug().Msgf("Project name from Unity PlayerSettings: %s", settings.PlayerSettings.ProductName)
-	return settings.PlayerSettings.ProductName, nil
-}
-
-func filterInvalidFileNameChars(productName string) string {
-	invalidChars := `<>:"/\|?*`
-	return strings.Map(func(r rune) rune {
-		if strings.ContainsRune(invalidChars, r) {
-			return -1
-		}
-		return r
-	}, productName)
 }
 
 // Add reference to the MetaplaySDK/Client project in the Unity project Packages/manifest.json.
