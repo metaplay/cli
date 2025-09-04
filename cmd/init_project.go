@@ -21,6 +21,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Support initializing projects with SDK versions up to this version.
+// Only enforced when downloading the SDK from the portal.
+var latestSupportedSdkVersion = version.Must(version.NewVersion("33.999.999"))
+
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
 	flagSdkVersion         string // Metaplay SDK version to use (e.g., "32.0").
@@ -230,6 +234,12 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
 		if vsn.LessThan(requiredVersion) {
 			return fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", sdkVersionInfo.Version)
+		}
+
+		// Must not be newer than the latest supported version.
+		// \todo Enforce version when using --sdk-source?
+		if vsn.GreaterThan(latestSupportedSdkVersion) {
+			return fmt.Errorf("SDK version %s is not supported by this CLI version; upgrade the CLI to the latest version with 'metaplay update cli'", sdkVersionInfo.Version)
 		}
 
 		// The SDK version must be downloadable.
