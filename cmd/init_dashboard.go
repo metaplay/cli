@@ -99,7 +99,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
 	// Install custom project from template in MetaplaySDK
-	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json")
+	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json", map[string]string{})
 	if err != nil {
 		return fmt.Errorf("failed to run dashboard project installer: %v", err)
 	}
