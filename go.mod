@@ -10,7 +10,7 @@ require (
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.7
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/creativeprojects/go-selfupdate v1.5.0
+	github.com/creativeprojects/go-selfupdate v1.5.1
 	github.com/docker/docker v28.3.3+incompatible
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-resty/resty/v2 v2.16.5
@@ -38,7 +38,7 @@ require (
 
 require (
 	al.essio.dev/pkg/shellescape v1.6.0 // indirect
-	code.gitea.io/sdk/gitea v0.21.0 // indirect
+	code.gitea.io/sdk/gitea v0.22.0 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
 	github.com/AdaLogics/go-fuzz-headers v0.0.0-20240806141605-e8a1dd7889d6 // indirect
@@ -165,7 +165,7 @@ require (
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
-	github.com/ulikunitz/xz v0.5.12 // indirect
+	github.com/ulikunitz/xz v0.5.14 // indirect
 	github.com/vbatts/tar-split v0.12.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xanzy/go-gitlab v0.115.0 // indirect
@@ -180,12 +180,12 @@ require (
 	go.opentelemetry.io/proto/otlp v1.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.3 // indirect
-	golang.org/x/crypto v0.40.0 // indirect
+	golang.org/x/crypto v0.41.0 // indirect
 	golang.org/x/net v0.42.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.16.0 // indirect
-	golang.org/x/term v0.33.0 // indirect
-	golang.org/x/text v0.27.0 // indirect
+	golang.org/x/term v0.34.0 // indirect
+	golang.org/x/text v0.28.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250428153025-10db94c68c34 // indirect
 	google.golang.org/grpc v1.72.1 // indirect
