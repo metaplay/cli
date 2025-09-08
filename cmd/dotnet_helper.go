@@ -96,7 +96,7 @@ func execChildTask(workingDir string, binary string, args []string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	log.Info().Msgf("Executing '%s %s'...", binary, strings.Join(args, " "))
+	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("%s$ %s %s", workingDir, binary, strings.Join(args, " "))))
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to build the project: %w", err)
 	}

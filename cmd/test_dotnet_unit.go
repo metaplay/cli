@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -76,7 +77,7 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 
 	// Execute SDK tests one project at a time for clearer output
 	for _, projPath := range testProjects {
-		log.Info().Msg(styles.RenderBright(filepath.Base(projPath)))
+		log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
 		if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
 			log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
 			os.Exit(1)
@@ -92,11 +93,11 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Run Project Unit Tests (if present)"))
-	log.Info().Msg("")
 
 	for _, projPath := range userTestProjects {
 		if st, err := os.Stat(projPath); err == nil && st.IsDir() {
-			log.Info().Msg(styles.RenderBright(filepath.Base(projPath)))
+			log.Info().Msg("")
+			log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
 			if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
 				log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
 				os.Exit(1)
