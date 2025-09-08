@@ -37,8 +37,6 @@ func init() {
 			- Backend/Cloud.Tests
 			- Backend/Cloud.Serialization.Compilation.Tests
 			- Backend/Server.Tests
-
-			The command will verify that a recent enough .NET SDK is installed first.
 		`),
 		Example: renderExample(`
 			# Run .NET unit tests
