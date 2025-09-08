@@ -15,24 +15,28 @@ import (
 
 type testDotnetUnitOpts struct{}
 
+// \todo Add support for customizing the unit test projects to run (via metaplay-project.yaml?)
+
 func init() {
 	o := testDotnetUnitOpts{}
 
 	cmd := &cobra.Command{
 		Use:   "dotnet-unit",
-		Short: "Run .NET unit tests for the Metaplay SDK",
+		Short: "[preview] Run .NET unit tests for the project",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			Run the available .NET unit tests in the Metaplay SDK locally.
+			PREVIEW: This command is still in preview and subject to change.
 
-			This roughly corresponds to running the following projects:
+			Run the available .NET unit tests in the project locally.
+
+			The following .NET unit test projects are run (if present):
+			- Backend/SharedCode.Tests
+			- Backend/Server.Tests
+
+			This includes running the Metaplay SDK unit test projects:
 			- Backend/Cloud.Tests
 			- Backend/Cloud.Serialization.Compilation.Tests
 			- Backend/Server.Tests
-
-			In addition, if your project contains game-specific unit test projects, they will be run as well:
-			- Backend/SharedCode.Tests (if present)
-			- Backend/Server.Tests (if present)
 
 			The command will verify that a recent enough .NET SDK is installed first.
 		`),
