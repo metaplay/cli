@@ -128,7 +128,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		// log.Info().Msg(styles.RenderBright("🔷 " + p.name))
 		if p.name == "build-images" && o.flagSkipBuild {
 			log.Info().Msg("")
-			log.Info().Msg(styles.RenderMuted("(skipping build step due to --skip-build)"))
+			log.Info().Msg(styles.RenderMuted("Skip container image build step due to --skip-build"))
 			continue
 		}
 

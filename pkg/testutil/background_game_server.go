@@ -149,8 +149,20 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	}
 	s.container = ctr
 
-	// Attach live log consumer BEFORE starting
-	// Use a long-lived context for the log producer so it keeps streaming even if Start(ctx) fails or times out.
+	// Start the container first to avoid attach races with Docker
+	log.Debug().Msg("Start container...")
+	if err := s.container.Start(ctx); err != nil {
+		// Best-effort: container failed to start; drain logs for post-mortem before cleanup
+		// Attach a temporary consumer to drain logs just for post-mortem
+		tmpConsumer := &containerLogConsumer{writer: os.Stdout, prefix: "[server] "}
+		_ = s.drainAllLogs(context.Background(), tmpConsumer)
+		// Now clean up
+		_ = s.Shutdown(context.Background())
+		return fmt.Errorf("start container: %w", err)
+	}
+
+	// Attach live log consumer AFTER successful start
+	// Use a long-lived context so streaming continues past Start(ctx).
 	producerCtx, producerCancel := context.WithCancel(context.Background())
 	consumer := &containerLogConsumer{writer: os.Stdout, prefix: "[server] "}
 	s.container.FollowOutput(consumer)
@@ -160,16 +172,6 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	// Store cancel to stop producer (and any background loops sharing the ctx) in Shutdown
 	s.cancel = producerCancel
 	s.collecting = true
-
-	// Now start the container (logs will flow immediately)
-	log.Debug().Msg("Start container...")
-	if err := s.container.Start(ctx); err != nil {
-		// Best-effort: container failed to start; drain logs for post-mortem before cleanup
-		_ = s.drainAllLogs(context.Background(), consumer)
-		// Now clean up
-		_ = s.Shutdown(context.Background())
-		return fmt.Errorf("start container: %w", err)
-	}
 
 	log.Debug().Msg("Container started; resolving host and mapped port")
 
@@ -263,6 +265,11 @@ func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
 	// Mark collecting false first
 	if s.collecting {
 		s.collecting = false
+	}
+	// Stop log producer first (best-effort), then cancel shared ctx users
+	if s.container != nil {
+		// StopLogProducer is idempotent and safe even if producer wasn't started
+		_ = s.container.StopLogProducer()
 	}
 	// Stop producer and any background loops sharing the same cancel
 	if s.cancel != nil {
