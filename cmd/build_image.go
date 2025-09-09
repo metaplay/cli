@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -170,36 +171,6 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Resolve docker build root directory. All other paths need to be made relative to it.
-	buildRootDir := project.GetBuildRootDir()
-
-	// Check that sdkRoot is a valid directory
-	sdkRootPath := project.GetSdkRootDir()
-	if _, err := os.Stat(sdkRootPath); os.IsNotExist(err) {
-		log.Error().Msgf("The Metaplay SDK directory '%s' does not exist.", sdkRootPath)
-		os.Exit(2)
-	}
-
-	dockerFilePath := filepath.Join(sdkRootPath, "Dockerfile.server")
-	if _, err := os.Stat(dockerFilePath); os.IsNotExist(err) {
-		log.Error().Msgf("Cannot locate Dockerfile.server at %s.", dockerFilePath)
-		os.Exit(2)
-	}
-
-	// Check project root directory.
-	projectBackendDir := project.GetBackendDir()
-	if _, err := os.Stat(projectBackendDir); os.IsNotExist(err) {
-		log.Error().Msgf("Unable to find project backend in '%s'.", projectBackendDir)
-		os.Exit(2)
-	}
-
-	// Check SharedCode directory.
-	sharedCodeDir := project.GetSharedCodeDir()
-	if _, err := os.Stat(sharedCodeDir); os.IsNotExist(err) {
-		log.Error().Msgf("The shared code directory (%s) does not exist.", sharedCodeDir)
-		os.Exit(2)
-	}
-
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check that docker is available")
 	err = checkDockerAvailable()
@@ -252,99 +223,36 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		platforms = append(platforms, fmt.Sprintf("linux/%s", arch))
 	}
 
+	// Resolve Docker version badge and show update recommendation
+	dockerVersionBadge := ""
+	if dockerVersionInfo == nil {
+		dockerVersionBadge = styles.RenderWarning("[unable to check version]")
+	} else if dockerUpgradeRecommended {
+		dockerVersionBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+	}
+
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
 	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
+	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionInfo.Server.Version), dockerVersionBadge)
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
-	// Print Docker version and show update recommendation (if have any)
-	dockerBadge := ""
-	if dockerVersionInfo == nil {
-		dockerBadge = styles.RenderWarning("[unable to check version]")
-	} else if dockerUpgradeRecommended {
-		dockerBadge = styles.RenderWarning("[version is old; upgrade recommended]")
-	}
-	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionInfo.Server.Version), dockerBadge)
-
-	// Rebase paths to be relative to docker build root.
-	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to MetaplaySDK/ from build root: %v", err)
-		os.Exit(2)
-	}
-	rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to Dockerfile.server from build root: %v", err)
-		os.Exit(2)
-	}
-	rebasedProjectRoot, err := rebasePath(project.RelativeDir, buildRootDir)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project root from build root: %v", err)
-		os.Exit(2)
+	// Build the Docker image using the extracted function
+	buildParams := buildDockerImageParams{
+		project:     project,
+		imageName:   imageName,
+		buildEngine: buildEngine,
+		platforms:   platforms,
+		commitID:    commitID,
+		buildNumber: buildNumber,
+		extraArgs:   o.extraArgs,
 	}
 
-	// Rebase paths relative to project root dir (where metaplay-project.yaml is located).
-	rebasedBackendDir, err := rebasePath(projectBackendDir, project.RelativeDir)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project backend directory from project root: %v", err)
-		os.Exit(2)
-	}
-	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, project.RelativeDir)
-	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project shared code directory from project root: %v", err)
-		os.Exit(2)
-	}
-
-	// Silence docker's recomendation messages at end-of-build.
-	var dockerEnv []string = os.Environ()
-	dockerEnv = append(dockerEnv, "DOCKER_CLI_HINTS=false")
-
-	// Handle build engine differences.
-	var buildEngineArgs []string
-	if buildEngine == "buildkit" {
-		dockerEnv = append(dockerEnv, "DOCKER_BUILDKIT=1")
-		buildEngineArgs = []string{"build"}
-	} else if buildEngine == "buildx" {
-		buildEngineArgs = []string{"buildx", "build", "--load"}
-	} else {
-		log.Panic().Msgf("Unsupported docker build engine: %s", buildEngine)
-	}
-
-	// Resolve .NET runtime version to build project for, expects '<major>.<minor>'.
-	projectDotnetVersionSegments := project.Config.DotnetRuntimeVersion.Segments()
-	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
-
-	// Resolve final docker build invocation
-	dockerArgs := append(
-		buildEngineArgs,
-		[]string{
-			"--pull",
-			"-t", imageName,
-			"-f", filepath.ToSlash(rebasedDockerFilePath),
-			"--platform", strings.Join(platforms, ","),
-			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
-			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
-			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
-			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),
-			"--build-arg", "METAPLAY_DOTNET_SDK_VERSION=" + projectDotnetVersion,
-			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", project.Config.ProjectHumanID),
-			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", buildNumber),
-			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", commitID),
-		}...,
-	)
-	dockerArgs = append(dockerArgs, o.extraArgs...)
-	dockerArgs = append(dockerArgs, ".")
-	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderMuted("docker %s"), strings.Join(dockerArgs, " "))
-	log.Info().Msg("")
-
-	// Execute the docker build
-	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
-		log.Error().Msgf("Docker build failed: %v", err)
-		os.Exit(1)
+	if err := buildDockerImage(buildParams); err != nil {
+		return err
 	}
 
 	log.Info().Msg("")
@@ -547,4 +455,134 @@ func checkDockerVersion() (*dockerVersionInfo, bool, error) {
 	upgradeRecommended := engineVersion.LessThan(recommendedDockerEngineVersion)
 
 	return &versionInfo, upgradeRecommended, nil
+}
+
+// buildDockerImageParams contains all parameters needed for building a Docker image
+type buildDockerImageParams struct {
+	project     *metaproj.MetaplayProject // Metaplay project to build
+	imageName   string                    // Name of the built image
+	buildEngine string                    // Docker build engine to use (buildx, buildkit)
+	platforms   []string                  // Platforms to build for (e.g. linux/amd64, linux/arm64)
+	commitID    string                    // Commit ID to use for the build
+	buildNumber string                    // Build number to use for the build
+	extraArgs   []string                  // Extra arguments to pass to docker build
+	target      string                    // Optional: Dockerfile stage to build
+}
+
+// buildDockerImage builds a Docker image with the given parameters
+func buildDockerImage(params buildDockerImageParams) error {
+	// Resolve docker build root directory. All other paths need to be made relative to it.
+	buildRootDir := params.project.GetBuildRootDir()
+
+	// Check that sdkRoot is a valid directory
+	sdkRootPath := params.project.GetSdkRootDir()
+	if _, err := os.Stat(sdkRootPath); os.IsNotExist(err) {
+		log.Error().Msgf("The Metaplay SDK directory '%s' does not exist.", sdkRootPath)
+		os.Exit(2)
+	}
+
+	dockerFilePath := filepath.Join(sdkRootPath, "Dockerfile.server")
+	if _, err := os.Stat(dockerFilePath); os.IsNotExist(err) {
+		log.Error().Msgf("Cannot locate Dockerfile.server at %s.", dockerFilePath)
+		os.Exit(2)
+	}
+
+	// Check project root directory.
+	projectBackendDir := params.project.GetBackendDir()
+	if _, err := os.Stat(projectBackendDir); os.IsNotExist(err) {
+		log.Error().Msgf("Unable to find project backend in '%s'.", projectBackendDir)
+		os.Exit(2)
+	}
+
+	// Check SharedCode directory.
+	sharedCodeDir := params.project.GetSharedCodeDir()
+	if _, err := os.Stat(sharedCodeDir); os.IsNotExist(err) {
+		log.Error().Msgf("The shared code directory (%s) does not exist.", sharedCodeDir)
+		os.Exit(2)
+	}
+
+	// Rebase paths to be relative to docker build root.
+	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
+	if err != nil {
+		log.Error().Msgf("Failed to resolve relative path to MetaplaySDK/ from build root: %v", err)
+		os.Exit(2)
+	}
+	rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
+	if err != nil {
+		log.Error().Msgf("Failed to resolve relative path to Dockerfile.server from build root: %v", err)
+		os.Exit(2)
+	}
+	rebasedProjectRoot, err := rebasePath(params.project.RelativeDir, buildRootDir)
+	if err != nil {
+		log.Error().Msgf("Failed to resolve relative path to project root from build root: %v", err)
+		os.Exit(2)
+	}
+
+	// Rebase paths relative to project root dir (where metaplay-project.yaml is located).
+	rebasedBackendDir, err := rebasePath(projectBackendDir, params.project.RelativeDir)
+	if err != nil {
+		log.Error().Msgf("Failed to resolve relative path to project backend directory from project root: %v", err)
+		os.Exit(2)
+	}
+	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, params.project.RelativeDir)
+	if err != nil {
+		log.Error().Msgf("Failed to resolve relative path to project shared code directory from project root: %v", err)
+		os.Exit(2)
+	}
+
+	// Silence docker's recomendation messages at end-of-build.
+	var dockerEnv []string = os.Environ()
+	dockerEnv = append(dockerEnv, "DOCKER_CLI_HINTS=false")
+
+	// Handle build engine differences.
+	var buildEngineArgs []string
+	if params.buildEngine == "buildkit" {
+		dockerEnv = append(dockerEnv, "DOCKER_BUILDKIT=1")
+		buildEngineArgs = []string{"build"}
+	} else if params.buildEngine == "buildx" {
+		buildEngineArgs = []string{"buildx", "build", "--load"}
+	} else {
+		log.Panic().Msgf("Unsupported docker build engine: %s", params.buildEngine)
+	}
+
+	// Resolve .NET runtime version to build project for, expects '<major>.<minor>'.
+	projectDotnetVersionSegments := params.project.Config.DotnetRuntimeVersion.Segments()
+	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
+
+	// Resolve final docker build invocation
+	dockerArgs := append(
+		buildEngineArgs,
+		[]string{
+			"--pull",
+			"-t", params.imageName,
+			"-f", filepath.ToSlash(rebasedDockerFilePath),
+			"--platform", strings.Join(params.platforms, ","),
+			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
+			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
+			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
+			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),
+			"--build-arg", "METAPLAY_DOTNET_SDK_VERSION=" + projectDotnetVersion,
+			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", params.project.Config.ProjectHumanID),
+			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", params.buildNumber),
+			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", params.commitID),
+		}...,
+	)
+
+	// Add target if specified (for multi-stage builds)
+	if params.target != "" {
+		dockerArgs = append(dockerArgs, "--target", params.target)
+	}
+	dockerArgs = append(dockerArgs, params.extraArgs...)
+	dockerArgs = append(dockerArgs, ".")
+	log.Info().Msg("")
+	log.Info().Msgf(styles.RenderMuted("docker %s"), strings.Join(dockerArgs, " "))
+	log.Info().Msg("")
+
+	// Execute the docker build
+	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
+		log.Error().Msgf("Docker build failed: %v", err)
+		os.Exit(1)
+	}
+
+	return nil
 }
