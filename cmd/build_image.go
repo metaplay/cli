@@ -205,7 +205,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		os.Exit(2)
 	}
 	for _, arch := range o.flagArchitectures {
-		if !contains(validArchitectures, arch) {
+		if !sliceContains(validArchitectures, arch) {
 			log.Error().Msgf("Invalid architecture '%s' specified. Must be one of %v.", arch, validArchitectures)
 			os.Exit(2)
 		}
@@ -270,7 +270,8 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-func contains(slice []string, value string) bool {
+// Check if a value exists in a slice.
+func sliceContains(slice []string, value string) bool {
 	for _, v := range slice {
 		if v == value {
 			return true
@@ -279,6 +280,8 @@ func contains(slice []string, value string) bool {
 	return false
 }
 
+// Find the first non-empty environment variable from a list of keys.
+// If none of the keys have a value, return an empty string.
 func detectEnvVar(keys []string) string {
 	for _, key := range keys {
 		if val, ok := os.LookupEnv(key); ok {
