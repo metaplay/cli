@@ -127,7 +127,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		fn   func() error
 	}{
 		{"start-server", func() error { return o.startServer(project, serverImage) }},
-		{"test-bots", func() error { return phasePlaceholder("test-bots") }},
+		{"test-bots", func() error { return o.testBots(project, serverImage) }},
 		{"test-dashboard", func() error { return phasePlaceholder("test-dashboard") }},
 		{"test-system", func() error { return phasePlaceholder("test-system") }},
 		{"test-http-api", func() error { return phasePlaceholder("test-http-api") }},
@@ -177,6 +177,78 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	}
 
 	log.Info().Msg("Server shutdown completed")
+	return nil
+}
+
+// testBots starts the game server in the background, runs the botclient against it, then shuts down the server.
+func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, serverImage string) error {
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderBright("🔷 Test bots"))
+
+	// Start the game server in the background
+	server := testutil.NewGameServer(testutil.GameServerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-bots-server", project.Config.ProjectHumanID),
+	})
+	ctx := context.Background()
+
+	log.Info().Msg("Starting background game server...")
+	if err := server.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start background server: %w", err)
+	}
+	defer func() {
+		log.Info().Msg("Shutting down background server...")
+		if shutdownErr := server.Shutdown(context.Background()); shutdownErr != nil {
+			log.Error().Msgf("Failed to shutdown background server: %v", shutdownErr)
+		}
+	}()
+
+	log.Info().Msgf("Background server started at %s", server.BaseURL().String())
+
+	// Run the botclient against the server
+	log.Info().Msg("Running botclient...")
+
+	botClientOpts := testutil.RunOnceContainerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-botclient", project.Config.ProjectHumanID),
+		LogPrefix:     "[botclient] ",
+		Env: map[string]string{
+			"METAPLAY_ENVIRONMENT_FAMILY": "Local",
+		},
+		Cmd: []string{
+			"botclient",
+			"-LogLevel=Information",
+			// METAPLAY_OPTS (shared with game server)
+			"--Environment:EnableKeyboardInput=false",
+			"--Environment:ExitOnLogError=true",
+			// Bot-specific configuration
+			"--Bot:ServerHost=localhost",
+			"--Bot:ServerPort=9339",
+			"--Bot:EnableTls=false",
+			"--Bot:CdnBaseUrl=http://localhost:5552/",
+			"-ExitAfter=30s",               // Run for 30 seconds
+			"-MaxBots=10",                  // Spawn up to 10 bots
+			"-SpawnRate=2",                 // Spawn 2 bots per second
+			"-ExpectedSessionDuration=10s", // Each bot session lasts ~10 seconds
+		},
+	}
+
+	// Use network mode to connect to the server container
+	botClientOpts.ExtraDockerArgs = []string{
+		"--network", fmt.Sprintf("container:%s", server.ContainerName()),
+	}
+
+	botClient := testutil.NewRunOnce(botClientOpts)
+	exitCode, err := botClient.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("botclient failed to run: %w", err)
+	}
+
+	if exitCode != 0 {
+		return fmt.Errorf("botclient exited with non-zero code: %d", exitCode)
+	}
+
+	log.Info().Msg("Botclient completed successfully")
 	return nil
 }
 

@@ -328,6 +328,11 @@ func (s *BackgroundGameServer) BaseURL() *url.URL {
 	return s.baseURL
 }
 
+// ContainerName returns the container name for network sharing purposes.
+func (s *BackgroundGameServer) ContainerName() string {
+	return s.opts.ContainerName
+}
+
 // removeDockerContainerByName force removes a container by name using the local docker CLI.
 // Best-effort: if removal fails, the error is returned but the caller may choose to proceed.
 func removeDockerContainerByName(ctx context.Context, name string) error {

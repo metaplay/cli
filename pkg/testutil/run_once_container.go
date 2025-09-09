@@ -16,15 +16,16 @@ import (
 
 // RunOnceContainerOptions configures a container that runs to completion.
 type RunOnceContainerOptions struct {
-	Image         string            // e.g. "myorg/myapp:latest"
-	Cmd           []string          // command/args to run inside the container
-	Env           map[string]string // environment variables
-	ExposedPorts  []string          // optional ports to expose (e.g. ["8080/tcp"])
-	ContainerName string            // optional; useful in CI logs
-	LogPrefix     string            // prefix for container logs (e.g. "[build] ")
-	WorkingDir    string            // optional working directory inside container
-	Mounts        []string          // optional bind mounts in "host:container" format
-	AutoRemove    bool              // equivalent to docker run --rm (default: true)
+	Image            string            // e.g. "myorg/myapp:latest"
+	Cmd              []string          // command/args to run inside the container
+	Env              map[string]string // environment variables
+	ExposedPorts     []string          // optional ports to expose (e.g. ["8080/tcp"])
+	ContainerName    string            // optional; useful in CI logs
+	LogPrefix        string            // prefix for container logs (e.g. "[build] ")
+	WorkingDir       string            // optional working directory inside container
+	Mounts           []string          // optional bind mounts in "host:container" format
+	AutoRemove       bool              // equivalent to docker run --rm (default: true)
+	ExtraDockerArgs  []string          // additional docker run arguments (e.g. ["--network", "container:name"])
 }
 
 // RunOnceContainer wraps a container that runs to completion.
@@ -68,14 +69,49 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 		AutoRemove:   r.opts.AutoRemove,
 	}
 
+	// Handle extra docker args (like --network)
+	if len(r.opts.ExtraDockerArgs) > 0 {
+		// Parse extra args for network mode
+		for i := 0; i < len(r.opts.ExtraDockerArgs)-1; i++ {
+			if r.opts.ExtraDockerArgs[i] == "--network" {
+				networkMode := r.opts.ExtraDockerArgs[i+1]
+				if req.HostConfigModifier == nil {
+					req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+						hc.NetworkMode = dockercontainer.NetworkMode(networkMode)
+					}
+				} else {
+					originalModifier := req.HostConfigModifier
+					req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+						originalModifier(hc)
+						hc.NetworkMode = dockercontainer.NetworkMode(networkMode)
+					}
+				}
+				break
+			}
+		}
+	}
+
 	// Add port bindings if any
 	if len(portBindings) > 0 {
-		req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
-			if hc.PortBindings == nil {
-				hc.PortBindings = nat.PortMap{}
+		if req.HostConfigModifier == nil {
+			req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+				if hc.PortBindings == nil {
+					hc.PortBindings = nat.PortMap{}
+				}
+				for port, bindings := range portBindings {
+					hc.PortBindings[port] = bindings
+				}
 			}
-			for port, bindings := range portBindings {
-				hc.PortBindings[port] = bindings
+		} else {
+			originalModifier := req.HostConfigModifier
+			req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+				originalModifier(hc)
+				if hc.PortBindings == nil {
+					hc.PortBindings = nat.PortMap{}
+				}
+				for port, bindings := range portBindings {
+					hc.PortBindings[port] = bindings
+				}
 			}
 		}
 	}
