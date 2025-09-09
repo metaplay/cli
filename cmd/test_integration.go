@@ -154,12 +154,11 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	// Configure the background game server
 	opts := testutil.GameServerOptions{
 		Image:         serverImage,
-		Port:          "8080/tcp",
-		HealthPath:    "/health",
+		SystemPort:    "8888/tcp",
 		MetricsPath:   "/metrics",
 		PollInterval:  2 * time.Second,
 		HistoryLimit:  10,
-		ContainerName: fmt.Sprintf("%s-integration-test", strings.ToLower(projectID)),
+		ContainerName: fmt.Sprintf("%s-test-server", strings.ToLower(projectID)),
 		Env: map[string]string{
 			"ASPNETCORE_ENVIRONMENT": "Development",
 		},

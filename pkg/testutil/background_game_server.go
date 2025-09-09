@@ -3,11 +3,16 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/url"
+	"os"
+	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/docker/go-connections/nat"
+	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -15,14 +20,27 @@ import (
 // GameServerOptions configures the server container and the poller behavior.
 type GameServerOptions struct {
 	Image         string        // e.g. "myorg/myserver:latest"
-	Port          string        // container port like "8080/tcp"
-	HealthPath    string        // e.g. "/health"
+	SystemPort    string        // container port for SystemHttpServer (usually "8888/tcp")
 	MetricsPath   string        // e.g. "/metrics"
 	PollInterval  time.Duration // how often to collect metrics
 	HistoryLimit  int           // max samples kept in memory (0 or <0 => unbounded)
 	Env           map[string]string
 	ExposedPorts  []string // optional override; defaults to []string{Port}
 	ContainerName string   // optional; useful in CI logs
+}
+
+// containerLogConsumer mirrors container logs to an io.Writer (e.g. os.Stdout).
+type containerLogConsumer struct {
+	prefix string
+	writer io.Writer
+}
+
+// Accept implements testcontainers-go LogConsumer interface.
+func (c *containerLogConsumer) Accept(l tc.Log) {
+	if c == nil || c.writer == nil {
+		return
+	}
+	_, _ = c.writer.Write([]byte(c.prefix + string(l.Content)))
 }
 
 // MetricSample is a single metrics collection result.
@@ -37,7 +55,7 @@ type MetricSample struct {
 type BackgroundGameServer struct {
 	opts GameServerOptions
 
-	ctr        tc.Container
+	container  tc.Container
 	baseURL    *url.URL
 	mu         sync.RWMutex
 	history    []MetricSample
@@ -48,8 +66,8 @@ type BackgroundGameServer struct {
 
 // New creates a wrapper with the given options (does not start the container).
 func New(opts GameServerOptions) *BackgroundGameServer {
-	if len(opts.ExposedPorts) == 0 && opts.Port != "" {
-		opts.ExposedPorts = []string{opts.Port}
+	if len(opts.ExposedPorts) == 0 && opts.SystemPort != "" {
+		opts.ExposedPorts = []string{opts.SystemPort}
 	}
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 2 * time.Second
@@ -68,30 +86,67 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		Name:         s.opts.ContainerName,
 		ExposedPorts: s.opts.ExposedPorts,
 		Env:          s.opts.Env,
-		WaitingFor: wait.ForHTTP(s.opts.HealthPath).
-			WithPort(nat.Port(s.opts.Port)).
+		WaitingFor: wait.ForHTTP("/healthz").
+			WithPort(nat.Port(s.opts.SystemPort)).
 			WithStatusCodeMatcher(func(code int) bool { return code == 200 }).
 			WithStartupTimeout(2 * time.Minute),
 	}
 
+	log.Debug().Msgf("Create container: name=%s image=%s ports=%v", s.opts.ContainerName, s.opts.Image, s.opts.ExposedPorts)
+
 	ctr, err := tc.GenericContainer(ctx, tc.GenericContainerRequest{
 		ContainerRequest: req,
-		Started:          true,
+		Started:          false, // create but do not start yet to attach logs first
 	})
+	if err != nil && s.opts.ContainerName != "" && strings.Contains(err.Error(), "is already in use") {
+		// Remove existing container with the same name to avoid leaks, then retry with the original name.
+		log.Debug().Msgf("Container name conflict detected; removing existing container name=%s", s.opts.ContainerName)
+		if rmErr := removeDockerContainerByName(ctx, s.opts.ContainerName); rmErr != nil {
+			log.Debug().Msgf("Failed to remove existing container '%s': %v", s.opts.ContainerName, rmErr)
+		}
+		// Retry with the original requested name
+		ctr, err = tc.GenericContainer(ctx, tc.GenericContainerRequest{
+			ContainerRequest: req,
+			Started:          false,
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
 	}
-	s.ctr = ctr
+	s.container = ctr
+
+	// Attach live log consumer BEFORE starting
+	consumer := &containerLogConsumer{writer: os.Stdout, prefix: "[server] "}
+	s.container.FollowOutput(consumer)
+	if err := s.container.StartLogProducer(ctx); err != nil {
+		log.Debug().Msgf("Failed to start log producer: %v", err)
+	}
+
+	// Now start the container (logs will flow immediately)
+	log.Debug().Msg("Start container...")
+	if err := s.container.Start(ctx); err != nil {
+		// Best-effort: container failed to start; logs should already be streaming
+		_ = s.TerminateSilently(ctx)
+		return fmt.Errorf("start container: %w", err)
+	}
+
+	log.Debug().Msg("Container started; resolving host and mapped port")
 
 	// Discover host:port where we can reach the server from the host
-	host, err := s.ctr.Host(ctx)
+	if portMap, perr := s.container.Ports(ctx); perr == nil {
+		log.Debug().Msgf("Container exposed ports: %v", portMap)
+	}
+	host, err := s.container.Host(ctx)
 	if err != nil {
 		_ = s.TerminateSilently(ctx)
 		return fmt.Errorf("get host: %w", err)
 	}
-	mapped, err := s.ctr.MappedPort(ctx, nat.Port(s.opts.Port))
+	mapped, err := s.container.MappedPort(ctx, nat.Port(s.opts.SystemPort))
 	if err != nil {
 		_ = s.TerminateSilently(ctx)
+		if portMap, perr := s.container.Ports(ctx); perr == nil {
+			return fmt.Errorf("get mapped port: %w; available ports: %v", err, portMap)
+		}
 		return fmt.Errorf("get mapped port: %w", err)
 	}
 	base, err := url.Parse(fmt.Sprintf("http://%s:%s", host, mapped.Port()))
@@ -100,21 +155,29 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		return fmt.Errorf("build base url: %w", err)
 	}
 	s.baseURL = base
+	log.Debug().Msgf("Resolved server base URL: %s", base.String())
 
-	// Start background collection
+	// Start background collection and log streaming
 	colCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.collecting = true
-	s.wg.Add(1)
-	go s.collectLoop(colCtx)
+	log.Debug().Msg("Starting background metrics collection loop")
+	s.wg.Go(func() { s.collectLoop(colCtx) })
+
+	// Stream container logs to host stdout using Logs API
+	log.Debug().Msg("Starting container log streaming to stdout")
+	if r, err := s.container.Logs(colCtx); err == nil {
+		s.wg.Go(func() {
+			defer r.Close()
+			_, _ = io.Copy(os.Stdout, r)
+		})
+	}
 
 	return nil
 }
 
 // collectLoop runs until cancel() is invoked. It uses a placeholder poller.
 func (s *BackgroundGameServer) collectLoop(ctx context.Context) {
-	defer s.wg.Done()
-
 	t := time.NewTicker(s.opts.PollInterval)
 	defer t.Stop()
 
@@ -167,6 +230,7 @@ func (s *BackgroundGameServer) History() []MetricSample {
 
 // Shutdown stops the metrics collector first, then terminates the container.
 func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
+	log.Debug().Msg("Shutting down BackgroundGameServer")
 	// 1) Stop collecting
 	if s.cancel != nil && s.collecting {
 		s.cancel()
@@ -175,10 +239,14 @@ func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
 	}
 
 	// 2) Now terminate container
-	if s.ctr != nil {
-		if err := s.ctr.Terminate(ctx); err != nil {
+	if s.container != nil {
+		// Stop log producer before terminating
+		_ = s.container.StopLogProducer()
+		log.Debug().Msg("Terminating container")
+		if err := s.container.Terminate(ctx); err != nil {
 			return fmt.Errorf("terminate container: %w", err)
 		}
+		log.Debug().Msg("Container terminated")
 	}
 	return nil
 }
@@ -193,4 +261,16 @@ func (s *BackgroundGameServer) TerminateSilently(ctx context.Context) error {
 // BaseURL returns the discovered host base URL for convenience (e.g. for client tests).
 func (s *BackgroundGameServer) BaseURL() *url.URL {
 	return s.baseURL
+}
+
+// removeDockerContainerByName force removes a container by name using the local docker CLI.
+// Best-effort: if removal fails, the error is returned but the caller may choose to proceed.
+func removeDockerContainerByName(ctx context.Context, name string) error {
+	// docker rm -f <name>
+	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker rm -f %s failed: %v, output: %s", name, err, string(output))
+	}
+	return nil
 }
