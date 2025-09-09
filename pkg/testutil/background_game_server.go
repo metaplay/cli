@@ -116,17 +116,24 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	s.container = ctr
 
 	// Attach live log consumer BEFORE starting
+	// Use a long-lived context for the log producer so it keeps streaming even if Start(ctx) fails or times out.
+	producerCtx, producerCancel := context.WithCancel(context.Background())
 	consumer := &containerLogConsumer{writer: os.Stdout, prefix: "[server] "}
 	s.container.FollowOutput(consumer)
-	if err := s.container.StartLogProducer(ctx); err != nil {
+	if err := s.container.StartLogProducer(producerCtx); err != nil {
 		log.Debug().Msgf("Failed to start log producer: %v", err)
 	}
+	// Store cancel to stop producer (and any background loops sharing the ctx) in Shutdown
+	s.cancel = producerCancel
+	s.collecting = true
 
 	// Now start the container (logs will flow immediately)
 	log.Debug().Msg("Start container...")
 	if err := s.container.Start(ctx); err != nil {
-		// Best-effort: container failed to start; logs should already be streaming
-		_ = s.TerminateSilently(ctx)
+		// Best-effort: container failed to start; drain logs for post-mortem before cleanup
+		_ = s.drainAllLogs(context.Background(), os.Stdout)
+		// Now clean up
+		_ = s.Shutdown(context.Background())
 		return fmt.Errorf("start container: %w", err)
 	}
 
@@ -157,21 +164,9 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	s.baseURL = base
 	log.Debug().Msgf("Resolved server base URL: %s", base.String())
 
-	// Start background collection and log streaming
-	colCtx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	s.collecting = true
+	// Start background metrics collection using the same long-lived context
 	log.Debug().Msg("Starting background metrics collection loop")
-	s.wg.Go(func() { s.collectLoop(colCtx) })
-
-	// Stream container logs to host stdout using Logs API
-	log.Debug().Msg("Starting container log streaming to stdout")
-	if r, err := s.container.Logs(colCtx); err == nil {
-		s.wg.Go(func() {
-			defer r.Close()
-			_, _ = io.Copy(os.Stdout, r)
-		})
-	}
+	s.wg.Go(func() { s.collectLoop(producerCtx) })
 
 	return nil
 }
@@ -231,23 +226,40 @@ func (s *BackgroundGameServer) History() []MetricSample {
 // Shutdown stops the metrics collector first, then terminates the container.
 func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
 	log.Debug().Msg("Shutting down BackgroundGameServer")
-	// 1) Stop collecting
-	if s.cancel != nil && s.collecting {
-		s.cancel()
-		s.wg.Wait()
+	// Mark collecting false first
+	if s.collecting {
 		s.collecting = false
 	}
+	// Stop producer and any background loops sharing the same cancel
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	// Wait for background goroutines to finish
+	s.wg.Wait()
 
-	// 2) Now terminate container
+	// Terminate container last
 	if s.container != nil {
-		// Stop log producer before terminating
-		_ = s.container.StopLogProducer()
 		log.Debug().Msg("Terminating container")
 		if err := s.container.Terminate(ctx); err != nil {
 			return fmt.Errorf("terminate container: %w", err)
 		}
 		log.Debug().Msg("Container terminated")
 	}
+	return nil
+}
+
+// drainAllLogs fetches the full log buffer once (non-follow) and writes it to w.
+func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, w io.Writer) error {
+	if s.container == nil {
+		return nil
+	}
+	r, err := s.container.Logs(ctx)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	_, _ = io.Copy(w, r)
 	return nil
 }
 
