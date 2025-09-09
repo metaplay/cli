@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -27,6 +28,7 @@ type GameServerOptions struct {
 	Env           map[string]string
 	ExposedPorts  []string // optional override; defaults to []string{Port}
 	ContainerName string   // optional; useful in CI logs
+	Cmd           []string // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
 }
 
 // containerLogConsumer mirrors container logs to an io.Writer (e.g. os.Stdout).
@@ -75,8 +77,13 @@ type BackgroundGameServer struct {
 
 // New creates a wrapper with the given options (does not start the container).
 func New(opts GameServerOptions) *BackgroundGameServer {
-	if len(opts.ExposedPorts) == 0 && opts.SystemPort != "" {
-		opts.ExposedPorts = []string{opts.SystemPort}
+	if len(opts.ExposedPorts) == 0 {
+		// Default to the typical ports used by the server on the user's example
+		// 8585 (probe proxy), SystemPort (e.g. 8888), 9090, 5550, 5560
+		if opts.SystemPort == "" {
+			opts.SystemPort = "8888/tcp"
+		}
+		opts.ExposedPorts = []string{"8585/tcp", opts.SystemPort, "9090/tcp", "5550/tcp", "5560/tcp"}
 	}
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 2 * time.Second
@@ -89,16 +96,34 @@ func New(opts GameServerOptions) *BackgroundGameServer {
 
 // Start launches the server container, waits for readiness, and starts metrics collection.
 func (s *BackgroundGameServer) Start(ctx context.Context) error {
+	// Build port bindings: bind each exposed container port to 127.0.0.1 with a random host port.
+	portBindings := nat.PortMap{}
+	for _, p := range s.opts.ExposedPorts {
+		port := nat.Port(p)
+		portBindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}}
+	}
+
 	// Build container request
 	req := tc.ContainerRequest{
 		Image:        s.opts.Image,
 		Name:         s.opts.ContainerName,
 		ExposedPorts: s.opts.ExposedPorts,
 		Env:          s.opts.Env,
+		Cmd:          s.opts.Cmd,
 		WaitingFor: wait.ForHTTP("/healthz").
 			WithPort(nat.Port(s.opts.SystemPort)).
 			WithStatusCodeMatcher(func(code int) bool { return code == 200 }).
 			WithStartupTimeout(2 * time.Minute),
+	}
+
+	// Bind ports on 127.0.0.1 with random host ports via HostConfigModifier
+	req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
+		if hc.PortBindings == nil {
+			hc.PortBindings = nat.PortMap{}
+		}
+		for port, bindings := range portBindings {
+			hc.PortBindings[port] = bindings
+		}
 	}
 
 	log.Debug().Msgf("Create container: name=%s image=%s ports=%v", s.opts.ContainerName, s.opts.Image, s.opts.ExposedPorts)
