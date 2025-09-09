@@ -122,7 +122,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 
 	// Start the background game server before all test phases
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderBright("🔷 Starting background game server"))
+	log.Info().Msg(styles.RenderBright("🔷 Start background game server"))
 
 	server := testutil.NewGameServer(testutil.GameServerOptions{
 		Image:         serverImage,
@@ -230,10 +230,10 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 			"--Bot:ServerPort=9339",
 			"--Bot:EnableTls=false",
 			"--Bot:CdnBaseUrl=http://localhost:5552/",
-			"-ExitAfter=30s",               // Run for 30 seconds
-			"-MaxBots=10",                  // Spawn up to 10 bots
-			"-SpawnRate=2",                 // Spawn 2 bots per second
-			"-ExpectedSessionDuration=10s", // Each bot session lasts ~10 seconds
+			"-ExitAfter=00:00:30",               // Run for 30 seconds (.NET TimeSpan format)
+			"-MaxBots=10",                       // Spawn up to 10 bots
+			"-SpawnRate=2",                      // Spawn 2 bots per second
+			"-ExpectedSessionDuration=00:00:10", // Each bot session lasts ~10 seconds (.NET TimeSpan format)
 		},
 	}
 
