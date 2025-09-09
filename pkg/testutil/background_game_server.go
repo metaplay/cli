@@ -43,6 +43,15 @@ func (c *containerLogConsumer) Accept(l tc.Log) {
 	_, _ = c.writer.Write([]byte(c.prefix + string(l.Content)))
 }
 
+// Write implements io.Writer so we can io.Copy logs through the consumer directly.
+func (c *containerLogConsumer) Write(p []byte) (int, error) {
+	if c == nil {
+		return len(p), nil
+	}
+	c.Accept(tc.Log{Content: append([]byte(nil), p...)})
+	return len(p), nil
+}
+
 // MetricSample is a single metrics collection result.
 type MetricSample struct {
 	At       time.Time
@@ -131,7 +140,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	log.Debug().Msg("Start container...")
 	if err := s.container.Start(ctx); err != nil {
 		// Best-effort: container failed to start; drain logs for post-mortem before cleanup
-		_ = s.drainAllLogs(context.Background(), os.Stdout)
+		_ = s.drainAllLogs(context.Background(), consumer)
 		// Now clean up
 		_ = s.Shutdown(context.Background())
 		return fmt.Errorf("start container: %w", err)
@@ -249,8 +258,8 @@ func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// drainAllLogs fetches the full log buffer once (non-follow) and writes it to w.
-func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, w io.Writer) error {
+// drainAllLogs fetches the full log buffer once (non-follow) and routes it via the given consumer.
+func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *containerLogConsumer) error {
 	if s.container == nil {
 		return nil
 	}
@@ -259,7 +268,8 @@ func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, w io.Writer) er
 		return err
 	}
 	defer r.Close()
-	_, _ = io.Copy(w, r)
+	// Pipe logs to the same consumer using io.Copy for simplicity and efficiency.
+	_, _ = io.Copy(consumer, r)
 	return nil
 }
 
