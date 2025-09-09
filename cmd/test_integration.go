@@ -27,7 +27,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "integration",
-		Short: "Run integration test pipeline (scaffold)",
+		Short: "Run integration test pipeline",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			Run the integration test pipeline with multiple named phases.
@@ -35,14 +35,13 @@ func init() {
 
 			Phases:
 			- build-images: Build Docker images.
-			- start-server: Start the game server in the background.
-			- test-bots: Run the game server in the background and then bots against it.
+			- test-bots: Run bots against the background server.
 			- test-dashboard: Run the dashboard Playwright tests.
 			- test-system: Run the system tests.
 			- test-http-api: HTTP API tests.
 		`),
 		Example: renderExample(`
-			# Run the full integration test pipeline (scaffold)
+			# Run the full integration test pipeline
 			metaplay test integration
 		`),
 	}
@@ -121,19 +120,42 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Skipping container image build step due to --skip-build")
 	}
 
-	// Execute test phases.
+	// Start the background game server before all test phases
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderBright("🔷 Starting background game server"))
+
+	server := testutil.NewGameServer(testutil.GameServerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-integration-server", project.Config.ProjectHumanID),
+	})
+	ctx := context.Background()
+
+	log.Info().Msg("Starting background game server...")
+	if err := server.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start background server: %w", err)
+	}
+	defer func() {
+		log.Info().Msg("Shutting down background server...")
+		if shutdownErr := server.Shutdown(context.Background()); shutdownErr != nil {
+			log.Error().Msgf("Failed to shutdown background server: %v", shutdownErr)
+		}
+	}()
+
+	log.Info().Msgf("Background server started at %s", server.BaseURL().String())
+
+	// Execute test phases with the running server
 	phases := []struct {
 		name string
 		fn   func() error
 	}{
-		{"start-server", func() error { return o.startServer(project, serverImage) }},
-		{"test-bots", func() error { return o.testBots(project, serverImage) }},
+		{"test-bots", func() error { return o.testBots(project, server) }},
 		{"test-dashboard", func() error { return phasePlaceholder("test-dashboard") }},
 		{"test-system", func() error { return phasePlaceholder("test-system") }},
 		{"test-http-api", func() error { return phasePlaceholder("test-http-api") }},
 	}
 
 	for _, p := range phases {
+		log.Info().Msg("")
 		log.Info().Msg(styles.RenderBright("🔷 " + p.name))
 
 		if err := p.fn(); err != nil {
@@ -180,33 +202,15 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	return nil
 }
 
-// testBots starts the game server in the background, runs the botclient against it, then shuts down the server.
-func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, serverImage string) error {
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderBright("🔷 Test bots"))
-
-	// Start the game server in the background
-	server := testutil.NewGameServer(testutil.GameServerOptions{
-		Image:         serverImage,
-		ContainerName: fmt.Sprintf("%s-test-bots-server", project.Config.ProjectHumanID),
-	})
+// testBots runs the botclient against the already-running server.
+func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
 	ctx := context.Background()
-
-	log.Info().Msg("Starting background game server...")
-	if err := server.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start background server: %w", err)
-	}
-	defer func() {
-		log.Info().Msg("Shutting down background server...")
-		if shutdownErr := server.Shutdown(context.Background()); shutdownErr != nil {
-			log.Error().Msgf("Failed to shutdown background server: %v", shutdownErr)
-		}
-	}()
-
-	log.Info().Msgf("Background server started at %s", server.BaseURL().String())
 
 	// Run the botclient against the server
 	log.Info().Msg("Running botclient...")
+
+	// Get the server image from the server container (we need to derive it from the project)
+	serverImage := fmt.Sprintf("%s/server:test", project.Config.ProjectHumanID)
 
 	botClientOpts := testutil.RunOnceContainerOptions{
 		Image:         serverImage,
