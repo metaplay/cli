@@ -77,19 +77,30 @@ type BackgroundGameServer struct {
 
 // NewGameServer creates a wrapper with the given options (does not start the container).
 func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
-	if len(opts.ExposedPorts) == 0 {
-		// Default to the typical ports used by the server on the user's example
-		// 8585 (probe proxy), SystemPort (e.g. 8888), 9090, 5550, 5560
-		if opts.SystemPort == "" {
-			opts.SystemPort = "8888/tcp"
-		}
-		opts.ExposedPorts = []string{"8585/tcp", opts.SystemPort, "9090/tcp", "5550/tcp", "5560/tcp"}
+	// Hard-code all configuration - these are the standard integration test defaults
+	opts.SystemPort = "8888/tcp"
+	opts.ExposedPorts = []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"}
+	opts.MetricsPath = "/metrics"
+	opts.PollInterval = 2 * time.Second
+	opts.HistoryLimit = 10
+	opts.Env = map[string]string{
+		"ASPNETCORE_ENVIRONMENT":      "Development",
+		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 	}
-	if opts.PollInterval <= 0 {
-		opts.PollInterval = 2 * time.Second
-	}
-	if opts.HistoryLimit < 0 {
-		opts.HistoryLimit = 0
+	opts.Cmd = []string{
+		"gameserver",
+		"-LogLevel=Information",
+		// METAPLAY_OPTS (shared with BotClient)
+		"--Environment:EnableKeyboardInput=false",
+		"--Environment:ExitOnLogError=true",
+		// METAPLAY_SERVER_OPTS (server-specific)
+		"--Environment:EnableSystemHttpServer=true",
+		"--Environment:SystemHttpListenHost=0.0.0.0",
+		"--Environment:WaitForSigtermBeforeExit=true",
+		"--AdminApi:WebRootPath=wwwroot",
+		"--Database:Backend=Sqlite",
+		"--Database:SqliteInMemory=true",
+		"--Player:ForceFullDebugConfigForBots=false",
 	}
 	return &BackgroundGameServer{opts: opts}
 }

@@ -152,38 +152,11 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderBright("🔷 Start game server"))
 
-	// Configure the background game server
-	opts := testutil.GameServerOptions{
-		Image:         serverImage,
-		SystemPort:    "8888/tcp",
-		MetricsPath:   "/metrics",
-		PollInterval:  2 * time.Second,
-		HistoryLimit:  10,
-		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
-		ExposedPorts:  []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"},
-		Env: map[string]string{
-			"ASPNETCORE_ENVIRONMENT":      "Development",
-			"METAPLAY_ENVIRONMENT_FAMILY": "Local",
-		},
-		Cmd: []string{
-			"gameserver",
-			"-LogLevel=Information",
-			// METAPLAY_OPTS (shared with BotClient)
-			"--Environment:EnableKeyboardInput=false",
-			"--Environment:ExitOnLogError=true",
-			// METAPLAY_SERVER_OPTS (server-specific)
-			"--Environment:EnableSystemHttpServer=true",
-			"--Environment:SystemHttpListenHost=0.0.0.0",
-			"--Environment:WaitForSigtermBeforeExit=true",
-			"--AdminApi:WebRootPath=wwwroot",
-			"--Database:Backend=Sqlite",
-			"--Database:SqliteInMemory=true",
-			"--Player:ForceFullDebugConfigForBots=false",
-		},
-	}
-
 	// Create and start the server
-	server := testutil.NewGameServer(opts)
+	server := testutil.NewGameServer(testutil.GameServerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
+	})
 	ctx := context.Background()
 
 	log.Info().Msg("Starting server container...")
