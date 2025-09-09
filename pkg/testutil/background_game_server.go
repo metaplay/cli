@@ -75,8 +75,8 @@ type BackgroundGameServer struct {
 	collecting bool
 }
 
-// New creates a wrapper with the given options (does not start the container).
-func New(opts GameServerOptions) *BackgroundGameServer {
+// NewGameServer creates a wrapper with the given options (does not start the container).
+func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	if len(opts.ExposedPorts) == 0 {
 		// Default to the typical ports used by the server on the user's example
 		// 8585 (probe proxy), SystemPort (e.g. 8888), 9090, 5550, 5560

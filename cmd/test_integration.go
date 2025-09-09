@@ -111,12 +111,21 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", projectID)
 	pwNetImage := fmt.Sprintf("%s/playwright-net:test", projectID)
 
-	// Phase execution order
+	// Build the container images first.
+	if !o.flagSkipBuild {
+		if err := o.buildDockerImages(project, serverImage, pwTsImage, pwNetImage); err != nil {
+			return fmt.Errorf("failed to build container images: %w", err)
+		}
+	} else {
+		log.Info().Msg("")
+		log.Info().Msg("Skipping container image build step due to --skip-build")
+	}
+
+	// Execute test phases.
 	phases := []struct {
 		name string
 		fn   func() error
 	}{
-		{"build-images", func() error { return o.buildDockerImages(project, serverImage, pwTsImage, pwNetImage) }},
 		{"start-server", func() error { return o.startServer(project, serverImage) }},
 		{"test-bots", func() error { return phasePlaceholder("test-bots") }},
 		{"test-dashboard", func() error { return phasePlaceholder("test-dashboard") }},
@@ -125,12 +134,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	}
 
 	for _, p := range phases {
-		// log.Info().Msg(styles.RenderBright("🔷 " + p.name))
-		if p.name == "build-images" && o.flagSkipBuild {
-			log.Info().Msg("")
-			log.Info().Msg(styles.RenderMuted("Skip container image build step due to --skip-build"))
-			continue
-		}
+		log.Info().Msg(styles.RenderBright("🔷 " + p.name))
 
 		if err := p.fn(); err != nil {
 			return fmt.Errorf("phase '%s' failed: %w", p.name, err)
@@ -148,9 +152,6 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderBright("🔷 Start game server"))
 
-	// Derive project ID for container naming
-	projectID := project.Config.ProjectHumanID
-
 	// Configure the background game server
 	opts := testutil.GameServerOptions{
 		Image:         serverImage,
@@ -158,7 +159,7 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 		MetricsPath:   "/metrics",
 		PollInterval:  2 * time.Second,
 		HistoryLimit:  10,
-		ContainerName: fmt.Sprintf("%s-test-server", strings.ToLower(projectID)),
+		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
 		ExposedPorts:  []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"},
 		Env: map[string]string{
 			"ASPNETCORE_ENVIRONMENT":      "Development",
@@ -182,7 +183,7 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	}
 
 	// Create and start the server
-	server := testutil.New(opts)
+	server := testutil.NewGameServer(opts)
 	ctx := context.Background()
 
 	log.Info().Msg("Starting server container...")
@@ -220,9 +221,9 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	commonParams := buildDockerImageParams{
 		project:     project,
 		buildEngine: buildEngine,
-		platforms:   []string{"linux/amd64"}, // Default platform for integration tests
-		commitID:    "test",                  // Test build
-		buildNumber: "test",                  // Test build
+		platforms:   []string{"linux/amd64"},
+		commitID:    "test",
+		buildNumber: "test",
 		extraArgs:   []string{},
 	}
 
