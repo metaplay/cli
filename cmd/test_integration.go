@@ -32,9 +32,12 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "integration",
-		Short: "Run integration test pipeline",
+		Short: "[preview] Run integration tests",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
+			PREVIEW: This command is currently in preview and may change in the future. If you encounter
+			problems or have feedback, please file an issue at https://github.com/metaplay/cli/issues/new.
+
 			Run Metaplay integration tests for your project.
 
 			Phases:

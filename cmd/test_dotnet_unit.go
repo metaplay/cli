@@ -45,6 +45,8 @@ func init() {
 		`),
 	}
 
+	cmd.Hidden = true // Not yet ready for prime-time, likely to change
+
 	testCmd.AddCommand(cmd)
 }
 
