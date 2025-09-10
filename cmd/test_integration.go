@@ -212,10 +212,13 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 	// Get the server image from the server container (we need to derive it from the project)
 	serverImage := fmt.Sprintf("%s/server:test", project.Config.ProjectHumanID)
 
+	log.Debug().Msgf("Botclient will connect to server container: %s", server.ContainerName())
+
 	botClientOpts := testutil.RunOnceContainerOptions{
 		Image:         serverImage,
 		ContainerName: fmt.Sprintf("%s-test-botclient", project.Config.ProjectHumanID),
 		LogPrefix:     "[botclient] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
 		Env: map[string]string{
 			"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 		},
@@ -235,11 +238,6 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 			"-SpawnRate=2",                      // Spawn 2 bots per second
 			"-ExpectedSessionDuration=00:00:10", // Each bot session lasts ~10 seconds (.NET TimeSpan format)
 		},
-	}
-
-	// Use network mode to connect to the server container
-	botClientOpts.ExtraDockerArgs = []string{
-		"--network", fmt.Sprintf("container:%s", server.ContainerName()),
 	}
 
 	botClient := testutil.NewRunOnce(botClientOpts)
