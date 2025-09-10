@@ -224,7 +224,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 	portalClient := portalapi.NewClient(tokenSet)
 	if environment == "" {
 		// Let the user choose from the accessible ones.
-		project, err := tui.ChooseOrgAndProject(tokenSet)
+		project, err := chooseOrgAndProject(portalClient, "")
 		if err != nil {
 			return nil, nil, err
 		}
@@ -283,4 +283,39 @@ func resolveProjectAndEnvironment(environment string) (*metaproj.MetaplayProject
 	}
 
 	return project, envConfig, nil
+}
+
+// Choose target project either with human ID provided (still validated against the portal-returned data) or
+// let the user interactively choose from a list of projects fetched from the portal.
+func chooseOrgAndProject(portalClient *portalapi.Client, projectID string) (*portalapi.ProjectInfo, error) {
+	// Fetch all the available organizations and projects.
+	orgsAndProjects, err := portalClient.FetchUserOrgsAndProjects()
+	if err != nil {
+		return nil, err
+	}
+
+	// If projectID is specified, find it from the list (or error out).
+	if projectID != "" {
+		var foundProject *portalapi.ProjectInfo
+		for _, org := range orgsAndProjects {
+			for _, project := range org.Projects {
+				if project.HumanID == projectID {
+					foundProject = &project
+					break
+				}
+			}
+			if foundProject != nil {
+				break
+			}
+		}
+
+		if foundProject == nil {
+			return nil, fmt.Errorf("project with ID '%s' not found in any accessible organization; check the project ID and ensure you have access to it", projectID)
+		}
+
+		return foundProject, nil
+	} else {
+		// Otherwise, let the user choose interactively.
+		return tui.ChooseOrgAndProject(orgsAndProjects)
+	}
 }

@@ -248,20 +248,10 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Choose target project either with human ID provided as flag or interactively
-	// let the user choose from a list of projects fetched from the portal.
-	var targetProject *portalapi.ProjectInfo
-	if o.flagProjectID != "" {
-		portal := portalapi.NewClient(tokenSet)
-		targetProject, err = portal.FetchProjectInfo(o.flagProjectID)
-		if err != nil {
-			return err
-		}
-	} else {
-		targetProject, err = tui.ChooseOrgAndProject(tokenSet)
-		if err != nil {
-			return err
-		}
+	// Choose target project either with provided human ID or let user choose interactively.
+	targetProject, err := chooseOrgAndProject(portalClient, o.flagProjectID)
+	if err != nil {
+		return err
 	}
 
 	// Fetch all project's environments (for populating the metaplay-config.yaml).

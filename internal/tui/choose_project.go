@@ -7,7 +7,6 @@ package tui
 import (
 	"fmt"
 
-	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -15,19 +14,9 @@ import (
 
 // ChooseOrgAndProject fetches all the organizations and projects from the portal (that the user has
 // access to) and then displays an interactive list for the user to choose the project from.
-func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error) {
+func ChooseOrgAndProject(orgsAndProjects []portalapi.OrganizationWithProjects) (*portalapi.ProjectInfo, error) {
 	if !isInteractiveMode {
 		return nil, fmt.Errorf("interactive mode required for project selection")
-	}
-
-	// Get available organizations from the portal.
-	portalClient := portalapi.NewClient(tokenSet)
-	orgsAndProjects, err := portalClient.FetchUserOrgsAndProjects()
-	if err != nil {
-		return nil, err
-	}
-	if len(orgsAndProjects) == 0 {
-		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
 	}
 
 	// Let the user choose their organization.
