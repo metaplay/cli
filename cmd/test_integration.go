@@ -126,7 +126,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 
 	server := testutil.NewGameServer(testutil.GameServerOptions{
 		Image:         serverImage,
-		ContainerName: fmt.Sprintf("%s-integration-server", project.Config.ProjectHumanID),
+		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
 	})
 	ctx := context.Background()
 
