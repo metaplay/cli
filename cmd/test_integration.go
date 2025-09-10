@@ -24,6 +24,7 @@ type testIntegrationOpts struct {
 	flagSkipBuild    bool
 	flagDebugNetwork bool
 	flagOutputDir    string
+	flagOnly         string
 }
 
 func init() {
@@ -59,6 +60,7 @@ func init() {
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the 'build-images' phase")
 	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "./integration-test-output", "Directory for test output and results")
+	flags.StringVar(&o.flagOnly, "only", "", "Run only the specified test phase (e.g. 'test-bots', 'test-dashboard', 'test-system', 'test-http-api')")
 }
 
 func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
@@ -164,23 +166,42 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Execute test phases with the running server
-	phases := []struct {
+	// Execute test tests with the running server
+	tests := []struct {
 		name string
 		fn   func() error
 	}{
 		{"test-bots", func() error { return o.testBots(project, server) }},
 		{"test-dashboard", func() error { return o.testDashboard(project, server) }},
 		{"test-system", func() error { return o.testSystem(project, server) }},
-		{"test-http-api", func() error { return phasePlaceholder("test-http-api") }},
+		{"test-http-api", func() error { return testPlaceholder("test-http-api") }},
 	}
 
-	for _, p := range phases {
+	// Filter tests if --only flag is specified
+	if o.flagOnly != "" {
+		var filteredTests []struct {
+			name string
+			fn   func() error
+		}
+		for _, p := range tests {
+			if p.name == o.flagOnly {
+				filteredTests = append(filteredTests, p)
+				break
+			}
+		}
+		if len(filteredTests) == 0 {
+			return fmt.Errorf("unknown test '%s'. Available tests: test-bots, test-dashboard, test-system, test-http-api", o.flagOnly)
+		}
+		tests = filteredTests
+	}
+
+	// Run all the active tests.
+	for _, p := range tests {
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderBright("🔷 " + p.name))
 
 		if err := p.fn(); err != nil {
-			return fmt.Errorf("phase '%s' failed: %w", p.name, err)
+			return fmt.Errorf("test '%s' failed: %w", p.name, err)
 		}
 	}
 
@@ -521,8 +542,8 @@ func dockerSupportsBuildx() bool {
 	return true
 }
 
-// phasePlaceholder is a stub implementation for an integration test phase.
-func phasePlaceholder(name string) error {
+// testPlaceholder is a stub implementation for an integration test.
+func testPlaceholder(name string) error {
 	log.Info().Msg(styles.RenderMuted("(placeholder) implementation pending for: " + name))
 	return nil
 }
