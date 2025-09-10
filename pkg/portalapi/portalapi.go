@@ -118,31 +118,29 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 }
 
 // Fetch the organizations and projects (within each org) that the user has access to.
+// Note: It's considered an error if the user has no accessible organizations.
 func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) {
 	path := fmt.Sprintf("/api/v1/organizations/user-organizations")
-	orgWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
+	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user's organizations and projects: %w", err)
 	}
-	return orgWithProjects, err
-}
 
-func (c *Client) FetchAllUserProjects() ([]ProjectInfo, error) {
-	// Fetch with the combined getter.
-	orgsWithProjects, err := c.FetchUserOrgsAndProjects()
-	if err != nil {
-		return nil, err
+	// It's an error if the user has no accessible organizations.
+	if len(orgsWithProjects) == 0 {
+		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
 	}
 
-	// Linearize all projects.
-	projects := []ProjectInfo{}
+	// Sanity check the returned data.
 	for _, org := range orgsWithProjects {
-		for _, proj := range org.Projects {
-			projects = append(projects, proj)
+		for _, project := range org.Projects {
+			if project.HumanID == "" {
+				return nil, fmt.Errorf("internal error: portal project '%s' has empty human ID", project.Name)
+			}
 		}
 	}
 
-	return projects, nil
+	return orgsWithProjects, err
 }
 
 // FetchProjectInfo fetches information about a project using its human ID.
