@@ -19,7 +19,8 @@ import (
 )
 
 type testIntegrationOpts struct {
-	flagSkipBuild bool
+	flagSkipBuild    bool
+	flagDebugNetwork bool
 }
 
 func init() {
@@ -43,6 +44,9 @@ func init() {
 		Example: renderExample(`
 			# Run the full integration test pipeline
 			metaplay test integration
+
+			# Run the tests without building the images. Speeds up the run if you already built the images.
+			metaplay test integration --skip-build
 		`),
 	}
 
@@ -51,6 +55,7 @@ func init() {
 	// Flags
 	flags := cmd.Flags()
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the 'build-images' phase")
+	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
 }
 
 func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
@@ -143,6 +148,13 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msgf("Background server started at %s", server.BaseURL().String())
 
+	// Run network connectivity tests if debug flag is enabled.
+	if o.flagDebugNetwork {
+		if err := o.debugNetworkConnectivity(ctx, project, server, serverImage); err != nil {
+			return fmt.Errorf("network connectivity test failed: %w", err)
+		}
+	}
+
 	// Execute test phases with the running server
 	phases := []struct {
 		name string
@@ -212,8 +224,6 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 	// Get the server image from the server container (we need to derive it from the project)
 	serverImage := fmt.Sprintf("%s/server:test", project.Config.ProjectHumanID)
 
-	log.Debug().Msgf("Botclient will connect to server container: %s", server.ContainerName())
-
 	botClientOpts := testutil.RunOnceContainerOptions{
 		Image:         serverImage,
 		ContainerName: fmt.Sprintf("%s-test-botclient", project.Config.ProjectHumanID),
@@ -251,6 +261,85 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 	}
 
 	log.Info().Msg("Botclient completed successfully")
+	return nil
+}
+
+// debugNetworkConnectivity runs network tests to help diagnose connectivity issues to the game server container.
+// These tests are run in containers to simulate the same networking as the other test containers will use.
+func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, serverImage string) error {
+	log.Info().Msg("Running network connectivity tests...")
+
+	// Test 1: Check if we can resolve localhost from within the botclient container network
+	log.Info().Msg("Test 1: DNS resolution test")
+	dnsTestOpts := testutil.RunOnceContainerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-dns", project.Config.ProjectHumanID),
+		LogPrefix:     "[dns-test] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Cmd:           []string{"nslookup", "localhost"},
+	}
+	dnsTest := testutil.NewRunOnce(dnsTestOpts)
+	if exitCode, err := dnsTest.Run(ctx); err != nil {
+		log.Warn().Msgf("DNS test failed to run: %v", err)
+	} else if exitCode != 0 {
+		log.Warn().Msgf("DNS test failed with exit code: %d", exitCode)
+	} else {
+		log.Info().Msg("DNS test passed")
+	}
+
+	// Test 2: Check if port 9339 is listening
+	log.Info().Msg("Test 2: Port connectivity test")
+	portTestOpts := testutil.RunOnceContainerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-port", project.Config.ProjectHumanID),
+		LogPrefix:     "[port-test] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Cmd:           []string{"netstat", "-tuln"},
+	}
+	portTest := testutil.NewRunOnce(portTestOpts)
+	if exitCode, err := portTest.Run(ctx); err != nil {
+		log.Warn().Msgf("Port test failed to run: %v", err)
+	} else if exitCode != 0 {
+		log.Warn().Msgf("Port test failed with exit code: %d", exitCode)
+	} else {
+		log.Info().Msg("Port test completed - check logs for port 9339")
+	}
+
+	// Test 3: Try to connect to the game server port directly
+	log.Info().Msg("Test 3: Direct connection test")
+	connectTestOpts := testutil.RunOnceContainerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-connect", project.Config.ProjectHumanID),
+		LogPrefix:     "[connect-test] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Cmd:           []string{"timeout", "5", "telnet", "localhost", "9339"},
+	}
+	connectTest := testutil.NewRunOnce(connectTestOpts)
+	if exitCode, err := connectTest.Run(ctx); err != nil {
+		log.Warn().Msgf("Connection test failed to run: %v", err)
+	} else {
+		log.Info().Msgf("Connection test completed with exit code: %d", exitCode)
+	}
+
+	// Test 4: Check what processes are running in the server container
+	log.Info().Msg("Test 4: Process list test")
+	psTestOpts := testutil.RunOnceContainerOptions{
+		Image:         serverImage,
+		ContainerName: fmt.Sprintf("%s-test-ps", project.Config.ProjectHumanID),
+		LogPrefix:     "[ps-test] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Cmd:           []string{"ps", "aux"},
+	}
+	psTest := testutil.NewRunOnce(psTestOpts)
+	if exitCode, err := psTest.Run(ctx); err != nil {
+		log.Warn().Msgf("Process test failed to run: %v", err)
+	} else if exitCode != 0 {
+		log.Warn().Msgf("Process test failed with exit code: %d", exitCode)
+	} else {
+		log.Info().Msg("Process test completed - check logs for gameserver process")
+	}
+
+	log.Info().Msg("Network connectivity tests completed")
 	return nil
 }
 

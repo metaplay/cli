@@ -20,9 +20,8 @@ import (
 
 // GameServerOptions configures the server container and the poller behavior.
 type GameServerOptions struct {
-	Image         string        // e.g. "myorg/myserver:latest"
+	Image         string        // e.g. "lovely-wombats-build/server:test"
 	SystemPort    string        // container port for SystemHttpServer (usually "8888/tcp")
-	MetricsPath   string        // e.g. "/metrics"
 	PollInterval  time.Duration // how often to collect metrics
 	HistoryLimit  int           // max samples kept in memory (0 or <0 => unbounded)
 	Env           map[string]string
@@ -80,7 +79,6 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	// Hard-code all configuration - these are the standard integration test defaults
 	opts.SystemPort = "8888/tcp"
 	opts.ExposedPorts = []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"}
-	opts.MetricsPath = "/metrics"
 	opts.PollInterval = 2 * time.Second
 	opts.HistoryLimit = 10
 	opts.Env = map[string]string{
@@ -121,7 +119,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		ExposedPorts: s.opts.ExposedPorts,
 		Env:          s.opts.Env,
 		Cmd:          s.opts.Cmd,
-		WaitingFor: wait.ForHTTP("/healthz").
+		WaitingFor: wait.ForHTTP("/isReady").
 			WithPort(nat.Port(s.opts.SystemPort)).
 			WithStatusCodeMatcher(func(code int) bool { return code == 200 }).
 			WithStartupTimeout(2 * time.Minute),
@@ -229,7 +227,7 @@ func (s *BackgroundGameServer) collectLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			start := time.Now()
-			raw, err := s.pollOnce(ctx) // Placeholder implementation
+			raw, err := s.pollMetricsOnce(ctx) // Placeholder implementation
 			d := time.Since(start)
 
 			sample := MetricSample{
@@ -250,10 +248,9 @@ func (s *BackgroundGameServer) collectLoop(ctx context.Context) {
 	}
 }
 
-// pollOnce is a placeholder for your real metrics scraping.
-// Swap this out for an actual HTTP GET to s.baseURL + s.opts.MetricsPath
-// and parse/serialize as you wish.
-func (s *BackgroundGameServer) pollOnce(ctx context.Context) (string, error) {
+// pollMetricsOnce is a placeholder for your real metrics scraping.
+// \todo implement properly
+func (s *BackgroundGameServer) pollMetricsOnce(ctx context.Context) (string, error) {
 	// Example placeholder that synthesizes a fake metric
 	// In a real impl: http.NewRequestWithContext(ctx, "GET", s.baseURL.ResolveReference(...).String(), nil)
 	// then read body, maybe parse Prometheus text, JSON, etc.
