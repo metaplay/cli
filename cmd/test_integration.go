@@ -169,9 +169,9 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		name string
 		fn   func() error
 	}{
-		// {"test-bots", func() error { return o.testBots(project, server) }},
+		{"test-bots", func() error { return o.testBots(project, server) }},
 		{"test-dashboard", func() error { return o.testDashboard(project, server) }},
-		{"test-system", func() error { return phasePlaceholder("test-system") }},
+		{"test-system", func() error { return o.testSystem(project, server) }},
 		{"test-http-api", func() error { return phasePlaceholder("test-http-api") }},
 	}
 
@@ -284,7 +284,7 @@ func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, s
 	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", project.Config.ProjectHumanID)
 
 	// Create output directory for dashboard test results.
-	resultsDir := filepath.Join(o.flagOutputDir, "dashboard")
+	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "dashboard"))
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory %s: %w", resultsDir, err)
 	}
@@ -295,7 +295,7 @@ func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, s
 		return fmt.Errorf("failed to get absolute path for %s: %w", resultsDir, err)
 	}
 	// Convert to forward slashes for Docker compatibility
-	absResultsDir = strings.ReplaceAll(absResultsDir, "\\", "/")
+	absResultsDir = filepath.ToSlash(absResultsDir)
 
 	playwrightOpts := testutil.RunOnceContainerOptions{
 		Image:         pwTsImage,
@@ -324,6 +324,59 @@ func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, s
 	}
 
 	log.Info().Msg("Playwright dashboard tests completed successfully")
+	return nil
+}
+
+// testSystem runs the Playwright .NET tests for system testing.
+func (o *testIntegrationOpts) testSystem(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+	ctx := context.Background()
+
+	// Run the Playwright.NET tests for system testing.
+	log.Info().Msg("Running Playwright.NET system tests...")
+
+	// Get the Playwright .NET image name.
+	pwNetImage := fmt.Sprintf("%s/playwright-net:test", project.Config.ProjectHumanID)
+
+	// Create output directory for system test results.
+	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "system"))
+	if err := os.MkdirAll(resultsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory %s: %w", resultsDir, err)
+	}
+
+	// Convert to absolute path for Docker volume mount
+	absResultsDir, err := filepath.Abs(resultsDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for %s: %w", resultsDir, err)
+	}
+	// Convert to forward slashes for Docker compatibility
+	absResultsDir = filepath.ToSlash(absResultsDir)
+
+	playwrightOpts := testutil.RunOnceContainerOptions{
+		Image:         pwNetImage,
+		ContainerName: fmt.Sprintf("%s-test-playwright-net", project.Config.ProjectHumanID),
+		LogPrefix:     "[playwright-net] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Env: map[string]string{
+			"DASHBOARD_BASE_URL": "http://localhost:5550",
+			"OUTPUT_DIRECTORY":   "/PlaywrightOutput",
+		},
+		Mounts: []string{
+			fmt.Sprintf("%s:/PlaywrightOutput", absResultsDir),
+		},
+	}
+
+	// Run the Playwright .NET tests container.
+	playwright := testutil.NewRunOnceContainer(playwrightOpts)
+	exitCode, err := playwright.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("playwright system tests failed to run: %w", err)
+	}
+
+	if exitCode != 0 {
+		return fmt.Errorf("playwright system tests failed with exit code: %d", exitCode)
+	}
+
+	log.Info().Msg("Playwright system tests completed successfully")
 	return nil
 }
 
