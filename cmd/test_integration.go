@@ -7,7 +7,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 type testIntegrationOpts struct {
 	flagSkipBuild    bool
 	flagDebugNetwork bool
+	flagOutputDir    string
 }
 
 func init() {
@@ -31,8 +34,7 @@ func init() {
 		Short: "Run integration test pipeline",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			Run the integration test pipeline with multiple named phases.
-			This is a scaffold: phase implementations are placeholders for now.
+			Run Metaplay integration tests for your project.
 
 			Phases:
 			- build-images: Build Docker images.
@@ -56,6 +58,7 @@ func init() {
 	flags := cmd.Flags()
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the 'build-images' phase")
 	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
+	flags.StringVar(&o.flagOutputDir, "output-dir", "./integration-test-output", "Directory for test output and results")
 }
 
 func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
@@ -109,6 +112,12 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
+	// Create output directory for test results
+	if err := os.MkdirAll(o.flagOutputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory %s: %w", o.flagOutputDir, err)
+	}
+	log.Info().Msgf("Test output directory: %s", styles.RenderTechnical(o.flagOutputDir))
+
 	// Derive container image names once and pass them to phases
 	projectID := strings.ToLower(project.Config.ProjectHumanID)
 	serverImage := fmt.Sprintf("%s/server:test", projectID)
@@ -160,8 +169,8 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		name string
 		fn   func() error
 	}{
-		{"test-bots", func() error { return o.testBots(project, server) }},
-		{"test-dashboard", func() error { return phasePlaceholder("test-dashboard") }},
+		// {"test-bots", func() error { return o.testBots(project, server) }},
+		{"test-dashboard", func() error { return o.testDashboard(project, server) }},
 		{"test-system", func() error { return phasePlaceholder("test-system") }},
 		{"test-http-api", func() error { return phasePlaceholder("test-http-api") }},
 	}
@@ -250,7 +259,7 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 		},
 	}
 
-	botClient := testutil.NewRunOnce(botClientOpts)
+	botClient := testutil.NewRunOnceContainer(botClientOpts)
 	exitCode, err := botClient.Run(ctx)
 	if err != nil {
 		return fmt.Errorf("botclient failed to run: %w", err)
@@ -261,6 +270,60 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 	}
 
 	log.Info().Msg("Botclient completed successfully")
+	return nil
+}
+
+// testDashboard runs the Playwright TypeScript tests against the dashboard.
+func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+	ctx := context.Background()
+
+	// Run the Playwright TypeScript tests against the dashboard.
+	log.Info().Msg("Running Playwright dashboard tests...")
+
+	// Get the Playwright TypeScript image name.
+	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", project.Config.ProjectHumanID)
+
+	// Create output directory for dashboard test results.
+	resultsDir := filepath.Join(o.flagOutputDir, "dashboard")
+	if err := os.MkdirAll(resultsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory %s: %w", resultsDir, err)
+	}
+
+	// Convert to absolute path for Docker volume mount
+	absResultsDir, err := filepath.Abs(resultsDir)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for %s: %w", resultsDir, err)
+	}
+	// Convert to forward slashes for Docker compatibility
+	absResultsDir = strings.ReplaceAll(absResultsDir, "\\", "/")
+
+	playwrightOpts := testutil.RunOnceContainerOptions{
+		Image:         pwTsImage,
+		ContainerName: fmt.Sprintf("%s-test-playwright-ts", project.Config.ProjectHumanID),
+		LogPrefix:     "[playwright-ts] ",
+		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
+		Env: map[string]string{
+			"DASHBOARD_BASE_URL": "http://localhost:5550",
+			"CI":                 "true",
+			"OUTPUT_DIRECTORY":   "/PlaywrightOutput",
+		},
+		Mounts: []string{
+			fmt.Sprintf("%s:/PlaywrightOutput", absResultsDir),
+		},
+	}
+
+	// Run the Playwright tests container.
+	playwright := testutil.NewRunOnceContainer(playwrightOpts)
+	exitCode, err := playwright.Run(ctx)
+	if err != nil {
+		return fmt.Errorf("playwright tests failed to run: %w", err)
+	}
+
+	if exitCode != 0 {
+		return fmt.Errorf("playwright tests failed with exit code: %d", exitCode)
+	}
+
+	log.Info().Msg("Playwright dashboard tests completed successfully")
 	return nil
 }
 
@@ -278,7 +341,7 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
 		Cmd:           []string{"nslookup", "localhost"},
 	}
-	dnsTest := testutil.NewRunOnce(dnsTestOpts)
+	dnsTest := testutil.NewRunOnceContainer(dnsTestOpts)
 	if exitCode, err := dnsTest.Run(ctx); err != nil {
 		log.Warn().Msgf("DNS test failed to run: %v", err)
 	} else if exitCode != 0 {
@@ -296,7 +359,7 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
 		Cmd:           []string{"netstat", "-tuln"},
 	}
-	portTest := testutil.NewRunOnce(portTestOpts)
+	portTest := testutil.NewRunOnceContainer(portTestOpts)
 	if exitCode, err := portTest.Run(ctx); err != nil {
 		log.Warn().Msgf("Port test failed to run: %v", err)
 	} else if exitCode != 0 {
@@ -314,7 +377,7 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
 		Cmd:           []string{"timeout", "5", "telnet", "localhost", "9339"},
 	}
-	connectTest := testutil.NewRunOnce(connectTestOpts)
+	connectTest := testutil.NewRunOnceContainer(connectTestOpts)
 	if exitCode, err := connectTest.Run(ctx); err != nil {
 		log.Warn().Msgf("Connection test failed to run: %v", err)
 	} else {
@@ -330,7 +393,7 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
 		Cmd:           []string{"ps", "aux"},
 	}
-	psTest := testutil.NewRunOnce(psTestOpts)
+	psTest := testutil.NewRunOnceContainer(psTestOpts)
 	if exitCode, err := psTest.Run(ctx); err != nil {
 		log.Warn().Msgf("Process test failed to run: %v", err)
 	} else if exitCode != 0 {

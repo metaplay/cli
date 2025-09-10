@@ -37,8 +37,8 @@ type RunOnceContainer struct {
 	completed bool
 }
 
-// NewRunOnce creates a wrapper for a run-once container with the given options.
-func NewRunOnce(opts RunOnceContainerOptions) *RunOnceContainer {
+// NewRunOnceContainer creates a wrapper for a run-once container with the given options.
+func NewRunOnceContainer(opts RunOnceContainerOptions) *RunOnceContainer {
 	// Set defaults
 	if opts.LogPrefix == "" {
 		opts.LogPrefix = "[container] "
@@ -288,6 +288,6 @@ type RunOnceContainerResult struct {
 // RunContainerToCompletion is a convenience function that creates and runs a container to completion.
 // It returns the exit code and any error that occurred.
 func RunContainerToCompletion(ctx context.Context, opts RunOnceContainerOptions) (int, error) {
-	container := NewRunOnce(opts)
+	container := NewRunOnceContainer(opts)
 	return container.Run(ctx)
 }
