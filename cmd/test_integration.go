@@ -31,21 +31,26 @@ func init() {
 	o := testIntegrationOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "integration",
-		Short: "[preview] Run integration tests",
-		Run:   runCommand(&o),
+		Use:     "integration",
+		Aliases: []string{"i"},
+		Short:   "[preview] Run integration tests",
+		Run:     runCommand(&o),
 		Long: renderLong(&o, `
 			PREVIEW: This command is currently in preview and may change in the future. If you encounter
 			problems or have feedback, please file an issue at https://github.com/metaplay/cli/issues/new.
 
 			Run Metaplay integration tests for your project.
 
-			Phases:
-			- build-images: Build Docker images.
-			- test-bots: Run bots against the background server.
-			- test-dashboard: Run the dashboard Playwright tests.
-			- test-system: Run the system tests.
-			- test-http-api: HTTP API tests.
+			The tests are run within containers. The game server and test container images are first built
+			and then used to run the tests.
+
+			For each of the tests, the game server container is first started in the background and then
+			the test-specific container is run against the game server.
+
+			Tests:
+			- bots: Run bots against the background server.
+			- dashboard: Run dashboard Playwright tests.
+			- system: Run Playwright.NET system tests.
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -171,20 +176,22 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 
 	// Execute test tests with the running server
 	tests := []struct {
-		name string
-		fn   func() error
+		name        string
+		displayName string
+		fn          func() error
 	}{
-		{"test-bots", func() error { return o.testBots(project, server) }},
-		{"test-dashboard", func() error { return o.testDashboard(project, server) }},
-		{"test-system", func() error { return o.testSystem(project, server) }},
-		{"test-http-api", func() error { return testPlaceholder("test-http-api") }},
+		{"bots", "Run bots against the server", func() error { return o.runBotTests(project, server) }},
+		{"dashboard", "Run dashboard Playwright tests", func() error { return o.runDashboardTests(project, server) }},
+		{"system", "Run Playwright.NET system tests", func() error { return o.runSystemTests(project, server) }},
+		// {"http-api", "Run HTTP API tests", func() error {  }}, // \todo migrate from Python script
 	}
 
 	// Filter tests if --only flag is specified
 	if o.flagOnly != "" {
 		var filteredTests []struct {
-			name string
-			fn   func() error
+			name        string
+			displayName string
+			fn          func() error
 		}
 		for _, p := range tests {
 			if p.name == o.flagOnly {
@@ -201,10 +208,10 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	// Run all the active tests.
 	for _, p := range tests {
 		log.Info().Msg("")
-		log.Info().Msg(styles.RenderBright("🔷 " + p.name))
+		log.Info().Msg(styles.RenderBright("🔷 " + p.displayName))
 
 		if err := p.fn(); err != nil {
-			return fmt.Errorf("test '%s' failed: %w", p.name, err)
+			return fmt.Errorf("test '%s' failed: %w", p.displayName, err)
 		}
 	}
 
@@ -247,8 +254,8 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 	return nil
 }
 
-// testBots runs the botclient against the already-running server.
-func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+// runBotTests runs the botclient against the already-running server.
+func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
 	ctx := context.Background()
 
 	// Run the botclient against the server
@@ -297,8 +304,8 @@ func (o *testIntegrationOpts) testBots(project *metaproj.MetaplayProject, server
 	return nil
 }
 
-// testDashboard runs the Playwright TypeScript tests against the dashboard.
-func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+// runDashboardTests runs the Playwright TypeScript tests against the dashboard.
+func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
 	ctx := context.Background()
 
 	// Run the Playwright TypeScript tests against the dashboard.
@@ -351,8 +358,8 @@ func (o *testIntegrationOpts) testDashboard(project *metaproj.MetaplayProject, s
 	return nil
 }
 
-// testSystem runs the Playwright .NET tests for system testing.
-func (o *testIntegrationOpts) testSystem(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+// runSystemTests runs the Playwright .NET tests for system testing.
+func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
 	ctx := context.Background()
 
 	// Run the Playwright.NET tests for system testing.
@@ -543,10 +550,4 @@ func dockerSupportsBuildx() bool {
 		return false
 	}
 	return true
-}
-
-// testPlaceholder is a stub implementation for an integration test.
-func testPlaceholder(name string) error {
-	log.Info().Msg(styles.RenderMuted("(placeholder) implementation pending for: " + name))
-	return nil
 }
