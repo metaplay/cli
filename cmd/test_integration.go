@@ -119,14 +119,16 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
-	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
+	// Print information about test run.
+	log.Info().Msgf("Docker version:        %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
+	log.Info().Msgf("Docker build engine:   %s", styles.RenderTechnical(buildEngine))
+	log.Info().Msgf("Build images:          %v", styles.RenderTechnical(fmt.Sprintf("%v", !o.flagSkipBuild)))
+	log.Info().Msgf("Test output directory: %s", styles.RenderTechnical(o.flagOutputDir))
 
 	// Create output directory for test results
 	if err := os.MkdirAll(o.flagOutputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory %s: %w", o.flagOutputDir, err)
 	}
-	log.Info().Msgf("Test output directory: %s", styles.RenderTechnical(o.flagOutputDir))
 
 	// Derive container image names once and pass them to phases
 	projectID := strings.ToLower(project.Config.ProjectHumanID)
@@ -144,10 +146,65 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Skipping container image build step due to --skip-build")
 	}
 
-	// Start the background game server before all test phases
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderBright("🔷 Start background game server"))
+	// runTestCase handles per-test server lifecycle and logs
+	tests := []struct {
+		name        string
+		displayName string
+		fn          func(*testutil.BackgroundGameServer) error
+	}{
+		{"bots", "Run botclient tests", func(server *testutil.BackgroundGameServer) error {
+			return o.runBotTests(project, server, serverImage)
+		}},
+		{"dashboard", "Run dashboard Playwright tests", func(server *testutil.BackgroundGameServer) error {
+			return o.runDashboardTests(project, server, pwTsImage)
+		}},
+		{"system", "Run Playwright.NET system tests", func(server *testutil.BackgroundGameServer) error {
+			return o.runSystemTests(project, server, pwNetImage)
+		}},
+		// {"http-api", "Run HTTP API tests", func(s *testutil.BackgroundGameServer) error { return nil }}, // \todo migrate from Python script
+	}
 
+	// Filter tests if --only flag is specified
+	if o.flagOnly != "" {
+		var filteredTests []struct {
+			name        string
+			displayName string
+			fn          func(*testutil.BackgroundGameServer) error
+		}
+		for _, p := range tests {
+			if p.name == o.flagOnly {
+				filteredTests = append(filteredTests, p)
+				break
+			}
+		}
+		if len(filteredTests) == 0 {
+			return fmt.Errorf("unknown test '%s'. Available tests: bots, dashboard, system", o.flagOnly)
+		}
+		tests = filteredTests
+	}
+
+	// Run all the active tests.
+	for _, p := range tests {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderBright("🔷 " + p.displayName))
+		log.Info().Msg("")
+
+		if err := o.runTestCase(project, serverImage, p.displayName, p.fn); err != nil {
+			return fmt.Errorf("test '%s' failed: %w", p.displayName, err)
+		}
+
+		log.Info().Msg("")
+		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "Test completed successfully")
+	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderSuccess("✅ Integration tests successfully completed"))
+	return nil
+}
+
+// runTestCase starts a background game server, runs the provided test function, and then stops the server.
+func (o *testIntegrationOpts) runTestCase(project *metaproj.MetaplayProject, serverImage, displayName string, fn func(*testutil.BackgroundGameServer) error) error {
+	// Create and start the background server for this test
 	server := testutil.NewGameServer(testutil.GameServerOptions{
 		Image:         serverImage,
 		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
@@ -167,56 +224,18 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msgf("Background server started at %s", server.BaseURL().String())
 
-	// Run network connectivity tests if debug flag is enabled.
+	// Optional: run network debug checks
 	if o.flagDebugNetwork {
 		if err := o.debugNetworkConnectivity(ctx, project, server, serverImage); err != nil {
 			return fmt.Errorf("network connectivity test failed: %w", err)
 		}
 	}
 
-	// Execute test tests with the running server
-	tests := []struct {
-		name        string
-		displayName string
-		fn          func() error
-	}{
-		{"bots", "Run bots against the server", func() error { return o.runBotTests(project, server) }},
-		{"dashboard", "Run dashboard Playwright tests", func() error { return o.runDashboardTests(project, server) }},
-		{"system", "Run Playwright.NET system tests", func() error { return o.runSystemTests(project, server) }},
-		// {"http-api", "Run HTTP API tests", func() error {  }}, // \todo migrate from Python script
+	// Execute the test function
+	if err := fn(server); err != nil {
+		return err
 	}
 
-	// Filter tests if --only flag is specified
-	if o.flagOnly != "" {
-		var filteredTests []struct {
-			name        string
-			displayName string
-			fn          func() error
-		}
-		for _, p := range tests {
-			if p.name == o.flagOnly {
-				filteredTests = append(filteredTests, p)
-				break
-			}
-		}
-		if len(filteredTests) == 0 {
-			return fmt.Errorf("unknown test '%s'. Available tests: test-bots, test-dashboard, test-system, test-http-api", o.flagOnly)
-		}
-		tests = filteredTests
-	}
-
-	// Run all the active tests.
-	for _, p := range tests {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderBright("🔷 " + p.displayName))
-
-		if err := p.fn(); err != nil {
-			return fmt.Errorf("test '%s' failed: %w", p.displayName, err)
-		}
-	}
-
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("✅ Integration tests successfully completed"))
 	return nil
 }
 
@@ -255,17 +274,11 @@ func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, ser
 }
 
 // runBotTests runs the botclient against the already-running server.
-func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
 	ctx := context.Background()
 
-	// Run the botclient against the server
-	log.Info().Msg("Running botclient...")
-
-	// Get the server image from the server container (we need to derive it from the project)
-	serverImage := fmt.Sprintf("%s/server:test", project.Config.ProjectHumanID)
-
 	botClientOpts := testutil.RunOnceContainerOptions{
-		Image:         serverImage,
+		Image:         imageName,
 		ContainerName: fmt.Sprintf("%s-test-botclient", project.Config.ProjectHumanID),
 		LogPrefix:     "[botclient] ",
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
@@ -300,19 +313,12 @@ func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, ser
 		return fmt.Errorf("botclient exited with non-zero code: %d", exitCode)
 	}
 
-	log.Info().Msg("Botclient completed successfully")
 	return nil
 }
 
 // runDashboardTests runs the Playwright TypeScript tests against the dashboard.
-func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
 	ctx := context.Background()
-
-	// Run the Playwright TypeScript tests against the dashboard.
-	log.Info().Msg("Running Playwright dashboard tests...")
-
-	// Get the Playwright TypeScript image name.
-	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", project.Config.ProjectHumanID)
 
 	// Create output directory for dashboard test results.
 	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "dashboard"))
@@ -329,7 +335,7 @@ func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProjec
 	absResultsDir = filepath.ToSlash(absResultsDir)
 
 	playwrightOpts := testutil.RunOnceContainerOptions{
-		Image:         pwTsImage,
+		Image:         imageName,
 		ContainerName: fmt.Sprintf("%s-test-playwright-ts", project.Config.ProjectHumanID),
 		LogPrefix:     "[playwright-ts] ",
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
@@ -354,19 +360,12 @@ func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProjec
 		return fmt.Errorf("playwright tests failed with exit code: %d", exitCode)
 	}
 
-	log.Info().Msg("Playwright dashboard tests completed successfully")
 	return nil
 }
 
 // runSystemTests runs the Playwright .NET tests for system testing.
-func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer) error {
+func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
 	ctx := context.Background()
-
-	// Run the Playwright.NET tests for system testing.
-	log.Info().Msg("Running Playwright.NET system tests...")
-
-	// Get the Playwright .NET image name.
-	pwNetImage := fmt.Sprintf("%s/playwright-net:test", project.Config.ProjectHumanID)
 
 	// Create output directory for system test results.
 	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "system"))
@@ -383,7 +382,7 @@ func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, 
 	absResultsDir = filepath.ToSlash(absResultsDir)
 
 	playwrightOpts := testutil.RunOnceContainerOptions{
-		Image:         pwNetImage,
+		Image:         imageName,
 		ContainerName: fmt.Sprintf("%s-test-playwright-net", project.Config.ProjectHumanID),
 		LogPrefix:     "[playwright-net] ",
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
@@ -407,15 +406,12 @@ func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, 
 		return fmt.Errorf("playwright system tests failed with exit code: %d", exitCode)
 	}
 
-	log.Info().Msg("Playwright system tests completed successfully")
 	return nil
 }
 
 // debugNetworkConnectivity runs network tests to help diagnose connectivity issues to the game server container.
 // These tests are run in containers to simulate the same networking as the other test containers will use.
 func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, serverImage string) error {
-	log.Info().Msg("Running network connectivity tests...")
-
 	// Test 1: Check if we can resolve localhost from within the botclient container network
 	log.Info().Msg("Test 1: DNS resolution test")
 	dnsTestOpts := testutil.RunOnceContainerOptions{
@@ -486,7 +482,6 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 		log.Info().Msg("Process test completed - check logs for gameserver process")
 	}
 
-	log.Info().Msg("Network connectivity tests completed")
 	return nil
 }
 
