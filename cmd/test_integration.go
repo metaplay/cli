@@ -477,7 +477,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	commonParams := buildDockerImageParams{
 		project:     project,
 		buildEngine: buildEngine,
-		platforms:   []string{"linux/amd64"},
+		platforms:   []string{}, // Use architecture of host machine
 		commitID:    "test",
 		buildNumber: "test",
 		extraArgs:   []string{},

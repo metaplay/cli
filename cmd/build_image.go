@@ -559,7 +559,6 @@ func buildDockerImage(params buildDockerImageParams) error {
 			"--pull",
 			"-t", params.imageName,
 			"-f", filepath.ToSlash(rebasedDockerFilePath),
-			"--platform", strings.Join(params.platforms, ","),
 			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
 			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
@@ -570,6 +569,13 @@ func buildDockerImage(params buildDockerImageParams) error {
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", params.commitID),
 		}...,
 	)
+
+	// If target platform is specified, set it explicitly.
+	if len(params.platforms) > 0 {
+		dockerArgs = append(
+			dockerArgs,
+			"--platform", strings.Join(params.platforms, ","))
+	}
 
 	// Add target if specified (for multi-stage builds)
 	if params.target != "" {
