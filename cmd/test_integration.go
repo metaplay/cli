@@ -24,7 +24,7 @@ type testIntegrationOpts struct {
 	flagSkipBuild    bool
 	flagDebugNetwork bool
 	flagOutputDir    string
-	flagOnly         string
+	flagTest         string
 }
 
 func init() {
@@ -58,6 +58,9 @@ func init() {
 
 			# Run the tests without building the images. Speeds up the run if you already built the images.
 			metaplay test integration --skip-build
+
+			# Run only the 'bots' test.
+			metaplay test integration --test=bots
 		`),
 	}
 
@@ -65,10 +68,11 @@ func init() {
 
 	// Flags
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the 'build-images' phase")
+	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the docker image build step (faster if you already built the images)")
 	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "./integration-test-output", "Directory for test output and results")
-	flags.StringVar(&o.flagOnly, "only", "", "Run only the specified test phase (e.g. 'test-bots', 'test-dashboard', 'test-system', 'test-http-api')")
+	flags.StringVar(&o.flagTest, "test", "", "Run only the specified test (e.g. 'bots', 'dashboard', 'system')")
+	_ = flags.MarkDeprecated("only", "use --tests instead")
 }
 
 func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
@@ -164,21 +168,21 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		// {"http-api", "Run HTTP API tests", func(s *testutil.BackgroundGameServer) error { return nil }}, // \todo migrate from Python script
 	}
 
-	// Filter tests if --only flag is specified
-	if o.flagOnly != "" {
+	// Filter tests if --tests flag is specified
+	if o.flagTest != "" {
 		var filteredTests []struct {
 			name        string
 			displayName string
 			fn          func(*testutil.BackgroundGameServer) error
 		}
 		for _, p := range tests {
-			if p.name == o.flagOnly {
+			if p.name == o.flagTest {
 				filteredTests = append(filteredTests, p)
 				break
 			}
 		}
 		if len(filteredTests) == 0 {
-			return fmt.Errorf("unknown test '%s'. Available tests: bots, dashboard, system", o.flagOnly)
+			return fmt.Errorf("unknown test '%s'. Available tests: bots, dashboard, system", o.flagTest)
 		}
 		tests = filteredTests
 	}
