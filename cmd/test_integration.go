@@ -124,10 +124,15 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Print information about test run.
-	log.Info().Msgf("Docker version:        %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
-	log.Info().Msgf("Docker build engine:   %s", styles.RenderTechnical(buildEngine))
-	log.Info().Msgf("Build images:          %v", styles.RenderTechnical(fmt.Sprintf("%v", !o.flagSkipBuild)))
-	log.Info().Msgf("Test output directory: %s", styles.RenderTechnical(o.flagOutputDir))
+	log.Info().Msgf("Docker version:         %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
+	log.Info().Msgf("Docker build engine:    %s", styles.RenderTechnical(buildEngine))
+	log.Info().Msgf("Build container images: %s", styles.RenderTechnical(map[bool]string{true: "yes", false: "skip"}[!o.flagSkipBuild]))
+	testsToRun := "all"
+	if o.flagTest != "" {
+		testsToRun = o.flagTest
+	}
+	log.Info().Msgf("Tests to run:           %s", styles.RenderTechnical(testsToRun))
+	log.Info().Msgf("Test output directory:  %s", styles.RenderTechnical(o.flagOutputDir))
 
 	// Create output directory for test results
 	if err := os.MkdirAll(o.flagOutputDir, 0755); err != nil {
