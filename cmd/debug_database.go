@@ -194,9 +194,9 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	// Show info
 	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
 	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msg("Database info:")
-	stderrLogger.Info().Msgf("  Shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
-	stderrLogger.Info().Msgf("  Replica: %s", styles.RenderTechnical(replicaType))
+	stderrLogger.Info().Msg("Target database:")
+	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	stderrLogger.Info().Msgf("  Replica:     %s", styles.RenderTechnical(replicaType))
 	stderrLogger.Info().Msg("")
 
 	// Connect to the database shard

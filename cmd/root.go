@@ -184,6 +184,7 @@ func init() {
 	debugCmd.GroupID = "core"
 	deployCmd.GroupID = "core"
 	devCmd.GroupID = "core"
+	testCmd.GroupID = "core"
 
 	// Manage project:
 	initCmd.GroupID = "project"
