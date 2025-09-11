@@ -182,7 +182,11 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 			}
 		}
 		if len(filteredTests) == 0 {
-			return fmt.Errorf("unknown test '%s'. Available tests: bots, dashboard, system", o.flagTest)
+			var names []string
+			for _, t := range tests {
+				names = append(names, t.name)
+			}
+			return fmt.Errorf("unknown test '%s'. Available tests: %s", o.flagTest, strings.Join(names, ", "))
 		}
 		tests = filteredTests
 	}
@@ -190,7 +194,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	// Run all the active tests.
 	for _, p := range tests {
 		log.Info().Msg("")
-		log.Info().Msg(styles.RenderBright("🔷 " + p.displayName))
+		log.Info().Msgf("%s %s: %s", styles.RenderBright("🔷"), styles.RenderTechnical(p.name), styles.RenderBright(p.displayName))
 		log.Info().Msg("")
 
 		if err := o.runTestCase(project, serverImage, p.displayName, p.fn); err != nil {
@@ -198,7 +202,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		}
 
 		log.Info().Msg("")
-		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "Test completed successfully")
+		log.Info().Msgf("%s Test %s successful", styles.RenderSuccess("✓"), styles.RenderTechnical(p.name))
 	}
 
 	log.Info().Msg("")
