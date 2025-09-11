@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
@@ -249,40 +248,6 @@ func (o *testIntegrationOpts) runTestCase(project *metaproj.MetaplayProject, ser
 		return err
 	}
 
-	return nil
-}
-
-// startServer starts the game server container, waits for it to be ready,
-// lets it run for 10 seconds, then gracefully terminates it.
-func (o *testIntegrationOpts) startServer(project *metaproj.MetaplayProject, serverImage string) error {
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderBright("🔷 Start game server"))
-
-	// Create and start the server
-	server := testutil.NewGameServer(testutil.GameServerOptions{
-		Image:         serverImage,
-		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
-	})
-	ctx := context.Background()
-
-	log.Info().Msg("Starting server container...")
-	if err := server.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start server: %w", err)
-	}
-
-	log.Info().Msgf("Server started successfully at %s", server.BaseURL().String())
-	log.Info().Msg("Letting server run for 10 seconds...")
-
-	// Let the server run for 10 seconds
-	time.Sleep(10 * time.Second)
-
-	// Gracefully terminate the server
-	log.Info().Msg("Gracefully shutting down server...")
-	if err := server.Shutdown(ctx); err != nil {
-		return fmt.Errorf("failed to shutdown server: %w", err)
-	}
-
-	log.Info().Msg("Server shutdown completed")
 	return nil
 }
 
