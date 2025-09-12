@@ -176,6 +176,56 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	return nil
 }
 
+// isTransientError checks if an error is transient and should be retried
+func isTransientError(err error, statusCode int) bool {
+	if err != nil {
+		return true // Network errors are generally transient
+	}
+	// HTTP status codes that indicate transient failures
+	return statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+}
+
+// retryWithBackoff executes a function with exponential backoff retry logic
+func retryWithBackoff(operation func() (*http.Response, error), maxRetries int) (*http.Response, error) {
+	var lastErr error
+	var resp *http.Response
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, lastErr = operation()
+
+		if lastErr == nil && resp != nil && !isTransientError(nil, resp.StatusCode) {
+			return resp, nil
+		}
+
+		// If this was the last attempt, don't wait
+		if attempt == maxRetries {
+			break
+		}
+
+		// Log the retry attempt
+		if resp != nil {
+			log.Warn().Msgf("Token endpoint request failed with status %d, retrying in %v (attempt %d/%d)",
+				resp.StatusCode, time.Duration(1<<attempt)*time.Second, attempt+1, maxRetries+1)
+		} else {
+			log.Warn().Msgf("Token endpoint request failed with error %v, retrying in %v (attempt %d/%d)",
+				lastErr, time.Duration(1<<attempt)*time.Second, attempt+1, maxRetries+1)
+		}
+
+		// Close the response body if present to avoid resource leaks
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		// Exponential backoff: 1s, 2s, 4s, 8s...
+		time.Sleep(time.Duration(1<<attempt) * time.Second)
+	}
+
+	if resp != nil && lastErr == nil {
+		return resp, nil
+	}
+	return resp, lastErr
+}
+
 func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret string) error {
 	// Get a fresh access token from Metaplay Auth.
 	params := url.Values{
@@ -185,10 +235,13 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 		"scope":         {"openid email profile offline_access"},
 	}
 
-	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint
-	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
+	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint with retry logic
+	resp, err := retryWithBackoff(func() (*http.Response, error) {
+		return http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
+	}, 3) // Retry up to 3 times (4 total attempts)
+
 	if err != nil {
-		return fmt.Errorf("failed to send request to token endpoint: %w", err)
+		return fmt.Errorf("failed to send request to token endpoint after retries: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -201,7 +254,6 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 	// Check for HTTP errors.
 	// TODO: Check whether other 2xx codes with a token in the body should be expected and accepted
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
 	}
 
