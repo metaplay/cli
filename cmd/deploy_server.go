@@ -359,7 +359,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"environment":       envConfig.Name,
 		"environmentFamily": envConfig.GetEnvironmentFamily(),
 		"config": map[string]any{
-			"files": []string{
+			"files": []any{
 				"./Config/Options.base.yaml",
 				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
