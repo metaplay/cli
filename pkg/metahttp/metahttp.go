@@ -87,7 +87,7 @@ func Request[TResponse any](c *Client, method string, url string, body any) (TRe
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
 	
-	log.Debug().Msgf("Raw request: %s", response.Request.RawRequest)
+	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
 
 	// Handle request errors
 	if err != nil {
