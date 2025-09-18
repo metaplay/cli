@@ -182,21 +182,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	var sdkVersionInfo *portalapi.SdkVersionInfo = nil
 	var sdkVersionBadge string = ""
 	if o.flagSdkSource == "" {
-		// Handle agreeing to general terms & conditions.
-		log.Debug().Msg("Fetch the user state to see which contracts have been signed")
-		userState, err := portalClient.GetUserState()
-		if err != nil {
-			return err
-		}
-
 		// Ensure Privacy Policy is accepted.
-		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.PrivacyPolicy)
-		if err != nil {
-			return err
-		}
-
-		// Ensure Terms & Conditions is accepted.
-		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.TermsAndConditions)
+		err = ensureSdkDownloadContractsAccepted(cmd.Context(), portalClient, o.flagAutoAgreeContracts)
 		if err != nil {
 			return err
 		}
@@ -224,22 +211,11 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 			}
 		}
 
-		// Validate the selected SDK version.
-		vsn, err := version.NewVersion(sdkVersionInfo.Version)
-		if err != nil {
-			return fmt.Errorf("invalid SDK version string '%s': %w", sdkVersionInfo.Version, err)
-		}
-
-		// Must be at least 32.0 (allow pre versions too).
-		requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
-		if vsn.LessThan(requiredVersion) {
-			return fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", sdkVersionInfo.Version)
-		}
-
-		// Must not be newer than the latest supported version.
+		// Validate SDK version.
 		// \todo Enforce version when using --sdk-source?
-		if vsn.GreaterThan(latestSupportedSdkVersion) {
-			return fmt.Errorf("SDK version %s is not supported by this CLI version; upgrade the CLI to the latest version with 'metaplay update cli'", sdkVersionInfo.Version)
+		_, err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
+		if err != nil {
+			return err
 		}
 
 		// The SDK version must be downloadable.
@@ -384,14 +360,35 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-func (o *initProjectOpts) ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client, contractState *portalapi.UserCoreContract) error {
+// ensureSdkDownloadContractsAccepted ensures that the user has agreed to the Privacy Policy and Terms & Conditions
+// before SDK download. If auto-agree is specified, the contracts are accepted automatically, otherwise the user is
+// prompted to agree to the contracts.
+func ensureSdkDownloadContractsAccepted(ctx context.Context, portalClient *portalapi.Client, autoAgree bool) error {
+	log.Debug().Msg("Fetch the user state to see which contracts have been signed")
+	userState, err := portalClient.GetUserState()
+	if err != nil {
+		return err
+	}
+
+	if err := ensureContractAccepted(ctx, portalClient, &userState.Contracts.PrivacyPolicy, autoAgree); err != nil {
+		return err
+	}
+	if err := ensureContractAccepted(ctx, portalClient, &userState.Contracts.TermsAndConditions, autoAgree); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureContractAccepted ensures that the specified contract has been signed by the user. If the contract is not
+// yet accepted, the user is prompted to do so, or if auto-agree is specified, the contract is accepted automatically.
+func ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client, contractState *portalapi.UserCoreContract, autoAgree bool) error {
 	// If already signed, return immediately.
 	if contractState.ContractSignature != nil {
 		return nil
 	}
 
 	// If auto-agree not specified, confirm the user for agreement to contract.
-	if !o.flagAutoAgreeContracts {
+	if !autoAgree {
 		contractURL := fmt.Sprintf("%s/contracts/%s", common.PortalBaseURL, contractState.ID)
 		choice, err := tui.DoConfirmDialog(
 			ctx,
@@ -415,4 +412,26 @@ func (o *initProjectOpts) ensureContractAccepted(ctx context.Context, portalClie
 
 	log.Info().Msgf(" %s Agreed to %s!", styles.RenderSuccess("✓"), contractState.Name)
 	return nil
+}
+
+// Parse an SDK version and validate that it's compatible with this CLI version.
+func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
+	// Validate the selected SDK version.
+	vsn, err := version.NewVersion(versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SDK version string '%s': %w", versionStr, err)
+	}
+
+	// Must be at least 32.0 (allow pre versions too).
+	requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
+	if vsn.LessThan(requiredVersion) {
+		return nil, fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", versionStr)
+	}
+
+	// Must not be newer than the latest supported version.
+	if vsn.GreaterThan(latestSupportedSdkVersion) {
+		return nil, fmt.Errorf("SDK version %s is not supported by this CLI version; upgrade the CLI to the latest version with 'metaplay update cli'", versionStr)
+	}
+
+	return vsn, nil
 }
