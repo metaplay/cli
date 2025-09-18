@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/gabriel-vasile/mimetype"
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
@@ -52,26 +53,41 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any) (TResponse, error) {
 	var result TResponse
-
+	
+	var contentType *mimetype.MIME
+	if strBody, isString := body.(string); isString { 
+		contentType = mimetype.Detect([]byte(strBody))
+	} else if byteBody, isByteArr := body.([]byte); isByteArr {
+		contentType = mimetype.Detect(byteBody)
+	}
+	
 	// Perform the request
 	var response *resty.Response
 	var err error
+	request := c.Resty.R()
+
+	if contentType != nil {
+		request.SetHeader("Content-Type", contentType.String())
+	}
+
 	switch method {
 	case http.MethodGet:
-		response, err = c.Resty.R().Get(url)
+		response, err = request.Get(url)
 	case http.MethodPost:
-		response, err = c.Resty.R().SetBody(body).Post(url)
+		response, err = request.SetBody(body).Post(url)
 	case http.MethodPut:
-		response, err = c.Resty.R().SetBody(body).Put(url)
+		response, err = request.SetBody(body).Put(url)
 	case http.MethodDelete:
 		if body != nil {
-			response, err = c.Resty.R().SetBody(body).Delete(url)
+			response, err = request.SetBody(body).Delete(url)
 		} else {
-			response, err = c.Resty.R().Delete(url)
+			response, err = request.Delete(url)
 		}
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
+	
+	log.Debug().Msgf("Raw request: %s", response.Request.RawRequest)
 
 	// Handle request errors
 	if err != nil {
