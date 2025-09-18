@@ -251,7 +251,7 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
+	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path, "")
 	return &details, err
 }
 
@@ -259,14 +259,14 @@ func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
 func (target *TargetEnvironment) GetKubeConfigWithEmbeddedCredentials() (string, error) {
 	log.Debug().Msg("Fetching kubeconfig with embedded secret")
 	path := fmt.Sprintf("/v0/credentials/%s/k8s", target.HumanID)
-	config, err := metahttp.Post[string](target.StackApiClient, path, nil)
+	config, err := metahttp.Post[string](target.StackApiClient, path, nil, "")
 	return config, err
 }
 
 // Get the Kubernetes credentials in the execcredential format
 func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
-	credentials, err := metahttp.Post[string](target.StackApiClient, path, nil)
+	credentials, err := metahttp.Post[string](target.StackApiClient, path, nil, "")
 	return &credentials, err
 }
 
@@ -280,7 +280,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
 	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
 
-	credentials, err := metahttp.Post[KubeExecCredential](target.StackApiClient, path, nil)
+	credentials, err := metahttp.Post[KubeExecCredential](target.StackApiClient, path, nil, "")
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +340,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 // \todo migrate this into StackAPI -- AWS creds should not be given to the client
 func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	path := fmt.Sprintf("/v0/credentials/%s/aws", target.HumanID)
-	awsCredentials, err := metahttp.Post[AWSCredentials](target.StackApiClient, path, nil)
+	awsCredentials, err := metahttp.Post[AWSCredentials](target.StackApiClient, path, nil, "")
 	if err != nil {
 		return nil, err
 	}

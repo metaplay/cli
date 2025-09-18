@@ -49,29 +49,56 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	return response, nil
 }
 
-// Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
-func Request[TResponse any](c *Client, method string, url string, body any) (TResponse, error) {
-	var result TResponse
+func IsJSON(str string) bool {
+    var js json.RawMessage
+    return json.Unmarshal([]byte(str), &js) == nil
+}
 
+// Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
+func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
+	var result TResponse
+	
+	if contentType == "" {
+		if strBody, isString := body.(string); isString { 
+			if IsJSON(strBody) {
+				contentType = "application/json"
+			}
+		} else if byteBody, isByteArr := body.([]byte); isByteArr {
+			if IsJSON(string(byteBody)) {
+				contentType = "application/json"
+			} else {
+				contentType = "application/octet-stream"
+			}
+		}
+	}
+	
 	// Perform the request
 	var response *resty.Response
 	var err error
+	request := c.Resty.R()
+
+	if contentType != "" {
+		request.SetHeader("Content-Type", contentType)
+	}
+
 	switch method {
 	case http.MethodGet:
-		response, err = c.Resty.R().Get(url)
+		response, err = request.Get(url)
 	case http.MethodPost:
-		response, err = c.Resty.R().SetBody(body).Post(url)
+		response, err = request.SetBody(body).Post(url)
 	case http.MethodPut:
-		response, err = c.Resty.R().SetBody(body).Put(url)
+		response, err = request.SetBody(body).Put(url)
 	case http.MethodDelete:
 		if body != nil {
-			response, err = c.Resty.R().SetBody(body).Delete(url)
+			response, err = request.SetBody(body).Delete(url)
 		} else {
-			response, err = c.Resty.R().Delete(url)
+			response, err = request.Delete(url)
 		}
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
+	
+	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
 
 	// Handle request errors
 	if err != nil {
@@ -109,24 +136,24 @@ func Request[TResponse any](c *Client, method string, url string, body any) (TRe
 
 // Make a HTTP GET to the target URL and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Get[TResponse any](c *Client, url string) (TResponse, error) {
-	return Request[TResponse](c, http.MethodGet, url, nil)
+func Get[TResponse any](c *Client, url string, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodGet, url, nil, contentType)
 }
 
 // Make a HTTP POST to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Post[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodPost, url, body)
+func Post[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPost, url, body, contentType)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Put[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodPut, url, body)
+func Put[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPut, url, body, contentType)
 }
 
 // Make a HTTP DELETE to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Delete[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodDelete, url, body)
+func Delete[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodDelete, url, body, contentType)
 }
