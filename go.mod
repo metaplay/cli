@@ -14,7 +14,6 @@ require (
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/docker/go-connections v0.5.0
 	github.com/dustin/go-humanize v1.0.1
-	github.com/gabriel-vasile/mimetype v1.4.10
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/goccy/go-yaml v1.18.0
 	github.com/golang-jwt/jwt/v5 v5.3.0

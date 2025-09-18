@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/gabriel-vasile/mimetype"
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
@@ -50,15 +49,23 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	return response, nil
 }
 
+func IsJSON(str string) bool {
+    var js json.RawMessage
+    return json.Unmarshal([]byte(str), &js) == nil
+}
+
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
-func Request[TResponse any](c *Client, method string, url string, body any) (TResponse, error) {
+func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
 	var result TResponse
 	
-	var contentType *mimetype.MIME
-	if strBody, isString := body.(string); isString { 
-		contentType = mimetype.Detect([]byte(strBody))
-	} else if byteBody, isByteArr := body.([]byte); isByteArr {
-		contentType = mimetype.Detect(byteBody)
+	if contentType == "" {
+		if strBody, isString := body.(string); isString { 
+			if IsJSON(strBody) {
+				contentType = "application/json"
+			}
+		} else if _, isByteArr := body.([]byte); isByteArr {
+			contentType = "application/octet-stream"
+		}
 	}
 	
 	// Perform the request
@@ -66,8 +73,8 @@ func Request[TResponse any](c *Client, method string, url string, body any) (TRe
 	var err error
 	request := c.Resty.R()
 
-	if contentType != nil {
-		request.SetHeader("Content-Type", contentType.String())
+	if contentType != "" {
+		request.SetHeader("Content-Type", contentType)
 	}
 
 	switch method {
@@ -125,24 +132,24 @@ func Request[TResponse any](c *Client, method string, url string, body any) (TRe
 
 // Make a HTTP GET to the target URL and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Get[TResponse any](c *Client, url string) (TResponse, error) {
-	return Request[TResponse](c, http.MethodGet, url, nil)
+func Get[TResponse any](c *Client, url string, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodGet, url, nil, contentType)
 }
 
 // Make a HTTP POST to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Post[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodPost, url, body)
+func Post[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPost, url, body, contentType)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Put[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodPut, url, body)
+func Put[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPut, url, body, contentType)
 }
 
 // Make a HTTP DELETE to the target URL with the specified body and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Delete[TResponse any](c *Client, url string, body any) (TResponse, error) {
-	return Request[TResponse](c, http.MethodDelete, url, body)
+func Delete[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodDelete, url, body, contentType)
 }
