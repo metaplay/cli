@@ -63,8 +63,12 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 			if IsJSON(strBody) {
 				contentType = "application/json"
 			}
-		} else if _, isByteArr := body.([]byte); isByteArr {
-			contentType = "application/octet-stream"
+		} else if byteBody, isByteArr := body.([]byte); isByteArr {
+			if IsJSON(string(byteBody)) {
+				contentType = "application/json"
+			} else {
+				contentType = "application/octet-stream"
+			}
 		}
 	}
 	
