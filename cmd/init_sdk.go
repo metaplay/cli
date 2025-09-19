@@ -29,9 +29,11 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "sdk",
-		Short: "Download the Metaplay SDK into a target directory",
+		Short: "[internal] Download the Metaplay SDK into a target directory",
 		Run:   runCommand(o),
 		Long: renderLong(o, `
+			INTERNAL: This command is intended for Metaplay internal use only.
+
 			Download and extract a specific Metaplay SDK release to a directory.
 
 			The SDK will be extracted to the directory specified by --sdk-directory (defaults to "MetaplaySDK" in the current directory).
@@ -53,6 +55,9 @@ func init() {
 	flags.StringVar(&o.flagSdkVersion, "sdk-version", "", "Metaplay SDK version to download (required)")
 	flags.StringVar(&o.flagSdkDirectory, "sdk-directory", "MetaplaySDK", "Directory where MetaplaySDK/ should be created")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
+
+	// For internal use only
+	initCmd.Hidden = true
 
 	initCmd.AddCommand(cmd)
 }
