@@ -316,7 +316,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 				return err
 			}
 		}
-		log.Debug().Msgf("Relative path to MetaplaySDK: %s", relativePathToSdk)
+		log.Debug().Msgf("Relative path to MetaplaySDK (from project root): %s", relativePathToSdk)
 
 		return nil
 	})

@@ -508,7 +508,7 @@ func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	if err != nil {
 		return fmt.Errorf("failed to compute relative path: %w", err)
 	}
-	log.Debug().Msgf("Relative path to MetaplaySDK: %s", relativePath)
+	log.Debug().Msgf("Relative path to MetaplaySDK (from Unity Packages/ directory): %s", relativePath)
 
 	// // Check if the SDK directory exists
 	// if _, err := os.Stat(relativePathToSdk); os.IsNotExist(err) {
