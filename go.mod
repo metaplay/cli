@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.31.6
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.50.1
 	github.com/charmbracelet/bubbles v0.21.0
-	github.com/charmbracelet/bubbletea v1.3.7
+	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/creativeprojects/go-selfupdate v1.5.1
 	github.com/docker/docker v28.4.0+incompatible
@@ -29,7 +29,7 @@ require (
 	github.com/testcontainers/testcontainers-go v0.38.0
 	github.com/tidwall/sjson v1.2.5
 	github.com/zalando/go-keyring v0.2.6
-	golang.org/x/sys v0.35.0
+	golang.org/x/sys v0.36.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.18.6
 	k8s.io/api v0.34.1
