@@ -36,6 +36,6 @@
   },
   "prConcurrentLimit": 10,
   "prHourlyLimit": 4,
-  "schedule": ["every saturday"],
+  "schedule": ["every saturday", "every sunday"],
   "timezone": "Europe/Berlin"
 }
