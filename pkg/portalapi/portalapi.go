@@ -65,7 +65,7 @@ type UserState struct {
 // the user profile and contract signature status.
 func (c *Client) GetUserState() (*UserState, error) {
 	// Fetch my user profile from portal.
-	userState, err := metahttp.Get[UserState](c.httpClient, "/api/v1/users/me", "")
+	userState, err := metahttp.Get[UserState](c.httpClient, "/api/v1/users/me")
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (c *Client) AgreeToContract(contractID string) error {
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.Put[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload, "")
+	_, err := metahttp.PutJSON[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}
@@ -121,7 +121,7 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 // Note: It's considered an error if the user has no accessible organizations.
 func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) {
 	path := fmt.Sprintf("/api/v1/organizations/user-organizations")
-	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path, "")
+	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user's organizations and projects: %w", err)
 	}
@@ -146,7 +146,7 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 // FetchProjectInfo fetches information about a project using its human ID.
 func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 	url := fmt.Sprintf("/api/v1/projects?human_id=%s", projectHumanID)
-	projectInfos, err := metahttp.Get[[]ProjectInfo](c.httpClient, url, "")
+	projectInfos, err := metahttp.Get[[]ProjectInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
 	}
@@ -165,7 +165,7 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?projectId=%s", projectUUID)
 	log.Debug().Msgf("Fetch project environments by UUID from %s%s", c.httpClient.BaseURL, url)
-	environmentInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url, "")
+	environmentInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
 	}
@@ -178,7 +178,7 @@ func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo
 func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?human_id=%s", humanID)
 	log.Debug().Msgf("Fetch environment by human ID from %s%s", c.httpClient.BaseURL, url)
-	envInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url, "")
+	envInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)
 	}
@@ -196,7 +196,7 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 
 // GetLatestSdkVersionInfo retrieves information about the latest SDK version.
 func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
-	sdkInfo, err := metahttp.Get[SdkVersionInfo](c.httpClient, "/api/v1/sdk/latest", "")
+	sdkInfo, err := metahttp.Get[SdkVersionInfo](c.httpClient, "/api/v1/sdk/latest")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest SDK version info: %w", err)
 	}
@@ -205,7 +205,7 @@ func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
 
 // GetSdkVersions retrieves a list of all available SDK versions.
 func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
-	sdkVersions, err := metahttp.Get[[]SdkVersionInfo](c.httpClient, "/api/v1/sdk", "")
+	sdkVersions, err := metahttp.Get[[]SdkVersionInfo](c.httpClient, "/api/v1/sdk")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}

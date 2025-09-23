@@ -251,7 +251,7 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path, "")
+	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
 	return &details, err
 }
 
