@@ -49,29 +49,10 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	return response, nil
 }
 
-func IsJSON(str string) bool {
-    var js json.RawMessage
-    return json.Unmarshal([]byte(str), &js) == nil
-}
-
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
 	var result TResponse
-	
-	if contentType == "" {
-		if strBody, isString := body.(string); isString { 
-			if IsJSON(strBody) {
-				contentType = "application/json"
-			}
-		} else if byteBody, isByteArr := body.([]byte); isByteArr {
-			if IsJSON(string(byteBody)) {
-				contentType = "application/json"
-			} else {
-				contentType = "application/octet-stream"
-			}
-		}
-	}
-	
+		
 	// Perform the request
 	var response *resty.Response
 	var err error
