@@ -22,12 +22,12 @@ import (
 type debugAdminRequestOpts struct {
 	UsePositionalArgs
 
-	argEnvironment string
-	argMethod      string
-	argPath        string
-	flagBody       string
-	flagFile       string
-	contentType    string
+	argEnvironment  string
+	argMethod       string
+	argPath         string
+	flagBody        string
+	flagFile        string
+	flagContentType string
 }
 
 func init() {
@@ -80,7 +80,7 @@ func init() {
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
-	cmd.Flags().StringVar(&o.contentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json")
+	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
 
 	debugCmd.AddCommand(cmd)
 }
