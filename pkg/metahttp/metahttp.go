@@ -136,8 +136,8 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 
 // Make a HTTP GET to the target URL and unmarshal the response into the specified type.
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
-func Get[TResponse any](c *Client, url string, contentType string) (TResponse, error) {
-	return Request[TResponse](c, http.MethodGet, url, nil, contentType)
+func Get[TResponse any](c *Client, url string) (TResponse, error) {
+	return Request[TResponse](c, http.MethodGet, url, nil, "")
 }
 
 // Make a HTTP POST to the target URL with the specified body and unmarshal the response into the specified type.
@@ -156,4 +156,22 @@ func Put[TResponse any](c *Client, url string, body any, contentType string) (TR
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
 func Delete[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
 	return Request[TResponse](c, http.MethodDelete, url, body, contentType)
+}
+
+// Make a HTTP POST to the target URL with the specified body (with JSON as mimetype) and unmarshal the response into the specified type.
+// URL should start with a slash, e.g. "/v0/credentials/123/k8s"
+func PostJSON[TResponse any](c *Client, url string, body any) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPost, url, body, "application/json")
+}
+
+// Make a HTTP PUT to the target URL with the specified body (with JSON as mimetype) and unmarshal the response into the specified type.
+// URL should start with a slash, e.g. "/v0/credentials/123/k8s"
+func PutJSON[TResponse any](c *Client, url string, body any) (TResponse, error) {
+	return Request[TResponse](c, http.MethodPut, url, body, "application/json")
+}
+
+// Make a HTTP DELETE to the target URL with the specified body (with JSON as mimetype) and unmarshal the response into the specified type.
+// URL should start with a slash, e.g. "/v0/credentials/123/k8s"
+func DeleteJSON[TResponse any](c *Client, url string, body any) (TResponse, error) {
+	return Request[TResponse](c, http.MethodDelete, url, body, "application/json")
 }
