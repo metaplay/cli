@@ -27,7 +27,7 @@ var latestSupportedSdkVersion = version.Must(version.NewVersion("34.999.999"))
 
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
-	flagSdkVersion         string // Metaplay SDK version to use (e.g., "32.0").
+	flagSdkVersion         string // Metaplay SDK version to use (e.g., "34.0").
 	flagSdkSource          string // Path to Metaplay SDK release .zip to use.
 	flagUnityProjectPath   string // Path to the Unity project files within the project.
 	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
@@ -77,11 +77,11 @@ func init() {
 			# Initialize SDK in your project at a specific path.
 			metaplay init project --project ../project-path
 
-			# Specify Metaplay SDK version to use (only 32.0 and above are supported).
-			metaplay init project --sdk-version=32.0
+			# Specify Metaplay SDK version to use (only 34.0 and above are supported).
+			metaplay init project --sdk-version=34.0
 
 			# Use a pre-downloaded Metaplay SDK archive.
-			metaplay init project --sdk-source=metaplay-sdk-release-32.0.zip
+			metaplay init project --sdk-source=metaplay-sdk-release-34.0.zip
 		`),
 	}
 
@@ -89,7 +89,7 @@ func init() {
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagProjectID, "project-id", "", "The ID for your project, eg, 'fancy-gorgeous-bear' (optional)")
 	flags.StringVar(&o.flagSdkVersion, "sdk-version", "", "Specify Metaplay SDK version to use, defaults to latest (optional)")
-	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-32.0.zip' (optional)")
+	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-34.0.zip' (optional)")
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
 	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm the 'Does this look correct?' confirmation")
@@ -422,10 +422,9 @@ func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
 		return nil, fmt.Errorf("invalid SDK version string '%s': %w", versionStr, err)
 	}
 
-	// Must be at least 32.0 (allow pre versions too).
-	requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
-	if vsn.LessThan(requiredVersion) {
-		return nil, fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", versionStr)
+	// Check that the SDK version is the minimum supported by the CLI.
+	if vsn.LessThan(metaproj.OldestSupportedSdkVersion) {
+		return nil, fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions %s and above", versionStr, metaproj.OldestSupportedSdkVersion)
 	}
 
 	// Must not be newer than the latest supported version.
