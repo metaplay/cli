@@ -21,6 +21,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// CLI only supports Metaplay SDK versions 32.0 and above. The legacy metaplay-auth CLI
+// was used with earlier SDK versions.
+var OldestSupportedSdkVersion = version.Must(version.NewVersion("32.0.0"))
+
 // Metaplay project: helper type to wrap the resolved project, including relative path to project,
 // parsed metaplay-project.yaml and parsed MetaplaySDK/version.yaml.
 type MetaplayProject struct {
@@ -467,8 +471,7 @@ func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error)
 		}
 
 		// Check that the SDK version is the minimum supported by the CLI.
-		minSupportedVersion, _ := version.NewVersion("32.0.0-aaaaa") // allow prerelease SDK versions
-		if sdkVersion.LessThan(minSupportedVersion) {
+		if sdkVersion.LessThan(OldestSupportedSdkVersion) {
 			return nil, fmt.Errorf("minimum Metaplay SDK version supported by this CLI is Release 32, your project is using %s", sdkVersion)
 		}
 
