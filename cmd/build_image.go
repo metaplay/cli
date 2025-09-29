@@ -233,6 +233,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
+	log.Info().Msgf("Metaplay SDK:        %s", styles.RenderTechnical(project.VersionMetadata.SdkVersion.String()))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)

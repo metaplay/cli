@@ -67,15 +67,12 @@ func init() {
 
 			# Auto-accept reset without confirmation prompt
 			metaplay database reset nimbly --yes
-
-			# Force reset even if a game server is deployed (dangerous!)
-			metaplay database reset nimbly --force --yes
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with reset")
-	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed (DANGEROUS!!)")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when resetting production environments")
 
 	databaseCmd.AddCommand(cmd)
@@ -139,11 +136,16 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
-			return fmt.Errorf("cannot reset database: active game server deployment detected in environment '%s'. Remove the game server deployment before resetting the database, or use --force to proceed anyway", o.argEnvironment)
+			removeServerCmd := fmt.Sprintf("metaplay remove server %s", o.argEnvironment)
+			log.Error().Msg("Cannot reset database due to game server deployment in environment.")
+			log.Info().Msgf("Remove the game server first with: %s", styles.RenderPrompt(removeServerCmd))
+			os.Exit(1)
 		}
 
-		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
-		log.Info().Msgf("   Proceeding with database reset due to --force flag")
+		log.Warn().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Warn().Msgf("   Proceeding with database reset due to --force flag.")
+		log.Warn().Msgf("   Your game server will stop functioning and you'll need to re-deploy it after the reset.")
+		log.Info().Msg("")
 	} else {
 		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database reset")
 	}
