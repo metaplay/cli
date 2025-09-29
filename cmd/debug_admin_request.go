@@ -22,11 +22,12 @@ import (
 type debugAdminRequestOpts struct {
 	UsePositionalArgs
 
-	argEnvironment string
-	argMethod      string
-	argPath        string
-	flagBody       string
-	flagFile       string
+	argEnvironment  string
+	argMethod       string
+	argPath         string
+	flagBody        string
+	flagFile        string
+	flagContentType string
 }
 
 func init() {
@@ -66,6 +67,9 @@ func init() {
 			# Send a POST request with request body from command line.
 			metaplay debug admin-request tough-falcons POST /api/some-endpoint --body '{"name":"test-resource"}'
 
+			# Send a POST request with request body containing json data from command line.
+			metaplay debug admin-request tough-falcons POST /api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
+
 			# Send a PUT request with request payload from file.
 			metaplay debug admin-request tough-falcons PUT /api/some-endpoint --file update.json
 
@@ -76,6 +80,7 @@ func init() {
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
+	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
 
 	debugCmd.AddCommand(cmd)
 }
@@ -113,6 +118,12 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 	return nil
 }
 
+
+func IsJSON(str string) bool {
+    var js json.RawMessage
+    return json.Unmarshal([]byte(str), &js) == nil
+}
+
 func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
@@ -142,16 +153,31 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Prepare request body if needed
 	var requestBody any
 
+	var contentType string = o.flagContentType
+
 	if o.flagBody != "" {
 		// Use raw body content
 		requestBody = o.flagBody
+		// Detect if passed string is JSON, otherwise fallback to default resty behavior
+		if o.flagContentType == "" && IsJSON(o.flagBody) {
+			contentType = "application/json"
+		}
 	} else if o.flagFile != "" {
 		// Read content from file
 		fileContent, err := os.ReadFile(o.flagFile)
 		if err != nil {
 			return fmt.Errorf("failed to read file %s: %v", o.flagFile, err)
 		}
-		requestBody = string(fileContent)
+		requestBody = fileContent
+
+		// Detect if file content is JSON, otherwise use octet-stream
+		if o.flagContentType == "" {
+			if IsJSON(string(fileContent)) {
+				contentType = "application/json"
+			} else {
+				contentType = "application/octet-stream"
+			}
+		}
 	}
 
 	// Debug logging
@@ -180,11 +206,11 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	case http.MethodGet:
 		response, requestErr = metahttp.Get[any](adminClient, o.argPath)
 	case http.MethodPost:
-		response, requestErr = metahttp.Post[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Post[any](adminClient, o.argPath, requestBody, contentType)
 	case http.MethodPut:
-		response, requestErr = metahttp.Put[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Put[any](adminClient, o.argPath, requestBody, contentType)
 	case http.MethodDelete:
-		response, requestErr = metahttp.Delete[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Delete[any](adminClient, o.argPath, requestBody, contentType)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", o.argMethod)
 	}

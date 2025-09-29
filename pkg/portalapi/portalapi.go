@@ -82,7 +82,7 @@ func (c *Client) AgreeToContract(contractID string) error {
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.Put[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
+	_, err := metahttp.PutJSON[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}
