@@ -451,13 +451,16 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check if the existing release is in some kind of pending state
+	uninstallExistingRelease := false
 	if existingRelease != nil {
 		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with 'metaplay remove server'", releaseName)
+			log.Error().Msgf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
+			return fmt.Errorf("Helm release %s is in state 'uninstalling'", releaseName)
 		} else if releaseStatus.IsPending() {
-			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the server with 'metaplay remove server'", releaseName, releaseStatus)
+			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
+			uninstallExistingRelease = true
 		}
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
 	}
@@ -468,12 +471,28 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
+	// Use TaskRunner to visualize progress.
 	taskRunner := tui.NewTaskRunner()
 
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
 			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+		})
+	}
+
+	// If there's a pending release, uninstall it first.
+	if uninstallExistingRelease {
+		taskRunner.AddTask(fmt.Sprintf("Uninstall existing Helm release"), func(output *tui.TaskOutput) error {
+			output.SetHeaderLines([]string{
+				fmt.Sprintf("Release status: %s", existingRelease.Info.Status),
+			})
+			err := helmutil.UninstallRelease(actionConfig, existingRelease)
+			if err != nil {
+				return fmt.Errorf("failed to uninstall Helm release %s: %v", existingRelease.Name, err)
+			}
+			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			return nil
 		})
 	}
 
