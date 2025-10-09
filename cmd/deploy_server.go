@@ -38,6 +38,7 @@ type deployGameServerOpts struct {
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
+	flagDryRun              bool
 }
 
 func init() {
@@ -107,6 +108,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.BoolVar(&o.flagDryRun, "dry-run", false, "Show what would be deployed without actually performing the deployment")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -408,6 +410,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  ID:                 %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("  Type:               %s", styles.RenderTechnical(string(envConfig.Type)))
 	log.Info().Msgf("  Stack domain:       %s", styles.RenderTechnical(envConfig.StackDomain))
+	log.Info().Msg("")
 	log.Info().Msgf("Build information:")
 	if useLocalImage {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(o.argImageNameTag))
@@ -418,6 +421,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
 	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageInfo.CreatedTime)))
 	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageInfo.SdkVersion))
+	log.Info().Msg("")
 	log.Info().Msgf("Deployment info:")
 	if o.flagHelmChartLocalPath != "" {
 		log.Info().Msgf("  Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
@@ -429,6 +433,21 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
 	}
 	// \todo list of runtime options files
+	// Show current Helm release info if it exists.
+	if existingRelease != nil {
+		log.Info().Msg("")
+		log.Info().Msg("Existing deployment:")
+		if existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
+			log.Info().Msgf("  %-19s %s", "Chart version:", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
+		}
+		log.Info().Msgf("  %-19s %s", "Status:", styles.RenderTechnical(existingRelease.Info.Status.String()))
+		log.Info().Msgf("  %-19s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", existingRelease.Version)))
+		lastDeployedAt := "Unknown"
+		if !existingRelease.Info.LastDeployed.IsZero() {
+			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed.Time)
+		}
+		log.Info().Msgf("  %-19s %s", "Last Deployed:", styles.RenderTechnical(lastDeployedAt))
+	}
 	log.Info().Msg("")
 
 	// Check if the existing release is in some kind of pending state
@@ -441,6 +460,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the server with 'metaplay remove server'", releaseName, releaseStatus)
 		}
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
+	}
+
+	// If dry-run mode, stop here.
+	if o.flagDryRun {
+		log.Info().Msg(styles.RenderMuted("Dry-run mode: skipping deployment"))
+		return nil
 	}
 
 	taskRunner := tui.NewTaskRunner()
