@@ -453,11 +453,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Check if the existing release is in some kind of pending state
 	uninstallExistingRelease := false
 	if existingRelease != nil {
-		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			log.Error().Msgf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
-			return fmt.Errorf("Helm release %s is in state 'uninstalling'", releaseName)
+			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
+			return fmt.Errorf("Unable to deploy server due to existing Helm release is in state 'uninstalling'")
 		} else if releaseStatus.IsPending() {
 			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
 			uninstallExistingRelease = true
