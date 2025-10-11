@@ -1,41 +1,66 @@
 {
-  "extends": [
-    "config:recommended",
-    ":dependencyDashboard"
+  extends: [
+    'config:recommended',
+    ':dependencyDashboard',
   ],
-  "constraints": {
-    "go": "1.25"
+  constraints: {
+    go: '1.25',
   },
-  "packageRules": [
+  packageRules: [
     {
-      "matchManagers": ["gomod"],
-      "enabled": true,
-      "postUpdateOptions": ["gomodTidy"]
+      matchManagers: [
+        'gomod',
+      ],
+      enabled: true,
+      postUpdateOptions: [
+        'gomodTidy',
+      ],
     },
     {
-      "matchManagers": ["gomod"],
-      "matchDepTypes": ["indirect"],
-      "enabled": false
+      matchManagers: [
+        'gomod',
+      ],
+      matchDepTypes: [
+        'indirect',
+      ],
+      enabled: false,
     },
     {
-      "matchManagers": ["github-actions"],
-      "groupName": "GitHub Actions",
-      "labels": ["github-actions"]
+      matchManagers: [
+        'github-actions',
+      ],
+      groupName: 'GitHub Actions',
+      labels: [
+        'github-actions',
+      ],
     },
     {
-      "matchManagers": ["gomod", "github-actions"],
-      "matchUpdateTypes": ["minor", "patch"],
-      "automerge": true,
-      "automergeType": "branch"
-    }
+      matchManagers: [
+        'gomod',
+        'github-actions',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'patch',
+      ],
+      automerge: true,
+      automergeType: 'branch',
+    },
   ],
-  "labels": ["dependencies"],
-  "vulnerabilityAlerts": {
-    "enabled": true,
-    "labels": ["security"]
+  labels: [
+    'dependencies',
+  ],
+  vulnerabilityAlerts: {
+    enabled: true,
+    labels: [
+      'security',
+    ],
   },
-  "prConcurrentLimit": 10,
-  "prHourlyLimit": 4,
-  "schedule": ["every saturday", "every sunday"],
-  "timezone": "Europe/Berlin"
+  prConcurrentLimit: 10,
+  prHourlyLimit: 4,
+  schedule: [
+    'on saturday',
+    'on sunday',
+  ],
+  timezone: 'Europe/Berlin',
 }
