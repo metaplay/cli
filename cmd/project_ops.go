@@ -395,7 +395,8 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 
 // Install files from installer template file in SDK/Installer.
 // dstPath - Root directory for installed files, relative to metaplay project dir.
-func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string) error {
+// skipSample - If true, skip files in MetaplayHelloWorld directory.
+func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
 	// Single template file within an installer project. Text files have non-empty
 	// `File` and binary files a non-empty `Bytes`. Text files support text replacement.
 	type installerTemplateFile struct {
@@ -460,6 +461,12 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 
 	// Extract all files from the template definition
 	for _, file := range template.Files {
+		// Skip MetaplayHelloWorld files if requested
+		if skipSample && strings.Contains(file.Path, "MetaplayHelloWorld") {
+			log.Debug().Msgf("Skipping sample file: %s", file.Path)
+			continue
+		}
+
 		// Resolve destination path (fill in templates)
 		dstPath, err := applyReplacements(filepath.Join(dstRoot, file.Path), templateReplacements)
 		if err != nil {
