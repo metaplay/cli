@@ -354,12 +354,12 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg("The following changes were made to your project:")
 	log.Info().Msgf("- Added project configuration file %s", styles.RenderTechnical("metaplay-project.yaml"))
-	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical("UnityClient/Assets/SharedCode/"))
+	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/SharedCode/"))))
 	if !o.flagNoSample {
-		log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical("UnityClient/Assets/MetaplayHelloWorld/"))
+		log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/MetaplayHelloWorld/"))))
 	}
-	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical("UnityClient/Assets/StreamingAssets/"))
-	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical("UnityClient/Package/manifest.json"))
+	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/StreamingAssets/"))))
+	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Packages/manifest.json"))))
 
 	return nil
 }
