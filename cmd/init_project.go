@@ -32,6 +32,7 @@ type initProjectOpts struct {
 	flagUnityProjectPath   string // Path to the Unity project files within the project.
 	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
 	flagAutoConfirm        bool   // Automatically confirm the 'Does this look correct?'
+	flagNoSample           bool   // Skip installing the MetaplayHelloWorld sample.
 
 	projectPath              string // User-provided path to project root (relative or absolute).
 	absoluteProjectPath      string // Absolute path to the project root.
@@ -93,6 +94,7 @@ func init() {
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
 	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm the 'Does this look correct?' confirmation")
+	flags.BoolVar(&o.flagNoSample, "no-sample", false, "Skip installing the MetaplayHelloWorld sample scene")
 
 	initCmd.AddCommand(cmd)
 }
@@ -328,7 +330,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 			"PROJECT_DISPLAY_NAME":      targetProject.Name,    // Added in R34
 			"PROJECT_NAME":              targetProject.HumanID, // Remove in R34
 			"BACKEND_SOLUTION_FILENAME": "Server.sln",
-		})
+		}, o.flagNoSample)
 		if err != nil {
 			return fmt.Errorf("failed to run SDK installer: %w", err)
 		}
@@ -353,7 +355,9 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("The following changes were made to your project:")
 	log.Info().Msgf("- Added project configuration file %s", styles.RenderTechnical("metaplay-project.yaml"))
 	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical("UnityClient/Assets/SharedCode/"))
-	log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical("UnityClient/Assets/MetaplayHelloWorld/"))
+	if !o.flagNoSample {
+		log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical("UnityClient/Assets/MetaplayHelloWorld/"))
+	}
 	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical("UnityClient/Assets/StreamingAssets/"))
 	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical("UnityClient/Package/manifest.json"))
 
