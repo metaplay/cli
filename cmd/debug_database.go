@@ -32,11 +32,12 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int    // parsed and validated in Prepare
-	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
-	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
-	flagQueryFile    string // If set, read SQL query from this file and exit (non-interactive)
-	flagOutput       string // If set, write output to this file instead of stdout
+	parsedShardIndex int      // parsed and validated in Prepare
+	extraArgs        []string // Extra arguments to pass to mariadb
+	flagReadWrite    bool     // If true, connect to read-write replica; otherwise, read-only
+	flagQuery        string   // If set, run this SQL query and exit, otherwise run in interactive mode
+	flagQueryFile    string   // If set, read SQL query from this file and exit (non-interactive)
+	flagOutput       string   // If set, write output to this file instead of stdout
 }
 
 func init() {
@@ -45,9 +46,10 @@ func init() {
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
 	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to mariadb CLI.")
 
 	cmd := &cobra.Command{
-		Use:     "database [ENVIRONMENT] [SHARD] [flags]",
+		Use:     "database [ENVIRONMENT] [SHARD] [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"db"},
 		Short:   "[preview] Connect to a database shard for the specified environment",
 		Long: renderLong(&o, `
@@ -90,6 +92,12 @@ func init() {
 
 			# Run a query from a file on the first shard and exit immediately after
 			metaplay debug database nimbly 0 --query-file ./my_query.sql
+
+			# Pass extra arguments to mariadb CLI (e.g., for formatting)
+			metaplay debug database nimbly -- --batch --skip-column-names
+
+			# Get player entity payload as binary and write to a file
+			metaplay debug database nimbly 0 --query "SELECT Payload FROM Players WHERE EntityId='Player:0000000000'" -- -N -B --binary-mode=1 > player.bin
 		`),
 		Run: runCommand(&o),
 	}
@@ -220,12 +228,21 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
 	}
 
-	// Determine command for starting SQL CLI (note: optional query is piped to mariadb)
-	sqlcliCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
-		host,
-		shard.UserId,
-		shard.Password,
-		shard.DatabaseName)
+	// Build mariadb command with extra args
+	cmdParts := []string{
+		"mariadb",
+		"-h", host,
+		"-u", shard.UserId,
+		fmt.Sprintf("-p%s", shard.Password),
+		shard.DatabaseName,
+	}
+	cmdParts = append(cmdParts, o.extraArgs...)
+	sqlcliCmd := strings.Join(cmdParts, " ")
+
+	// Log extra arguments if provided
+	if len(o.extraArgs) > 0 {
+		log.Debug().Msgf("Extra args to mariadb: %s", strings.Join(o.extraArgs, " "))
+	}
 
 	if o.flagQuery != "" {
 		stderrLogger.Info().Msgf("Run query: %s", o.flagQuery)
