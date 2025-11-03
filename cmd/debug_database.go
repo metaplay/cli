@@ -47,7 +47,7 @@ func init() {
 	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
 
 	cmd := &cobra.Command{
-		Use:     "database [ENVIRONMENT] [POD] [SHARD] [flags]",
+		Use:     "database [ENVIRONMENT] [SHARD] [flags]",
 		Aliases: []string{"db"},
 		Short:   "[preview] Connect to a database shard for the specified environment",
 		Long: renderLong(&o, `
