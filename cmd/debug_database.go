@@ -94,7 +94,7 @@ func init() {
 			metaplay debug database nimbly 0 --query-file ./my_query.sql
 
 			# Pass extra arguments to mariadb CLI (e.g., for formatting)
-			metaplay debug database nimbly -- --batch --skip-column-names
+			metaplay debug database nimbly 0 -- --batch --skip-column-names
 
 			# Get player entity payload as binary and write to a file
 			metaplay debug database nimbly 0 --query "SELECT Payload FROM Players WHERE EntityId='Player:0000000000'" -- -N -B --raw > player.bin
