@@ -97,10 +97,10 @@ func init() {
 			metaplay debug database nimbly -- --batch --skip-column-names
 
 			# Get player entity payload as binary and write to a file
-			metaplay debug database nimbly 0 --query "SELECT Payload FROM Players WHERE EntityId='Player:0000000000'" -- -N -B --binary-mode=1 > player.bin
+			metaplay debug database nimbly 0 --query "SELECT Payload FROM Players WHERE EntityId='Player:0000000000'" -- -N -B --raw > player.bin
 
 			# Fetch multiple players into a file as JSON objects, with one player/object per line, payload encoded with base64
-			metaplay debug database nimbly 0 --query "SELECT json_object('EntityId', EntityId, 'Payload', to_base64(Payload)) FROM Players LIMIT 5" -- -N -B --binary-mode=1 > players.json
+			metaplay debug database nimbly 0 --query "SELECT json_object('EntityId', EntityId, 'Payload', to_base64(Payload)) FROM Players LIMIT 5" -- -N -B --raw > players.json
 		`),
 		Run: runCommand(&o),
 	}
