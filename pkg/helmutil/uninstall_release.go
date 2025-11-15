@@ -8,16 +8,17 @@ import (
 	"fmt"
 	"time"
 
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/kube"
+	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
 // UninstallRelease uninstalls the given Helm release.
-func UninstallRelease(actionConfig *action.Configuration, release *release.Release) error {
+func UninstallRelease(actionConfig *action.Configuration, release *v1.Release) error {
 	// Create Helm Uninstall action
 	uninstall := action.NewUninstall(actionConfig)
-	uninstall.Wait = true
 	uninstall.Timeout = 5 * time.Minute
+	uninstall.WaitStrategy = kube.LegacyStrategy // Wait for resources to be deleted (legacy wait behavior)
 
 	// Execute the Uninstall action
 	_, err := uninstall.Run(release.Name)

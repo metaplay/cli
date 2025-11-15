@@ -19,7 +19,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/release"
+	rcommon "helm.sh/helm/v4/pkg/release/common"
 )
 
 const metaplayLoadTestChartName = "metaplay-loadtest"
@@ -261,7 +261,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil {
 		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
-		if releaseStatus == release.StatusUninstalling {
+		if releaseStatus == rcommon.StatusUninstalling {
 			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the botclient with 'metaplay remove botclient'", releaseName)
 		} else if releaseStatus.IsPending() {
 			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the botclient with 'metaplay remove botclient'", releaseName, releaseStatus)
