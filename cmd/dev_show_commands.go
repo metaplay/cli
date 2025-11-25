@@ -71,6 +71,7 @@ description: Complete reference for all Metaplay CLI commands and their usage.
 <!-- This file is auto-generated using the Metaplay CLI. DO NOT EDIT MANUALLY!! -->
 <!-- To regenerate this file, run: metaplay dev show-commands --output-docs <filename> -->
 
+<!-- markdownlint-disable MD001 --> <!-- Allow non-incremental header indents -->
 <!-- markdownlint-disable MD007 --> <!-- Unordered list indentation -->
 <!-- markdownlint-disable MD010 --> <!-- Hard tabs -->
 <!-- markdownlint-disable MD012 --> <!-- Multiple consecutive blank lines -->
