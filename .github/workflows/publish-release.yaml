@@ -15,7 +15,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
