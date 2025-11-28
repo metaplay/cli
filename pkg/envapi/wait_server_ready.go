@@ -370,7 +370,16 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 					return false, nil, fmt.Errorf("pod %s failed to deploy (see above for logs and details)", podName)
 				}
 			} else {
-				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
+				// Pod not in our filtered list - try to fetch it directly to see if it exists
+				actualPod, err := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Get(ctx, podName, metav1.GetOptions{})
+				if err != nil {
+					// Pod truly doesn't exist
+					statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
+				} else {
+					// Pod exists but didn't pass our filters (old version, terminating, etc.)
+					status := resolvePodStatus(*actualPod)
+					statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s] (old version, being replaced)", podName, status.Phase, status.Message))
+				}
 				allPodsReady = false
 			}
 		}
