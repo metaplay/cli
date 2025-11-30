@@ -18,7 +18,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/release"
+	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
 type getServerInfoOpts struct {
@@ -238,13 +238,13 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 }
 
 // Extract the Helm release information from a release object into a simpler info class.
-func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*helmReleaseInfo, error) {
+func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *v1.Release) (*helmReleaseInfo, error) {
 	helmInfo := &helmReleaseInfo{
 		Name:         releaseInfo.Name,
 		Status:       releaseInfo.Info.Status.String(),
 		Namespace:    releaseInfo.Namespace,
 		Revision:     releaseInfo.Version,
-		LastDeployed: releaseInfo.Info.LastDeployed.Time,
+		LastDeployed: releaseInfo.Info.LastDeployed,
 	}
 
 	if releaseInfo.Chart != nil && releaseInfo.Chart.Metadata != nil {
@@ -256,7 +256,7 @@ func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*h
 }
 
 // Extract information about the docker image used in the game server deployment.
-func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment, existingRelease *release.Release) (*deploymentImageInfo, error) {
+func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.TargetEnvironment, existingRelease *v1.Release) (*deploymentImageInfo, error) {
 	// Extract image information from Helm release values.
 	var imageTag, fullImageRef string
 	if existingRelease.Config != nil {
