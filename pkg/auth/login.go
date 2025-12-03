@@ -55,24 +55,21 @@ func generateCodeVerifierAndChallenge() (verifier, challenge string) {
 // Note: We try these in reverse order as 5000 is more likely to be used by other systems.
 func findAvailableCallbackPort() (net.Listener, int, error) {
 	for tryPort := 5004; tryPort >= 5000; tryPort-- {
-		// Verify that both ipv4 and ipv6 are available, using `:port` as addr seems to only check ipv6.
-		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", tryPort))
+		// Bind to IPv4 loopback only - maximum compatibility across systems
+		// (avoids issues on systems with IPv6 disabled or misconfigured)
+		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", tryPort))
 		if err == nil {
-			ipv6Listener, err := net.Listen("tcp", fmt.Sprintf("[::1]:%d", tryPort))
-			if err == nil {
-				ipv6Listener.Close()
-				return listener, tryPort, nil
-			}
+			return listener, tryPort, nil
 		}
 	}
-	return nil, 0, fmt.Errorf("no available ports between 5000-5004")
+	return nil, 0, fmt.Errorf("failed to find an available port in range 5000..5004")
 }
 
 func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) error {
 	// Set up a local server on a random port.
 	listener, port, err := findAvailableCallbackPort()
 	if err != nil {
-		return fmt.Errorf("failed to find an available port in range 5000..5004: %v", err)
+		return err
 	}
 	defer listener.Close()
 
