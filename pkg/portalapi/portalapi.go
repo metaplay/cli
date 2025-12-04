@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
@@ -213,18 +215,30 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 }
 
 // FindSdkVersionByVersionOrName attempts to find an SDK version by its version string or name.
+// If only a major version is provided (e.g., "34"), returns the latest minor/patch for that major.
 // Returns nil if no matching version is found.
 func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersionInfo, error) {
+	log.Debug().Msgf("FindSdkVersionByVersionOrName: looking for '%s'", versionOrName)
+
 	// Get all SDK versions
 	versions, err := c.GetSdkVersions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
 
-	// First, try to find an exact match for the version string
+	// If input looks like a major version only (digits with no dots), find the latest for that major.
+	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
+	if isMajorVersionOnly(versionOrName) {
+		result, err := findLatestForMajorVersion(versions, versionOrName)
+		if result != nil {
+			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
+		}
+		return result, err
+	}
+
+	// Try to find an exact match for the version string.
 	for _, v := range versions {
 		if v.Version == versionOrName {
-			// Check if the version has a storage path
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version '%s' found but it has no downloadable file", versionOrName)
 			}
@@ -235,7 +249,6 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 	// If no exact version match, try to find a match in the name
 	for _, v := range versions {
 		if v.Name == versionOrName {
-			// Check if the version has a storage path
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version with name '%s' found but it has no downloadable file", versionOrName)
 			}
@@ -245,6 +258,59 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 
 	// No match found
 	return nil, nil
+}
+
+// isMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
+func isMajorVersionOnly(version string) bool {
+	if version == "" {
+		return false
+	}
+	for _, c := range version {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// findLatestForMajorVersion finds the latest SDK version matching the given major version.
+func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (*SdkVersionInfo, error) {
+	prefix := majorVersion + "."
+	var best *SdkVersionInfo
+	var bestMinor, bestPatch int = -1, -1
+
+	for i := range versions {
+		v := &versions[i]
+		if !strings.HasPrefix(v.Version, prefix) {
+			continue
+		}
+		if v.StoragePath == nil {
+			continue
+		}
+
+		rest := strings.TrimPrefix(v.Version, prefix)
+		minor, patch := parseMinorPatch(rest)
+
+		if minor > bestMinor || (minor == bestMinor && patch > bestPatch) {
+			best = v
+			bestMinor = minor
+			bestPatch = patch
+		}
+	}
+
+	return best, nil
+}
+
+// parseMinorPatch parses "3" or "3.1" into minor and patch numbers.
+func parseMinorPatch(s string) (minor, patch int) {
+	parts := strings.SplitN(s, ".", 2)
+	if len(parts) >= 1 {
+		minor, _ = strconv.Atoi(parts[0])
+	}
+	if len(parts) >= 2 {
+		patch, _ = strconv.Atoi(parts[1])
+	}
+	return minor, patch
 }
 
 // DownloadLatestSdk downloads the latest SDK to the specified target directory.
