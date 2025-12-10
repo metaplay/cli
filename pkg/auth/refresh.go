@@ -93,17 +93,11 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	data.Set("scope", authProvider.Scopes) //"openid offline_access")
 	data.Set("client_id", authProvider.ClientID)
 
-	// Prepare the POST request
-	req, err := http.NewRequest("POST", authProvider.TokenEndpoint, bytes.NewBufferString(data.Encode()))
-	if err != nil {
-		log.Error().Msgf("Failed to create HTTP request: %v", err)
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	// Make the HTTP request with retry logic for transient errors
+	resp, err := retryWithBackoff(func() (*http.Response, error) {
+		return http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	}, 3)
 
-	// Send the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
 	if err != nil {
 		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
@@ -113,7 +107,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	}
 	defer resp.Body.Close()
 
-	// Check for a non-OK response
+	// Check for a non-OK response (after retries exhausted for transient errors)
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		log.Error().Msgf("Failed to refresh tokens. Response: %s", body)

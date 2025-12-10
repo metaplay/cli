@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -23,38 +22,13 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
-// isRetryableError checks if an error or status code should trigger a retry.
-func isRetryableError(resp *resty.Response, err error) bool {
-	if err != nil {
-		return true // Network errors are generally transient
-	}
-	if resp == nil {
-		return true
-	}
-	// Retry on server errors and rate limiting
-	statusCode := resp.StatusCode()
-	return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
-}
-
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
-	restyClient := resty.New().
+	restyClient := NewRetryClient().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").
-		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion)).
-		// Retry configuration: retry up to 3 times with exponential backoff
-		SetRetryCount(3).
-		SetRetryWaitTime(1 * time.Second).
-		SetRetryMaxWaitTime(8 * time.Second).
-		AddRetryCondition(isRetryableError).
-		AddRetryHook(func(resp *resty.Response, err error) {
-			if err != nil {
-				log.Warn().Msgf("Request failed with error, retrying: %v", err)
-			} else if resp != nil {
-				log.Warn().Msgf("Request failed with status %d, retrying...", resp.StatusCode())
-			}
-		})
+		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))
 	return &Client{
 		TokenSet: tokenSet,
 		BaseURL:  baseURL,
@@ -78,7 +52,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
 	var result TResponse
-		
+
 	// Perform the request
 	var response *resty.Response
 	var err error
@@ -104,7 +78,7 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
-	
+
 	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
 
 	// Handle request errors

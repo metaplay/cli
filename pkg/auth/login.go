@@ -20,7 +20,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/go-resty/resty/v2"
+	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
 	"github.com/rs/zerolog/log"
@@ -279,12 +279,10 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 }
 
 func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
-	// Resolve userinfo endpoint (on the portal).
 	log.Debug().Msgf("Fetch user info from %s", authProvider.UserInfoEndpoint)
 
-	// Make the request
 	var userinfo UserInfoResponse
-	resp, err := resty.New().R().
+	resp, err := metahttp.NewRetryClient().R().
 		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
 		SetResult(&userinfo).               // Unmarshal response into the struct
 		Get(authProvider.UserInfoEndpoint)
@@ -310,8 +308,12 @@ func exchangeCodeForTokens(code, verifier, redirectURI string, authProvider *Aut
 	data.Set("client_id", authProvider.ClientID)
 	data.Set("code_verifier", verifier)
 
-	// Make the HTTP POST request
-	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	// Make the HTTP POST request with retry logic for transient errors
+	// Note: Authorization codes are single-use, but retrying on network errors is still safe
+	// since the code won't be consumed if the request never reached the server
+	resp, err := retryWithBackoff(func() (*http.Response, error) {
+		return http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	}, 3)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}
