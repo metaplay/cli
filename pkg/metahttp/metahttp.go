@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -22,13 +23,38 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
+// isRetryableError checks if an error or status code should trigger a retry.
+func isRetryableError(resp *resty.Response, err error) bool {
+	if err != nil {
+		return true // Network errors are generally transient
+	}
+	if resp == nil {
+		return true
+	}
+	// Retry on server errors and rate limiting
+	statusCode := resp.StatusCode()
+	return statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+}
+
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	restyClient := resty.New().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").
-		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))
+		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion)).
+		// Retry configuration: retry up to 3 times with exponential backoff
+		SetRetryCount(3).
+		SetRetryWaitTime(1 * time.Second).
+		SetRetryMaxWaitTime(8 * time.Second).
+		AddRetryCondition(isRetryableError).
+		AddRetryHook(func(resp *resty.Response, err error) {
+			if err != nil {
+				log.Warn().Msgf("Request failed with error, retrying: %v", err)
+			} else if resp != nil {
+				log.Warn().Msgf("Request failed with status %d, retrying...", resp.StatusCode())
+			}
+		})
 	return &Client{
 		TokenSet: tokenSet,
 		BaseURL:  baseURL,
