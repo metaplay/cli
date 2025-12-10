@@ -2,7 +2,7 @@
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 
-package metahttp
+package httputil
 
 import (
 	"fmt"
@@ -54,4 +54,18 @@ func GetBytesWithRetry(url string) ([]byte, error) {
 		return nil, fmt.Errorf("GET %s failed with status %d: %s", url, resp.StatusCode(), resp.String())
 	}
 	return resp.Body(), nil
+}
+
+// PostFormWithRetry performs a form-encoded POST to the specified URL without authentication.
+// Returns the response body as bytes and the HTTP status code. Includes retry logic for transient errors.
+func PostFormWithRetry(url string, formData string) ([]byte, int, error) {
+	client := NewRetryClient()
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetBody(formData).
+		Post(url)
+	if err != nil {
+		return nil, 0, fmt.Errorf("POST request to %s failed: %w", url, err)
+	}
+	return resp.Body(), resp.StatusCode(), nil
 }

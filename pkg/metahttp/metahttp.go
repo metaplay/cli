@@ -12,6 +12,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,8 +24,9 @@ type Client struct {
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
+// All failed requests are automatically retried a few times to mitigate network errors.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
-	restyClient := NewRetryClient().
+	restyClient := httputil.NewRetryClient().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").

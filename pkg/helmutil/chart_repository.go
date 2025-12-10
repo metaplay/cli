@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
-	"github.com/metaplay/cli/pkg/metahttp"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -74,7 +74,7 @@ func FetchHelmChartVersions(repository string, chartName string, minVersion *ver
 	url := strings.TrimSuffix(repository, "/") + "/index.yaml"
 	log.Debug().Msgf("Fetching Helm chart versions from '%s'...", url)
 
-	body, err := metahttp.GetBytesWithRetry(url)
+	body, err := httputil.GetBytesWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch repository index: %w", err)
 	}
