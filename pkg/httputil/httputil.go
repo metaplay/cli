@@ -7,10 +7,11 @@ package httputil
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 )
 
 // isRetryableError checks if an error or status code should trigger a retry.
@@ -34,10 +35,12 @@ func NewRetryClient() *resty.Client {
 		SetRetryMaxWaitTime(8 * time.Second).
 		AddRetryCondition(isRetryableError).
 		AddRetryHook(func(resp *resty.Response, err error) {
+			// \todo Refactor error logger to a common place available everywhere?
+			stderrLogger := zerolog.New(os.Stderr)
 			if err != nil {
-				log.Warn().Msgf("Request failed with error, retrying: %v", err)
+				stderrLogger.Warn().Msgf("Request to %s failed with error, retrying: %v", resp.Request.URL, err)
 			} else if resp != nil {
-				log.Warn().Msgf("Request failed with status %d, retrying...", resp.StatusCode())
+				stderrLogger.Warn().Msgf("Request to %s failed with status %d, retrying...", resp.Request.URL, resp.StatusCode())
 			}
 		})
 }
