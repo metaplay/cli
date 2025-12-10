@@ -12,6 +12,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -23,8 +24,9 @@ type Client struct {
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
+// All failed requests are automatically retried a few times to mitigate network errors.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
-	restyClient := resty.New().
+	restyClient := httputil.NewRetryClient().
 		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").
@@ -52,7 +54,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
 	var result TResponse
-		
+
 	// Perform the request
 	var response *resty.Response
 	var err error
@@ -78,7 +80,7 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 	default:
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
-	
+
 	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
 
 	// Handle request errors

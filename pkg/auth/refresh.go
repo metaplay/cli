@@ -5,16 +5,15 @@
 package auth
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 )
 
@@ -93,17 +92,8 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	data.Set("scope", authProvider.Scopes) //"openid offline_access")
 	data.Set("client_id", authProvider.ClientID)
 
-	// Prepare the POST request
-	req, err := http.NewRequest("POST", authProvider.TokenEndpoint, bytes.NewBufferString(data.Encode()))
-	if err != nil {
-		log.Error().Msgf("Failed to create HTTP request: %v", err)
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	// Send the request
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	// Make the HTTP request with retry logic for transient errors
+	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, data.Encode())
 	if err != nil {
 		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
@@ -111,11 +101,9 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		}
 		return nil, fmt.Errorf("failed to refresh tokens via %s: %w", authProvider.TokenEndpoint, err)
 	}
-	defer resp.Body.Close()
 
-	// Check for a non-OK response
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+	// Check for a non-OK response (after retries exhausted for transient errors)
+	if statusCode != http.StatusOK {
 		log.Error().Msgf("Failed to refresh tokens. Response: %s", body)
 		log.Debug().Msg("Clearing local credentials...")
 
@@ -127,13 +115,6 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 
 		log.Debug().Msg("Local credentials removed.")
 		return nil, errors.New("failed to refresh tokens, exiting. Please log in again")
-	}
-
-	// Parse the response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error().Msgf("Failed to read response body: %v", err)
-		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var tokens TokenSet

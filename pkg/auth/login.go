@@ -5,7 +5,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,13 +13,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
 
-	"github.com/go-resty/resty/v2"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
 	"github.com/rs/zerolog/log"
@@ -173,56 +171,6 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	return nil
 }
 
-// isTransientError checks if an error is transient and should be retried
-func isTransientError(err error, statusCode int) bool {
-	if err != nil {
-		return true // Network errors are generally transient
-	}
-	// HTTP status codes that indicate transient failures
-	return statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
-}
-
-// retryWithBackoff executes a function with exponential backoff retry logic
-func retryWithBackoff(operation func() (*http.Response, error), maxRetries int) (*http.Response, error) {
-	var lastErr error
-	var resp *http.Response
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, lastErr = operation()
-
-		if lastErr == nil && resp != nil && !isTransientError(nil, resp.StatusCode) {
-			return resp, nil
-		}
-
-		// If this was the last attempt, don't wait
-		if attempt == maxRetries {
-			break
-		}
-
-		// Log the retry attempt
-		if resp != nil {
-			log.Warn().Msgf("Token endpoint request failed with status %d, retrying in %v (attempt %d/%d)",
-				resp.StatusCode, time.Duration(1<<attempt)*time.Second, attempt+1, maxRetries+1)
-		} else {
-			log.Warn().Msgf("Token endpoint request failed with error %v, retrying in %v (attempt %d/%d)",
-				lastErr, time.Duration(1<<attempt)*time.Second, attempt+1, maxRetries+1)
-		}
-
-		// Close the response body if present to avoid resource leaks
-		if resp != nil {
-			resp.Body.Close()
-		}
-
-		// Exponential backoff: 1s, 2s, 4s, 8s...
-		time.Sleep(time.Duration(1<<attempt) * time.Second)
-	}
-
-	if resp != nil && lastErr == nil {
-		return resp, nil
-	}
-	return resp, lastErr
-}
-
 func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret string) error {
 	// Get a fresh access token from Metaplay Auth.
 	params := url.Values{
@@ -233,25 +181,14 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 	}
 
 	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint with retry logic
-	resp, err := retryWithBackoff(func() (*http.Response, error) {
-		return http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
-	}, 3) // Retry up to 3 times (4 total attempts)
-
+	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, params.Encode())
 	if err != nil {
-		return fmt.Errorf("failed to send request to token endpoint after retries: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Parse the response, there should be a non-empty body containing the token as JSON
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read token endpoint response: %w", err)
+		return fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}
 
 	// Check for HTTP errors.
-	// TODO: Check whether other 2xx codes with a token in the body should be expected and accepted
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
+	if statusCode != http.StatusOK {
+		return fmt.Errorf("token endpoint returned an error: %d - %s", statusCode, string(body))
 	}
 
 	// Parse a TokenSet object from the response body JSON
@@ -279,12 +216,10 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 }
 
 func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
-	// Resolve userinfo endpoint (on the portal).
 	log.Debug().Msgf("Fetch user info from %s", authProvider.UserInfoEndpoint)
 
-	// Make the request
 	var userinfo UserInfoResponse
-	resp, err := resty.New().R().
+	resp, err := httputil.NewRetryClient().R().
 		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
 		SetResult(&userinfo).               // Unmarshal response into the struct
 		Get(authProvider.UserInfoEndpoint)
@@ -310,23 +245,17 @@ func exchangeCodeForTokens(code, verifier, redirectURI string, authProvider *Aut
 	data.Set("client_id", authProvider.ClientID)
 	data.Set("code_verifier", verifier)
 
-	// Make the HTTP POST request
-	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	// Make the HTTP POST request with retry logic for transient errors
+	// Note: Authorization codes are single-use, but retrying on network errors is still safe
+	// since the code won't be consumed if the request never reached the server
+	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, data.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}
-	defer resp.Body.Close()
 
 	// Check for HTTP errors
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
-	}
-
-	// Parse the JSON response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read token endpoint response: %w", err)
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint returned an error: %d - %s", statusCode, string(body))
 	}
 	// log.Debug().Msgf("Response body: %s", body)
 	// Sample response:
