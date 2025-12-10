@@ -18,6 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// \todo Add a --no-retry flag to avoid HTTP retries on failed requests
+
 // Command to make HTTP requests to the game server admin API.
 type debugAdminRequestOpts struct {
 	UsePositionalArgs
@@ -51,6 +53,8 @@ func init() {
 			This command allows you to interact with the game server's admin API endpoint using
 			various HTTP methods. You can pass a request body using either the --body flag for
 			providing raw content directly or the --file flag to read content from a file.
+
+			Requests are automatically retried a few times to mitigate transient network errors.
 
 			{Arguments}
 
@@ -118,10 +122,9 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 	return nil
 }
 
-
 func IsJSON(str string) bool {
-    var js json.RawMessage
-    return json.Unmarshal([]byte(str), &js) == nil
+	var js json.RawMessage
+	return json.Unmarshal([]byte(str), &js) == nil
 }
 
 func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
