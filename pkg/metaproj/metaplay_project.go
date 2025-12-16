@@ -665,17 +665,17 @@ environments:{{if not .Environments}} []{{else}}
     stackDomain: {{.StackDomain}}
 {{end}}{{end}}`))
 
-// \todo Clean this up
-func GenerateProjectConfigFile(
+// RenderProjectConfigYAML generates the YAML content for a project config file.
+// Returns the YAML string and the parsed ProjectConfig.
+func RenderProjectConfigYAML(
 	sdkMetadata *MetaplayVersionMetadata,
-	rootPath string,
 	pathToUnityProject string,
 	pathToMetaplaySdk string,
 	sharedCodePath string,
 	gameBackendPath string,
 	customDashboardPath string,
 	project *portalapi.ProjectInfo,
-	environments []portalapi.EnvironmentInfo) (*ProjectConfig, error) {
+	environments []portalapi.EnvironmentInfo) (string, *ProjectConfig, error) {
 	// Data for the template
 	data := struct {
 		SchemaPath            string
@@ -710,23 +710,53 @@ func GenerateProjectConfigFile(
 	var result strings.Builder
 	err := projectFileTemplate.Execute(&result, data)
 	if err != nil {
-		log.Panic().Msgf("Failed to render Metaplay project config file template: %v", err)
+		return "", nil, fmt.Errorf("failed to render Metaplay project config file template: %w", err)
 	}
 
 	var projectConfig ProjectConfig
 	err = yaml.Unmarshal([]byte(result.String()), &projectConfig)
 	if err != nil {
-		log.Panic().Msgf("Failed to parse generated Metaplay project file: %v\nFull YAML:\n%s", err, result.String())
+		return "", nil, fmt.Errorf("failed to parse generated Metaplay project file: %w\nFull YAML:\n%s", err, result.String())
+	}
+
+	return result.String(), &projectConfig, nil
+}
+
+// GenerateProjectConfigFile generates and writes a project config file to disk.
+// \todo Clean this up
+func GenerateProjectConfigFile(
+	sdkMetadata *MetaplayVersionMetadata,
+	rootPath string,
+	pathToUnityProject string,
+	pathToMetaplaySdk string,
+	sharedCodePath string,
+	gameBackendPath string,
+	customDashboardPath string,
+	project *portalapi.ProjectInfo,
+	environments []portalapi.EnvironmentInfo) (*ProjectConfig, error) {
+
+	yamlContent, projectConfig, err := RenderProjectConfigYAML(
+		sdkMetadata,
+		pathToUnityProject,
+		pathToMetaplaySdk,
+		sharedCodePath,
+		gameBackendPath,
+		customDashboardPath,
+		project,
+		environments,
+	)
+	if err != nil {
+		log.Panic().Msgf("%v", err)
 	}
 
 	// Write metaplay-project.yaml.
 	configFilePath := filepath.Join(rootPath, "metaplay-project.yaml")
 	log.Debug().Msgf("Write project configuration to: %s", configFilePath)
-	if err := os.WriteFile(configFilePath, []byte(result.String()), 0644); err != nil {
+	if err := os.WriteFile(configFilePath, []byte(yamlContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write project configuration file: %w", err)
 	}
 
-	return &projectConfig, nil
+	return projectConfig, nil
 }
 
 func isValidEnvironmentType(envType portalapi.EnvironmentType) bool {
