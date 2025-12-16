@@ -658,12 +658,12 @@ features:
     rootDir: {{.CustomDashboardPath}}
 
 # Project environments.
-environments:
+environments:{{if not .Environments}} []{{else}}
 {{range .Environments}}  - name: {{.Name}}
     humanId: {{.HumanID}}
     type: {{.Type}}
     stackDomain: {{.StackDomain}}
-{{end}}`))
+{{end}}{{end}}`))
 
 // \todo Clean this up
 func GenerateProjectConfigFile(
