@@ -134,7 +134,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	}
 
 	// Handle the case where environments exists but is null/empty (e.g., "environments:" with no value).
-	// This can happen due to an earlier bug in the CLI or manual editing.
+	// This happens with projects that have no environments in them.
 	if _, isNull := envsNode.(*ast.NullNode); isNull {
 		// Replace the null node with an empty sequence
 		if err := envsPath.ReplaceWithReader(root, strings.NewReader("[]")); err != nil {
