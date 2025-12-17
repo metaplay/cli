@@ -138,12 +138,12 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	if _, isNull := envsNode.(*ast.NullNode); isNull {
 		// Replace the null node with an empty sequence
 		if err := envsPath.ReplaceWithReader(root, strings.NewReader("[]")); err != nil {
-			return fmt.Errorf("failed to replace null environments with sequence: %v", err)
+			return fmt.Errorf("failed to replace null 'environments' with empty sequence: %v", err)
 		}
 		// Re-fetch the environments node after replacement
 		envsNode, err = envsPath.FilterFile(root)
 		if err != nil {
-			return fmt.Errorf("failed to get environments after replacement: %v", err)
+			return fmt.Errorf("failed to find node 'environments' after replacement: %v", err)
 		}
 		// Ensure block-style output (not flow-style like [a, b, c]) and reset indentation
 		if seqNode, ok := envsNode.(*ast.SequenceNode); ok {
