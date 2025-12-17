@@ -177,14 +177,29 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 	if project != nil {
 		// If environment not specified, ask it from the user (if in interactive mode).
 		if environment == "" {
-			if tui.IsInteractiveMode() {
-				envConfig, err = tui.ChooseTargetEnvironmentDialog(project.Config.Environments)
-				if err != nil {
-					return nil, nil, err
-				}
-			} else {
+			// Must be in interactive mode.
+			if !tui.IsInteractiveMode() {
 				return nil, nil, fmt.Errorf("in non-interactive mode, target environment must be explicitly specified")
 			}
+
+			// Error if no environments in the metaplay-project.yaml.
+			if len(project.Config.Environments) == 0 {
+				return nil, nil, fmt.Errorf("no environments found in metaplay-project.yaml; update the local file with 'metaplay update project-environments' or create a new environment via https://portal.metaplay.dev")
+			}
+
+			// Let the user choose the target environment.
+			envConfig, err = tui.ChooseFromListDialog(
+				"Select Target Environment",
+				project.Config.Environments,
+				func(env *metaproj.ProjectEnvironmentConfig) (string, string) {
+					return env.Name, fmt.Sprintf("[%s]", env.HumanID)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), envConfig.Name, styles.RenderMuted(fmt.Sprintf("[%s]", envConfig.HumanID)))
 		} else {
 			// Find target environment.
 			envConfig, err = project.Config.FindEnvironmentConfig(environment)
@@ -235,8 +250,24 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 			return nil, nil, err
 		}
 
-		// Let the user choose from the environments.
-		portalEnv, err = tui.ChooseEnvironmentDialog(environments)
+		// Must be in interactive mode.
+		if !tui.IsInteractiveMode() {
+			return nil, nil, fmt.Errorf("interactive mode required for project selection")
+		}
+
+		// Error if no environments in portal project.
+		if len(environments) == 0 {
+			return nil, nil, fmt.Errorf("no accessible environments found in the portal for project '%s'; either create one in https://portal.metaplay.dev or request access to an existing one from your team", project.Name)
+		}
+
+		// Let user interactively choose the environment.
+		portalEnv, err := tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
+			"Select Target Environment",
+			environments,
+			func(env *portalapi.EnvironmentInfo) (string, string) {
+				return env.Name, fmt.Sprintf("[%s]", env.HumanID)
+			},
+		)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -152,7 +152,7 @@ func ChooseFromListDialog[TItem any](title string, items []TItem, toItemFunc fun
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderTitle(title))
 		log.Info().Msg("")
-		return nil, fmt.Errorf("no items in the list")
+		return nil, fmt.Errorf("ChooseFromListDialog(): an empty list was provided")
 	}
 
 	// Convert items to list items.
