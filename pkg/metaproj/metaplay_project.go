@@ -658,12 +658,12 @@ features:
     rootDir: {{.CustomDashboardPath}}
 
 # Project environments.
-environments:{{if not .Environments}} []{{else}}
+environments:
 {{range .Environments}}  - name: {{.Name}}
     humanId: {{.HumanID}}
     type: {{.Type}}
     stackDomain: {{.StackDomain}}
-{{end}}{{end}}`))
+{{end}}`))
 
 // RenderProjectConfigYAML generates the YAML content for a project config file.
 // Returns the YAML string and the parsed ProjectConfig.
