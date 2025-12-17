@@ -159,7 +159,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	// Cast to sequence node (now guaranteed to be valid after null handling above)
 	envsSeqNode, ok := envsNode.(*ast.SequenceNode)
 	if !ok {
-		return fmt.Errorf("environments is not a sequence")
+		return fmt.Errorf("the 'environments' node in metaplay-project.yaml is not a valid sequence")
 	}
 
 	// Handle all environments from the portal.
