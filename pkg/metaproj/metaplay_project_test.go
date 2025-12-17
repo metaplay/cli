@@ -60,20 +60,13 @@ func TestRenderProjectConfigYAML_EmptyEnvironments(t *testing.T) {
 		t.Fatalf("Generated YAML is invalid: %v\nContent:\n%s", err, yamlContent)
 	}
 
-	// Verify environments is an empty list, not nil
+	// Verify environments key exists and is null (implicit null from "environments:" with no value)
 	envs, ok := parsed["environments"]
 	if !ok {
 		t.Fatal("Expected 'environments' key in YAML")
 	}
-	if envs == nil {
-		t.Fatal("Expected 'environments' to be empty list, got nil")
-	}
-	envList, ok := envs.([]interface{})
-	if !ok {
-		t.Fatalf("Expected 'environments' to be a list, got %T", envs)
-	}
-	if len(envList) != 0 {
-		t.Fatalf("Expected empty environments list, got %d items", len(envList))
+	if envs != nil {
+		t.Fatalf("Expected 'environments' to be null, got %T: %v", envs, envs)
 	}
 }
 
@@ -105,10 +98,13 @@ func TestRenderProjectConfigYAML_NilEnvironments(t *testing.T) {
 		t.Fatalf("Generated YAML is invalid: %v\nContent:\n%s", err, yamlContent)
 	}
 
-	// Verify environments key exists
-	_, ok := parsed["environments"]
+	// Verify environments key exists and is null
+	envs, ok := parsed["environments"]
 	if !ok {
 		t.Fatal("Expected 'environments' key in YAML")
+	}
+	if envs != nil {
+		t.Fatalf("Expected 'environments' to be null, got %T: %v", envs, envs)
 	}
 }
 
