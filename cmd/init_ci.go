@@ -347,7 +347,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Metaplay CLI
         uses: metaplay-shared/github-workflows/setup-cli@v0
@@ -362,7 +362,7 @@ jobs:
 `
 
 // Bitbucket Pipelines template (CLIv2)
-const bitbucketPipelinesTemplate = `image: atlassian/default-image:4
+const bitbucketPipelinesTemplate = `image: atlassian/default-image:5
 
 definitions:
   clone:
@@ -392,7 +392,7 @@ pipelines:
             # Exit on failures
             - set -eo pipefail
             # Install metaplay CLI
-            - bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
+            - bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
             # Login to Metaplay cloud (using machine user with credentials from the METAPLAY_CREDENTIALS secret)
             - metaplay auth machine-login
             # Build the game server docker image using the commit hash as the tag
@@ -423,7 +423,7 @@ export BUILD_NUMBER="${BUILD_NUMBER:-local}"
 # Install metaplay CLI (skip if already installed)
 if ! command -v metaplay &> /dev/null; then
     echo "Installing Metaplay CLI..."
-    bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
+    bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
 fi
 
 # Login to Metaplay cloud using the machine user
