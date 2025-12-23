@@ -125,7 +125,7 @@ if [ -z "$VERSION" ]; then
   # which we then parse the actual version number from.
   latest_release_url="https://github.com/${REPO}/releases/latest"
   curl_exit=0
-  redirect_url=$(curl -sI --show-error --fail -o /dev/null -w '%{redirect_url}' "$latest_release_url") || curl_exit=$?
+  redirect_url=$(curl -sI --show-error --fail --retry 10 --retry-all-errors --retry-max-time 60 -o /dev/null -w '%{redirect_url}' "$latest_release_url") || curl_exit=$?
 
   if [ $curl_exit -ne 0 ]; then
     print_error "Failed to determine latest CLI version from $latest_release_url (curl exited with code $curl_exit)."
@@ -140,7 +140,7 @@ elif [ "$VERSION" = "latest-dev" ]; then
   # Fetch all releases (newest first), get the tag_name of the very first one
   # Note: Uses a rate-limited URL but since this is for internal use only, it's fine.
   curl_exit=0
-  releases_json=$(curl -sSfL --show-error --fail "https://api.github.com/repos/${REPO}/releases") || curl_exit=$?
+  releases_json=$(curl -sSfL --show-error --fail --retry 10 --retry-all-errors --retry-max-time 60 "https://api.github.com/repos/${REPO}/releases") || curl_exit=$?
 
   if [ $curl_exit -ne 0 ]; then
     print_error "Failed to fetch releases from api.github.com to determine 'latest-dev' version (curl exited with code $curl_exit)."
@@ -172,10 +172,10 @@ TMP_DIR="$(mktemp -d)"
 TARBALL_PATH="${TMP_DIR}/${TARBALL}"
 
 if [ "$VERBOSE" = "true" ]; then
-  curl -sSfL -o "${TARBALL_PATH}" "${DOWNLOAD_URL}"
+  curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 -o "${TARBALL_PATH}" "${DOWNLOAD_URL}"
 else
   # Show compact progress bar
-  curl --progress-bar -fL -o "${TARBALL_PATH}" "${DOWNLOAD_URL}"
+  curl --progress-bar -fL --retry 10 --retry-all-errors --retry-max-time 60 -o "${TARBALL_PATH}" "${DOWNLOAD_URL}"
 fi
 
 # Extract the binary
