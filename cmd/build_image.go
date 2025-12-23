@@ -60,8 +60,8 @@ func init() {
 			- 'metaplay image push ...' to push the built image into a target environment's registry.
 		`),
 		Example: renderExample(`
-			# Build Docker image, produces image named '<projectID>:<timestamp>'. Only recommended when
-			# building images manually. In CI, you should always specify the tag explicitly.
+			# Build Docker image, produces image named '<projectID>:YYYYMMDD-HHMMSS-COMMIT_ID'.
+			# Only recommended when building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
 			# Specify only the tag, produces image named '<projectID>:364cff09'.
@@ -99,7 +99,7 @@ func init() {
 func (o *buildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle image name.
 	if o.argImageName == "" {
-		o.argImageName = "<projectID>:<timestamp>"
+		o.argImageName = "<projectID>:<autotag>"
 	} else if strings.Contains(o.argImageName, ":") {
 		// Full name specified, use as-is
 	} else {
@@ -119,17 +119,6 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	project, err := resolveProject()
 	if err != nil {
 		return err
-	}
-
-	// Resolve image name to use: fill in <timestamp> with current unix time
-	// and <projectID> with the project's human ID.
-	log.Debug().Msgf("Image name template: %s", o.argImageName)
-	imageName := strings.Replace(o.argImageName, "<timestamp>", fmt.Sprintf("%d", time.Now().Unix()), -1)
-	imageName = strings.Replace(imageName, "<projectID>", project.Config.ProjectHumanID, -1)
-
-	if strings.HasSuffix(imageName, ":latest") {
-		log.Error().Msg("Building docker image with 'latest' tag is not allowed. Use a commit hash or timestamp instead.")
-		os.Exit(1)
 	}
 
 	// Log extra arguments.
@@ -169,6 +158,25 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			buildNumber = "none" // default if not specified
 			buildNumberBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-number=<number>]")
 		}
+	}
+
+	// Resolve image name to use: fill in <autotag> with YYYYMMDD-HHMMSS[-COMMIT_ID]
+	// and <projectID> with the project's human ID.
+	log.Debug().Msgf("Image name template: %s", o.argImageName)
+	imageName := o.argImageName
+	if strings.Contains(imageName, "<autotag>") {
+		// Generate auto-tag in format YYYYMMDD-HHMMSS[-COMMIT_ID]
+		autoTag := time.Now().UTC().Format("20060102-150405")
+		if commitID != "" && commitID != "none" {
+			autoTag = fmt.Sprintf("%s-%s", autoTag, commitID)
+		}
+		imageName = strings.ReplaceAll(imageName, "<autotag>", autoTag)
+	}
+	imageName = strings.ReplaceAll(imageName, "<projectID>", project.Config.ProjectHumanID)
+
+	if strings.HasSuffix(imageName, ":latest") {
+		log.Error().Msg("Building docker image with 'latest' tag is not allowed. Use a commit hash or timestamp instead.")
+		os.Exit(1)
 	}
 
 	// Check that docker is installed and running
