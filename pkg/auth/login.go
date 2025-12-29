@@ -100,6 +100,13 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 					return
 				}
 
+				// Validate OAuth2 state parameter to prevent CSRF attacks
+				returnedState := query.Get("state")
+				if returnedState != state {
+					http.Error(w, "Authentication failed: Invalid state parameter", http.StatusBadRequest)
+					return
+				}
+
 				code := query.Get("code")
 				if code == "" {
 					http.Error(w, "Authentication failed: No code received", http.StatusBadRequest)
