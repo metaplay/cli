@@ -167,7 +167,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	if o.flagSdkSource != "" {
 		metaplaySdkSource, err = filepath.Abs(o.flagSdkSource)
 		if err != nil {
-			return fmt.Errorf("Could not resolve sdk source location: %w", err)
+			return fmt.Errorf("could not resolve SDK source location: %w", err)
 		}
 	}
 	// Check if MetaplaySDK/ already exists: if so, we do migration only.

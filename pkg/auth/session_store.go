@@ -294,7 +294,7 @@ func savePersistedConfig(config *PersistedConfig) error {
 	// Write sessionState to file.
 	err = os.WriteFile(filePath, configJSON, 0600)
 	if err != nil {
-		return fmt.Errorf("failed to write session sate to file: %w", err)
+		return fmt.Errorf("failed to write session state to file: %w", err)
 	}
 
 	return nil

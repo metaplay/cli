@@ -49,7 +49,7 @@ func init() {
 
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
-			WARNING: This operation is very intrusive as it completely freeze the target process
+			WARNING: This operation is very intrusive as it completely freezes the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
 

@@ -232,7 +232,7 @@ func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserI
 		Get(authProvider.UserInfoEndpoint)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch userinfo %w", err)
+		return nil, fmt.Errorf("failed to fetch userinfo: %w", err)
 	}
 
 	if resp.IsError() {

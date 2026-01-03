@@ -127,7 +127,7 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// Read the file content
 		fileContent, err := os.ReadFile(filePath)
 		if err != nil {
-			return fmt.Errorf("failed to secret from file '%s': %v", filePath, err)
+			return fmt.Errorf("failed to read secret from file '%s': %v", filePath, err)
 		}
 
 		// Insert into the map

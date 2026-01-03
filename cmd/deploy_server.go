@@ -57,7 +57,7 @@ func init() {
 		Long: renderLong(&o, `
 			Deploy a game server into a cloud environment using the specified docker image version.
 
-			After deploying the server image, various checks are run against the deployment to help
+			After deploying the server image, various checks are run against the deployment to
 			help diagnose any potential issues:
 			- All expected pods are present, healthy, and ready.
 			- Client-facing domain name resolves correctly.
@@ -456,7 +456,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
 			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
-			return fmt.Errorf("Unable to deploy server due to existing Helm release is in state 'uninstalling'")
+			return fmt.Errorf("unable to deploy server: existing Helm release is in state 'uninstalling'")
 		} else if releaseStatus.IsPending() {
 			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
 			uninstallExistingRelease = true

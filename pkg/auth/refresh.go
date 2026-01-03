@@ -114,7 +114,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		}
 
 		log.Debug().Msg("Local credentials removed.")
-		return nil, errors.New("failed to refresh tokens, exiting. Please log in again")
+		return nil, errors.New("failed to refresh tokens, please log in again")
 	}
 
 	var tokens TokenSet

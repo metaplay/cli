@@ -44,7 +44,7 @@ func init() {
 			By default, the output is placed in Backend/Dashboard/dist/. The locally running
 			game server (with 'metaplay run server') will serve this output on http://localhost:5550.
 
-			If you want to include the a pre-built version of the dashboard in your version
+			If you want to include a pre-built version of the dashboard in your version
 			control, so that it can be served locally without the Node/pnpm tooling installed,
 			use the --output-prebuilt flag to place the build output in Backend/PrebuiltDashboard/.
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
