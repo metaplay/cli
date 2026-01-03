@@ -27,9 +27,13 @@ const (
 	keyringKey     = "encryption-key"
 )
 
-// Hard-coded encryption key for Linux as it doesn't have a reliable keyring.
-// We rely on the filesystem access control to protect the secrets.
-var hardCodedKey = []byte{7, 246, 197, 129, 44, 88, 77, 229, 221, 48, 42, 6, 54, 141, 173, 238, 162, 83, 31, 12, 241, 254, 170, 86, 247, 233, 103, 130, 205, 243, 36, 61}
+// linuxFallbackKey is a hard-coded encryption key used on Linux systems where
+// the system keyring (Secret Service) is not available. This includes headless
+// servers, containers, and minimal installs without GNOME Keyring or KWallet.
+//
+// When this key is used, the implementation relies on filesystem permissions
+// (0600) as the security boundary rather than a secure credential store.
+var linuxFallbackKey = []byte{7, 246, 197, 129, 44, 88, 77, 229, 221, 48, 42, 6, 54, 141, 173, 238, 162, 83, 31, 12, 241, 254, 170, 86, 247, 233, 103, 130, 205, 243, 36, 61}
 
 // Type of user in portal (human or machine).
 type UserType string
@@ -69,53 +73,80 @@ var ErrKeyNotFound = errors.New("encryption key not found in keyring")
 // Retrieve the AES encryption key from the keyring.
 // Returns ErrKeyNotFound if the key does not exist.
 func getAESKey() ([]byte, error) {
-	// On Linux, there is no reliable keyring available, so we resort to a fixed key.
-	if runtime.GOOS == "linux" {
-		return hardCodedKey, nil
-	}
-
 	// Get the AES key from the OS keyring.
 	key, err := keyring.Get(keyringService, keyringKey)
-	if err != nil {
-		if errors.Is(err, keyring.ErrNotFound) {
-			return nil, ErrKeyNotFound
+	if err == nil {
+		// Decode the stored key
+		decodedKey, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AES key: %w", err)
 		}
-		return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
+		return decodedKey, nil
 	}
 
-	// Decode the stored key
-	decodedKey, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode AES key: %w", err)
+	if errors.Is(err, keyring.ErrNotFound) {
+		// On Linux, fall back to fixed key if keyring has no key stored.
+		if runtime.GOOS == "linux" {
+			log.Debug().Msg("No key in system keyring, using fallback key (tokens protected by filesystem permissions)")
+			return linuxFallbackKey, nil
+		}
+		return nil, ErrKeyNotFound
 	}
-	return decodedKey, nil
+
+	// On Linux, keyring may be unavailable (no Secret Service daemon).
+	// Fall back to fixed key which relies on filesystem permissions for security.
+	if runtime.GOOS == "linux" {
+		log.Debug().Msg("System keyring unavailable, using fallback key (tokens protected by filesystem permissions)")
+		return linuxFallbackKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
 }
 
 // Generate or retrieve the AES encryption key from the keyring.
 // Creates a new key if one does not exist.
 func getOrCreateAESKey() ([]byte, error) {
-	key, err := getAESKey()
+	// Try to get existing key from keyring
+	key, err := keyring.Get(keyringService, keyringKey)
 	if err == nil {
-		return key, nil
-	}
-	if !errors.Is(err, ErrKeyNotFound) {
-		return nil, err
-	}
-
-	// Generate a new AES key
-	log.Debug().Msg("Generate new AES encryption key")
-	newKey := make([]byte, 32) // AES-256
-	if _, err := rand.Read(newKey); err != nil {
-		return nil, fmt.Errorf("failed to generate AES key: %w", err)
+		decodedKey, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AES key: %w", err)
+		}
+		return decodedKey, nil
 	}
 
-	// Store the key in the keyring
-	log.Debug().Msg("Store encryption key in keyring")
-	err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
-	if err != nil {
-		return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
+	// If keyring is available but key doesn't exist, create one
+	if errors.Is(err, keyring.ErrNotFound) {
+		// Generate a new AES key
+		log.Debug().Msg("Generate new AES encryption key")
+		newKey := make([]byte, 32) // AES-256
+		if _, err := rand.Read(newKey); err != nil {
+			return nil, fmt.Errorf("failed to generate AES key: %w", err)
+		}
+
+		// Store the key in the keyring
+		log.Debug().Msg("Store encryption key in keyring")
+		err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
+		if err != nil {
+			// On Linux, keyring.Set may fail even if Get returned ErrNotFound
+			// (e.g., Secret Service available for read but not write).
+			if runtime.GOOS == "linux" {
+				log.Debug().Msg("Failed to store key in keyring, using fallback key (tokens protected by filesystem permissions)")
+				return linuxFallbackKey, nil
+			}
+			return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
+		}
+		return newKey, nil
 	}
-	return newKey, nil
+
+	// Keyring error (not ErrNotFound) - keyring may be unavailable
+	if runtime.GOOS == "linux" {
+		log.Debug().Msg("System keyring unavailable, using fallback key (tokens protected by filesystem permissions)")
+		return linuxFallbackKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
 }
 
 // Encrypt data using AES-GCM encryption (authenticated encryption).
@@ -325,6 +356,8 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 // LoadSessionState loads a session state and decrypts the tokenSet.
 // Returns nil if there is no existing session.
 // If a legacy CFB-encrypted session is found, it is automatically migrated to GCM.
+// On Linux, sessions encrypted with the fallback key are re-encrypted with the
+// keyring-based key if a keyring becomes available.
 func LoadSessionState(sessionID string) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
@@ -360,7 +393,17 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 
 		tokenSetJSON, err = decryptGCM(tokenSetBytes, key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt session (encryption key may have changed, please log in again): %w", err)
+			// On Linux, try fallback key. This handles the case where a session was
+			// created without keyring, but keyring is now available.
+			if runtime.GOOS == "linux" {
+				tokenSetJSON, err = decryptGCM(tokenSetBytes, linuxFallbackKey)
+				if err == nil {
+					needsMigration = true
+				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt session (encryption key may have changed, please log in again): %w", err)
+			}
 		}
 	} else if sessionState.TokenSetLegacy != "" {
 		// Fall back to legacy CFB-encrypted field
@@ -371,7 +414,13 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 
 		tokenSetJSON, err = decryptLegacyCFB(tokenSetBytes, key)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt legacy TokenSet: %w", err)
+			// On Linux, try fallback key in case session was created without keyring.
+			if runtime.GOOS == "linux" {
+				tokenSetJSON, err = decryptLegacyCFB(tokenSetBytes, linuxFallbackKey)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt legacy TokenSet: %w", err)
+			}
 		}
 
 		needsMigration = true
