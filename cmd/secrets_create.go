@@ -52,6 +52,7 @@ func init() {
 			{Arguments}
 
 			Related commands:
+			- 'metaplay secrets update ENVIRONMENT NAME ...' to update an existing user secret.
 			- 'metaplay secrets delete ENVIRONMENT NAME ...' to delete a user secret.
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
