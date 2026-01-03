@@ -36,7 +36,7 @@ type UserType string
 
 const (
 	UserTypeHuman   UserType = "human"
-	UserTypeMachine          = "machine"
+	UserTypeMachine UserType = "machine"
 )
 
 // In-memory session state.
@@ -47,8 +47,9 @@ type SessionState struct {
 
 // Persisted session state (with encrypted tokenSet).
 type PersistedSessionState struct {
-	UserType        UserType `json:"userType"` // Type of the user (human or machine)
-	EncodedTokenSet string   `json:"tokenSet"` // Encrypted tokenSet
+	UserType       UserType `json:"userType"`              // Type of the user (human or machine)
+	TokenSetLegacy string   `json:"tokenSet,omitempty"`    // Legacy CFB-encrypted tokenSet (deprecated)
+	TokenSetGCM    string   `json:"tokenSetGcm,omitempty"` // GCM-encrypted tokenSet
 }
 
 // Represents the config.json persisted on disk.
@@ -99,27 +100,61 @@ func getOrCreateAESKey() ([]byte, error) {
 	return decodedKey, nil
 }
 
-// Encrypt data using AES encryption.
-func encrypt(data []byte, key []byte) ([]byte, error) {
+// Encrypt data using AES-GCM encryption (authenticated encryption).
+func encryptGCM(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	ciphertext := make([]byte, aes.BlockSize+len(data))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, fmt.Errorf("failed to generate IV: %w", err)
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], data)
+	// Generate a random nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
 
+	// Encrypt and authenticate the data, prepending the nonce
+	ciphertext := gcm.Seal(nonce, nonce, data, nil)
 	return ciphertext, nil
 }
 
-// Decrypt data using AES decryption.
-func decrypt(data []byte, key []byte) ([]byte, error) {
+// Decrypt data using AES-GCM decryption (authenticated encryption).
+// Returns an error if the key is wrong or the data has been tampered with.
+func decryptGCM(data []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// \todo Remove legacy CFB decryption support in a future release (deprecated in 1.7.0, early Jan 2026).
+
+// decryptLegacyCFB decrypts data using AES-CFB decryption.
+// Deprecated: Use decryptGCM instead. This function is only kept for migration purposes.
+func decryptLegacyCFB(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
@@ -234,7 +269,7 @@ func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 	return savePersistedConfig(configState)
 }
 
-// SaveSessionState saves the current session state (with encrypted tokenSet).
+// SaveSessionState saves the current session state (with GCM-encrypted tokenSet).
 func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
@@ -248,16 +283,16 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 		return err
 	}
 
-	// Encrypt the tokenSet
-	encryptedTokenSet, err := encrypt(tokenSetJSON, key)
+	// Encrypt the tokenSet using GCM (authenticated encryption)
+	encryptedTokenSet, err := encryptGCM(tokenSetJSON, key)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TokenSet: %w", err)
 	}
 
-	// Construct session state.
+	// Construct session state (only using GCM field, legacy field is omitted).
 	sessionState := PersistedSessionState{
-		UserType:        userType,
-		EncodedTokenSet: base64.StdEncoding.EncodeToString(encryptedTokenSet),
+		UserType:    userType,
+		TokenSetGCM: base64.StdEncoding.EncodeToString(encryptedTokenSet),
 	}
 
 	// Update session state in persisted config.
@@ -271,6 +306,7 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 
 // LoadSessionState loads a session state and decrypts the tokenSet.
 // Returns nil if there is no existing session.
+// If a legacy CFB-encrypted session is found, it is automatically migrated to GCM.
 func LoadSessionState(sessionID string) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
@@ -285,22 +321,42 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 		return nil, nil
 	}
 
-	// Base64 decode to get encrypted tokenSet bytes.
-	tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.EncodedTokenSet)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode encrypted tokenSet: %w", err)
-	}
-
 	// Get encryption key.
 	key, err := getOrCreateAESKey()
 	if err != nil {
 		return nil, err
 	}
 
-	// Decrypt the tokenSet
-	tokenSetJSON, err := decrypt(tokenSetBytes, key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt TokenSet: %w", err)
+	var tokenSetJSON []byte
+	needsMigration := false
+
+	// Try GCM-encrypted field first (preferred)
+	if sessionState.TokenSetGCM != "" {
+		tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.TokenSetGCM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode GCM-encrypted tokenSet: %w", err)
+		}
+
+		tokenSetJSON, err = decryptGCM(tokenSetBytes, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt session (encryption key may have changed, please log in again): %w", err)
+		}
+	} else if sessionState.TokenSetLegacy != "" {
+		// Fall back to legacy CFB-encrypted field
+		tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.TokenSetLegacy)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode legacy-encrypted tokenSet: %w", err)
+		}
+
+		tokenSetJSON, err = decryptLegacyCFB(tokenSetBytes, key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt legacy TokenSet: %w", err)
+		}
+
+		needsMigration = true
+	} else {
+		// No token set data found
+		return nil, fmt.Errorf("session state has no token data")
 	}
 
 	// Deserialize the JSON into a TokenSet.
@@ -308,6 +364,12 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 	err = json.Unmarshal(tokenSetJSON, &tokenSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize TokenSet: %w", err)
+	}
+
+	// Migrate legacy session to GCM encryption
+	if needsMigration {
+		// Re-save with GCM encryption. Ignore errors as we can retry next time.
+		_ = SaveSessionState(sessionID, sessionState.UserType, &tokenSet)
 	}
 
 	return &SessionState{
