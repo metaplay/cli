@@ -63,9 +63,13 @@ func newPersistedConfig() *PersistedConfig {
 	}
 }
 
-// Generate or retrieve the AES encryption key from the keyring.
-func getOrCreateAESKey() ([]byte, error) {
-	// On Linux, there is no reliably keyring available, so we resort to a fixed key.
+// ErrKeyNotFound is returned when the encryption key is not found in the keyring.
+var ErrKeyNotFound = errors.New("encryption key not found in keyring")
+
+// Retrieve the AES encryption key from the keyring.
+// Returns ErrKeyNotFound if the key does not exist.
+func getAESKey() ([]byte, error) {
+	// On Linux, there is no reliable keyring available, so we resort to a fixed key.
 	if runtime.GOOS == "linux" {
 		return hardCodedKey, nil
 	}
@@ -74,20 +78,7 @@ func getOrCreateAESKey() ([]byte, error) {
 	key, err := keyring.Get(keyringService, keyringKey)
 	if err != nil {
 		if errors.Is(err, keyring.ErrNotFound) {
-			// Generate a new AES key
-			log.Debug().Msg("Generate new AES encryption key")
-			newKey := make([]byte, 32) // AES-256
-			if _, err := rand.Read(newKey); err != nil {
-				return nil, fmt.Errorf("failed to generate AES key: %w", err)
-			}
-
-			// Store the key in the keyring
-			log.Debug().Msg("Store encryption key in keyring")
-			err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
-			if err != nil {
-				return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
-			}
-			return newKey, nil
+			return nil, ErrKeyNotFound
 		}
 		return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
 	}
@@ -98,6 +89,33 @@ func getOrCreateAESKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode AES key: %w", err)
 	}
 	return decodedKey, nil
+}
+
+// Generate or retrieve the AES encryption key from the keyring.
+// Creates a new key if one does not exist.
+func getOrCreateAESKey() ([]byte, error) {
+	key, err := getAESKey()
+	if err == nil {
+		return key, nil
+	}
+	if !errors.Is(err, ErrKeyNotFound) {
+		return nil, err
+	}
+
+	// Generate a new AES key
+	log.Debug().Msg("Generate new AES encryption key")
+	newKey := make([]byte, 32) // AES-256
+	if _, err := rand.Read(newKey); err != nil {
+		return nil, fmt.Errorf("failed to generate AES key: %w", err)
+	}
+
+	// Store the key in the keyring
+	log.Debug().Msg("Store encryption key in keyring")
+	err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
+	}
+	return newKey, nil
 }
 
 // Encrypt data using AES-GCM encryption (authenticated encryption).
@@ -321,9 +339,12 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 		return nil, nil
 	}
 
-	// Get encryption key.
-	key, err := getOrCreateAESKey()
+	// Get encryption key (read-only, do not create if missing).
+	key, err := getAESKey()
 	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, fmt.Errorf("encryption key not found, please log in again")
+		}
 		return nil, err
 	}
 
