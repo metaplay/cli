@@ -415,7 +415,7 @@ func displayError(err error) {
 		// Display the suggestion with empty line before and styled "Suggest:" prefix
 		if cliErr.Suggestion != "" {
 			stderrLogger.Info().Msg("")
-			stderrLogger.Info().Msgf("%s %s", styles.RenderPrompt("Suggest:"), cliErr.Suggestion)
+			stderrLogger.Info().Msgf("%s %s", styles.RenderPrompt("Hint:"), cliErr.Suggestion)
 		}
 	} else {
 		// Fallback for plain Go errors
