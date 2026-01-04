@@ -6,9 +6,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -123,8 +123,7 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 
 	// Run the docker image.
 	if err := executeCommand(".", nil, "docker", dockerRunArgs...); err != nil {
-		log.Error().Msgf("Docker run failed: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Docker run failed")
 	}
 
 	// The docker container exited normally.

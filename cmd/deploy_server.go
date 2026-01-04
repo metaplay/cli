@@ -6,13 +6,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -311,9 +311,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		// Environment type (prod, staging, development) must match that in the portal.
 		// Otherwise, the game server will be using wrong environment type-specific defaults.
 		if envConfig.Type != portalInfo.Type {
-			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
-			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
-			os.Exit(1)
+			return clierrors.Newf("Environment type mismatch: local config has '%s', portal has '%s'", envConfig.Type, portalInfo.Type).
+				WithSuggestion("Run 'metaplay update project-environments' to sync with portal")
 		}
 	}
 

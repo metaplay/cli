@@ -5,11 +5,11 @@
 package cmd
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -56,8 +56,7 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	// Resolve project
 	project, err := resolveProject()
 	if err != nil {
-		log.Error().Msgf("Failed to find project: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	log.Info().Msg("")
@@ -71,10 +70,8 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 
 	// Ensure Playwright CLI is available.
 	if _, err := exec.LookPath("playwright"); err != nil {
-		log.Error().Msg(styles.RenderError("Playwright CLI not found on PATH"))
-		log.Info().Msg("Install it with:")
-		log.Info().Msg(styles.RenderPrompt("dotnet tool install --global Microsoft.Playwright.CLI"))
-		return errors.New("playwright CLI not found; please install it and re-run")
+		return clierrors.New("Playwright CLI not found on PATH").
+			WithSuggestion("Install it with: dotnet tool install --global Microsoft.Playwright.CLI")
 	}
 
 	// Resolve SDK System.Tests directory and install browsers
@@ -84,16 +81,14 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	// Install Playwright browsers.
 	log.Info().Msg(styles.RenderBright("🔷 Install Playwright browsers"))
 	if err := execChildTask(sdkSystemTestsDir, "playwright", []string{"install"}); err != nil {
-		log.Error().Msgf("Playwright install failed in %s: %v", sdkSystemTestsDir, err)
-		os.Exit(1)
+		return clierrors.Wrapf(err, "Playwright install failed in %s", sdkSystemTestsDir)
 	}
 
 	// SDK core system tests
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderBright("🔷 Run tests in MetaplaySDK/Backend/System.Tests"))
 	if err := execChildTask(sdkSystemTestsDir, "dotnet", []string{"test"}); err != nil {
-		log.Error().Msgf("SDK system tests failed in %s: %v", sdkSystemTestsDir, err)
-		os.Exit(1)
+		return clierrors.Wrapf(err, "SDK system tests failed in %s", sdkSystemTestsDir)
 	}
 
 	// Userland system tests (if present)
@@ -103,8 +98,7 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	if st, err := os.Stat(userSystemTestsDir); err == nil && st.IsDir() {
 		log.Info().Msg(styles.RenderBright("🔷 Run tests in Backend/System.Tests"))
 		if err := execChildTask(userSystemTestsDir, "dotnet", []string{"test"}); err != nil {
-			log.Error().Msgf("Project system tests failed in %s: %v", userSystemTestsDir, err)
-			os.Exit(1)
+			return clierrors.Wrapf(err, "Project system tests failed in %s", userSystemTestsDir)
 		}
 	} else {
 		log.Info().Msg(styles.RenderMuted("No project-specific system tests project found in Backend/System.Tests (skipping)"))

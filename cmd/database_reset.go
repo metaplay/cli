@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -81,12 +82,14 @@ func init() {
 func (o *databaseResetOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Environment argument is required
 	if o.argEnvironment == "" {
-		return fmt.Errorf("ENVIRONMENT argument is required")
+		return clierrors.NewUsageError("ENVIRONMENT argument is required").
+			WithSuggestion("Specify the target environment, e.g., 'metaplay database reset develop'")
 	}
 
 	// In non-interactive mode, --yes flag is required for safety
 	if !tui.IsInteractiveMode() && !o.flagYes {
-		return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database reset operation")
+		return clierrors.NewUsageError("Confirmation required for destructive operation").
+			WithSuggestion("Use --yes flag in non-interactive mode to confirm database reset")
 	}
 
 	return nil
@@ -107,7 +110,8 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 
 	// Check if this is a production environment and require additional confirmation
 	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
-		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when resetting production environments", envConfig.Name)
+		return clierrors.Newf("Production environment detected: %s", envConfig.Name).
+			WithSuggestion("Use --confirm-production flag to confirm reset of production environments")
 	}
 
 	// Resolve target environment & game server
@@ -129,17 +133,15 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	// Check for any active game server Helm deployments - refuse to reset if found
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
 	if err != nil {
-		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+		return clierrors.Wrap(err, "Failed to check for existing Helm releases")
 	}
 
 	// Check if there's a game server deployed.
 	log.Info().Msg("")
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
-			removeServerCmd := fmt.Sprintf("metaplay remove server %s", o.argEnvironment)
-			log.Error().Msg("Cannot reset database due to game server deployment in environment.")
-			log.Info().Msgf("Remove the game server first with: %s", styles.RenderPrompt(removeServerCmd))
-			os.Exit(1)
+			return clierrors.New("Cannot reset database while game server is deployed").
+				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s', or use --force to proceed anyway", o.argEnvironment))
 		}
 
 		log.Warn().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))

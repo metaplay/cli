@@ -89,7 +89,7 @@ func findProjectDirectory() (string, error) {
 		if parentDir == absCurrentDir {
 			// We've reached the root and didn't find the config file
 			return "", clierrors.New("Cannot find metaplay-project.yaml").
-				WithSuggestion("Run 'metaplay init project' to create one, or use --project=<path> to specify the project directory")
+				WithSuggestion("Make sure you are in the right directory, or use --project=<path> to specify the project directory")
 		}
 
 		// Move up to the parent directory

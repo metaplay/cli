@@ -7,8 +7,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -99,8 +99,7 @@ func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
 	// Get AWS credentials
 	credentials, err := targetEnv.GetAWSCredentials()
 	if err != nil {
-		log.Error().Msgf("Failed to get AWS credentials: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to get AWS credentials")
 	}
 
 	// Output the credentials in the requested format

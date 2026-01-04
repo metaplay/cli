@@ -9,10 +9,10 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -87,14 +87,16 @@ func init() {
 func (o *debugLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// --since and --since-time are mutually exclusive.
 	if o.flagSince != 0 && o.flagSinceTime != "" {
-		return fmt.Errorf("only one of either --since or --since-time can be used, not both")
+		return clierrors.NewUsageError("Cannot use both --since and --since-time").
+			WithSuggestion("Use only one of --since or --since-time")
 	}
 
 	// Parse --since-time (if specified).
 	if o.flagSinceTime != "" {
 		t, err := time.Parse(time.RFC3339, o.flagSinceTime)
 		if err != nil {
-			return fmt.Errorf("unable to parse --since-time: %v", err)
+			return clierrors.WrapUsageError(err, "Invalid --since-time format").
+				WithSuggestion("Use RFC3339 format, e.g., '2024-12-27T15:04:05Z'")
 		}
 		o.sinceTime = &t
 	}
@@ -133,12 +135,12 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	// \todo Keep updating the list of pods to dynamically adapt to new/delete pods.
 	pods, err := envapi.FetchGameServerPods(cmd.Context(), kubeCli)
 	if err != nil {
-		log.Error().Msgf("Failed to determine game server pods in the environment: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to find game server pods").
+			WithSuggestion("Make sure you have deployed a game server to this environment")
 	}
 	if len(pods) == 0 {
-		log.Error().Msgf("No game server pods found in the environment. Make sure you have a game server deployed.")
-		os.Exit(1)
+		return clierrors.New("No game server pods found in the environment").
+			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 	log.Debug().Msgf("Found %d game server pods: %s", len(pods), strings.Join(getPodNames(pods), ", "))
 

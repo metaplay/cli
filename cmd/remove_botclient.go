@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/rs/zerolog/log"
@@ -73,8 +73,7 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		log.Error().Msgf("Failed to initialize Helm config: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to initialize Helm config")
 	}
 
 	// Resolve all deployed game server Helm releases.
