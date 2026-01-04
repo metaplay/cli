@@ -23,6 +23,23 @@ type IOStreams struct {
 	ErrOut io.Writer
 }
 
+// terminalSizeQueueAdapter adapts term.TerminalSizeQueue to remotecommand.TerminalSizeQueue.
+// These interfaces are identical but use different TerminalSize types from their respective packages.
+type terminalSizeQueueAdapter struct {
+	queue term.TerminalSizeQueue
+}
+
+func (a *terminalSizeQueueAdapter) Next() *remotecommand.TerminalSize {
+	size := a.queue.Next()
+	if size == nil {
+		return nil
+	}
+	return &remotecommand.TerminalSize{
+		Width:  size.Width,
+		Height: size.Height,
+	}
+}
+
 // execRemoteKubernetesCommand creates a SPDY executor and executes a remote command stream with proper terminal handling.
 // It handles both TTY and non-TTY modes, with proper terminal state management for TTY mode.
 func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Config, requestURL *url.URL, ioStreams IOStreams, interactive, showPressEnter bool) error {
@@ -60,7 +77,7 @@ func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Con
 				Stdout:            ioStreams.Out,
 				Stderr:            nil, // In TTY mode, stderr is merged with stdout
 				Tty:               true,
-				TerminalSizeQueue: terminalSizeQueue,
+				TerminalSizeQueue: &terminalSizeQueueAdapter{queue: terminalSizeQueue},
 			}
 			return streamWithLogging(streamOptions)
 		})
