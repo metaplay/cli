@@ -150,40 +150,19 @@ var rootCmd = &cobra.Command{
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
-		// Handle errors from Cobra commands (RunE returns, unknown flags, etc.)
+		// Handle Cobra errors (unknown flags, missing arguments, etc.)
+		// Usage was already shown by Cobra, now show formatted error at the end
 		displayCobraError(err)
-		os.Exit(clierrors.GetExitCode(err))
+		os.Exit(2)
 	}
 }
 
-// displayCobraError formats errors from Cobra command execution.
-// CLIError instances get special formatting with suggestions and details.
-// Regular Cobra errors (flag parsing, etc.) get simple formatting.
+// displayCobraError formats Cobra's built-in errors (flag parsing, etc.)
+// to match our CLIError style.
 func displayCobraError(err error) {
-	// Check if it's a CLIError and format accordingly
-	cliErr, ok := clierrors.AsCLIError(err)
-	if ok {
-		// Display the main error message
-		if cliErr.Cause != nil {
-			fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %s %s", cliErr.Message, styles.RenderMuted(fmt.Sprintf("(%v)", cliErr.Cause)))))
-		} else {
-			fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %s", cliErr.Message)))
-		}
-
-		// Display any detail bullet points
-		for _, detail := range cliErr.Details {
-			fmt.Fprintf(os.Stderr, "  %s %s\n", styles.RenderMuted("-"), detail)
-		}
-
-		// Display the suggestion
-		if cliErr.Suggestion != "" {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintf(os.Stderr, "%s %s\n", styles.RenderPrompt("Suggest:"), cliErr.Suggestion)
-		}
-	} else {
-		// Fallback for plain Cobra errors
-		fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %v", err)))
-	}
+	// Add empty line for separation from usage text, then styled error
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %v", err)))
 }
 
 func init() {
@@ -551,18 +530,4 @@ func isTruthy(str string) bool {
 func isFalsy(str string) bool {
 	str = strings.ToLower(str)
 	return str == "no" || str == "n" || str == "false" || str == "0"
-}
-
-// requireSubcommand returns a RunE function that shows an error when an unknown
-// or missing subcommand is provided. Use this for parent commands that only
-// serve as containers for subcommands.
-func requireSubcommand() func(cmd *cobra.Command, args []string) error {
-	return func(cmd *cobra.Command, args []string) error {
-		if len(args) == 0 {
-			return clierrors.NewUsageErrorf("'%s' requires a subcommand", cmd.CommandPath()).
-				WithSuggestion(fmt.Sprintf("Run '%s --help' to see available subcommands", cmd.CommandPath()))
-		}
-		return clierrors.NewUsageErrorf("Unknown subcommand '%s' for '%s'", args[0], cmd.CommandPath()).
-			WithSuggestion(fmt.Sprintf("Run '%s --help' to see available subcommands", cmd.CommandPath()))
-	}
 }

@@ -11,7 +11,6 @@ import (
 var imageCmd = &cobra.Command{
 	Use:   "image",
 	Short: "Commands for managing server Docker images",
-	RunE:  requireSubcommand(),
 }
 
 func init() {

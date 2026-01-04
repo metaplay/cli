@@ -13,7 +13,6 @@ var buildCmd = &cobra.Command{
 	Use:     "build",
 	Aliases: []string{"b"},
 	Short:   "Build game server components locally",
-	RunE:    requireSubcommand(),
 }
 
 func init() {

@@ -13,7 +13,6 @@ var debugCmd = &cobra.Command{
 	Aliases: []string{"d"},
 	Short:   "Debug and diagnostic commands",
 	Long:    "Commands for debugging and diagnostics of running game servers",
-	RunE:    requireSubcommand(),
 }
 
 func init() {

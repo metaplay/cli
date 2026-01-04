@@ -12,7 +12,6 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
 	Short: "Deploy server or bots into the cloud",
-	RunE:  requireSubcommand(),
 }
 
 func init() {

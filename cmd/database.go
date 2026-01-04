@@ -13,7 +13,6 @@ var databaseCmd = &cobra.Command{
 	Aliases: []string{"db"},
 	Short:   "Database management commands",
 	Long:    "Commands for managing and interacting with game server databases",
-	RunE:    requireSubcommand(),
 }
 
 func init() {

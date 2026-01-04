@@ -12,7 +12,6 @@ import (
 var secretsCmd = &cobra.Command{
 	Use:   "secrets",
 	Short: "Manage Kubernetes secrets of an environment",
-	RunE:  requireSubcommand(),
 }
 
 func init() {

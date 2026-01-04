@@ -11,7 +11,6 @@ import (
 var devCmd = &cobra.Command{
 	Use:   "dev",
 	Short: "Commands for local development",
-	RunE:  requireSubcommand(),
 }
 
 func init() {
