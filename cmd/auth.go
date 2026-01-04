@@ -14,6 +14,7 @@ var authCmd = &cobra.Command{
 	Short: "Authenticate to Metaplay Cloud",
 	Long: `Commands related to authenticating with Metaplay Cloud.
 Supports sign in via a browser for human users and using a secret for machine users.`,
+	RunE: requireSubcommand(),
 }
 
 func init() {

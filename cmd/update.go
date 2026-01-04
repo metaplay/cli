@@ -11,6 +11,7 @@ import (
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update components or tools in the project",
+	RunE:  requireSubcommand(),
 }
 
 func init() {

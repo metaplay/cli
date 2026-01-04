@@ -11,6 +11,7 @@ import (
 var getCmd = &cobra.Command{
 	Use:   "get",
 	Short: "Get information about cloud resources",
+	RunE:  requireSubcommand(),
 }
 
 func init() {

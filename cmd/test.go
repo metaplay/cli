@@ -14,6 +14,7 @@ var testCmd = &cobra.Command{
 	Aliases: []string{"t"},
 	Short:   "Developer testing and verification commands",
 	Long:    "Commands intended for developer testing, verification, and internal diagnostics.",
+	RunE:    requireSubcommand(),
 }
 
 func init() {

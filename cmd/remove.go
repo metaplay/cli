@@ -12,6 +12,7 @@ import (
 var removeCmd = &cobra.Command{
 	Use:   "remove",
 	Short: "Remove deployed components from the cloud",
+	RunE:  requireSubcommand(),
 }
 
 func init() {

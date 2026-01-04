@@ -11,6 +11,7 @@ import (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize project features",
+	RunE:  requireSubcommand(),
 }
 
 func init() {
