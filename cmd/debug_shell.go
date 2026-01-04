@@ -12,6 +12,7 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -120,11 +121,15 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 	defer cleanup()
 
-	// Setup IO streams
+	// Setup IO streams using mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
+	stdIn, stdOut, stdErr := mobyterm.StdStreams()
 	ioStreams := IOStreams{
-		In:     cmd.InOrStdin(),
-		Out:    cmd.OutOrStdout(),
-		ErrOut: cmd.ErrOrStderr(),
+		In:     stdIn,
+		Out:    stdOut,
+		ErrOut: stdErr,
 	}
 
 	// Attach to the running shell in the container.

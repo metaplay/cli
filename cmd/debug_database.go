@@ -16,6 +16,7 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -267,40 +268,47 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Setup stdin for piping queries or interactive mode
+	// Setup stdin for piping queries or interactive mode.
+	// For interactive mode, use mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
 	var stdin io.Reader
+	var stdout io.Writer
+	var stderr io.Writer
 	if isInteractive {
-		stdin = os.Stdin
-	} else if o.flagQuery != "" {
-		// Pipe the query to mariadb stdin
-		stdin = strings.NewReader(o.flagQuery)
-	} else if o.flagQueryFile != "" {
-		// Stream query file directly to mariadb stdin
-		queryFile, err := os.Open(o.flagQueryFile)
-		if err != nil {
-			return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+		stdin, stdout, stderr = mobyterm.StdStreams()
+	} else {
+		stderr = os.Stderr
+		if o.flagQuery != "" {
+			// Pipe the query to mariadb stdin
+			stdin = strings.NewReader(o.flagQuery)
+		} else if o.flagQueryFile != "" {
+			// Stream query file directly to mariadb stdin
+			queryFile, err := os.Open(o.flagQueryFile)
+			if err != nil {
+				return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+			}
+			defer queryFile.Close()
+			stdin = queryFile
 		}
-		defer queryFile.Close()
-		stdin = queryFile
-	}
 
-	// Setup output channel to stdout or file
-	var out io.Writer = os.Stdout
-	var file *os.File
-	if o.flagOutput != "" && !isInteractive {
-		var err error
-		file, err = os.Create(o.flagOutput)
-		if err != nil {
-			return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+		// Setup output channel to stdout or file
+		stdout = os.Stdout
+		if o.flagOutput != "" {
+			file, err := os.Create(o.flagOutput)
+			if err != nil {
+				return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+			}
+			defer file.Close()
+			stdout = file
 		}
-		defer file.Close()
-		out = file
 	}
 
 	ioStreams := IOStreams{
 		In:     stdin,
-		Out:    out,
-		ErrOut: os.Stderr,
+		Out:    stdout,
+		ErrOut: stderr,
 	}
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
