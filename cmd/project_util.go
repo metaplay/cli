@@ -261,7 +261,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		}
 
 		// Let user interactively choose the environment.
-		portalEnv, err := tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
+		portalEnv, err = tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
 			"Select Target Environment",
 			environments,
 			func(env *portalapi.EnvironmentInfo) (string, string) {
