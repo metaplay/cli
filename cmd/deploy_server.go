@@ -194,7 +194,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 		// If there are no images for this project, error out.
 		if len(localImages) == 0 {
-			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+			return clierrors.Newf("No Docker images matching project '%s' found locally", project.Config.ProjectHumanID).
+				WithSuggestion("Build an image first with 'metaplay build image'")
 		}
 
 		// Use the first entry (they are reverse sorted by creation time).
@@ -454,8 +455,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil {
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
-			return fmt.Errorf("unable to deploy server: existing Helm release is in state 'uninstalling'")
+			return clierrors.New("Cannot deploy: existing Helm release is in state 'uninstalling'").
+				WithSuggestion("Wait for the uninstall to complete, or manually remove with 'metaplay remove server'")
 		} else if releaseStatus.IsPending() {
 			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
 			uninstallExistingRelease = true
@@ -589,7 +590,8 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	// If there are no images for this project, error out.
 	if len(localImages) == 0 {
-		return nil, fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", projectHumanID)
+		return nil, clierrors.Newf("No Docker images matching project '%s' found locally", projectHumanID).
+			WithSuggestion("Build an image first with 'metaplay build image'")
 	}
 
 	// Let the user choose from the list of images.

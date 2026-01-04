@@ -74,7 +74,8 @@ func init() {
 
 func (o *getAWSCredentialsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagFormat != "text" && o.flagFormat != "json" {
-		return fmt.Errorf("invalid format %q; must be either \"text\" or \"json\"", o.flagFormat)
+		return clierrors.NewUsageErrorf("Invalid format '%s'", o.flagFormat).
+			WithSuggestion("Use --format=text for human-readable or --format=json for scripting")
 	}
 
 	return nil

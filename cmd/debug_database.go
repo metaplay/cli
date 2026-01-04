@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -115,7 +116,8 @@ func init() {
 func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle mutually exclusive query flags
 	if o.flagQuery != "" && o.flagQueryFile != "" {
-		return fmt.Errorf("only one of --query or --query-file may be specified")
+		return clierrors.NewUsageError("Cannot use both --query and --query-file").
+			WithSuggestion("Use --query for inline SQL or --query-file to read from a file, but not both")
 	}
 
 	// Parse shard index argument if provided
@@ -123,21 +125,25 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
-			return fmt.Errorf("invalid argument SHARD '%s': must be an integer", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		if idx < 0 {
-			return fmt.Errorf("invalid argument SHARD '%s': must be non-negative", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		o.parsedShardIndex = idx
 	} else {
 		// In non-interactive mode, SHARD argument must be specified
 		if !tui.IsInteractiveMode() {
-			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
+			return clierrors.NewUsageError("SHARD argument is required in non-interactive mode").
+				WithSuggestion("Specify the database shard index, e.g., 'metaplay debug database myenv 0'")
 		}
 	}
 	// Non-interactive mode requires the query in the command line
-	if o.flagQuery == "" && !tui.IsInteractiveMode() {
-		return fmt.Errorf("in non-interactive mode, argument QUERY must be specified")
+	if o.flagQuery == "" && o.flagQueryFile == "" && !tui.IsInteractiveMode() {
+		return clierrors.NewUsageError("Query is required in non-interactive mode").
+			WithSuggestion("Use --query '<SQL>' or --query-file <path> to specify the query")
 	}
 	return nil
 }
@@ -199,7 +205,8 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 	if shardIndex < 0 || shardIndex >= len(shards) {
-		return fmt.Errorf("invalid database shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
+		return clierrors.Newf("Invalid database shard index %d", shardIndex).
+			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
 	}
 	targetShard := shards[shardIndex]
 
@@ -229,7 +236,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 	// Use of --output is only allowed with a non-interactive query
 	if o.flagOutput != "" && isInteractive {
-		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
+		return clierrors.NewUsageError("--output flag requires a non-interactive query").
+			WithSuggestion("Use --output together with --query or --query-file")
 	}
 
 	// Build mariadb command with extra args
@@ -323,7 +331,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 // The 'shards' argument should be a slice of databaseShardConfig.
 func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 	if !tui.IsInteractiveMode() {
-		return nil, fmt.Errorf("in non-interactive mode, database shard must be explicitly specified")
+		return nil, clierrors.NewUsageError("Database shard selection requires interactive mode").
+			WithSuggestion("Specify the shard index explicitly, e.g., 'metaplay debug database myenv 0'")
 	}
 
 	selected, err := tui.ChooseFromListDialog(

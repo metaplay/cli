@@ -5,7 +5,6 @@
 package cmd
 
 import (
-	"fmt"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -69,7 +68,8 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 
 	// Check that docker is installed and running
 	if err := checkCommand("docker", "info"); err != nil {
-		return fmt.Errorf("failed to invoke docker. Ensure docker is installed and running.")
+		return clierrors.New("Failed to invoke Docker").
+			WithSuggestion("Ensure Docker Desktop is installed and running")
 	}
 
 	// If no docker image specified, scan the images matching project from the local docker repo
@@ -89,7 +89,8 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 
 		// If there are no images for this project, error out.
 		if len(localImages) == 0 {
-			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+			return clierrors.Newf("No Docker images matching project '%s' found locally", project.Config.ProjectHumanID).
+				WithSuggestion("Build an image first with 'metaplay build image'")
 		}
 
 		// Use the first entry (they are reverse sorted by creation time).

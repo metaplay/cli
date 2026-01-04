@@ -154,7 +154,8 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 		}
 
 		if len(filteredPods) == 0 {
-			return fmt.Errorf("no game server pods match the specified name: %s", o.flagPodName)
+			return clierrors.Newf("No game server pods match the name '%s'", o.flagPodName).
+				WithSuggestion("Check available pods with 'kubectl get pods' or omit --pod to see all pods")
 		}
 
 		pods = filteredPods

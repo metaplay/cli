@@ -79,7 +79,8 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 	// Resolve all deployed game server Helm releases.
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayLoadTestChartName)
 	if len(helmReleases) == 0 {
-		return fmt.Errorf("no existing bots deployment found")
+		return clierrors.New("No existing bots deployment found in this environment").
+			WithSuggestion("Deploy bots first with 'metaplay deploy botclient'")
 	}
 
 	// Uninstall all Helm releases (multiple releases should not happen but are possible).
