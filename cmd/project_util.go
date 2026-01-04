@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
@@ -202,7 +203,11 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 				"Select Target Environment",
 				project.Config.Environments,
 				func(env *metaproj.ProjectEnvironmentConfig) (string, string) {
-					return env.Name, fmt.Sprintf("[%s]", env.HumanID)
+					desc := fmt.Sprintf("[%s]", env.HumanID)
+					if len(env.Aliases) > 0 {
+						desc += fmt.Sprintf(" (aliases: %s)", strings.Join(env.Aliases, ", "))
+					}
+					return env.Name, desc
 				},
 			)
 			if err != nil {
