@@ -372,10 +372,14 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		if hasPosArgs {
 			err := posArgs.Arguments().ParseCommandLine(args)
 			if err != nil {
-				stderrLogger.Error().Msgf("Expected usage: %s", cmd.UseLine())
-				stderrLogger.Warn().Msgf("%s", posArgs.args.GetHelpText())
-				stderrLogger.Info().Msgf("Run with --help flag for full help.")
-				os.Exit(2)
+				// Add usage suggestion to the error
+				cliErr, ok := clierrors.AsCLIError(err)
+				if ok && cliErr.Suggestion == "" {
+					cliErr.Suggestion = fmt.Sprintf("Run '%s --help' for usage details", cmd.CommandPath())
+				}
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+				displayError(err)
+				os.Exit(clierrors.GetExitCode(err))
 			}
 		} else {
 			// \todo implement me: expect no args provided
