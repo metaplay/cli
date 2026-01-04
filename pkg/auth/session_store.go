@@ -13,10 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 )
@@ -455,4 +459,65 @@ func DeleteSessionState(sessionID string) error {
 		delete(config.Sessions, sessionID)
 		return nil
 	})
+}
+
+// RevokeRefreshToken revokes a refresh token at the authorization server per RFC 7009.
+// This is best-effort: errors are logged at Warn level but not returned, since local
+// cleanup should proceed regardless of server-side revocation success.
+func RevokeRefreshToken(authProvider *AuthProviderConfig, refreshToken string) {
+	// Skip if no refresh token
+	if refreshToken == "" {
+		return
+	}
+
+	// Get revocation endpoint
+	revokeEndpoint := authProvider.RevokeEndpoint
+	if revokeEndpoint == "" {
+		log.Warn().Msg("No revocation endpoint available, skipping token revocation")
+		return
+	}
+
+	// Build form data per RFC 7009
+	data := url.Values{}
+	data.Set("token", refreshToken)
+	data.Set("token_type_hint", "refresh_token")
+	data.Set("client_id", authProvider.ClientID)
+
+	// POST with 5-second timeout
+	client := resty.New().SetTimeout(5 * time.Second)
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetBody(data.Encode()).
+		Post(revokeEndpoint)
+
+	if err != nil {
+		log.Warn().Msgf("Failed to revoke refresh token: %v", err)
+		return
+	}
+
+	// HTTP 200 = success (even for invalid/already-revoked tokens per RFC 7009)
+	if resp.StatusCode() == http.StatusOK {
+		log.Debug().Msg("Refresh token revoked successfully")
+	} else {
+		log.Warn().Msgf("Token revocation returned status %d: %s", resp.StatusCode(), resp.String())
+	}
+}
+
+// RevokeAndDeleteSession revokes tokens server-side and removes local session state.
+// Server-side revocation is best-effort; local deletion always proceeds.
+func RevokeAndDeleteSession(authProvider *AuthProviderConfig, sessionID string) error {
+	// Load session to get tokens
+	sessionState, err := LoadSessionState(sessionID)
+	if err != nil {
+		log.Warn().Msgf("Failed to load session for revocation: %v", err)
+		// Proceed with local deletion anyway
+	}
+
+	// Revoke refresh token if we have one
+	if sessionState != nil && sessionState.TokenSet != nil && sessionState.TokenSet.RefreshToken != "" {
+		RevokeRefreshToken(authProvider, sessionState.TokenSet.RefreshToken)
+	}
+
+	// Always delete local session state
+	return DeleteSessionState(sessionID)
 }
