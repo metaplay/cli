@@ -34,7 +34,7 @@ import (
 type TargetEnvironment struct {
 	TokenSet        *auth.TokenSet   // Tokens to use to access the environment.
 	StackApiBaseURL string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
-	HumanID         string           // Environment human ID, eg, 'tiny-squids'. Same as Kubernetes namespace.
+	HumanID         string           // Environment human ID, eg, 'lovely-wombats-build-nimbly'. Same as Kubernetes namespace.
 	StackApiClient  *metahttp.Client // HTTP client to access environment StackAPI.
 
 	primaryKubeClient *KubeClient       // Lazily initialized KubeClient.

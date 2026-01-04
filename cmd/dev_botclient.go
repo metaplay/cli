@@ -45,8 +45,8 @@ func init() {
 			# Run bots against the locally running server.
 			metaplay dev botclient
 
-			# Run bots against the 'tough-falcons' cloud environment.
-			metaplay dev botclient -e tough-falcons
+			# Run bots against the 'nimbly' cloud environment.
+			metaplay dev botclient -e nimbly
 
 			# Pass additional arguments to 'dotnet run' of the BotClient project.
 			metaplay dev botclient -- -MaxBots=5 -MaxBotId=20

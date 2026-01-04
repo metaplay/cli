@@ -27,7 +27,7 @@ func init() {
 	o := removeGameServerOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "server ENVIRONMENT",
@@ -40,8 +40,8 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Remove game server deployment from environment tough-falcons.
-			metaplay remove game-server tough-falcons
+			# Remove game server deployment from environment nimbly.
+			metaplay remove game-server nimbly
 		`),
 	}
 

@@ -31,7 +31,7 @@ func init() {
 	o := secretsUpdateOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
 
 	cmd := &cobra.Command{
@@ -57,19 +57,19 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Update an existing entry's value
-			metaplay secrets update tough-falcons user-mysecret --from-literal=password=newsecret
+			metaplay secrets update nimbly user-mysecret --from-literal=password=newsecret
 
 			# Add a new entry to an existing secret
-			metaplay secrets update tough-falcons user-mysecret --from-literal=apikey=abc123
+			metaplay secrets update nimbly user-mysecret --from-literal=apikey=abc123
 
 			# Add entry from file
-			metaplay secrets update tough-falcons user-mysecret --from-file=certificate=./cert.pem
+			metaplay secrets update nimbly user-mysecret --from-file=certificate=./cert.pem
 
 			# Remove an entry
-			metaplay secrets update tough-falcons user-mysecret --remove=oldkey
+			metaplay secrets update nimbly user-mysecret --remove=oldkey
 
 			# Combine: update one entry and remove another
-			metaplay secrets update tough-falcons user-mysecret --from-literal=password=new --remove=deprecated-key
+			metaplay secrets update nimbly user-mysecret --from-literal=password=new --remove=deprecated-key
 		`),
 	}
 

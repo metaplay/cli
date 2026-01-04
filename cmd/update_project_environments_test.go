@@ -145,7 +145,7 @@ func TestUpdateEnvironments(t *testing.T) {
 	singleEnv := []portalapi.EnvironmentInfo{
 		{
 			Name:        "Development",
-			HumanID:     "tiny-squids",
+			HumanID:     "lovely-wombats-build-nimbly",
 			Type:        portalapi.EnvironmentTypeDevelopment,
 			StackDomain: "dev.metaplay.io",
 			HostingType: portalapi.HostingTypeMetaplayHosted,
@@ -155,7 +155,7 @@ func TestUpdateEnvironments(t *testing.T) {
 	twoEnvs := []portalapi.EnvironmentInfo{
 		{
 			Name:        "Development",
-			HumanID:     "tiny-squids",
+			HumanID:     "tough-falcons",
 			Type:        portalapi.EnvironmentTypeDevelopment,
 			StackDomain: "dev.metaplay.io",
 			HostingType: portalapi.HostingTypeMetaplayHosted,
@@ -199,7 +199,7 @@ projectID: test-project
 environments:
   - name: Development
     hostingType: metaplay-hosted
-    humanId: tiny-squids
+    humanId: lovely-wombats-build-nimbly
     type: development
     stackDomain: dev.metaplay.io
 `,
@@ -216,7 +216,7 @@ projectID: test-project
 environments:
   - name: Development
     hostingType: metaplay-hosted
-    humanId: tiny-squids
+    humanId: lovely-wombats-build-nimbly
     type: development
     stackDomain: dev.metaplay.io
 `,
@@ -233,7 +233,7 @@ projectID: test-project
 environments:
   - name: Development
     hostingType: metaplay-hosted
-    humanId: tiny-squids
+    humanId: tough-falcons
     type: development
     stackDomain: dev.metaplay.io
   - name: Production
@@ -255,7 +255,7 @@ projectID: test-project
 environments:
   - name: Development
     hostingType: metaplay-hosted
-    humanId: tiny-squids
+    humanId: tough-falcons
     type: development
     stackDomain: dev.metaplay.io
   - name: Production
@@ -281,7 +281,7 @@ sdkRootDir: MetaplaySDK
 environments:
   - name: Development
     hostingType: metaplay-hosted
-    humanId: tiny-squids
+    humanId: lovely-wombats-build-nimbly
     type: development
     stackDomain: dev.metaplay.io
 `,

@@ -25,7 +25,7 @@ func init() {
 	o := getAWSCredentialsOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "aws-credentials ENVIRONMENT [flags]",
@@ -52,13 +52,13 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Get credentials in human-readable text format (default)
-			metaplay get aws-credentials tough-falcons
+			metaplay get aws-credentials nimbly
 
 			# Get credentials in JSON format for scripting
-			metaplay get aws-credentials tough-falcons --format json
+			metaplay get aws-credentials nimbly --format json
 
 			# Example of using the credentials with AWS CLI (bash):
-			eval $(metaplay get aws-credentials tough-falcons --format json | jq -r '
+			eval $(metaplay get aws-credentials nimbly --format json | jq -r '
 			  "export AWS_ACCESS_KEY_ID=\(.AccessKeyId)
 			   export AWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)
 			   export AWS_SESSION_TOKEN=\(.SessionToken)"

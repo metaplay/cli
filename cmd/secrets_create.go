@@ -33,7 +33,7 @@ func init() {
 	o := secretsCreateOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
 
 	cmd := &cobra.Command{
@@ -65,16 +65,16 @@ func init() {
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: renderExample(`
-			# Create a secret named 'user-mysecret' in environment 'tough-falcons' with two entries.
+			# Create a secret named 'user-mysecret' in environment 'nimbly' with two entries.
 			# Accessible with URLs 'kube-secret://user-mysecret#username' and 'kube-secret://user-mysecret#password'
-			metaplay secrets create tough-falcons user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
+			metaplay secrets create nimbly user-mysecret --from-literal=username=foobar --from-literal=password=tops3cret
 
 			# Create a secret with entry payload read from a file.
 			# Accessible with URL 'kube-secret://user-mysecret#credentials'
-			metaplay secrets create tough-falcons user-mysecret --from-file=credentials=../../credentials-dev.json
+			metaplay secrets create nimbly user-mysecret --from-file=credentials=../../credentials-dev.json
 
 			# Create or replace a secret (useful for scripting)
-			metaplay secrets create tough-falcons user-mysecret --from-literal=apikey=secret123 --overwrite
+			metaplay secrets create nimbly user-mysecret --from-literal=apikey=secret123 --overwrite
 		`),
 	}
 

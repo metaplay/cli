@@ -42,7 +42,7 @@ func init() {
 	o := debugLogsOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:   "logs [ENVIRONMENT] [flags]",
@@ -57,20 +57,20 @@ func init() {
 			- 'metaplay deploy server ...' to deploy a game server into the cloud.
 		`),
 		Example: renderExample(`
-			# Show logs from environment 'tough-falcons' up until now.
-			metaplay debug logs tough-falcons
+			# Show logs from environment 'nimbly' up until now.
+			metaplay debug logs nimbly
 
 			# Show logs and keep streaming them until terminated.
-			metaplay debug logs tough-falcons -f
+			metaplay debug logs nimbly -f
 
 			# Show logs only from the 'service-0' pod.
-			metaplay debug logs tough-falcons --pod service-0
+			metaplay debug logs nimbly --pod service-0
 
 			# Show logs more recent than 3 hours.
-			metaplay debug logs tough-falcons --since=3h
+			metaplay debug logs nimbly --since=3h
 
 			# Show logs since Dec 27th, 2024 15:04:05 UTC.
-			metaplay debug logs tough-falcons --since-time=2024-12-27T15:04:05Z
+			metaplay debug logs nimbly --since-time=2024-12-27T15:04:05Z
 		`),
 	}
 

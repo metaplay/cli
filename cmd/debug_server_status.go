@@ -26,7 +26,7 @@ func init() {
 	o := debugCheckServerStatus{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "server-status ENVIRONMENT [flags]",
@@ -54,7 +54,7 @@ func init() {
 			metaplay debug server-status
 
 			# Check the status of a game server deployment in a specific environment.
-			metaplay debug server-status tough-falcons
+			metaplay debug server-status nimbly
 		`),
 	}
 	debugCmd.AddCommand(cmd)
