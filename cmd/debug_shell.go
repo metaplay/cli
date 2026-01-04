@@ -51,11 +51,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "shell [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"sh"},
-		Short:   "[preview] Start a debug container targeting the specified pod",
+		Short:   "Start a debug container targeting the specified pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change
-
 			Start a debug container targeting a game server pod in the specified environment.
 			This command creates a Kubernetes ephemeral debug container that attaches to an existing
 			game server pod, allowing you to inspect and troubleshoot the running server.
@@ -71,10 +69,10 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Start a debug container in the 'tough-falcons' environment (when only one pod is running).
+			# Start a debug container in the 'tough-falcons' environment, interactively choose target pod.
 			metaplay debug shell tough-falcons
 
-			# Start a debug container pod named 'service-0' in the environment 'tough-falcons'.
+			# Start a debug container in the 'tough-falcons' environment, targeting pod 'service-0'.
 			metaplay debug shell tough-falcons service-0
 		`),
 	}
