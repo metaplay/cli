@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -175,8 +176,8 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	imageName = strings.ReplaceAll(imageName, "<projectID>", project.Config.ProjectHumanID)
 
 	if strings.HasSuffix(imageName, ":latest") {
-		log.Error().Msg("Building docker image with 'latest' tag is not allowed. Use a commit hash or timestamp instead.")
-		os.Exit(1)
+		return clierrors.New("Cannot build image with 'latest' tag").
+			WithSuggestion("Use a specific tag like 'mygame:abc123' or 'mygame:20240115'")
 	}
 
 	// Check that docker is installed and running
@@ -196,8 +197,8 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msg("Resolve docker build engine")
 	buildEngine, err := resolveBuildEngine(o.flagBuildEngine)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve docker build engine: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Invalid Docker build engine").
+			WithSuggestion("Use --engine=buildx or --engine=buildkit")
 	}
 
 	// Check that the build engine is available.
@@ -209,20 +210,21 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	// Validate target architectures.
 	validArchitectures := []string{"amd64", "arm64"}
 	if len(o.flagArchitectures) == 0 {
-		log.Error().Msg("No architectures specified.")
-		os.Exit(2)
+		return clierrors.NewUsageError("No target architecture specified").
+			WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
 	}
 	for _, arch := range o.flagArchitectures {
 		if !sliceContains(validArchitectures, arch) {
-			log.Error().Msgf("Invalid architecture '%s' specified. Must be one of %v.", arch, validArchitectures)
-			os.Exit(2)
+			return clierrors.NewUsageErrorf("Invalid architecture '%s'", arch).
+				WithDetails(fmt.Sprintf("Valid architectures: %v", validArchitectures)).
+				WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
 		}
 	}
 
 	// Only buildx supports building multiple architectures at once.
 	if buildEngine == "buildkit" && len(o.flagArchitectures) > 1 {
-		log.Error().Msg("BuildKit does not support building multiple architectures at once. Please use '--engine=buildx' for multi-arch builds.")
-		os.Exit(2)
+		return clierrors.NewUsageError("BuildKit does not support multi-architecture builds").
+			WithSuggestion("Use --engine=buildx for multi-arch builds, or build one architecture at a time")
 	}
 
 	// Resolve target platforms.
@@ -379,7 +381,8 @@ func checkDockerAvailable() error {
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
+			return clierrors.Wrap(err, "Docker is not responding").
+				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 		}
 		return nil
 	case <-time.After(time.Second):
@@ -390,10 +393,12 @@ func checkDockerAvailable() error {
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("docker is not available: %w. Ensure docker is installed and running.", err)
+			return clierrors.Wrap(err, "Docker is not responding").
+				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 		}
 	case <-time.After(9 * time.Second):
-		return fmt.Errorf("timeout while invoking docker. Ensure docker is running and responsive.")
+		return clierrors.New("Docker daemon timed out").
+			WithSuggestion("Docker may be starting up or unresponsive. Try restarting Docker Desktop.")
 	}
 
 	return nil
@@ -407,7 +412,8 @@ func checkBuildEngineAvailable(buildEngine string) error {
 	case "buildx":
 		err := checkCommand("docker", "buildx", "version")
 		if err != nil {
-			return fmt.Errorf("Docker buildx is not available. Ensure docker buildx is properly installed.")
+			return clierrors.Wrap(err, "Docker buildx is not available").
+				WithSuggestion("Install Docker buildx or use --engine=buildkit instead")
 		}
 	}
 
@@ -489,57 +495,52 @@ func buildDockerImage(params buildDockerImageParams) error {
 	// Check that sdkRoot is a valid directory
 	sdkRootPath := params.project.GetSdkRootDir()
 	if _, err := os.Stat(sdkRootPath); os.IsNotExist(err) {
-		log.Error().Msgf("The Metaplay SDK directory '%s' does not exist.", sdkRootPath)
-		os.Exit(2)
+		return clierrors.Newf("Metaplay SDK directory not found: %s", sdkRootPath).
+			WithSuggestion("Check that 'sdkRootDir' in metaplay-project.yaml points to the correct location")
 	}
 
 	dockerFilePath := filepath.Join(sdkRootPath, "Dockerfile.server")
 	if _, err := os.Stat(dockerFilePath); os.IsNotExist(err) {
-		log.Error().Msgf("Cannot locate Dockerfile.server at %s.", dockerFilePath)
-		os.Exit(2)
+		return clierrors.Newf("Cannot find Dockerfile.server at %s", dockerFilePath).
+			WithSuggestion("Make sure the Metaplay SDK is properly installed")
 	}
 
 	// Check project root directory.
 	projectBackendDir := params.project.GetBackendDir()
 	if _, err := os.Stat(projectBackendDir); os.IsNotExist(err) {
-		log.Error().Msgf("Unable to find project backend in '%s'.", projectBackendDir)
-		os.Exit(2)
+		return clierrors.Newf("Project backend directory not found: %s", projectBackendDir).
+			WithSuggestion("Check that 'backendDir' in metaplay-project.yaml points to the correct location")
 	}
 
 	// Check SharedCode directory.
 	sharedCodeDir := params.project.GetSharedCodeDir()
 	if _, err := os.Stat(sharedCodeDir); os.IsNotExist(err) {
-		log.Error().Msgf("The shared code directory (%s) does not exist.", sharedCodeDir)
-		os.Exit(2)
+		return clierrors.Newf("Shared code directory not found: %s", sharedCodeDir).
+			WithSuggestion("Check that 'sharedCodeDir' in metaplay-project.yaml points to the correct location")
 	}
 
 	// Rebase paths to be relative to docker build root.
 	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to MetaplaySDK/ from build root: %v", err)
-		os.Exit(2)
+		return clierrors.Wrap(err, "Failed to resolve path to MetaplaySDK from build root")
 	}
 	rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to Dockerfile.server from build root: %v", err)
-		os.Exit(2)
+		return clierrors.Wrap(err, "Failed to resolve path to Dockerfile.server from build root")
 	}
 	rebasedProjectRoot, err := rebasePath(params.project.RelativeDir, buildRootDir)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project root from build root: %v", err)
-		os.Exit(2)
+		return clierrors.Wrap(err, "Failed to resolve path to project root from build root")
 	}
 
 	// Rebase paths relative to project root dir (where metaplay-project.yaml is located).
 	rebasedBackendDir, err := rebasePath(projectBackendDir, params.project.RelativeDir)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project backend directory from project root: %v", err)
-		os.Exit(2)
+		return clierrors.Wrap(err, "Failed to resolve path to backend directory")
 	}
 	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, params.project.RelativeDir)
 	if err != nil {
-		log.Error().Msgf("Failed to resolve relative path to project shared code directory from project root: %v", err)
-		os.Exit(2)
+		return clierrors.Wrap(err, "Failed to resolve path to shared code directory")
 	}
 
 	// Silence docker's recomendation messages at end-of-build.
@@ -598,8 +599,8 @@ func buildDockerImage(params buildDockerImageParams) error {
 
 	// Execute the docker build
 	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
-		log.Error().Msgf("Docker build failed: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Docker build failed").
+			WithSuggestion("Check the build output above for details")
 	}
 
 	return nil

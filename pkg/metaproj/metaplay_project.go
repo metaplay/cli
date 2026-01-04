@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
@@ -518,8 +519,9 @@ func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*
 		}
 	}
 
-	environmentIDs := strings.Join(getEnvironmentIDs(projectConfig), ", ")
-	return nil, fmt.Errorf("no environment matching '%s' found in project config. The valid environments are: %s", environment, environmentIDs)
+	environmentIDs := getEnvironmentIDs(projectConfig)
+	return nil, clierrors.NewUsageErrorf("Unknown environment '%s'", environment).
+		WithDetails(fmt.Sprintf("Available environments: %s", strings.Join(environmentIDs, ", ")))
 }
 
 func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*ProjectEnvironmentConfig, error) {
