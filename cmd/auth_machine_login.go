@@ -73,7 +73,7 @@ func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msg("Using environment variable METAPLAY_CREDENTIALS for machine login")
 		if envCredentials, ok := os.LookupEnv("METAPLAY_CREDENTIALS"); !ok {
 			return clierrors.NewUsageError("Missing credentials for machine login").
-				WithSuggestion("Set the METAPLAY_CREDENTIALS environment variable or use --dev-credentials flag")
+				WithSuggestion("Set the METAPLAY_CREDENTIALS environment variable to the credentials value from the developer portal")
 		} else {
 			credentials = envCredentials
 		}

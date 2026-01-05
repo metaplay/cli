@@ -184,7 +184,7 @@ func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*env
 func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) (*envapi.KubeClient, *corev1.Pod, error) {
 	if !tui.IsInteractiveMode() {
 		return nil, nil, clierrors.NewUsageError("Interactive mode required for pod selection").
-			WithSuggestion("Specify the pod name explicitly, e.g., 'metaplay debug shell myenv service-0'")
+			WithSuggestion("Specify the pod name explicitly, e.g., 'metaplay debug shell nimbly service-0'")
 	}
 
 	if len(shardSetsWithPods) == 0 {

@@ -171,7 +171,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
 	case <-time.After(5 * time.Minute):
 		return clierrors.New("Authentication timed out after 5 minutes").
-			WithSuggestion("Try again, or use 'metaplay auth machine-login' for non-interactive authentication")
+			WithSuggestion("Log in again")
 	}
 
 	// Shutdown the HTTP server gracefully

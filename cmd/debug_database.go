@@ -137,7 +137,7 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// In non-interactive mode, SHARD argument must be specified
 		if !tui.IsInteractiveMode() {
 			return clierrors.NewUsageError("SHARD argument is required in non-interactive mode").
-				WithSuggestion("Specify the database shard index, e.g., 'metaplay debug database myenv 0'")
+				WithSuggestion("Specify the database shard index, e.g., 'metaplay debug database nimbly 0'")
 		}
 	}
 	// Non-interactive mode requires the query in the command line
@@ -332,7 +332,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 	if !tui.IsInteractiveMode() {
 		return nil, clierrors.NewUsageError("Database shard selection requires interactive mode").
-			WithSuggestion("Specify the shard index explicitly, e.g., 'metaplay debug database myenv 0'")
+			WithSuggestion("Specify the shard index explicitly, e.g., 'metaplay debug database nimbly 0'")
 	}
 
 	selected, err := tui.ChooseFromListDialog(

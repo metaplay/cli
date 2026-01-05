@@ -189,7 +189,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 			// Must be in interactive mode.
 			if !tui.IsInteractiveMode() {
 				return nil, nil, clierrors.NewUsageError("Target environment must be specified in non-interactive mode").
-					WithSuggestion("Provide the environment name as an argument, e.g., 'metaplay <command> develop'")
+					WithSuggestion("Provide the environment name as an argument, e.g., 'metaplay <command> nimbly'")
 			}
 
 			// Error if no environments in the metaplay-project.yaml.

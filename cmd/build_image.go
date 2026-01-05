@@ -176,8 +176,8 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	imageName = strings.ReplaceAll(imageName, "<projectID>", project.Config.ProjectHumanID)
 
 	if strings.HasSuffix(imageName, ":latest") {
-		return clierrors.New("Cannot build image with 'latest' tag").
-			WithSuggestion("Use a specific tag like 'mygame:abc123' or 'mygame:20240115'")
+		return clierrors.New("Cannot build image with tag 'latest'").
+			WithSuggestion("Use a unique tag like 'mygame:20250131-133012'")
 	}
 
 	// Check that docker is installed and running
@@ -224,7 +224,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	// Only buildx supports building multiple architectures at once.
 	if buildEngine == "buildkit" && len(o.flagArchitectures) > 1 {
 		return clierrors.NewUsageError("BuildKit does not support multi-architecture builds").
-			WithSuggestion("Use --engine=buildx for multi-arch builds, or build one architecture at a time")
+			WithSuggestion("Use --engine=buildx for multi-arch builds, or build for only one architecture")
 	}
 
 	// Resolve target platforms.
@@ -522,7 +522,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 	// Rebase paths to be relative to docker build root.
 	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to resolve path to MetaplaySDK from build root")
+		return clierrors.Wrap(err, "Failed to resolve path to MetaplaySDK/ from build root")
 	}
 	rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
 	if err != nil {
@@ -536,11 +536,11 @@ func buildDockerImage(params buildDockerImageParams) error {
 	// Rebase paths relative to project root dir (where metaplay-project.yaml is located).
 	rebasedBackendDir, err := rebasePath(projectBackendDir, params.project.RelativeDir)
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to resolve path to backend directory")
+		return clierrors.Wrap(err, "Failed to resolve path to backend directory from project root")
 	}
 	rebasedSharedCodeDir, err := rebasePath(sharedCodeDir, params.project.RelativeDir)
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to resolve path to shared code directory")
+		return clierrors.Wrap(err, "Failed to resolve path to shared code directory from project root")
 	}
 
 	// Silence docker's recomendation messages at end-of-build.

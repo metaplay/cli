@@ -158,8 +158,8 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 	// Check if there's a game server deployed.
 	if hasGameServer {
 		if !o.flagForce {
-			return clierrors.Newf("Cannot export database: game server is deployed in '%s'", o.argEnvironment).
-				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s', or use --force to proceed", o.argEnvironment))
+			return clierrors.Newf("Cannot export database when game server is deployed in '%s'", o.argEnvironment).
+				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s'", o.argEnvironment))
 		}
 
 		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))

@@ -435,7 +435,7 @@ func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
 	if vsn.LessThan(metaproj.OldestSupportedSdkVersion) {
 		return nil, clierrors.Newf("SDK version %s is too old", versionStr).
 			WithDetails(fmt.Sprintf("Minimum supported version is %s", metaproj.OldestSupportedSdkVersion)).
-			WithSuggestion("Use a newer SDK version, or an older version of the CLI")
+			WithSuggestion("Update Metaplay SDK to a more recent version (or use the legacy AuthCLI if you must use an older version)")
 	}
 
 	// Must not be newer than the latest supported version.
