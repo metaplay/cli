@@ -135,7 +135,16 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 	// Handle the case where environments exists but is null/empty (e.g., "environments:" with no value).
 	// This happens with projects that have no environments in them.
+	// Only convert null to a sequence if there are environments to add - otherwise keep as null.
 	if _, isNull := envsNode.(*ast.NullNode); isNull {
+		if len(newPortalEnvironments) == 0 {
+			// No environments to add, keep the null node as-is to avoid outputting "environments: []"
+			log.Info().Msgf("%s No environments found for this project in the portal.", styles.RenderMuted("i"))
+			log.Info().Msg("")
+			log.Info().Msgf("%s Updated environments in %s", styles.RenderSuccess("✓"), styles.RenderTechnical("metaplay-project.yaml"))
+			return nil
+		}
+
 		// Replace the null node with an empty sequence
 		if err := envsPath.ReplaceWithReader(root, strings.NewReader("[]")); err != nil {
 			return fmt.Errorf("failed to replace null 'environments' with empty sequence: %v", err)
@@ -160,6 +169,23 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	envsSeqNode, ok := envsNode.(*ast.SequenceNode)
 	if !ok {
 		return fmt.Errorf("the 'environments' node in metaplay-project.yaml is not a valid sequence")
+	}
+
+	// Ensure block-style output (not flow-style like []) when there are environments to add.
+	// This handles the case where the YAML file already has "environments: []".
+	// Also fix indentation when converting from flow-style to block-style.
+	if len(newPortalEnvironments) > 0 {
+		envsSeqNode.IsFlowStyle = false
+		// Reset the Start token position to fix indentation (2 spaces indent)
+		if envsSeqNode.Start != nil {
+			envsSeqNode.Start.Position.Column = 3
+			envsSeqNode.Start.Position.IndentNum = 2
+		}
+	}
+
+	// Print a note if no environments exist in the portal.
+	if len(newPortalEnvironments) == 0 {
+		log.Info().Msgf("%s No environments found for this project in the portal.", styles.RenderMuted("i"))
 	}
 
 	// Handle all environments from the portal.
