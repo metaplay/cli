@@ -55,9 +55,6 @@ func HelmUpgradeOrInstall(
 	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
 	output.SetHeaderLines([]string{headerLine})
 
-	// Note: In Helm v4, logging is handled via slog and cannot be easily redirected
-	// The actionConfig.Log field no longer exists
-
 	var installCmd *action.Install
 	var upgradeCmd *action.Upgrade
 	var chartPathOptions *action.ChartPathOptions
@@ -88,7 +85,7 @@ func HelmUpgradeOrInstall(
 		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
 		upgradeCmd.Devel = true                                 // If version is development, accept it
 		upgradeCmd.ForceReplace = true                          // Force recreate resources (delete old, create new) instead of rolling update
-		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors (was Atomic)
+		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
 		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
 		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
