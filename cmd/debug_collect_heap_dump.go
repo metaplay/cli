@@ -49,7 +49,7 @@ func init() {
 
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
-			WARNING: This operation is very intrusive as it completely freeze the target process
+			WARNING: This operation is very intrusive as it completely freezes the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
 
@@ -71,11 +71,11 @@ func init() {
 			metaplay debug collect-heap-dump tough-falcons service-0
 
 			# Use 'dotnet-dump' for full process dump instead of 'dotnet-gcdump'.
-			metaplay debug collect-heap-dump tough-falcons --mode dump
+			metaplay debug collect-heap-dump tough-falcons --mode=dump
 
 			# Specify custom output path. Use .gcdump extension for gcdump mode, and no extension for dump mode.
 			metaplay debug collect-heap-dump tough-falcons -o /path/to/output.gcdump
-			metaplay debug collect-heap-dump tough-falcons --mode dump -o /path/to/core_250901_093000
+			metaplay debug collect-heap-dump tough-falcons --mode=dump -o /path/to/core_250901_093000
 
 			# Don't ask for confirmation on the operation.
 			metaplay debug collect-heap-dump tough-falcons --yes
@@ -84,7 +84,7 @@ func init() {
 	debugCmd.AddCommand(cmd)
 
 	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump for gcdump mode, core_YYMMDD_HHMMSS for dump mode)")
-	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump) (default: gcdump)")
+	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump)")
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip heap size warning and proceed with dump")
 }
 

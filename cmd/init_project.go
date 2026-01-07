@@ -167,7 +167,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	if o.flagSdkSource != "" {
 		metaplaySdkSource, err = filepath.Abs(o.flagSdkSource)
 		if err != nil {
-			return fmt.Errorf("Could not resolve sdk source location: %w", err)
+			return fmt.Errorf("could not resolve SDK source location: %w", err)
 		}
 	}
 	// Check if MetaplaySDK/ already exists: if so, we do migration only.
@@ -246,7 +246,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Project root:       %s", styles.RenderTechnical(o.absoluteProjectPath))
 	log.Info().Msgf("Unity project dir:  %s", styles.RenderTechnical(filepath.Join(o.absoluteProjectPath, o.relativeUnityProjectPath)))
 	if sdkVersionInfo != nil {
-		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
+		log.Info().Msgf("Metaplay version:   %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
 		log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
 	} else if isDirectory(metaplaySdkSource) {
 		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(metaplaySdkSource), styles.RenderAttention("[use existing]"))

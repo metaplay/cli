@@ -433,7 +433,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			}
 			parts := strings.Split(globalJSON.SDK.Version, ".")
 			if len(parts) < 2 {
-				return nil, fmt.Errorf("invalid .NET runtime vesion in global.json")
+				return nil, fmt.Errorf("invalid .NET runtime version in global.json")
 			}
 			// Only keep major.minor, e.g., '9.0'.
 			dotnetRuntimeVersion = strings.Join(parts[0:2], ".")

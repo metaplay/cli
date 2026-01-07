@@ -12,6 +12,7 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -50,11 +51,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "shell [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"sh"},
-		Short:   "[preview] Start a debug container targeting the specified pod",
+		Short:   "Start a debug container targeting the specified pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change
-
 			Start a debug container targeting a game server pod in the specified environment.
 			This command creates a Kubernetes ephemeral debug container that attaches to an existing
 			game server pod, allowing you to inspect and troubleshoot the running server.
@@ -70,10 +69,10 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Start a debug container in the 'tough-falcons' environment (when only one pod is running).
+			# Start a debug container in the 'tough-falcons' environment, interactively choose target pod.
 			metaplay debug shell tough-falcons
 
-			# Start a debug container pod named 'service-0' in the environment 'tough-falcons'.
+			# Start a debug container in the 'tough-falcons' environment, targeting pod 'service-0'.
 			metaplay debug shell tough-falcons service-0
 		`),
 	}
@@ -120,11 +119,15 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 	defer cleanup()
 
-	// Setup IO streams
+	// Setup IO streams using mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
+	stdIn, stdOut, stdErr := mobyterm.StdStreams()
 	ioStreams := IOStreams{
-		In:     cmd.InOrStdin(),
-		Out:    cmd.OutOrStdout(),
-		ErrOut: cmd.ErrOrStderr(),
+		In:     stdIn,
+		Out:    stdOut,
+		ErrOut: stdErr,
 	}
 
 	// Attach to the running shell in the container.

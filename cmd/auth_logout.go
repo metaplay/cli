@@ -84,8 +84,8 @@ func (o *authLogoutOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	// Delete the session state.
-	err = auth.DeleteSessionState(authProvider.GetSessionID())
+	// Revoke tokens server-side and delete the local session state.
+	err = auth.RevokeAndDeleteSession(authProvider, authProvider.GetSessionID())
 	if err != nil {
 		return err
 	}

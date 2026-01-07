@@ -89,7 +89,7 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 
 		err := helmutil.UninstallRelease(actionConfig, release)
 		if err != nil {
-			return fmt.Errorf("failed to uninstall Helm relese %s: %w", release.Name, err)
+			return fmt.Errorf("failed to uninstall Helm release %s: %w", release.Name, err)
 		}
 	}
 

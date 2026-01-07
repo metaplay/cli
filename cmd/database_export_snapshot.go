@@ -53,7 +53,7 @@ func init() {
 
 			Export a database snapshot from the specified environment into a file.
 
-			DISCLAIMER: This operation is not a a real backup and is intended for ad hoc database
+			DISCLAIMER: This operation is not a real backup and is intended for ad hoc database
 			exports only. This operation should only be used for relatively small databases as it
 			copies the entire database to the machine running the CLI.
 
