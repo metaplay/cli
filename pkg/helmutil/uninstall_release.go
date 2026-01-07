@@ -18,7 +18,7 @@ func UninstallRelease(actionConfig *action.Configuration, release *v1.Release) e
 	// Create Helm Uninstall action
 	uninstall := action.NewUninstall(actionConfig)
 	uninstall.Timeout = 5 * time.Minute
-	uninstall.WaitStrategy = kube.LegacyStrategy // Wait for resources to be deleted (legacy wait behavior)
+	uninstall.WaitStrategy = kube.StatusWatcherStrategy // Wait for resources to be deleted
 
 	// Execute the Uninstall action
 	_, err := uninstall.Run(release.Name)

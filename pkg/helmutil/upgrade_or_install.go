@@ -69,7 +69,7 @@ func HelmUpgradeOrInstall(
 		installCmd.ReleaseName = releaseName
 		installCmd.Namespace = namespace
 		installCmd.Timeout = timeout
-		installCmd.WaitStrategy = kube.LegacyStrategy           // Wait for resources to be ready (legacy wait behavior)
+		installCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
 		installCmd.WaitForJobs = true                           // Also wait for jobs to complete
 		installCmd.Devel = true                                 // If version is development, accept it
 		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
@@ -80,7 +80,7 @@ func HelmUpgradeOrInstall(
 		upgradeCmd.Version = chartVersion
 		upgradeCmd.Namespace = namespace
 		upgradeCmd.Timeout = timeout
-		upgradeCmd.WaitStrategy = kube.LegacyStrategy           // Wait for resources to be ready (legacy wait behavior)
+		upgradeCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
 		upgradeCmd.WaitForJobs = true                           // Also wait for jobs to complete
 		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
 		upgradeCmd.Devel = true                                 // If version is development, accept it
