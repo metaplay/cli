@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/rs/zerolog/log"
 )
 
@@ -115,7 +116,8 @@ func NewDockerClient() (*client.Client, error) {
 		pingResponse, err = dockerClient.Ping(context.Background())
 		if err != nil {
 			dockerClient.Close()
-			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Fallback connection also failed: %w", err)
+			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
+				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
 		}
 
 		dockerClient.NegotiateAPIVersionPing(pingResponse)
@@ -123,7 +125,14 @@ func NewDockerClient() (*client.Client, error) {
 	}
 
 	// For non-connection errors, or non-macOS systems, return the original error.
-	return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Original error: %w", err)
+	dockerSuggestion := "Start Docker Desktop"
+	if runtime.GOOS == "linux" {
+		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
+	} else if runtime.GOOS == "windows" {
+		dockerSuggestion = "Start Docker Desktop from the Start menu"
+	}
+	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
+		WithSuggestion(dockerSuggestion)
 }
 
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.

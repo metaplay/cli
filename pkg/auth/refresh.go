@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 )
@@ -46,7 +47,8 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 	// Get current session (including credentials).
 	sessionState, err := LoadSessionState(authProvider.GetSessionID())
 	if err != nil {
-		return nil, fmt.Errorf("failed to load credentials: %w", err)
+		return nil, clierrors.Wrap(err, "Failed to load stored credentials").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
 	// If no tokens, user is not logged in; return empty token set.
@@ -67,7 +69,8 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			// Refresh the tokenSet.
 			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
 			if err != nil {
-				return nil, fmt.Errorf("failed to refresh tokens: %w", err)
+				return nil, clierrors.Wrap(err, "Failed to refresh authentication tokens").
+					WithSuggestion("Your session may have expired. Run 'metaplay auth login' to re-authenticate")
 			}
 
 			// Persist the refreshed tokens.
@@ -76,7 +79,8 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 				return nil, fmt.Errorf("failed to persist refreshed tokens: %w", err)
 			}
 		} else {
-			return nil, fmt.Errorf("access token has expired and there is no refresh token")
+			return nil, clierrors.New("Access token has expired and cannot be refreshed").
+				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		}
 	}
 
@@ -114,7 +118,8 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		}
 
 		log.Debug().Msg("Local credentials removed.")
-		return nil, errors.New("failed to refresh tokens, please log in again")
+		return nil, clierrors.New("Session expired and could not be refreshed").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
 	var tokens TokenSet

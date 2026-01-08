@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
@@ -110,9 +111,11 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 	// Handle server errors.
 	if resp.IsError() {
 		if resp.StatusCode() == 403 {
-			return "", fmt.Errorf("you must agree to the SDK terms and conditions in https://portal.metaplay.dev first")
+			return "", clierrors.New("SDK download requires accepting the terms and conditions").
+				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
 		}
-		return "", fmt.Errorf("failed to download the Metaplay SDK from the portal with status code %d", resp.StatusCode())
+		return "", clierrors.Newf("Failed to download the Metaplay SDK (status %d)", resp.StatusCode()).
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
@@ -130,7 +133,8 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 
 	// It's an error if the user has no accessible organizations.
 	if len(orgsWithProjects) == 0 {
-		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
+		return nil, clierrors.New("No accessible organizations found").
+			WithSuggestion("Create a new organization at https://portal.metaplay.dev, or request access to an existing one from your team")
 	}
 
 	// Sanity check the returned data.
@@ -155,7 +159,8 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 
 	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)
 	if len(projectInfos) == 0 {
-		return nil, fmt.Errorf("no project with ID %s found in the Metaplay portal. Are you sure it's correct and you have access?", projectHumanID)
+		return nil, clierrors.Newf("Project '%s' not found", projectHumanID).
+			WithSuggestion("Check the project ID is correct, or run 'metaplay auth whoami' to verify your account has access")
 	} else if len(projectInfos) > 2 {
 		return nil, fmt.Errorf("portal returned %d matching projects, expecting only one", len(projectInfos))
 	}
@@ -186,7 +191,8 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	}
 
 	if len(envInfos) == 0 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: no such environment")
+		return nil, clierrors.Newf("Environment '%s' not found", humanID).
+			WithSuggestion("Run 'metaplay update project-environments' to sync with portal, or check available environments in the portal")
 	}
 
 	if len(envInfos) > 1 {

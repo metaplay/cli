@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/rs/zerolog/log"
@@ -73,14 +73,14 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		log.Error().Msgf("Failed to initialize Helm config: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to initialize Helm config")
 	}
 
 	// Resolve all deployed game server Helm releases.
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayLoadTestChartName)
 	if len(helmReleases) == 0 {
-		return fmt.Errorf("no existing bots deployment found")
+		log.Info().Msgf("No existing botclient deployment found in this environment, nothing to do.")
+		return nil
 	}
 
 	// Uninstall all Helm releases (multiple releases should not happen but are possible).

@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -75,8 +75,7 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		log.Error().Msgf("Failed to initialize Helm config: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to initialize Helm config")
 	}
 
 	log.Info().Msg("")
@@ -92,7 +91,7 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	// If no releases found, exit.
 	if len(helmReleases) == 0 {
 		log.Info().Msgf("No game server deployment found in environment, nothing to do.")
-		os.Exit(0)
+		return nil
 	}
 
 	// Warn about multiple game server deployments (can happen if deploying manually or with old CLI).

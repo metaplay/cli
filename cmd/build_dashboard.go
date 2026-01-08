@@ -6,9 +6,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -94,7 +94,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
-		return fmt.Errorf("project does not have a custom dashboard to build")
+		return clierrors.New("Project does not have a custom dashboard to build").
+			WithSuggestion("Initialize a custom dashboard with 'metaplay init dashboard'")
 	}
 
 	log.Info().Msg("")
@@ -123,8 +124,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
-			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
-			os.Exit(1)
+			return clierrors.Wrap(err, "Failed to install LiveOps Dashboard dependencies").
+				WithSuggestion("Check the output above for details")
 		}
 	} else {
 		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
@@ -142,8 +143,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(buildArgs, " "))))
 	err = execChildInteractive(dashboardPath, "pnpm", buildArgs, nil)
 	if err != nil {
-		log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to build the LiveOps Dashboard").
+			WithSuggestion("Check the output above for details")
 	}
 
 	// Build done.
