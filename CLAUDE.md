@@ -25,13 +25,16 @@ This is a Go CLI tool for managing Metaplay game server projects. It uses the Co
 - `main.go` → `cmd.Execute()` → `cmd/root.go`
 
 ### Package Structure
-- **`cmd/`** - All CLI commands using Cobra. Commands implement the `CommandOptions` interface with `Prepare()` and `Run()` methods.
+- **`cmd/`** - All CLI commands using Cobra. Commands implement the `CommandOptions` interface with `Prepare()` and `Run()` methods. Use `UsePositionalArgs` for commands with positional arguments.
 - **`pkg/`** - Core business logic:
   - `auth/` - Authentication and session management
   - `envapi/` - Environment API (Kubernetes, Docker, secrets)
+  - `helmutil/` - Helm chart operations (install, upgrade, uninstall)
+  - `kubeutil/` - Kubernetes utilities (debug containers, file copy, pod management)
   - `metaproj/` - Project configuration (`metaplay-project.yaml` handling)
   - `portalapi/` - Metaplay Portal API client
   - `styles/` - Terminal output styling
+  - `testutil/` - Test utilities (background server, containers)
 - **`internal/`** - Internal packages:
   - `tui/` - Terminal UI components (interactive dialogs, task runners)
   - `version/` - Version management and update checks
