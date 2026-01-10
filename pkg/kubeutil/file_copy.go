@@ -93,14 +93,16 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	}
 
 	go func() {
-		defer outStream.Close()
-		err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: os.Stderr,
 			Tty:    false,
 		})
 		if err != nil {
 			log.Error().Msgf("Error streaming from pod: %v", err)
+			outStream.CloseWithError(err)
+		} else {
+			outStream.Close()
 		}
 	}()
 
