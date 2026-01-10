@@ -6,18 +6,22 @@ package kubeutil
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 )
@@ -93,15 +97,33 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	}
 
 	go func() {
+		streamStart := time.Now()
+		log.Debug().Msgf("SPDY stream started: pod=%s container=%s file=%s/%s", podName, containerName, srcDir, fileName)
+
+		// Capture stderr from the remote command to diagnose tar failures
+		var stderrBuf bytes.Buffer
 		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
 			Stdout: outStream,
-			Stderr: os.Stderr,
+			Stderr: &stderrBuf,
 			Tty:    false,
 		})
+
+		elapsed := time.Since(streamStart)
 		if err != nil {
-			log.Error().Msgf("Error streaming from pod: %v", err)
-			outStream.CloseWithError(err)
+			log.Debug().Msgf("SPDY stream failed after %v: %v (type: %T)", elapsed, err, err)
+			if stderrBuf.Len() > 0 {
+				stderrStr := strings.TrimSpace(stderrBuf.String())
+				log.Debug().Msgf("Remote command stderr: %s", stderrStr)
+				outStream.CloseWithError(fmt.Errorf("stream failed after %v: %w (stderr: %s)", elapsed, err, stderrStr))
+			} else {
+				outStream.CloseWithError(fmt.Errorf("stream failed after %v: %w", elapsed, err))
+			}
 		} else {
+			// Log stderr even on success (warnings from tar)
+			if stderrBuf.Len() > 0 {
+				log.Debug().Msgf("Remote command stderr (non-fatal): %s", strings.TrimSpace(stderrBuf.String()))
+			}
+			log.Debug().Msgf("SPDY stream completed normally after %v", elapsed)
 			outStream.Close()
 		}
 	}()
@@ -167,7 +189,7 @@ func attemptFileCopy(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 	// Determine update interval: faster in interactive mode, slower in non-interactive mode
 	interval := map[bool]time.Duration{
 		true:  time.Second / 5,
-		false: time.Second,
+		false: 5 * time.Second,
 	}[tui.IsInteractiveMode()]
 
 	// Create progress tracker for the file copying.
@@ -180,10 +202,39 @@ func attemptFileCopy(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 	}
 
 	// Copy the file & track progress.
+	copyStart := time.Now()
 	if _, err := io.Copy(progressTracker, tr); err != nil {
+		elapsed := time.Since(copyStart)
+		remaining := fileSize - progressTracker.numProcessed
+		throughputMBps := float64(progressTracker.numProcessed) / elapsed.Seconds() / (1 << 20)
+
 		output.AppendLinef("Failed to copy file contents: %v (copied %d out of %d bytes)", err, progressTracker.numProcessed, fileSize)
+
+		// Log diagnostic details for timeout analysis
+		log.Debug().Msgf("Transfer failed after %v: copied %d/%d bytes (%.1f MB/s)",
+			elapsed, progressTracker.numProcessed, fileSize, throughputMBps)
+		log.Debug().Msgf("Bytes remaining: %d (%.2f MB)", remaining, float64(remaining)/(1<<20))
+		if progressTracker.numProcessed > 0 {
+			estimatedTotal := time.Duration(float64(fileSize) / float64(progressTracker.numProcessed) * float64(elapsed))
+			log.Debug().Msgf("Estimated total transfer time: %v (check for timeout thresholds)", estimatedTotal)
+		}
+
+		// Detect gzip stream truncation (missing trailer)
+		if errors.Is(err, io.ErrUnexpectedEOF) {
+			log.Debug().Msg("Gzip stream truncated (missing trailer) - connection likely dropped before transfer completed")
+		}
+
+		// Check if container was terminated (OOM, eviction, etc.)
+		checkContainerTermination(ctx, kubeCli, podName, containerName)
+
 		return fmt.Errorf("failed to copy file contents: %v", err)
 	}
+
+	// Log successful transfer statistics
+	elapsed := time.Since(copyStart)
+	throughputMBps := float64(fileSize) / elapsed.Seconds() / (1 << 20)
+	log.Debug().Msgf("Transfer completed: %d bytes in %v (%.1f MB/s)", fileSize, elapsed, throughputMBps)
+
 	return nil
 }
 
@@ -233,6 +284,43 @@ func ReadFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, c
 
 	// Read the full payload
 	return io.ReadAll(tr)
+}
+
+// checkContainerTermination checks if a container was terminated and logs the reason.
+// This helps diagnose failures caused by OOM kills, evictions, or other container terminations.
+func checkContainerTermination(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) {
+	pod, err := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		log.Debug().Msgf("Failed to check container status: %v", err)
+		return
+	}
+
+	// Check ephemeral container statuses
+	for _, status := range pod.Status.EphemeralContainerStatuses {
+		if status.Name == containerName {
+			if status.State.Terminated != nil {
+				t := status.State.Terminated
+				log.Debug().Msgf("Container %s was terminated: reason=%s exitCode=%d signal=%d message=%s",
+					containerName, t.Reason, t.ExitCode, t.Signal, t.Message)
+			} else if status.State.Waiting != nil {
+				log.Debug().Msgf("Container %s is waiting: reason=%s message=%s",
+					containerName, status.State.Waiting.Reason, status.State.Waiting.Message)
+			}
+			return
+		}
+	}
+
+	// Check regular container statuses as fallback
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == containerName {
+			if status.State.Terminated != nil {
+				t := status.State.Terminated
+				log.Debug().Msgf("Container %s was terminated: reason=%s exitCode=%d signal=%d message=%s",
+					containerName, t.Reason, t.ExitCode, t.Signal, t.Message)
+			}
+			return
+		}
+	}
 }
 
 // Humanize a file size to more readable format.
