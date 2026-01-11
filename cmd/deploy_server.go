@@ -20,7 +20,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/release"
+	rcommon "helm.sh/helm/v4/pkg/release/common"
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
@@ -444,7 +444,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  %-19s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", existingRelease.Version)))
 		lastDeployedAt := "Unknown"
 		if !existingRelease.Info.LastDeployed.IsZero() {
-			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed.Time)
+			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed)
 		}
 		log.Info().Msgf("  %-19s %s", "Last Deployed:", styles.RenderTechnical(lastDeployedAt))
 	}
@@ -454,7 +454,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	uninstallExistingRelease := false
 	if existingRelease != nil {
 		releaseStatus := existingRelease.Info.Status
-		if releaseStatus == release.StatusUninstalling {
+		if releaseStatus == rcommon.StatusUninstalling {
 			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
 			return fmt.Errorf("unable to deploy server: existing Helm release is in state 'uninstalling'")
 		} else if releaseStatus.IsPending() {
