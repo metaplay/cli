@@ -78,6 +78,11 @@ func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
+	if credentials == "" {
+		log.Error().Msg("Credentials are empty, please set METAPLAY_CREDENTIALS to the value from the developer portal")
+		os.Exit(2)
+	}
+
 	if clientID, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
 		log.Error().Msg("Invalid format for credentials, you should copy-paste the value from the developer portal verbatim")
 		os.Exit(2)
