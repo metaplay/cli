@@ -9,6 +9,7 @@ import (
 
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/pkg/portalapi"
+	"gopkg.in/yaml.v3"
 )
 
 func createTestSdkMetadata() *MetaplayVersionMetadata {
@@ -441,5 +442,188 @@ func TestGetEnvironmentIdentifiers(t *testing.T) {
 		if !found {
 			t.Errorf("Expected identifier '%s' not found in %v", exp, identifiers)
 		}
+	}
+}
+
+// Test parsing integrationTests config section
+func TestParseIntegrationTestsConfig(t *testing.T) {
+	tests := []struct {
+		name     string
+		yamlData string
+		validate func(t *testing.T, config *ProjectConfig)
+	}{
+		{
+			name:     "no integrationTests section",
+			yamlData: `projectID: test-project`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests != nil {
+					t.Error("Expected IntegrationTests to be nil when not specified")
+				}
+			},
+		},
+		{
+			name: "empty integrationTests section",
+			yamlData: `projectID: test-project
+integrationTests: {}`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests == nil {
+					t.Error("Expected IntegrationTests to be non-nil")
+					return
+				}
+				if config.IntegrationTests.Docker != nil {
+					t.Error("Expected Docker to be nil")
+				}
+				if config.IntegrationTests.Server != nil {
+					t.Error("Expected Server to be nil")
+				}
+				if config.IntegrationTests.BotClient != nil {
+					t.Error("Expected BotClient to be nil")
+				}
+			},
+		},
+		{
+			name: "docker buildArgs only",
+			yamlData: `projectID: test-project
+integrationTests:
+  docker:
+    buildArgs:
+      - "--build-arg"
+      - "INCLUDE_DEBUG_TOOLS=true"`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests == nil {
+					t.Error("Expected IntegrationTests to be non-nil")
+					return
+				}
+				if config.IntegrationTests.Docker == nil {
+					t.Error("Expected Docker to be non-nil")
+					return
+				}
+				if len(config.IntegrationTests.Docker.BuildArgs) != 2 {
+					t.Errorf("Expected 2 build args, got %d", len(config.IntegrationTests.Docker.BuildArgs))
+				}
+				if config.IntegrationTests.Docker.BuildArgs[0] != "--build-arg" {
+					t.Errorf("Expected first arg to be '--build-arg', got '%s'", config.IntegrationTests.Docker.BuildArgs[0])
+				}
+				if config.IntegrationTests.Docker.BuildArgs[1] != "INCLUDE_DEBUG_TOOLS=true" {
+					t.Errorf("Expected second arg to be 'INCLUDE_DEBUG_TOOLS=true', got '%s'", config.IntegrationTests.Docker.BuildArgs[1])
+				}
+			},
+		},
+		{
+			name: "server args and env",
+			yamlData: `projectID: test-project
+integrationTests:
+  server:
+    args:
+      - "--Clustering:ClusteringPort=6000"
+      - "--Metrics:PrometheusPort=9999"
+    env:
+      MY_CUSTOM_FLAG: "true"
+      DEBUG_LEVEL: "verbose"`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests == nil {
+					t.Error("Expected IntegrationTests to be non-nil")
+					return
+				}
+				if config.IntegrationTests.Server == nil {
+					t.Error("Expected Server to be non-nil")
+					return
+				}
+				if len(config.IntegrationTests.Server.Args) != 2 {
+					t.Errorf("Expected 2 server args, got %d", len(config.IntegrationTests.Server.Args))
+				}
+				if config.IntegrationTests.Server.Args[0] != "--Clustering:ClusteringPort=6000" {
+					t.Errorf("Expected first arg to be '--Clustering:ClusteringPort=6000', got '%s'", config.IntegrationTests.Server.Args[0])
+				}
+				if len(config.IntegrationTests.Server.Env) != 2 {
+					t.Errorf("Expected 2 env vars, got %d", len(config.IntegrationTests.Server.Env))
+				}
+				if config.IntegrationTests.Server.Env["MY_CUSTOM_FLAG"] != "true" {
+					t.Errorf("Expected MY_CUSTOM_FLAG to be 'true', got '%s'", config.IntegrationTests.Server.Env["MY_CUSTOM_FLAG"])
+				}
+				if config.IntegrationTests.Server.Env["DEBUG_LEVEL"] != "verbose" {
+					t.Errorf("Expected DEBUG_LEVEL to be 'verbose', got '%s'", config.IntegrationTests.Server.Env["DEBUG_LEVEL"])
+				}
+			},
+		},
+		{
+			name: "botClient args and env",
+			yamlData: `projectID: test-project
+integrationTests:
+  botClient:
+    args:
+      - "-ExitAfter=00:01:00"
+      - "-MaxBots=50"
+      - "-SpawnRate=5"
+    env:
+      BOT_BEHAVIOR_MODE: "stress"`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests == nil {
+					t.Error("Expected IntegrationTests to be non-nil")
+					return
+				}
+				if config.IntegrationTests.BotClient == nil {
+					t.Error("Expected BotClient to be non-nil")
+					return
+				}
+				if len(config.IntegrationTests.BotClient.Args) != 3 {
+					t.Errorf("Expected 3 botclient args, got %d", len(config.IntegrationTests.BotClient.Args))
+				}
+				if config.IntegrationTests.BotClient.Args[0] != "-ExitAfter=00:01:00" {
+					t.Errorf("Expected first arg to be '-ExitAfter=00:01:00', got '%s'", config.IntegrationTests.BotClient.Args[0])
+				}
+				if len(config.IntegrationTests.BotClient.Env) != 1 {
+					t.Errorf("Expected 1 env var, got %d", len(config.IntegrationTests.BotClient.Env))
+				}
+				if config.IntegrationTests.BotClient.Env["BOT_BEHAVIOR_MODE"] != "stress" {
+					t.Errorf("Expected BOT_BEHAVIOR_MODE to be 'stress', got '%s'", config.IntegrationTests.BotClient.Env["BOT_BEHAVIOR_MODE"])
+				}
+			},
+		},
+		{
+			name: "full configuration",
+			yamlData: `projectID: test-project
+integrationTests:
+  docker:
+    buildArgs:
+      - "--build-arg"
+      - "INCLUDE_DEBUG_TOOLS=true"
+  server:
+    args:
+      - "--Clustering:ClusteringPort=6000"
+    env:
+      MY_CUSTOM_FLAG: "true"
+  botClient:
+    args:
+      - "-MaxBots=50"
+    env:
+      BOT_BEHAVIOR_MODE: "stress"`,
+			validate: func(t *testing.T, config *ProjectConfig) {
+				if config.IntegrationTests == nil {
+					t.Error("Expected IntegrationTests to be non-nil")
+					return
+				}
+				if config.IntegrationTests.Docker == nil {
+					t.Error("Expected Docker to be non-nil")
+				}
+				if config.IntegrationTests.Server == nil {
+					t.Error("Expected Server to be non-nil")
+				}
+				if config.IntegrationTests.BotClient == nil {
+					t.Error("Expected BotClient to be non-nil")
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var config ProjectConfig
+			err := yaml.Unmarshal([]byte(tc.yamlData), &config)
+			if err != nil {
+				t.Fatalf("Failed to parse YAML: %v", err)
+			}
+			tc.validate(t, &config)
+		})
 	}
 }
