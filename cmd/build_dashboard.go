@@ -7,6 +7,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/metaplay/cli/pkg/styles"
@@ -20,6 +21,7 @@ type buildDashboardOpts struct {
 	extraArgs          []string
 	flagSkipInstall    bool // Skip 'pnpm install'
 	flagOutputPrebuilt bool // Output to 'Backend/PrebuiltDashboard/' -- \todo Auto-detect this from metaplay-project.yaml in the future
+	flagCleanInstall   bool // Remove node_modules/ and dist/ before install
 }
 
 func init() {
@@ -73,6 +75,7 @@ func init() {
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-install", false, "Skip the pnpm install step")
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-pnpm", false, "Skip the pnpm install step (deprecated, use --skip-install)")
 	buildDashboardCmd.Flags().BoolVar(&o.flagOutputPrebuilt, "output-prebuilt", false, "Output pre-built version of the dashboard (see help text)")
+	buildDashboardCmd.Flags().BoolVar(&o.flagCleanInstall, "clean-install", false, "Remove node_modules/ and dist/ before install")
 
 	buildCmd.AddCommand(buildDashboardCmd)
 }
@@ -116,9 +119,21 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve project dashboard path.
 	dashboardPath := project.GetDashboardDir()
+	projectRootPath, err := filepath.Abs(project.RelativeDir)
+	if err != nil {
+		return err
+	}
 
 	// Install dashboard dependencies if not skipped.
 	if !o.flagSkipInstall {
+		// Clean up temporary files if requested meaning node_modules and dist folders will be removed before install.
+		if o.flagCleanInstall {
+			if err := cleanTemporaryDashboardFiles(projectRootPath); err != nil {
+				return err
+			}
+		}
+
+		// Run 'pnpm install'
 		installArgs := []string{"install"}
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
@@ -127,7 +142,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 			os.Exit(1)
 		}
 	} else {
-		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
+		log.Info().Msg("Skipping pnpm install because of the --skip-install flag")
 	}
 
 	// Build with pnpm. If --output-prebuilt flag is set, output build results to Backend/PrebuiltDashboard,

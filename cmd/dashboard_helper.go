@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/go-version"
@@ -121,6 +123,47 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	}
 
 	log.Info().Msg("")
+
+	return nil
+}
+
+func cleanTemporaryDashboardFiles(projectRootPath string) error {
+	log.Info().Msgf("Cleaning up temporary files in %s", projectRootPath)
+	// Collect all node_modules folders to delete
+	var foldersToDelete []string
+	if err := filepath.Walk(projectRootPath, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.IsDir() && info.Name() == "node_modules" {
+			foldersToDelete = append(foldersToDelete, path)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("Failed to collect node_modules folders: %w", err)
+	}
+
+	// Delete the collected node_modules folders
+	for _, folder := range foldersToDelete {
+		log.Info().Msgf("Deleting node_modules folder: %s", folder)
+		if err := os.RemoveAll(folder); err != nil {
+			// Recursive folders might be deleted already, so just log the error and continue
+			log.Warn().Msgf("Failed to delete folder %s: %s", folder, err)
+		}
+	}
+
+	// Log the number of deleted folders
+	if len(foldersToDelete) == 0 {
+		log.Info().Msgf("No node_modules folders found in %s", projectRootPath)
+	} else {
+		log.Info().Msgf("Deleted %d node_modules folders in %s", len(foldersToDelete), projectRootPath)
+	}
+
+	// Remove dist/ if it exists.
+	distPath := fmt.Sprintf("%s/dist", projectRootPath)
+	if _, err := os.Stat(distPath); err == nil {
+		log.Info().Msg("Removing existing dist/ directory for a clean install...")
+		if err := os.RemoveAll(distPath); err != nil {
+			return fmt.Errorf("Failed to remove existing dist/ directory: %s", err)
+		}
+	}
 
 	return nil
 }
