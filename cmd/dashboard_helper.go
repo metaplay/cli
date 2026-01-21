@@ -127,6 +127,7 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	return nil
 }
 
+// Cleans temporary dashboard files including node_modules from project root, MetaplaySDK/FrontEnd and the project dashboard folder, and the dist folder of the project's dashboard.
 func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashboardPath string) error {
 	log.Info().Msgf("Cleaning up temporary files in %s", projectRootPath)
 	// Collect all node_modules folders to delete
@@ -156,6 +157,7 @@ func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashbo
 	// Delete the collected node_modules folders
 	for _, folder := range foldersToDelete {
 		log.Info().Msgf("Deleting node_modules folder: %s", folder)
+		// note: If the folder is a symbolic link, RemoveAll removes the link without deleting the contents.
 		if err := os.RemoveAll(folder); err != nil {
 			// Recursive folders might be deleted already, so just log the error and continue
 			log.Warn().Msgf("Failed to delete folder %s: %s", folder, err)
