@@ -127,7 +127,7 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	return nil
 }
 
-func cleanTemporaryDashboardFiles(projectRootPath string) error {
+func cleanTemporaryDashboardFiles(projectRootPath string, dashboardPath string) error {
 	log.Info().Msgf("Cleaning up temporary files in %s", projectRootPath)
 	// Collect all node_modules folders to delete
 	var foldersToDelete []string
@@ -157,7 +157,7 @@ func cleanTemporaryDashboardFiles(projectRootPath string) error {
 	}
 
 	// Remove dist/ if it exists.
-	distPath := fmt.Sprintf("%s/dist", projectRootPath)
+	distPath := fmt.Sprintf("%s/dist", dashboardPath)
 	if _, err := os.Stat(distPath); err == nil {
 		log.Info().Msg("Removing existing dist/ directory for a clean install...")
 		if err := os.RemoveAll(distPath); err != nil {

@@ -128,7 +128,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	if !o.flagSkipInstall {
 		// Clean up temporary files if requested meaning node_modules and dist folders will be removed before install.
 		if o.flagCleanInstall {
-			if err := cleanTemporaryDashboardFiles(projectRootPath); err != nil {
+			if err := cleanTemporaryDashboardFiles(projectRootPath, dashboardPath); err != nil {
 				return err
 			}
 		}
