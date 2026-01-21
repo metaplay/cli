@@ -127,18 +127,31 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	return nil
 }
 
-func cleanTemporaryDashboardFiles(projectRootPath string, dashboardPath string) error {
+func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashboardPath string) error {
 	log.Info().Msgf("Cleaning up temporary files in %s", projectRootPath)
 	// Collect all node_modules folders to delete
 	var foldersToDelete []string
-	if err := filepath.Walk(projectRootPath, func(path string, info os.FileInfo, err error) error {
-		if err == nil && info.IsDir() && info.Name() == "node_modules" {
+
+	// project root node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(projectRootPath, "node_modules"))
+
+	// sdk frontend node_modules
+	if err := filepath.WalkDir(filepath.Join(sdkPath, "FrontEnd"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == "node_modules" {
 			foldersToDelete = append(foldersToDelete, path)
+			// Skip walking into this directory
+			return filepath.SkipDir
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("Failed to collect node_modules folders: %w", err)
+		return fmt.Errorf("Failed to collect node_modules folders in MetaplaySDK/FrontEnd/: %w", err)
 	}
+
+	// dashboard node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(dashboardPath, "node_modules"))
 
 	// Delete the collected node_modules folders
 	for _, folder := range foldersToDelete {

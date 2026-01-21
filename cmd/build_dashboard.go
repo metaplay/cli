@@ -123,12 +123,13 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	sdkPath := project.GetSdkRootDir()
 
 	// Install dashboard dependencies if not skipped.
 	if !o.flagSkipInstall {
 		// Clean up temporary files if requested meaning node_modules and dist folders will be removed before install.
 		if o.flagCleanInstall {
-			if err := cleanTemporaryDashboardFiles(projectRootPath, dashboardPath); err != nil {
+			if err := cleanTemporaryDashboardFiles(projectRootPath, sdkPath, dashboardPath); err != nil {
 				return err
 			}
 		}
