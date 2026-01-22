@@ -87,7 +87,7 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 
 	if o.flagWatch {
 		// Run with file watching (auto-restart on code changes).
-		watchArgs := append([]string{"watch", "run", "--no-hot-reload"}, o.extraArgs...)
+		watchArgs := append([]string{"watch", "run", "--no-hot-reload", "/p:Configuration=Watch"}, o.extraArgs...)
 		if err := execChildInteractive(serverPath, "dotnet", watchArgs, commonDotnetEnvVars); err != nil {
 			return fmt.Errorf("game server exited with error: %s", err)
 		}
