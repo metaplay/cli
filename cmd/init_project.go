@@ -32,7 +32,7 @@ type initProjectOpts struct {
 	flagUnityProjectPath   string // Path to the Unity project files within the project.
 	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
 	flagAutoConfirm        bool   // Automatically confirm the 'Does this look correct?'
-	flagNoSample           bool   // Skip installing the MetaplayHelloWorld sample.
+	flagWithSample         bool   // Include the MetaplayHelloWorld sample scene.
 
 	projectPath              string // User-provided path to project root (relative or absolute).
 	absoluteProjectPath      string // Absolute path to the project root.
@@ -94,7 +94,7 @@ func init() {
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
 	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm the 'Does this look correct?' confirmation")
-	flags.BoolVar(&o.flagNoSample, "no-sample", false, "Skip installing the MetaplayHelloWorld sample scene")
+	flags.BoolVar(&o.flagWithSample, "with-sample", false, "Include the MetaplayHelloWorld sample scene")
 
 	initCmd.AddCommand(cmd)
 }
@@ -315,6 +315,9 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		return err
 	})
 
+	// Track whether sample template was actually used (for success message)
+	usingSample := false
+
 	// Only extract files if not migrating existing project
 	runner.AddTask("Update files to project", func(output *tui.TaskOutput) error {
 		// Create MetaplayProject.
@@ -325,12 +328,26 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 		// Copy files from the template.
 		log.Debug().Msgf("Initialize SDK resources in the project")
-		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
+		// Choose template based on flag
+		templateName := "project_template.json"
+		sampleTemplatePath := filepath.Join(project.GetSdkRootDir(), "Installer", "project_template_sample.json")
+
+		if o.flagWithSample {
+			usingSample = true
+			// Check if sample template exists (older SDKs may not have it)
+			if _, err := os.Stat(sampleTemplatePath); err == nil {
+				templateName = "project_template_sample.json"
+			} else {
+				log.Warn().Msg("Sample template not found in SDK; using default template instead.")
+			}
+		}
+
+		err = installFromTemplate(project, ".", templateName, map[string]string{
 			"PROJECT_HUMAN_ID":          targetProject.HumanID,
 			"PROJECT_DISPLAY_NAME":      targetProject.Name,    // Added in R34
 			"PROJECT_NAME":              targetProject.HumanID, // Remove in R34
 			"BACKEND_SOLUTION_FILENAME": "Server.sln",
-		}, o.flagNoSample)
+		}, !usingSample)
 		if err != nil {
 			return fmt.Errorf("failed to run SDK installer: %w", err)
 		}
@@ -355,8 +372,10 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("The following changes were made to your project:")
 	log.Info().Msgf("- Added project configuration file %s", styles.RenderTechnical("metaplay-project.yaml"))
 	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/SharedCode/"))))
-	if !o.flagNoSample {
+	if usingSample {
 		log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/MetaplayHelloWorld/"))))
+	} else {
+		log.Info().Msgf("- Created minimal project structure")
 	}
 	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/StreamingAssets/"))))
 	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Packages/manifest.json"))))
