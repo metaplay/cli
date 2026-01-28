@@ -52,6 +52,10 @@ func init() {
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
 			version control.
 
+			If you run into issues during the build process, try using the --clean-install
+			flag to remove cached files before installing dependencies. This flag does nothing if
+			--skip-install is used.
+
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
@@ -69,6 +73,9 @@ func init() {
 
 			# Pass extra arguments to vite build
 			metaplay build dashboard -- --mode production
+
+			# Clean install (removes node_modules/ and dist/ before install. Useful when facing build issues)
+			metaplay build dashboard --clean-install
 		`),
 	}
 
@@ -117,7 +124,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve project dashboard path.
+	// Resolve project dashboard, project root and sdk root paths.
 	dashboardPath := project.GetDashboardDir()
 	projectRootPath, err := filepath.Abs(project.RelativeDir)
 	if err != nil {
