@@ -7,6 +7,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/metaplay/cli/pkg/styles"
@@ -20,6 +21,7 @@ type buildDashboardOpts struct {
 	extraArgs          []string
 	flagSkipInstall    bool // Skip 'pnpm install'
 	flagOutputPrebuilt bool // Output to 'Backend/PrebuiltDashboard/' -- \todo Auto-detect this from metaplay-project.yaml in the future
+	flagCleanInstall   bool // Remove node_modules/ and dist/ before install
 }
 
 func init() {
@@ -50,10 +52,16 @@ func init() {
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
 			version control.
 
+			If you run into issues during the build process, try using the --clean-install
+			flag to remove cached files before installing dependencies. This flag does nothing if
+			--skip-install is used. Alternatively, you can run
+			'metaplay dev clean-dashboard-cached-files' to remove cached files.
+
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev dashboard' runs the dashboard in development mode.
+			- 'metaplay dev clean-dashboard-cached-files' removes cached dashboard files which potentially helps with build issues.
 		`),
 		Example: renderExample(`
 			# Build the dashboard.
@@ -67,12 +75,16 @@ func init() {
 
 			# Pass extra arguments to vite build
 			metaplay build dashboard -- --mode production
+
+			# Clean install (removes node_modules/ and dist/ before install. Useful when facing build issues)
+			metaplay build dashboard --clean-install
 		`),
 	}
 
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-install", false, "Skip the pnpm install step")
 	buildDashboardCmd.Flags().BoolVar(&o.flagSkipInstall, "skip-pnpm", false, "Skip the pnpm install step (deprecated, use --skip-install)")
 	buildDashboardCmd.Flags().BoolVar(&o.flagOutputPrebuilt, "output-prebuilt", false, "Output pre-built version of the dashboard (see help text)")
+	buildDashboardCmd.Flags().BoolVar(&o.flagCleanInstall, "clean-install", false, "Remove node_modules/ and dist/ before install")
 
 	buildCmd.AddCommand(buildDashboardCmd)
 }
@@ -114,20 +126,34 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve project dashboard path.
+	// Resolve project dashboard, project root and sdk root paths.
 	dashboardPath := project.GetDashboardDir()
+	projectRootPath, err := filepath.Abs(project.RelativeDir)
+	if err != nil {
+		return err
+	}
+	sdkPath := project.GetSdkRootDir()
 
 	// Install dashboard dependencies if not skipped.
 	if !o.flagSkipInstall {
+		// Clean up temporary files if requested meaning node_modules and dist folders will be removed before install.
+		if o.flagCleanInstall {
+			if err := cleanTemporaryDashboardFiles(projectRootPath, sdkPath, dashboardPath); err != nil {
+				return err
+			}
+		}
+
+		// Run 'pnpm install'
 		installArgs := []string{"install"}
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
 			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
+			log.Info().Msg("Have you tried running with the --clean-install flag (or `metaplay dev clean-dashboard-cached-files`)? This removes cached files before installing dependencies.")
 			os.Exit(1)
 		}
 	} else {
-		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
+		log.Info().Msg("Skipping pnpm install because of the --skip-install flag")
 	}
 
 	// Build with pnpm. If --output-prebuilt flag is set, output build results to Backend/PrebuiltDashboard,

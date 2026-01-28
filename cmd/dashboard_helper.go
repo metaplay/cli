@@ -8,7 +8,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/go-version"
@@ -121,6 +123,61 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	}
 
 	log.Info().Msg("")
+
+	return nil
+}
+
+// Cleans temporary dashboard files including node_modules from project root, MetaplaySDK/Frontend and the project dashboard folder, and the dist folder of the project's dashboard.
+func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashboardPath string) error {
+	log.Info().Msg("Cleaning up temporary files...")
+	// Collect all node_modules folders to delete
+	var foldersToDelete []string
+
+	// project root node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(projectRootPath, "node_modules"))
+
+	// sdk frontend node_modules
+	if err := filepath.WalkDir(filepath.Join(sdkPath, "Frontend"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == "node_modules" {
+			foldersToDelete = append(foldersToDelete, path)
+			// Skip walking into this directory
+			return filepath.SkipDir
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("Failed to collect node_modules folders in MetaplaySDK/Frontend/: %w", err)
+	}
+
+	// dashboard node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(dashboardPath, "node_modules"))
+
+	// Delete the collected node_modules folders
+	for _, folder := range foldersToDelete {
+		log.Info().Msgf("Deleting node_modules folder: %s", folder)
+		// note: If the folder is a symbolic link, RemoveAll removes the link without deleting the contents.
+		if err := os.RemoveAll(folder); err != nil {
+			log.Warn().Msgf("Failed to delete folder %s: %s", folder, err)
+		}
+	}
+
+	// Log the number of deleted folders
+	if len(foldersToDelete) == 0 {
+		log.Info().Msg("No node_modules folders found")
+	} else {
+		log.Info().Msgf("Deleted %d node_modules folders", len(foldersToDelete))
+	}
+
+	// Remove custom dashboard dist/ if it exists.
+	distPath := fmt.Sprintf("%s/dist", dashboardPath)
+	if _, err := os.Stat(distPath); err == nil {
+		log.Info().Msg("Removing existing dist/ directory for a clean build...")
+		if err := os.RemoveAll(distPath); err != nil {
+			return fmt.Errorf("Failed to remove existing dist/ directory: %s", err)
+		}
+	}
 
 	return nil
 }
