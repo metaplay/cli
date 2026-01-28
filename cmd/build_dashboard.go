@@ -54,12 +54,14 @@ func init() {
 
 			If you run into issues during the build process, try using the --clean-install
 			flag to remove cached files before installing dependencies. This flag does nothing if
-			--skip-install is used.
+			--skip-install is used. Alternatively, you can run
+			'metaplay dev clean-dashboard-cached-files' to remove cached files.
 
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev dashboard' runs the dashboard in development mode.
+			- 'metaplay dev clean-dashboard-cached-files' removes cached dashboard files which potentially helps with build issues.
 		`),
 		Example: renderExample(`
 			# Build the dashboard.
@@ -147,6 +149,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
 			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
+			log.Info().Msg("Have you tried running with the --clean-install flag (or `metaplay dev clean-dashboard-cached-files`)? This removes cached files before installing dependencies.")
 			os.Exit(1)
 		}
 	} else {
