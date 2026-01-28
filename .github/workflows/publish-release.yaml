@@ -5,6 +5,8 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+' # only official release tags
 
+run-name: Publish v${{ github.ref_name }}
+
 permissions:
   contents: write
   id-token: write
@@ -14,6 +16,9 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Log version
+        run: echo "### Published version ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
