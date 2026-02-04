@@ -44,7 +44,7 @@ func init() {
 	o := deployBotClientOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '364cff09'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
@@ -69,8 +69,8 @@ func init() {
 			- 'metaplay debug shell ...' to debug a running server pod.
 		`),
 		Example: renderExample(`
-			# Deploy bots into environment tough-falcons with the docker image tag 364cff09.
-			metaplay deploy botclient tough-falcons 364cff09
+			# Deploy bots into environment nimbly with the docker image tag 364cff09.
+			metaplay deploy botclient nimbly 364cff09
 		`),
 	}
 	deployCmd.AddCommand(cmd)

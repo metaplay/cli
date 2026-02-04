@@ -448,6 +448,8 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	templateReplacements := map[string]string{
 		"RELATIVE_PATH_TO_SDK": project.Config.SdkRootDir,
 		"UNITY_PROJECT_DIR":    unityProjectDir,
+		"PROJECT_HUMAN_ID":     project.Config.ProjectHumanID,
+		"PROJECT_NAME":         project.Config.ProjectHumanID, // Removed in R34
 	}
 	for k, v := range extraReplacements {
 		templateReplacements[k] = v

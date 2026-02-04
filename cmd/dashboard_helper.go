@@ -44,11 +44,11 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
 	}
 
-	// If installed major version is more recent than expected, fail.
+	// If installed major version is more recent than expected, warn.
 	installedMajorVersion := installedVersion.Segments()[0]
 	requiredMajorVersion := recommendedVersion.Segments()[0]
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
+		log.Warn().Msgf("Detected Node.js version %s is more recent than expected v%d.x.y; downgrade if you encounter any problems", installedVersion, requiredMajorVersion)
 	}
 
 	// Print the info.

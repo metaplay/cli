@@ -24,6 +24,7 @@ type updateSdkOpts struct {
 	flagToVersion          string // Target SDK version (non-interactive mode)
 	flagAutoAgreeContracts bool   // Automatically agree to contracts
 	flagYes                bool   // Skip confirmation prompts
+	flagSkipPatch          bool   // Skip patch file generation
 }
 
 func init() {
@@ -41,8 +42,15 @@ func init() {
 			- Latest minor version within your current major release (e.g., 34.1 -> 34.3)
 			- Latest version in the next major release (e.g., 34.x -> 35.2)
 
-			Warning: Updating the SDK will replace all files in the MetaplaySDK directory.
-			Any local modifications to SDK files will be lost and must be handled manually.
+			Experimental: If local modifications to SDK files are detected, a patch file
+			(metaplay-sdk-modifications.patch) will be extracted before updating. You can
+			re-apply the changes with 'patch -p1' or 'git apply --reject'. Some hunks may
+			fail if there are conflicts with the new SDK version and will require manual
+			resolution. This feature is experimental - please ensure you use version control
+			(e.g., git) to have a backup of your SDK modifications.
+
+			You may also use your own preferred way to preserve the changes. If so, use
+			--skip-patch to disable patch file generation.
 
 			You must be logged in to the Metaplay portal (use 'metaplay auth login').
 		`),
@@ -58,6 +66,9 @@ func init() {
 
 			# Non-interactive update for CI/automation
 			metaplay update sdk --to-version=35 --auto-agree --yes
+
+			# Skip patch file generation (when handling SDK modifications yourself)
+			metaplay update sdk --skip-patch
 		`),
 	}
 
@@ -65,6 +76,7 @@ func init() {
 	flags.StringVar(&o.flagToVersion, "to-version", "", "Target SDK version to update to (required in non-interactive mode)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to privacy policy and terms & conditions")
 	flags.BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompts")
+	flags.BoolVar(&o.flagSkipPatch, "skip-patch", false, "Skip patch file generation for SDK modifications")
 
 	updateCmd.AddCommand(cmd)
 }
@@ -131,27 +143,33 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Detect local SDK modifications
+	// Detect local SDK modifications (unless --skip-patch is set)
 	portalClient := portalapi.NewClient(tokenSet)
-	currentVersionInfo, err := portalClient.FindSdkVersionByVersionOrName(formatMajorMinor(currentVersion))
-	if err != nil {
-		log.Debug().Msgf("Could not look up current SDK version in portal: %v", err)
-	}
-
 	var modifications []ModifiedFile
+	var patchContent string
 	var modificationCheckDone bool
-	if currentVersionInfo != nil {
-		log.Info().Msgf("Preparing update...")
-		sdkZipPath, err := downloadSdkZipOnly(tokenSet, currentVersionInfo.ID)
+
+	if !o.flagSkipPatch {
+		currentVersionInfo, err := portalClient.FindSdkVersionByVersionOrName(formatMajorMinor(currentVersion))
 		if err != nil {
-			log.Debug().Msgf("Could not download current SDK for comparison: %v", err)
-		} else {
-			defer os.Remove(sdkZipPath)
-			modifications, err = detectSdkModifications(sdkRootDirAbs, sdkZipPath)
+			log.Debug().Msgf("Could not look up current SDK version in portal: %v", err)
+		}
+
+		if currentVersionInfo != nil {
+			log.Info().Msgf("Preparing update...")
+			sdkZipPath, err := downloadSdkZipOnly(tokenSet, currentVersionInfo.ID)
 			if err != nil {
-				log.Debug().Msgf("Could not check for SDK modifications: %v", err)
+				log.Debug().Msgf("Could not download current SDK for comparison: %v", err)
 			} else {
-				modificationCheckDone = true
+				defer os.Remove(sdkZipPath)
+				result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath)
+				if err != nil {
+					log.Debug().Msgf("Could not check for SDK modifications: %v", err)
+				} else {
+					modifications = result.Modifications
+					patchContent = result.PatchContent
+					modificationCheckDone = true
+				}
 			}
 		}
 	}
@@ -170,11 +188,41 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Show modified files and warn user before proceeding
+	var patchPath string
 	if len(modifications) > 0 {
-		log.Warn().Msg(styles.RenderWarning("The following local changes will be lost:"))
+		patchPath = filepath.Join(projectDir, "metaplay-sdk-modifications.patch")
+		log.Info().Msg(styles.RenderTitle("SDK Modifications Detected"))
 		log.Info().Msg("")
-		log.Info().Msg(formatModifiedFilesList(modifications, 20))
+		log.Info().Msg(styles.RenderWarning("EXPERIMENTAL: Automatic change preservation is an experimental feature."))
+		log.Info().Msg(styles.RenderWarning("Make sure you use version control (e.g., git) to have a backup for your SDK modifications!"))
+		log.Info().Msg("")
+		log.Info().Msgf("The following SDK changes were detected and will be saved to a patch file: %s.", styles.RenderTechnical(patchPath))
+		log.Info().Msg("")
+		printModifiedFilesList(modifications, 20)
+		log.Info().Msg("")
 
+		// Warn about binary files that cannot be included in the patch
+		binaryCount := countBinaryFiles(modifications)
+		if binaryCount > 0 {
+			log.Info().Msg(styles.RenderWarning(fmt.Sprintf("WARNING: %d binary file(s) cannot be included in the patch and WILL BE LOST!", binaryCount)))
+			log.Info().Msg("         You must manually back up and restore these files.")
+			log.Info().Msg("")
+		}
+
+		log.Info().Msgf("After the update, you can re-apply the changes from the SDK directory with either:")
+		log.Info().Msgf("  %s", styles.RenderPrompt("patch -p1 < "+patchPath))
+		log.Info().Msg("or")
+		log.Info().Msgf("  %s", styles.RenderPrompt("git apply --reject "+patchPath))
+		log.Info().Msg("")
+		log.Info().Msg("Tip: Use 'patch -p1 --dry-run < <patch>' first to preview what will be applied.")
+		log.Info().Msg("")
+		log.Info().Msg("Note: Some hunks may fail if there are conflicting changes in the new SDK.")
+		log.Info().Msg("      Failed hunks are saved to .rej files for manual resolution.")
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderWarning("If you encounter any issues with handling the patch, please report them at https://github.com/metaplay/cli/issues"))
+		log.Info().Msg("")
+
+		// Ask for confirmation
 		if tui.IsInteractiveMode() {
 			confirmed, err := tui.DoConfirmQuestion(ctx, "Continue with update?")
 			if err != nil {
@@ -189,6 +237,14 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 				return fmt.Errorf("local SDK modifications detected; use --yes to proceed anyway")
 			}
 			log.Warn().Msg("Proceeding despite modifications (--yes specified)")
+		}
+
+		// Save patch file
+		if patchContent != "" {
+			if err := os.WriteFile(patchPath, []byte(patchContent), 0644); err != nil {
+				log.Warn().Msgf("Could not save patch file: %v", err)
+				patchPath = "" // Clear path so we don't show restore instructions
+			}
 		}
 	}
 
@@ -255,6 +311,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Apply the update
+	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle(fmt.Sprintf("Updating SDK to %s", styles.RenderTechnical(targetVersion.Version))))
 	log.Info().Msg("")
 

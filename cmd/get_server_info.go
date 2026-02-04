@@ -83,7 +83,7 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Show server deployment information in text format (default)
-			metaplay get server-info lovely-wombats-build-nimbly
+			metaplay get server-info nimbly
 		`),
 	}
 

@@ -39,7 +39,9 @@ jobs:
 
       # Note: Not pushing tags due to lots of noise .. can still find versions from CI build history
       - name: Tag the version
-        run: git tag ${{ env.NEXT_DEV_TAG }}
+        run: |
+          git tag ${{ env.NEXT_DEV_TAG }}
+          echo "### Published version ${{ env.NEXT_DEV_TAG }}" >> $GITHUB_STEP_SUMMARY
 
       # Dev builds are not published to distribution channels, only available in Github as draft releases
       - name: Run GoReleaser (Development Build)
@@ -60,9 +62,9 @@ jobs:
           echo "Wait a bit before deletion to allow active installations to finish..."
           sleep 10
 
-          echo "Deleting old dev releases (keeping only the most recent)..."
+          echo "Deleting old dev releases (keeping only the just-published one)..."
           RELEASE_IDS_TO_DELETE=$(gh api repos/${{ github.repository }}/releases --paginate |
-            jq '[.[] | select(.prerelease == true)] | sort_by(.created_at) | reverse | .[1:] | .[] | .id')
+            jq --arg current_tag "$NEXT_DEV_TAG" '[.[] | select(.prerelease == true and .tag_name != $current_tag)] | .[].id')
 
           if [ -z "$RELEASE_IDS_TO_DELETE" ]; then
             echo "No old dev releases found to delete."

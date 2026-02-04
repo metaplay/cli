@@ -45,7 +45,7 @@ func init() {
 	o := deployGameServerOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
@@ -78,26 +78,26 @@ func init() {
 			- 'metaplay debug shell ...' to start a shell on a running server pod.
 		`),
 		Example: renderExample(`
-			# Push the local image and deploy to the environment tough-falcons.
-			metaplay deploy server tough-falcons mygame:364cff09
+			# Push the local image and deploy to the environment nimbly.
+			metaplay deploy server nimbly mygame:364cff09
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy server tough-falcons 364cff09
+			metaplay deploy server nimbly 364cff09
 
 			# Deploy the latest locally built image for this project.
-			metaplay deploy server tough-falcons latest-local
+			metaplay deploy server nimbly latest-local
 
 			# Pass extra arguments to Helm.
-			metaplay deploy server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server nimbly mygame:364cff09 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy server tough-falcons mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server nimbly mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server nimbly mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server nimbly mygame:364cff09 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)

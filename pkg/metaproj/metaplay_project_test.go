@@ -35,7 +35,7 @@ func TestRenderProjectConfigYAML(t *testing.T) {
 	singleEnv := []portalapi.EnvironmentInfo{
 		{
 			Name:        "dev",
-			HumanID:     "tiny-squids",
+			HumanID:     "lovely-wombats-build-nimbly",
 			Type:        portalapi.EnvironmentTypeDevelopment,
 			StackDomain: "dev.example.com",
 		},
@@ -44,19 +44,19 @@ func TestRenderProjectConfigYAML(t *testing.T) {
 	multipleEnvs := []portalapi.EnvironmentInfo{
 		{
 			Name:        "dev",
-			HumanID:     "tiny-squids",
+			HumanID:     "lovely-wombats-build-nimbly",
 			Type:        portalapi.EnvironmentTypeDevelopment,
 			StackDomain: "dev.example.com",
 		},
 		{
 			Name:        "staging",
-			HumanID:     "happy-pandas",
+			HumanID:     "lovely-wombats-build-nimbly",
 			Type:        portalapi.EnvironmentTypeStaging,
 			StackDomain: "staging.example.com",
 		},
 		{
 			Name:        "prod",
-			HumanID:     "brave-lions",
+			HumanID:     "lovely-wombats-build-nimbly",
 			Type:        portalapi.EnvironmentTypeProduction,
 			StackDomain: "prod.example.com",
 		},
@@ -169,7 +169,7 @@ features:
 # Project environments.
 environments:
   - name: dev
-    humanId: tiny-squids
+    humanId: lovely-wombats-build-nimbly
     type: development
     stackDomain: dev.example.com
 `,
@@ -207,15 +207,15 @@ features:
 # Project environments.
 environments:
   - name: dev
-    humanId: tiny-squids
+    humanId: lovely-wombats-build-nimbly
     type: development
     stackDomain: dev.example.com
   - name: staging
-    humanId: happy-pandas
+    humanId: lovely-wombats-build-nimbly
     type: staging
     stackDomain: staging.example.com
   - name: prod
-    humanId: brave-lions
+    humanId: lovely-wombats-build-nimbly
     type: production
     stackDomain: prod.example.com
 `,

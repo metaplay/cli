@@ -22,7 +22,7 @@ func init() {
 	o := secretsDeleteOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
 
 	cmd := &cobra.Command{
@@ -41,8 +41,8 @@ func init() {
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: renderExample(`
-			# Delete the secret 'user-mysecret' from the environment 'tough-falcons'.
-			metaplay secrets delete tough-falcons user-mysecret
+			# Delete the secret 'user-mysecret' from the environment 'nimbly'.
+			metaplay secrets delete nimbly user-mysecret
 		`),
 	}
 
