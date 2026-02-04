@@ -6,7 +6,9 @@
       "Bash(go mod tidy:*)",
       "Bash(grep:*)",
       "Bash(go build:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(go list:*)",
+      "Bash(go get:*)"
     ]
   }
 }
