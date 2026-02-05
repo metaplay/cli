@@ -155,19 +155,22 @@ func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashbo
 	foldersToDelete = append(foldersToDelete, filepath.Join(dashboardPath, "node_modules"))
 
 	// Delete the collected node_modules folders
+	deletedCount := 0
 	for _, folder := range foldersToDelete {
 		log.Info().Msgf("Deleting node_modules folder: %s", folder)
 		// note: If the folder is a symbolic link, RemoveAll removes the link without deleting the contents.
 		if err := os.RemoveAll(folder); err != nil {
 			log.Warn().Msgf("Failed to delete folder %s: %s", folder, err)
+		} else {
+			deletedCount++
 		}
 	}
 
 	// Log the number of deleted folders
-	if len(foldersToDelete) == 0 {
+	if deletedCount == 0 {
 		log.Info().Msg("No node_modules folders found")
 	} else {
-		log.Info().Msgf("Deleted %d node_modules folders", len(foldersToDelete))
+		log.Info().Msgf("Deleted %d node_modules folders", deletedCount)
 	}
 
 	// Remove custom dashboard dist/ if it exists.
