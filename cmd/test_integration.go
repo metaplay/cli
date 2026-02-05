@@ -19,6 +19,34 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// integrationTestCtx carries runtime state into test functions.
+type integrationTestCtx struct {
+	opts               *testIntegrationOpts
+	project            *metaproj.MetaplayProject
+	serverImage        string
+	playwrightTsImage  string
+	playwrightNetImage string
+	config             *metaproj.IntegrationTestsConfig
+}
+
+type integrationTest struct {
+	name        string
+	displayName string
+	run         func(ctx integrationTestCtx, server *testutil.BackgroundGameServer) error
+}
+
+var integrationTests = []integrationTest{
+	{"bots", "Run botclient tests", func(ctx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return ctx.opts.runBotTests(ctx.project, server, ctx.serverImage, ctx.config)
+	}},
+	{"dashboard", "Run dashboard Playwright tests", func(ctx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return ctx.opts.runDashboardTests(ctx.project, server, ctx.playwrightTsImage)
+	}},
+	{"system", "Run Playwright.NET system tests", func(ctx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return ctx.opts.runSystemTests(ctx.project, server, ctx.playwrightNetImage)
+	}},
+}
+
 type testIntegrationOpts struct {
 	flagSkipBuild    bool
 	flagDebugNetwork bool
@@ -28,6 +56,12 @@ type testIntegrationOpts struct {
 
 func init() {
 	o := testIntegrationOpts{}
+
+	// Build the test list for the Long description from integrationTests.
+	var testListLines string
+	for _, t := range integrationTests {
+		testListLines += fmt.Sprintf("\n\t\t\t- %s: %s.", t.name, t.displayName)
+	}
 
 	cmd := &cobra.Command{
 		Use:     "integration",
@@ -46,10 +80,7 @@ func init() {
 			For each of the tests, the game server container is first started in the background and then
 			the test-specific container is run against the game server.
 
-			Tests:
-			- bots: Run bots against the background server.
-			- dashboard: Run dashboard Playwright tests.
-			- system: Run Playwright.NET system tests.
+			Tests:`+testListLines+`
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -70,17 +101,66 @@ func init() {
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the docker image build step (faster if you already built the images)")
 	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "./integration-test-output", "Directory for test output and results")
-	flags.StringVar(&o.flagTest, "test", "", "Run only the specified test (e.g. 'bots', 'dashboard', 'system')")
+	var testNames []string
+	for _, t := range integrationTests {
+		testNames = append(testNames, "'"+t.name+"'")
+	}
+	flags.StringVar(&o.flagTest, "test", "", "Run only the specified test ("+strings.Join(testNames, ", ")+")")
 	_ = flags.MarkDeprecated("only", "use --tests instead")
 }
 
-func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
+func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if o.flagTest != "" {
+		found := false
+		for _, t := range integrationTests {
+			if t.name == o.flagTest {
+				found = true
+				break
+			}
+		}
+		if !found {
+			var names []string
+			for _, t := range integrationTests {
+				names = append(names, t.name)
+			}
+			return fmt.Errorf("unknown test '%s'. Available tests: %s", o.flagTest, strings.Join(names, ", "))
+		}
+	}
+	return nil
+}
 
 func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	// Resolve project configuration
 	project, err := resolveProject()
 	if err != nil {
 		return fmt.Errorf("failed to resolve project: %w", err)
+	}
+
+	// Derive container image names once and pass them to phases
+	projectID := strings.ToLower(project.Config.ProjectHumanID)
+	serverImage := fmt.Sprintf("%s/server:test", projectID)
+	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", projectID)
+	pwNetImage := fmt.Sprintf("%s/playwright-net:test", projectID)
+
+	// Get integration tests config (may be nil if not specified)
+	integrationTestsConfig := project.Config.IntegrationTests
+
+	// Build runtime context for test functions.
+	testCtx := integrationTestCtx{
+		opts:               o,
+		project:            project,
+		serverImage:        serverImage,
+		playwrightTsImage:  pwTsImage,
+		playwrightNetImage: pwNetImage,
+		config:             integrationTestsConfig,
+	}
+
+	// Build the list of tests to run, filtered by --test if specified.
+	var tests []integrationTest
+	for _, t := range integrationTests {
+		if o.flagTest == "" || o.flagTest == t.name {
+			tests = append(tests, t)
+		}
 	}
 
 	log.Info().Msg("")
@@ -138,15 +218,6 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to create output directory %s: %w", o.flagOutputDir, err)
 	}
 
-	// Derive container image names once and pass them to phases
-	projectID := strings.ToLower(project.Config.ProjectHumanID)
-	serverImage := fmt.Sprintf("%s/server:test", projectID)
-	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", projectID)
-	pwNetImage := fmt.Sprintf("%s/playwright-net:test", projectID)
-
-	// Get integration tests config (may be nil if not specified)
-	integrationTestsConfig := project.Config.IntegrationTests
-
 	// Build the container images first.
 	if !o.flagSkipBuild {
 		if err := o.buildDockerImages(project, serverImage, pwTsImage, pwNetImage, integrationTestsConfig); err != nil {
@@ -157,59 +228,21 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Skipping container image build step due to --skip-build")
 	}
 
-	// runTestCase handles per-test server lifecycle and logs
-	tests := []struct {
-		name        string
-		displayName string
-		fn          func(*testutil.BackgroundGameServer) error
-	}{
-		{"bots", "Run botclient tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runBotTests(project, server, serverImage, integrationTestsConfig)
-		}},
-		{"dashboard", "Run dashboard Playwright tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runDashboardTests(project, server, pwTsImage)
-		}},
-		{"system", "Run Playwright.NET system tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runSystemTests(project, server, pwNetImage)
-		}},
-		// {"http-api", "Run HTTP API tests", func(s *testutil.BackgroundGameServer) error { return nil }}, // \todo migrate from Python script
-	}
-
-	// Filter tests if --tests flag is specified
-	if o.flagTest != "" {
-		var filteredTests []struct {
-			name        string
-			displayName string
-			fn          func(*testutil.BackgroundGameServer) error
-		}
-		for _, p := range tests {
-			if p.name == o.flagTest {
-				filteredTests = append(filteredTests, p)
-				break
-			}
-		}
-		if len(filteredTests) == 0 {
-			var names []string
-			for _, t := range tests {
-				names = append(names, t.name)
-			}
-			return fmt.Errorf("unknown test '%s'. Available tests: %s", o.flagTest, strings.Join(names, ", "))
-		}
-		tests = filteredTests
-	}
-
 	// Run all the active tests.
-	for _, p := range tests {
+	for _, t := range tests {
 		log.Info().Msg("")
-		log.Info().Msgf("%s %s: %s", styles.RenderBright("🔷"), styles.RenderTechnical(p.name), styles.RenderBright(p.displayName))
+		log.Info().Msgf("%s %s: %s", styles.RenderBright("🔷"), styles.RenderTechnical(t.name), styles.RenderBright(t.displayName))
 		log.Info().Msg("")
 
-		if err := o.runTestCase(project, serverImage, integrationTestsConfig, p.displayName, p.fn); err != nil {
-			return fmt.Errorf("test '%s' failed: %w", p.displayName, err)
+		runFn := t.run
+		if err := o.runTestCase(project, serverImage, integrationTestsConfig, t.displayName, func(server *testutil.BackgroundGameServer) error {
+			return runFn(testCtx, server)
+		}); err != nil {
+			return fmt.Errorf("test '%s' failed: %w", t.displayName, err)
 		}
 
 		log.Info().Msg("")
-		log.Info().Msgf("%s Test %s successful", styles.RenderSuccess("✓"), styles.RenderTechnical(p.name))
+		log.Info().Msgf("%s Test %s successful", styles.RenderSuccess("✓"), styles.RenderTechnical(t.name))
 	}
 
 	log.Info().Msg("")
