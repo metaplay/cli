@@ -10,35 +10,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type devCleanDashboardCachedFilesOpts struct {
+type devCleanDashboardArtifactsOpts struct {
 	UsePositionalArgs
 }
 
-func (o *devCleanDashboardCachedFilesOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *devCleanDashboardArtifactsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
 func init() {
-	o := devCleanDashboardCachedFilesOpts{}
-	var devCleanDashboardCachedFilesCmd = &cobra.Command{
-		Use:     "clean-dashboard-cached-files",
+	o := devCleanDashboardArtifactsOpts{}
+	var devCleanDashboardArtifactsCmd = &cobra.Command{
+		Use:     "clean-dashboard-artifacts",
 		Aliases: []string{"clean-dash"},
-		Short:   "[debug] Clean cached files used by the LiveOps Dashboard build process",
+		Short:   "[debug] Clean cached build artifacts used by the LiveOps Dashboard build process",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			Debug command to clean cached files used by the LiveOps Dashboard build process.
+			Debug command to clean cached build artifacts used by the LiveOps Dashboard build process.
 			Removes the 'node_modules/' directories found in the project and SDK, 
 			and the 'dist/' directory inside 'Backend/Dashboard/'.
 		`),
 		Example: renderExample(`
-			# Clean cached files used by the LiveOps Dashboard build process
-			metaplay dev clean-dashboard-cached-files
+			# Clean cached build artifacts used by the LiveOps Dashboard build process
+			metaplay dev clean-dashboard-artifacts
 		`),
 	}
-	devCmd.AddCommand(devCleanDashboardCachedFilesCmd)
+	devCmd.AddCommand(devCleanDashboardArtifactsCmd)
 }
 
-func (o *devCleanDashboardCachedFilesOpts) Run(cmd *cobra.Command) error {
+func (o *devCleanDashboardArtifactsOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {

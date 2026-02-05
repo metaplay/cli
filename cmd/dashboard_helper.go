@@ -127,9 +127,9 @@ func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
 	return nil
 }
 
-// Cleans temporary dashboard files including node_modules from project root, MetaplaySDK/Frontend and the project dashboard folder, and the dist folder of the project's dashboard.
+// Cleans dashboard build artifacts including node_modules from project root, MetaplaySDK/Frontend and the project dashboard folder, and the dist folder of the project's dashboard.
 func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashboardPath string) error {
-	log.Info().Msg("Cleaning up temporary files...")
+	log.Info().Msg("Cleaning up dashboard build artifacts...")
 	// Collect all node_modules folders to delete
 	var foldersToDelete []string
 
