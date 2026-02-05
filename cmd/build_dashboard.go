@@ -20,7 +20,6 @@ type buildDashboardOpts struct {
 	extraArgs          []string
 	flagSkipInstall    bool // Skip 'pnpm install'
 	flagOutputPrebuilt bool // Output to 'Backend/PrebuiltDashboard/' -- \todo Auto-detect this from metaplay-project.yaml in the future
-	flagCleanInstall   bool // Remove node_modules/ and dist/ before install
 }
 
 func init() {
