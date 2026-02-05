@@ -52,13 +52,13 @@ func init() {
 			version control.
 
 			If you run into issues during the build process, try running
-			'metaplay dev clean-dashboard-artifacts' to remove cached build artifacts.
+			'metaplay dev clean-dashboard-artifacts' to remove dashboard build artifacts.
 
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev dashboard' runs the dashboard in development mode.
-			- 'metaplay dev clean-dashboard-artifacts' removes cached dashboard build artifacts.
+			- 'metaplay dev clean-dashboard-artifacts' removes dashboard build artifacts.
 		`),
 		Example: renderExample(`
 			# Build the dashboard.
