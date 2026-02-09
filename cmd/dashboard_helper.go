@@ -148,7 +148,7 @@ func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashbo
 		}
 		return nil
 	}); err != nil {
-		return fmt.Errorf("Failed to collect node_modules folders in MetaplaySDK/Frontend/: %w", err)
+		return fmt.Errorf("failed to collect node_modules folders in MetaplaySDK/Frontend/: %w", err)
 	}
 
 	// dashboard node_modules
@@ -178,7 +178,7 @@ func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashbo
 	if _, err := os.Stat(distPath); err == nil {
 		log.Info().Msg("Removing existing dist/ directory for a clean build...")
 		if err := os.RemoveAll(distPath); err != nil {
-			return fmt.Errorf("Failed to remove existing dist/ directory: %s", err)
+			return fmt.Errorf("failed to remove existing dist/ directory: %w", err)
 		}
 	}
 
