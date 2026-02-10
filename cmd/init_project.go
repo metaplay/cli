@@ -23,7 +23,7 @@ import (
 
 // Support initializing projects with SDK versions up to this version.
 // Only enforced when downloading the SDK from the portal.
-var latestSupportedSdkVersion = version.Must(version.NewVersion("35.999.999"))
+var latestSupportedSdkVersion = version.Must(version.NewVersion("36.999.999"))
 
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
