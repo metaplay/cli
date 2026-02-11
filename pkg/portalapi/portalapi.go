@@ -230,10 +230,15 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
 	if isMajorVersionOnly(versionOrName) {
 		result, err := findLatestForMajorVersion(versions, versionOrName)
+		if err != nil {
+			return nil, err
+		}
 		if result != nil {
 			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
+			return result, nil
 		}
-		return result, err
+		// No "X.y" versions found, fall through to check for exact match (e.g., "36" without minor versions)
+		log.Debug().Msgf("No minor versions found for major version %s, checking for exact match", versionOrName)
 	}
 
 	// Try to find an exact match for the version string.
