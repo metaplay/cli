@@ -30,6 +30,7 @@ type debugAdminRequestOpts struct {
 	flagBody        string
 	flagFile        string
 	flagContentType string
+	flagOutput      string
 }
 
 func init() {
@@ -79,12 +80,16 @@ func init() {
 
 			# Send a DELETE request.
 			metaplay debug admin-request nimbly DELETE /api/some-endpoint
+
+			# Download a binary file (e.g., game config archive).
+			metaplay debug admin-request nimbly GET /api/GameConfig/.../download -o gameconfig.mca
 		`),
 	}
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
 	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
+	cmd.Flags().StringVarP(&o.flagOutput, "output", "o", "", "Save response to file (for binary/non-JSON downloads)")
 
 	debugCmd.AddCommand(cmd)
 }
@@ -201,7 +206,33 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msg("")
 
-	// Make the HTTP request based on the method
+	// Binary download mode: save raw response to file
+	if o.flagOutput != "" {
+		request := adminClient.Resty.R()
+		if contentType != "" {
+			request.SetHeader("Content-Type", contentType)
+		}
+		if requestBody != nil {
+			request.SetBody(requestBody)
+		}
+
+		response, err := request.Execute(o.argMethod, o.argPath)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
+			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
+		}
+
+		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
+			return fmt.Errorf("failed to write output file: %v", err)
+		}
+
+		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
+		return nil
+	}
+
+	// JSON mode: make the HTTP request and unmarshal response
 	var response any
 	var requestErr error
 
