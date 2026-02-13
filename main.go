@@ -5,9 +5,19 @@
 package main
 
 import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/metaplay/cli/cmd"
 )
 
 func main() {
-	cmd.Execute()
+	// Create a context that cancels on SIGINT (Ctrl+C) or SIGTERM
+	// This ensures graceful cleanup when the user interrupts the CLI
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cmd.ExecuteContext(ctx)
 }

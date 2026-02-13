@@ -6,7 +6,12 @@
       "Bash(go mod tidy:*)",
       "Bash(grep:*)",
       "Bash(go build:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(go doc:*)",
+      "Bash(go mod graph:*)",
+      "Bash(cat:*)"
     ]
   }
 }
