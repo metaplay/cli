@@ -31,7 +31,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       # Resolve tag for the release. Writes the output into env variables NEXT_DEV_TAG and LATEST_RELEASE_TAG (in GITHUB_ENV).
       - name: Resolve tag for release
