@@ -24,7 +24,7 @@ import (
 
 // Support initializing projects with SDK versions up to this version.
 // Only enforced when downloading the SDK from the portal.
-var latestSupportedSdkVersion = version.Must(version.NewVersion("35.999.999"))
+var latestSupportedSdkVersion = version.Must(version.NewVersion("36.999.999"))
 
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
@@ -331,9 +331,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		// Copy files from the template.
 		log.Debug().Msgf("Initialize SDK resources in the project")
 		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
-			"PROJECT_HUMAN_ID":          targetProject.HumanID,
-			"PROJECT_DISPLAY_NAME":      targetProject.Name,    // Added in R34
-			"PROJECT_NAME":              targetProject.HumanID, // Remove in R34
+			"PROJECT_DISPLAY_NAME": targetProject.Name,
 			"BACKEND_SOLUTION_FILENAME": "Server.sln",
 		}, o.flagNoSample)
 		if err != nil {

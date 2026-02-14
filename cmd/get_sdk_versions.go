@@ -109,7 +109,7 @@ func (o *getSdkVersionsOpts) Run(cmd *cobra.Command) error {
 			log.Info().Msg("No downloadable SDK versions found.")
 		} else {
 			// Print header
-			log.Info().Msgf("  %-7s  %-12s  %s", "VERSION", "RELEASE DATE", "DESCRIPTION")
+			log.Info().Msgf("  %-10s  %-12s  %s", "VERSION", "RELEASE DATE", "DESCRIPTION")
 			log.Info().Msg("")
 
 			for _, v := range versions {
@@ -125,20 +125,29 @@ func (o *getSdkVersionsOpts) Run(cmd *cobra.Command) error {
 				}
 
 				// Add badges for non-public and test assets
+				// Emojis are 2 chars wide in terminal, plus 1 space before each
 				badges := ""
+				badgeWidth := 0
 				if !v.IsPublic {
 					badges += " 🔒"
+					badgeWidth += 3
 				}
 				if v.IsTestAsset {
 					badges += " 🧪"
+					badgeWidth += 3
 				}
 
-				versionPadded := fmt.Sprintf("%-7s", v.Version)
+				// Pad version+badges to fixed column width (10 chars total)
+				versionColWidth := 10
+				padding := versionColWidth - len(v.Version) - badgeWidth
+				if padding < 0 {
+					padding = 0
+				}
+				versionWithBadges := styles.RenderTechnical(v.Version) + badges + strings.Repeat(" ", padding)
 				datePadded := fmt.Sprintf("%-12s", releaseDate)
 
-				log.Info().Msgf("  %s%s  %s  %s",
-					styles.RenderTechnical(versionPadded),
-					badges,
+				log.Info().Msgf("  %s  %s  %s",
+					versionWithBadges,
 					styles.RenderMuted(datePadded),
 					description)
 			}

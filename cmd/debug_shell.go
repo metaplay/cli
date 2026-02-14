@@ -45,7 +45,7 @@ func init() {
 	}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.Environment, "ENVIRONMENT", "Target environment, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.Environment, "ENVIRONMENT", "Target environment, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.PodName, "POD", "Target pod name, eg, 'all-0'.")
 
 	cmd := &cobra.Command{
@@ -69,11 +69,11 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Start a debug container in the 'tough-falcons' environment, interactively choose target pod.
-			metaplay debug shell tough-falcons
+			# Start a debug container in the 'nimbly' environment, interactively choose target pod.
+			metaplay debug shell nimbly
 
-			# Start a debug container in the 'tough-falcons' environment, targeting pod 'service-0'.
-			metaplay debug shell tough-falcons service-0
+			# Start a debug container in the 'nimbly' environment, targeting pod 'service-0'.
+			metaplay debug shell nimbly service-0
 		`),
 	}
 

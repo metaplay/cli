@@ -157,7 +157,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			buildNumberBadge = styles.RenderMuted("(auto-detected)")
 		} else {
 			buildNumber = "none" // default if not specified
-			buildNumberBadge = styles.RenderWarning("[unable to auto-detect; specify with --commit-number=<number>]")
+			buildNumberBadge = styles.RenderWarning("[unable to auto-detect; specify with --build-number=<number>]")
 		}
 	}
 

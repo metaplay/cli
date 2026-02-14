@@ -37,7 +37,7 @@ func init() {
 	o := debugCollectHeapDumpOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argPodName, "POD", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 
 	cmd := &cobra.Command{
@@ -66,20 +66,20 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Collect heap dump from the only running pod.
-			metaplay debug collect-heap-dump tough-falcons
+			metaplay debug collect-heap-dump nimbly
 
 			# Collect heap dump from pod 'service-0'.
-			metaplay debug collect-heap-dump tough-falcons service-0
+			metaplay debug collect-heap-dump nimbly service-0
 
 			# Use 'dotnet-dump' for full process dump instead of 'dotnet-gcdump'.
-			metaplay debug collect-heap-dump tough-falcons --mode=dump
+			metaplay debug collect-heap-dump nimbly --mode=dump
 
 			# Specify custom output path. Use .gcdump extension for gcdump mode, and no extension for dump mode.
-			metaplay debug collect-heap-dump tough-falcons -o /path/to/output.gcdump
-			metaplay debug collect-heap-dump tough-falcons --mode=dump -o /path/to/core_250901_093000
+			metaplay debug collect-heap-dump nimbly -o /path/to/output.gcdump
+			metaplay debug collect-heap-dump nimbly --mode=dump -o /path/to/core_250901_093000
 
 			# Don't ask for confirmation on the operation.
-			metaplay debug collect-heap-dump tough-falcons --yes
+			metaplay debug collect-heap-dump nimbly --yes
 		`),
 	}
 	debugCmd.AddCommand(cmd)

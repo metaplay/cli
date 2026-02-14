@@ -79,6 +79,11 @@ func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
+	if credentials == "" {
+		return clierrors.NewUsageError("Credentials are empty").
+			WithSuggestion("Set METAPLAY_CREDENTIALS to the value from the developer portal")
+	}
+
 	clientID, clientSecret, ok := strings.Cut(credentials, "+")
 	if !ok {
 		return clierrors.NewUsageError("Invalid credentials format").

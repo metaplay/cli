@@ -651,7 +651,7 @@ func ValidateProjectID(id string) error {
 // For Metaplay-hosted environments:
 // - Must be dash-separated segments, with 2 to 4 segments allowed.
 // - Each segment must consist of lowercase alphanumeric characters.
-// - Examples: 'tiny-squids' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
+// - Examples: 'lovely-wombats-build-nimbly' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
 // For self-hosted environments, only the global checks are applied.
 func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	if id == "" {

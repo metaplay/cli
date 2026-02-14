@@ -25,7 +25,7 @@ func init() {
 	o := removeBotClientOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "botclient [ENVIRONMENT]",
@@ -38,8 +38,8 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Remove botclient deployment from environment tough-falcons.
-			metaplay remove botclient tough-falcons
+			# Remove botclient deployment from environment nimbly.
+			metaplay remove botclient nimbly
 		`),
 	}
 

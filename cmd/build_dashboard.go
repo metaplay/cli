@@ -50,10 +50,14 @@ func init() {
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
 			version control.
 
+			If you run into issues during the build process, try running
+			'metaplay dev clean-dashboard-artifacts' to remove dashboard build artifacts.
+
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev dashboard' runs the dashboard in development mode.
+			- 'metaplay dev clean-dashboard-artifacts' removes dashboard build artifacts.
 		`),
 		Example: renderExample(`
 			# Build the dashboard.
@@ -115,20 +119,21 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve project dashboard path.
+	// Resolve project dashboard, project root and sdk root paths.
 	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies if not skipped.
 	if !o.flagSkipInstall {
+		// Run 'pnpm install'
 		installArgs := []string{"install"}
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
 			return clierrors.Wrap(err, "Failed to install LiveOps Dashboard dependencies").
-				WithSuggestion("Check the output above for details")
+				WithSuggestion("Try running 'metaplay dev clean-dashboard-artifacts' to remove build artifacts, then retry")
 		}
 	} else {
-		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
+		log.Info().Msg("Skipping pnpm install because of the --skip-install flag")
 	}
 
 	// Build with pnpm. If --output-prebuilt flag is set, output build results to Backend/PrebuiltDashboard,

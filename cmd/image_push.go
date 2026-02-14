@@ -35,7 +35,7 @@ func init() {
 	o := imagePushOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
 
 	cmd := &cobra.Command{
@@ -52,8 +52,8 @@ func init() {
 			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
 		Example: renderExample(`
-			# Push the docker image 'mygame:1a27c25753' into environment 'tough-falcons'.
-			metaplay image push tough-falcons mygame:1a27c25753
+			# Push the docker image 'mygame:1a27c25753' into environment 'nimbly'.
+			metaplay image push nimbly mygame:1a27c25753
 		`),
 	}
 	imageCmd.AddCommand(cmd)
