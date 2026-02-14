@@ -6,13 +6,13 @@ package auth
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 )
@@ -46,7 +46,8 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 	// Get current session (including credentials).
 	sessionState, err := LoadSessionState(authProvider.GetSessionID())
 	if err != nil {
-		return nil, fmt.Errorf("failed to load credentials: %w", err)
+		return nil, clierrors.Wrap(err, "Failed to load stored credentials").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
 	// If no tokens, user is not logged in; return empty token set.
@@ -67,16 +68,18 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			// Refresh the tokenSet.
 			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
 			if err != nil {
-				return nil, fmt.Errorf("failed to refresh tokens: %w", err)
+				return nil, clierrors.Wrap(err, "Failed to refresh authentication tokens").
+					WithSuggestion("Your session may have expired. Run 'metaplay auth login' to re-authenticate")
 			}
 
 			// Persist the refreshed tokens.
 			err = SaveSessionState(authProvider.GetSessionID(), sessionState.UserType, tokenSet)
 			if err != nil {
-				return nil, fmt.Errorf("failed to persist refreshed tokens: %w", err)
+				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
 			}
 		} else {
-			return nil, fmt.Errorf("access token has expired and there is no refresh token")
+			return nil, clierrors.New("Access token has expired and cannot be refreshed").
+				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		}
 	}
 
@@ -97,9 +100,10 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	if err != nil {
 		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
-			return nil, errors.New("failed to refresh tokens: SSL certificate validation failed. Is someone tampering with your internet connection?")
+			return nil, clierrors.Wrap(err, "SSL certificate validation failed during token refresh").
+				WithSuggestion("Check your network connection — someone may be intercepting your traffic")
 		}
-		return nil, fmt.Errorf("failed to refresh tokens via %s: %w", authProvider.TokenEndpoint, err)
+		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint)
 	}
 
 	// Check for a non-OK response (after retries exhausted for transient errors)
@@ -110,18 +114,19 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		// Remove the session state (something has gone badly wrong).
 		err = DeleteSessionState(authProvider.GetSessionID())
 		if err != nil {
-			return nil, fmt.Errorf("failed to delete bad tokens: %w", err)
+			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
 		}
 
 		log.Debug().Msg("Local credentials removed.")
-		return nil, errors.New("failed to refresh tokens, please log in again")
+		return nil, clierrors.New("Session expired and could not be refreshed").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
 	var tokens TokenSet
 	err = json.Unmarshal(body, &tokens)
 	if err != nil {
 		log.Error().Msgf("Failed to parse tokens from response: %v", err)
-		return nil, fmt.Errorf("failed to parse tokens: %w", err)
+		return nil, clierrors.Wrap(err, "Failed to parse authentication tokens")
 	}
 
 	return &tokens, nil

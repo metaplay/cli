@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
@@ -585,8 +586,8 @@ func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*
 		}
 	}
 
-	environmentIDs := strings.Join(getEnvironmentIdentifiers(projectConfig), ", ")
-	return nil, fmt.Errorf("no environment matching '%s' found in project config. The valid environments are: %s", environment, environmentIDs)
+	return nil, clierrors.Newf("Environment '%s' not found in metaplay-project.yaml", environment).
+		WithSuggestion(formatEnvironmentList(projectConfig))
 }
 
 func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*ProjectEnvironmentConfig, error) {
@@ -596,18 +597,22 @@ func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*Pr
 			return &envConfig, nil
 		}
 	}
-	return nil, fmt.Errorf("no environment with humanID '%s' found", humanID)
+	return nil, clierrors.Newf("Environment '%s' not found", humanID).
+		WithSuggestion(formatEnvironmentList(projectConfig))
 }
 
-// getEnvironmentIdentifiers returns all valid identifiers for environments in the project,
-// including humanIDs and aliases.
-func getEnvironmentIdentifiers(projectConfig *ProjectConfig) []string {
-	identifiers := make([]string, 0)
+// formatEnvironmentList returns a formatted list of available environments,
+// showing name, humanID, and aliases for each environment.
+func formatEnvironmentList(projectConfig *ProjectConfig) string {
+	var lines []string
 	for _, env := range projectConfig.Environments {
-		identifiers = append(identifiers, env.HumanID)
-		identifiers = append(identifiers, env.Aliases...)
+		line := fmt.Sprintf("%s: %s", env.HumanID, env.Name)
+		if len(env.Aliases) > 0 {
+			line += fmt.Sprintf(" (aliases: %s)", strings.Join(env.Aliases, ", "))
+		}
+		lines = append(lines, line)
 	}
-	return identifiers
+	return "Available environments:\n  " + strings.Join(lines, "\n  ")
 }
 
 // Validate the given project ID:

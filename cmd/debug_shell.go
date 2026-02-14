@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -183,11 +183,13 @@ func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*env
 
 func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) (*envapi.KubeClient, *corev1.Pod, error) {
 	if !tui.IsInteractiveMode() {
-		return nil, nil, fmt.Errorf("interactive mode required for selecting target pod")
+		return nil, nil, clierrors.NewUsageError("Interactive mode required for pod selection").
+			WithSuggestion("Specify the pod name explicitly, e.g., 'metaplay debug shell nimbly service-0'")
 	}
 
 	if len(shardSetsWithPods) == 0 {
-		return nil, nil, fmt.Errorf("no stateful sets exist in the gameserver")
+		return nil, nil, clierrors.New("No game server pods found in the environment").
+			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 
 	// Create a flattened list of all pods with their shard set context
@@ -208,7 +210,8 @@ func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) 
 	}
 
 	if len(allPods) == 0 {
-		return nil, nil, fmt.Errorf("no pods found in any shard set")
+		return nil, nil, clierrors.New("No running pods found in the game server").
+			WithSuggestion("Check if the game server deployment is healthy with 'metaplay debug server-status'")
 	}
 
 	// Let the user choose from the flattened pod list

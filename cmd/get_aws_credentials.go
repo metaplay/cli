@@ -7,8 +7,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -74,7 +74,8 @@ func init() {
 
 func (o *getAWSCredentialsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagFormat != "text" && o.flagFormat != "json" {
-		return fmt.Errorf("invalid format %q; must be either \"text\" or \"json\"", o.flagFormat)
+		return clierrors.NewUsageErrorf("Invalid format '%s'", o.flagFormat).
+			WithSuggestion("Use --format=text for human-readable or --format=json for scripting")
 	}
 
 	return nil
@@ -99,8 +100,7 @@ func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
 	// Get AWS credentials
 	credentials, err := targetEnv.GetAWSCredentials()
 	if err != nil {
-		log.Error().Msgf("Failed to get AWS credentials: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to get AWS credentials")
 	}
 
 	// Output the credentials in the requested format

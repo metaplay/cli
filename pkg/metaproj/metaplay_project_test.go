@@ -5,6 +5,7 @@
 package metaproj
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
@@ -406,8 +407,8 @@ func TestFindEnvironmentConfig_ByAlias(t *testing.T) {
 	}
 }
 
-// Test that getEnvironmentIdentifiers includes aliases
-func TestGetEnvironmentIdentifiers(t *testing.T) {
+// Test that formatEnvironmentList returns a readable list with names and aliases
+func TestFormatEnvironmentList(t *testing.T) {
 	config := &ProjectConfig{
 		Environments: []ProjectEnvironmentConfig{
 			{
@@ -418,30 +419,32 @@ func TestGetEnvironmentIdentifiers(t *testing.T) {
 			{
 				Name:    "Production",
 				HumanID: "test-prod",
-				Aliases: []string{"prod"},
 			},
 		},
 	}
 
-	identifiers := getEnvironmentIdentifiers(config)
+	result := formatEnvironmentList(config)
 
-	// Should contain humanIDs and aliases
-	expected := []string{"test-dev", "dev", "develop", "test-prod", "prod"}
-	if len(identifiers) != len(expected) {
-		t.Errorf("Expected %d identifiers, got %d", len(expected), len(identifiers))
+	// Should contain environment humanIDs and names
+	if !strings.Contains(result, "test-dev") {
+		t.Error("Expected result to contain 'test-dev'")
+	}
+	if !strings.Contains(result, "Development") {
+		t.Error("Expected result to contain 'Development'")
+	}
+	if !strings.Contains(result, "test-prod") {
+		t.Error("Expected result to contain 'test-prod'")
+	}
+	if !strings.Contains(result, "Production") {
+		t.Error("Expected result to contain 'Production'")
 	}
 
-	for _, exp := range expected {
-		found := false
-		for _, id := range identifiers {
-			if id == exp {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("Expected identifier '%s' not found in %v", exp, identifiers)
-		}
+	// Should contain aliases for the dev environment
+	if !strings.Contains(result, "dev") {
+		t.Error("Expected result to contain alias 'dev'")
+	}
+	if !strings.Contains(result, "develop") {
+		t.Error("Expected result to contain alias 'develop'")
 	}
 }
 
