@@ -88,7 +88,7 @@ func init() {
 			metaplay init ci --ci-provider=github --environment=nimbly --yes
 
 			# Initialize for all configured environments
-			metaplay init ci --ci-provider=github --yes
+			metaplay init ci --ci-provider=github --environment=all --yes
 		`),
 	}
 
@@ -135,6 +135,17 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 		o.environment, err = o.project.Config.FindEnvironmentConfig(o.flagEnvironment)
 		if err != nil {
 			return err
+		}
+	}
+
+	// Validate output directory if specified
+	if o.flagOutputDir != "" {
+		info, err := os.Stat(o.flagOutputDir)
+		if err != nil {
+			return clierrors.NewUsageErrorf("Output directory '%s' does not exist", o.flagOutputDir)
+		}
+		if !info.IsDir() {
+			return clierrors.NewUsageErrorf("Output path '%s' is not a directory", o.flagOutputDir)
 		}
 	}
 
@@ -205,32 +216,40 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 
 	// Generate CI files. Bitbucket uses a single file for all environments,
 	// so it is handled separately from the per-environment providers.
+	anyCreated := false
 	if o.ciProvider == CIProviderBitbucket {
-		if err := o.generateBitbucketFile(ctx, outputDir, environments); err != nil {
+		written, err := o.generateBitbucketFile(ctx, outputDir, environments)
+		if err != nil {
 			return err
 		}
+		anyCreated = anyCreated || written
 	} else {
 		for _, env := range environments {
-			if err := o.generateCIFile(ctx, outputDir, env); err != nil {
+			written, err := o.generateCIFile(ctx, outputDir, env)
+			if err != nil {
 				return err
 			}
+			anyCreated = anyCreated || written
 		}
 	}
 
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("CI configuration initialized successfully!"))
-	log.Info().Msg("")
-	log.Info().Msg("Next steps:")
-	log.Info().Msg("  1. Create a machine user in the Metaplay portal (if not created yet)")
-	log.Info().Msg("  2. Store the machine user credentials in your CI system's secrets with name `METAPLAY_CREDENTIALS`")
-	log.Info().Msg("  3. Add the machine user to your project and environment with the 'game-admin' role")
-	log.Info().Msg("  4. Review, commit and push the generated CI configuration files")
+	if anyCreated {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderSuccess("CI configuration initialized successfully!"))
+		log.Info().Msg("")
+		log.Info().Msg("Next steps:")
+		log.Info().Msg("  1. Create a machine user in the Metaplay portal (if not created yet)")
+		log.Info().Msg("  2. Store the machine user credentials in your CI system's secrets with name `METAPLAY_CREDENTIALS`")
+		log.Info().Msg("  3. Add the machine user to your project and environment with the 'game-admin' role")
+		log.Info().Msg("  4. Review, commit and push the generated CI configuration files")
+	}
 
 	return nil
 }
 
 // generateCIFile generates a CI configuration file for a single environment (GitHub Actions or Generic).
-func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env metaproj.ProjectEnvironmentConfig) error {
+// Returns true if a file was written.
+func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env metaproj.ProjectEnvironmentConfig) (bool, error) {
 	data := ciTemplateData{
 		EnvironmentDisplayName: env.Name,
 		EnvironmentHumanID:     env.HumanID,
@@ -243,16 +262,16 @@ func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env m
 	switch o.ciProvider {
 	case CIProviderGitHubActions:
 		filePath = filepath.Join(outputDir, ".github", "workflows", fmt.Sprintf("build-deploy-server-%s.yaml", env.HumanID))
-		content, err = renderCITemplate(githubActionsTemplate, data)
+		content, err = renderTemplate(githubActionsTmpl, data)
 	case CIProviderGeneric:
 		filePath = filepath.Join(outputDir, fmt.Sprintf("deploy-%s.sh", env.HumanID))
-		content, err = renderCITemplate(genericCITemplate, data)
+		content, err = renderTemplate(genericCITmpl, data)
 	default:
-		return clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
+		return false, clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
 	}
 
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to render CI template")
+		return false, clierrors.Wrap(err, "Failed to render CI template")
 	}
 
 	// Use executable permissions for shell scripts
@@ -270,11 +289,16 @@ func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env m
 	log.Info().Msgf("Output file:  %s", styles.RenderTechnical(filePath))
 	log.Info().Msg("")
 
-	return o.confirmAndWriteFile(ctx, filePath, content, perm)
+	written, err := o.confirmAndWriteFile(ctx, filePath, content, perm)
+	if err != nil {
+		return false, err
+	}
+	return written, nil
 }
 
 // generateBitbucketFile generates a single Bitbucket Pipelines file containing all environments.
-func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string, environments []metaproj.ProjectEnvironmentConfig) error {
+// Returns true if a file was written.
+func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string, environments []metaproj.ProjectEnvironmentConfig) (bool, error) {
 	var envData []bitbucketEnvironmentData
 	for _, env := range environments {
 		envData = append(envData, bitbucketEnvironmentData{
@@ -287,9 +311,9 @@ func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string
 		Environments: envData,
 	}
 
-	content, err := renderBitbucketTemplate(bitbucketPipelinesTemplate, data)
+	content, err := renderTemplate(bitbucketPipelinesTmpl, data)
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
+		return false, clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
 	}
 
 	filePath := filepath.Join(outputDir, "bitbucket-pipelines.yml")
@@ -308,47 +332,48 @@ func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string
 }
 
 // confirmAndWriteFile prompts the user for confirmation (unless --yes) and writes the file.
-func (o *initCIOpts) confirmAndWriteFile(ctx context.Context, filePath string, content string, perm os.FileMode) error {
+// Returns true if the file was written, false if skipped.
+func (o *initCIOpts) confirmAndWriteFile(ctx context.Context, filePath string, content string, perm os.FileMode) (bool, error) {
 	// Check if file already exists
 	if _, err := os.Stat(filePath); err == nil {
 		log.Info().Msgf("%s File already exists: %s", styles.RenderAttention("⚠"), filePath)
 		if !o.flagAutoConfirm {
 			confirmed, err := tui.DoConfirmQuestion(ctx, "Overwrite existing file?")
 			if err != nil {
-				return err
+				return false, err
 			}
 			if !confirmed {
 				log.Info().Msg("Skipping file...")
-				return nil
+				return false, nil
 			}
 		}
 	} else if !o.flagAutoConfirm {
 		confirmed, err := tui.DoConfirmQuestion(ctx, "Create this file?")
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !confirmed {
 			log.Info().Msg("Skipping file...")
-			return nil
+			return false, nil
 		}
 	}
 
 	// Create directory if needed
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return clierrors.Wrap(err, fmt.Sprintf("Failed to create directory %s", dir)).
+		return false, clierrors.Wrap(err, fmt.Sprintf("Failed to create directory %s", dir)).
 			WithSuggestion("Check that you have write permissions to the output directory")
 	}
 
 	// Write the file
 	if err := os.WriteFile(filePath, []byte(content), perm); err != nil {
-		return clierrors.Wrap(err, fmt.Sprintf("Failed to write file %s", filePath)).
+		return false, clierrors.Wrap(err, fmt.Sprintf("Failed to write file %s", filePath)).
 			WithSuggestion("Check that you have write permissions to the output directory")
 	}
 
 	log.Info().Msgf(" %s Created %s", styles.RenderSuccess("✓"), styles.RenderTechnical(filePath))
 
-	return nil
+	return true, nil
 }
 
 func isValidCIProvider(provider string) bool {
@@ -377,37 +402,25 @@ type bitbucketTemplateData struct {
 	Environments []bitbucketEnvironmentData
 }
 
-func renderCITemplate(tmpl string, data ciTemplateData) (string, error) {
-	t, err := template.New("ci").Parse(tmpl)
-	if err != nil {
-		return "", err
-	}
+// Parsed CI templates (parsed once at package init).
+// The GitHub Actions template uses [[.Field]] delimiters to avoid conflicts with GitHub's ${{ }} syntax.
+var (
+	githubActionsTmpl        = template.Must(template.New("github").Delims("[[", "]]").Parse(githubActionsTemplate))
+	bitbucketPipelinesTmpl   = template.Must(template.New("bitbucket").Parse(bitbucketPipelinesTemplate))
+	genericCITmpl            = template.Must(template.New("generic").Parse(genericCITemplate))
+)
 
+func renderTemplate(tmpl *template.Template, data any) (string, error) {
 	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", err
 	}
-
-	return buf.String(), nil
-}
-
-func renderBitbucketTemplate(tmpl string, data bitbucketTemplateData) (string, error) {
-	t, err := template.New("ci").Parse(tmpl)
-	if err != nil {
-		return "", err
-	}
-
-	var buf bytes.Buffer
-	if err := t.Execute(&buf, data); err != nil {
-		return "", err
-	}
-
 	return buf.String(), nil
 }
 
 // GitHub Actions template
 const githubActionsTemplate = `# Rename this action to what you want, this is what shows in the left sidebar in Github Actions
-name: Build game server and deploy to {{.EnvironmentDisplayName}} ({{.EnvironmentHumanID}})
+name: Build game server and deploy to [[.EnvironmentDisplayName]] ([[.EnvironmentHumanID]])
 
 # Configure when this Github Action is triggered
 on:
@@ -430,13 +443,13 @@ jobs:
       - name: Setup Metaplay CLI
         uses: metaplay-shared/github-workflows/setup-cli@v0
         with:
-          credentials: ${{"{{"}} secrets.METAPLAY_CREDENTIALS {{"}}"}}
+          credentials: ${{ secrets.METAPLAY_CREDENTIALS }}
 
       - name: Build server image
         run: metaplay build image gameserver:$GITHUB_SHA
 
       - name: Deploy server to target environment
-        run: metaplay deploy server {{.EnvironmentHumanID}} gameserver:$GITHUB_SHA
+        run: metaplay deploy server [[.EnvironmentHumanID]] gameserver:$GITHUB_SHA
 `
 
 // Bitbucket Pipelines template
