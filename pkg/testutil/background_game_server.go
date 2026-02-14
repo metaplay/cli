@@ -28,6 +28,8 @@ type GameServerOptions struct {
 	ExposedPorts  []string // optional override; defaults to []string{Port}
 	ContainerName string   // optional; useful in CI logs
 	Cmd           []string // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
+	ExtraArgs     []string // additional args to append to the default Cmd
+	ExtraEnv      map[string]string // additional env vars to merge with defaults (overrides on conflict)
 }
 
 // containerLogConsumer mirrors container logs to an io.Writer (e.g. os.Stdout).
@@ -81,11 +83,19 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	opts.ExposedPorts = []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"}
 	opts.PollInterval = 2 * time.Second
 	opts.HistoryLimit = 10
-	opts.Env = map[string]string{
+
+	// Build default env and merge any extra env vars (extra overrides on conflict)
+	defaultEnv := map[string]string{
 		"ASPNETCORE_ENVIRONMENT":      "Development",
 		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 	}
-	opts.Cmd = []string{
+	for k, v := range opts.ExtraEnv {
+		defaultEnv[k] = v
+	}
+	opts.Env = defaultEnv
+
+	// Build default cmd and append any extra args
+	defaultCmd := []string{
 		"gameserver",
 		"-LogLevel=Information",
 		// METAPLAY_OPTS (shared with BotClient)
@@ -100,6 +110,8 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 		"--Database:SqliteInMemory=true",
 		"--Player:ForceFullDebugConfigForBots=false",
 	}
+	opts.Cmd = append(defaultCmd, opts.ExtraArgs...)
+
 	return &BackgroundGameServer{opts: opts}
 }
 

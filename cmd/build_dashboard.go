@@ -6,9 +6,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -44,16 +44,20 @@ func init() {
 			By default, the output is placed in Backend/Dashboard/dist/. The locally running
 			game server (with 'metaplay run server') will serve this output on http://localhost:5550.
 
-			If you want to include the a pre-built version of the dashboard in your version
+			If you want to include a pre-built version of the dashboard in your version
 			control, so that it can be served locally without the Node/pnpm tooling installed,
 			use the --output-prebuilt flag to place the build output in Backend/PrebuiltDashboard/.
 			If you do this, you should commit the Backend/PrebuiltDashboard/ directory to
 			version control.
 
+			If you run into issues during the build process, try running
+			'metaplay dev clean-dashboard-artifacts' to remove dashboard build artifacts.
+
 			Related commands:
 			- 'metaplay build server' builds the game server .NET project.
 			- 'metaplay build image' builds a Docker image with the server and dashboard.
 			- 'metaplay dev dashboard' runs the dashboard in development mode.
+			- 'metaplay dev clean-dashboard-artifacts' removes dashboard build artifacts.
 		`),
 		Example: renderExample(`
 			# Build the dashboard.
@@ -94,7 +98,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
-		return fmt.Errorf("project does not have a custom dashboard to build")
+		return clierrors.New("Project does not have a custom dashboard to build").
+			WithSuggestion("Initialize a custom dashboard with 'metaplay init dashboard'")
 	}
 
 	log.Info().Msg("")
@@ -114,20 +119,21 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve project dashboard path.
+	// Resolve project dashboard, project root and sdk root paths.
 	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies if not skipped.
 	if !o.flagSkipInstall {
+		// Run 'pnpm install'
 		installArgs := []string{"install"}
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
-			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
-			os.Exit(1)
+			return clierrors.Wrap(err, "Failed to install LiveOps Dashboard dependencies").
+				WithSuggestion("Try running 'metaplay dev clean-dashboard-artifacts' to remove build artifacts, then retry")
 		}
 	} else {
-		log.Info().Msg("Skipping pnpm install because of the --skip-pnpm flag")
+		log.Info().Msg("Skipping pnpm install because of the --skip-install flag")
 	}
 
 	// Build with pnpm. If --output-prebuilt flag is set, output build results to Backend/PrebuiltDashboard,
@@ -142,8 +148,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(buildArgs, " "))))
 	err = execChildInteractive(dashboardPath, "pnpm", buildArgs, nil)
 	if err != nil {
-		log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to build the LiveOps Dashboard").
+			WithSuggestion("Check the output above for details")
 	}
 
 	// Build done.

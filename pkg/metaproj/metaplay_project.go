@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
@@ -24,6 +25,39 @@ import (
 // CLI only supports Metaplay SDK versions 32.0 and above. The legacy metaplay-auth CLI
 // was used with earlier SDK versions.
 var OldestSupportedSdkVersion = version.Must(version.NewVersion("32.0.0"))
+
+// Reserved alias names that cannot be used for environment aliases.
+var reservedAliases = []string{
+	"all",
+	"default",
+	"local",
+	"localhost",
+	"none",
+	"self",
+	"metaplay",
+}
+
+// validateAlias checks if an environment alias is valid.
+func validateAlias(alias string) error {
+	if alias == "" {
+		return fmt.Errorf("alias cannot be empty")
+	}
+	if len(alias) > 30 {
+		return fmt.Errorf("alias must be at most 30 characters")
+	}
+	// Only lowercase alphanumeric and dashes allowed, cannot start/end with dash.
+	validAlias := regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+	if !validAlias.MatchString(alias) {
+		return fmt.Errorf("alias must contain only lowercase alphanumeric characters and dashes, and cannot start or end with a dash")
+	}
+	// Check reserved aliases.
+	for _, reserved := range reservedAliases {
+		if alias == reserved {
+			return fmt.Errorf("alias '%s' is reserved and cannot be used", alias)
+		}
+	}
+	return nil
+}
 
 // Metaplay project: helper type to wrap the resolved project, including relative path to project,
 // parsed metaplay-project.yaml and parsed MetaplaySDK/version.yaml.
@@ -385,6 +419,33 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		}
 	}
 
+	// Validate environment aliases.
+	aliasToEnvName := make(map[string]string)
+	for _, envConfig := range config.Environments {
+		for _, alias := range envConfig.Aliases {
+			// Validate alias format.
+			if err := validateAlias(alias); err != nil {
+				return fmt.Errorf("environment '%s' has invalid alias: %w", envConfig.Name, err)
+			}
+
+			// Check for duplicate aliases across environments.
+			if existingEnv, exists := aliasToEnvName[alias]; exists {
+				return fmt.Errorf("alias '%s' is used by both environments '%s' and '%s'", alias, existingEnv, envConfig.Name)
+			}
+			aliasToEnvName[alias] = envConfig.Name
+
+			// Check that alias doesn't conflict with any humanID or name.
+			for _, otherEnv := range config.Environments {
+				if alias == otherEnv.HumanID {
+					return fmt.Errorf("alias '%s' in environment '%s' conflicts with humanId of environment '%s'", alias, envConfig.Name, otherEnv.Name)
+				}
+				if alias == otherEnv.Name {
+					return fmt.Errorf("alias '%s' in environment '%s' conflicts with name of environment '%s'", alias, envConfig.Name, otherEnv.Name)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -498,7 +559,7 @@ func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, version
 
 // Find a matching environment from the project config.
 // The first environment that matches 'environment' is chosen.
-// The 'environment' argument can match either the humanID or the name of the project.
+// The 'environment' argument can match the humanID, name, or an alias of the environment.
 func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*ProjectEnvironmentConfig, error) {
 	for _, envConfig := range projectConfig.Environments {
 		// Match by HumanID.
@@ -516,10 +577,17 @@ func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*
 		if envConfig.Name == environment {
 			return &envConfig, nil
 		}
+
+		// Match by alias.
+		for _, alias := range envConfig.Aliases {
+			if alias == environment {
+				return &envConfig, nil
+			}
+		}
 	}
 
-	environmentIDs := strings.Join(getEnvironmentIDs(projectConfig), ", ")
-	return nil, fmt.Errorf("no environment matching '%s' found in project config. The valid environments are: %s", environment, environmentIDs)
+	return nil, clierrors.Newf("Environment '%s' not found in metaplay-project.yaml", environment).
+		WithSuggestion(formatEnvironmentList(projectConfig))
 }
 
 func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*ProjectEnvironmentConfig, error) {
@@ -529,15 +597,22 @@ func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*Pr
 			return &envConfig, nil
 		}
 	}
-	return nil, fmt.Errorf("no environment with humanID '%s' found", humanID)
+	return nil, clierrors.Newf("Environment '%s' not found", humanID).
+		WithSuggestion(formatEnvironmentList(projectConfig))
 }
 
-func getEnvironmentIDs(projectConfig *ProjectConfig) []string {
-	names := make([]string, len(projectConfig.Environments))
-	for ndx, env := range projectConfig.Environments {
-		names[ndx] = env.HumanID
+// formatEnvironmentList returns a formatted list of available environments,
+// showing name, humanID, and aliases for each environment.
+func formatEnvironmentList(projectConfig *ProjectConfig) string {
+	var lines []string
+	for _, env := range projectConfig.Environments {
+		line := fmt.Sprintf("%s: %s", env.HumanID, env.Name)
+		if len(env.Aliases) > 0 {
+			line += fmt.Sprintf(" (aliases: %s)", strings.Join(env.Aliases, ", "))
+		}
+		lines = append(lines, line)
 	}
-	return names
+	return "Available environments:\n  " + strings.Join(lines, "\n  ")
 }
 
 // Validate the given project ID:
@@ -577,7 +652,7 @@ func ValidateProjectID(id string) error {
 // For Metaplay-hosted environments:
 // - Must be dash-separated segments, with 2 to 4 segments allowed.
 // - Each segment must consist of lowercase alphanumeric characters.
-// - Examples: 'tiny-squids' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
+// - Examples: 'lovely-wombats-build-nimbly' or 'idler-develop5', or 'yellow-gritty-tuna-jumps'.
 // For self-hosted environments, only the global checks are applied.
 func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	if id == "" {

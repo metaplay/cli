@@ -29,7 +29,7 @@ func init() {
 	o := getEnvironmentInfoOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "environment-info ENVIRONMENT [flags]",
@@ -50,10 +50,10 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Show relevant environment information in text format (default)
-			metaplay get environment-info tough-falcons
+			metaplay get environment-info nimbly
 
 			# Show complete environment information in JSON format
-			metaplay get environment-info tough-falcons --format=json
+			metaplay get environment-info nimbly --format=json
 		`),
 	}
 

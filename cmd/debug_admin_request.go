@@ -30,15 +30,16 @@ type debugAdminRequestOpts struct {
 	flagBody        string
 	flagFile        string
 	flagContentType string
+	flagOutput      string
 }
 
 func init() {
 	o := debugAdminRequestOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argMethod, "METHOD", "HTTP method to use: GET, POST, DELETE, PUT.")
-	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg '/api/v1/status'.")
+	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg 'api/hello'.")
 
 	cmd := &cobra.Command{
 		Use:     "admin-request ENVIRONMENT METHOD PATH [flags]",
@@ -63,28 +64,32 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Get the server hello message.
-			metaplay debug admin-request tough-falcons GET /api/hello
+			metaplay debug admin-request nimbly GET api/hello
 
 			# Pipe JSON output to jq for colored rendering.
-			metaplay debug admin-request tough-falcons GET /api/hello | jq
+			metaplay debug admin-request nimbly GET api/hello | jq
 
 			# Send a POST request with request body from command line.
-			metaplay debug admin-request tough-falcons POST /api/some-endpoint --body '{"name":"test-resource"}'
+			metaplay debug admin-request nimbly POST api/some-endpoint --body '{"name":"test-resource"}'
 
 			# Send a POST request with request body containing json data from command line.
-			metaplay debug admin-request tough-falcons POST /api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
+			metaplay debug admin-request nimbly POST api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
 
 			# Send a PUT request with request payload from file.
-			metaplay debug admin-request tough-falcons PUT /api/some-endpoint --file update.json
+			metaplay debug admin-request nimbly PUT api/some-endpoint --file update.json
 
 			# Send a DELETE request.
-			metaplay debug admin-request tough-falcons DELETE /api/some-endpoint
+			metaplay debug admin-request nimbly DELETE api/some-endpoint
+
+			# Download a binary file (e.g., game config archive).
+			metaplay debug admin-request nimbly GET api/GameConfig/.../download -o gameconfig.mca
 		`),
 	}
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
 	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
+	cmd.Flags().StringVarP(&o.flagOutput, "output", "o", "", "Save response to file (for binary/non-JSON downloads)")
 
 	debugCmd.AddCommand(cmd)
 }
@@ -201,7 +206,33 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msg("")
 
-	// Make the HTTP request based on the method
+	// Binary download mode: save raw response to file
+	if o.flagOutput != "" {
+		request := adminClient.Resty.R()
+		if contentType != "" {
+			request.SetHeader("Content-Type", contentType)
+		}
+		if requestBody != nil {
+			request.SetBody(requestBody)
+		}
+
+		response, err := request.Execute(o.argMethod, o.argPath)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
+			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
+		}
+
+		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
+			return fmt.Errorf("failed to write output file: %v", err)
+		}
+
+		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
+		return nil
+	}
+
+	// JSON mode: make the HTTP request and unmarshal response
 	var response any
 	var requestErr error
 

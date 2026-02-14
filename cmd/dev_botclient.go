@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -45,8 +45,8 @@ func init() {
 			# Run bots against the locally running server.
 			metaplay dev botclient
 
-			# Run bots against the 'tough-falcons' cloud environment.
-			metaplay dev botclient -e tough-falcons
+			# Run bots against the 'nimbly' cloud environment.
+			metaplay dev botclient -e nimbly
 
 			# Pass additional arguments to 'dotnet run' of the BotClient project.
 			metaplay dev botclient -- -MaxBots=5 -MaxBotId=20
@@ -111,16 +111,15 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Build the BotClient project
 	if err := execChildInteractive(botClientPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
-		log.Error().Msgf("Failed to build the BotClient .NET project: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to build the BotClient .NET project").
+			WithSuggestion("Check the build output for errors")
 	}
 
 	// Run the project without rebuilding
 	botRunFlags := append([]string{"run", "--no-build"}, targetEnvFlags...)
 	botRunFlags = append(botRunFlags, o.extraArgs...)
 	if err := execChildInteractive(botClientPath, "dotnet", botRunFlags, commonDotnetEnvVars); err != nil {
-		log.Error().Msgf("BotClient exited with error: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "BotClient exited with error")
 	}
 
 	// BotClients terminated normally

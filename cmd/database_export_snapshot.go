@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -53,7 +54,7 @@ func init() {
 
 			Export a database snapshot from the specified environment into a file.
 
-			DISCLAIMER: This operation is not a a real backup and is intended for ad hoc database
+			DISCLAIMER: This operation is not a real backup and is intended for ad hoc database
 			exports only. This operation should only be used for relatively small databases as it
 			copies the entire database to the machine running the CLI.
 
@@ -157,7 +158,8 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 	// Check if there's a game server deployed.
 	if hasGameServer {
 		if !o.flagForce {
-			return fmt.Errorf("cannot export database: active game server deployment detected in environment '%s'. Remove the game server deployment before exporting the database", o.argEnvironment)
+			return clierrors.Newf("Cannot export database when game server is deployed in '%s'", o.argEnvironment).
+				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s'", o.argEnvironment))
 		}
 
 		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))

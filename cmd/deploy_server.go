@@ -6,13 +6,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -45,7 +45,7 @@ func init() {
 	o := deployGameServerOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
@@ -57,7 +57,7 @@ func init() {
 		Long: renderLong(&o, `
 			Deploy a game server into a cloud environment using the specified docker image version.
 
-			After deploying the server image, various checks are run against the deployment to help
+			After deploying the server image, various checks are run against the deployment to
 			help diagnose any potential issues:
 			- All expected pods are present, healthy, and ready.
 			- Client-facing domain name resolves correctly.
@@ -78,26 +78,26 @@ func init() {
 			- 'metaplay debug shell ...' to start a shell on a running server pod.
 		`),
 		Example: renderExample(`
-			# Push the local image and deploy to the environment tough-falcons.
-			metaplay deploy server tough-falcons mygame:364cff09
+			# Push the local image and deploy to the environment nimbly.
+			metaplay deploy server nimbly mygame:364cff09
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy server tough-falcons 364cff09
+			metaplay deploy server nimbly 364cff09
 
 			# Deploy the latest locally built image for this project.
-			metaplay deploy server tough-falcons latest-local
+			metaplay deploy server nimbly latest-local
 
 			# Pass extra arguments to Helm.
-			metaplay deploy server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server nimbly mygame:364cff09 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy server tough-falcons mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server nimbly mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server nimbly mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server nimbly mygame:364cff09 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -194,7 +194,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 		// If there are no images for this project, error out.
 		if len(localImages) == 0 {
-			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+			return clierrors.Newf("No Docker images matching project '%s' found locally", project.Config.ProjectHumanID).
+				WithSuggestion("Build an image first with 'metaplay build image'")
 		}
 
 		// Use the first entry (they are reverse sorted by creation time).
@@ -311,9 +312,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		// Environment type (prod, staging, development) must match that in the portal.
 		// Otherwise, the game server will be using wrong environment type-specific defaults.
 		if envConfig.Type != portalInfo.Type {
-			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
-			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
-			os.Exit(1)
+			return clierrors.Newf("Environment type mismatch: local config has '%s', portal has '%s'", envConfig.Type, portalInfo.Type).
+				WithSuggestion("Run 'metaplay update project-environments' to sync with portal")
 		}
 	}
 
@@ -455,8 +455,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil {
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
-			return fmt.Errorf("Unable to deploy server due to existing Helm release is in state 'uninstalling'")
+			return clierrors.New("Cannot deploy: existing Helm release is in state 'uninstalling'").
+				WithSuggestion("Wait for the uninstall to complete, or manually remove with 'metaplay remove server'")
 		} else if releaseStatus.IsPending() {
 			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
 			uninstallExistingRelease = true
@@ -590,7 +590,8 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	// If there are no images for this project, error out.
 	if len(localImages) == 0 {
-		return nil, fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", projectHumanID)
+		return nil, clierrors.Newf("No Docker images matching project '%s' found locally", projectHumanID).
+			WithSuggestion("Build an image first with 'metaplay build image'")
 	}
 
 	// Let the user choose from the list of images.

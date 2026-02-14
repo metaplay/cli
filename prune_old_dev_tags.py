@@ -78,20 +78,28 @@ def main(dry_run: bool = True):
     sorted_official = sorted(official_versions)  # lexicographic (major, minor, patch)
     latest_two = sorted_official[-2:] if len(sorted_official) >= 2 else sorted_official
 
+    latest_official = sorted_official[-1]
+
     print("Official releases found (sorted):")
     for v in sorted_official:
         print(f"  {v[0]}.{v[1]}.{v[2]}")
 
-    print("\nKeeping dev tags ONLY for the following official releases:")
-    for v in latest_two:
-        print(f"  {v[0]}.{v[1]}.{v[2]}")
-
-    # 4) Determine dev tags to delete
+    # 4) Determine dev tags to delete/keep
+    # Keep dev tags for: latest two official releases + any version newer than latest official
     tags_to_delete: List[str] = []
+    tags_to_keep: List[str] = []
     for ver_key, dev_tag_list in dev_tags_by_version.items():
         if ver_key in latest_two:
-            continue  # Keep dev tags for latest two official releases
-        tags_to_delete.extend(dev_tag_list)
+            tags_to_keep.extend(dev_tag_list)  # Keep dev tags for latest two official releases
+        elif ver_key > latest_official:
+            tags_to_keep.extend(dev_tag_list)  # Keep dev tags for versions newer than latest official (in development)
+        else:
+            tags_to_delete.extend(dev_tag_list)
+
+    if tags_to_keep:
+        print("\nDev tags to keep:")
+        for t in sorted(tags_to_keep):
+            print(f"  {t}")
 
     if not tags_to_delete:
         print("\nNo dev tags need to be deleted.")
@@ -105,13 +113,13 @@ def main(dry_run: bool = True):
         print("\nDry-run mode: no tags have been deleted.")
         return
 
-    # 5) Delete tags locally and on remote
+    # 6) Delete tags locally and on remote
     for t in tags_to_delete:
         print(f"Deleting tag: {t}")
         run_git(["tag", "-d", t])
         run_git(["push", "--delete", "origin", t])
 
-    print("\nDone. Deleted dev tags outside the two latest official releases (local and origin).")
+    print("\nDone. Deleted old dev tags (local and origin).")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

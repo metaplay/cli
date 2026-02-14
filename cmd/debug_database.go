@@ -12,10 +12,12 @@ import (
 	"strconv"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -44,7 +46,7 @@ func init() {
 	o := debugDatabaseOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to mariadb CLI.")
 
@@ -114,7 +116,8 @@ func init() {
 func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle mutually exclusive query flags
 	if o.flagQuery != "" && o.flagQueryFile != "" {
-		return fmt.Errorf("only one of --query or --query-file may be specified")
+		return clierrors.NewUsageError("Cannot use both --query and --query-file").
+			WithSuggestion("Use --query for inline SQL or --query-file to read from a file, but not both")
 	}
 
 	// Parse shard index argument if provided
@@ -122,21 +125,25 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
-			return fmt.Errorf("invalid argument SHARD '%s': must be an integer", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		if idx < 0 {
-			return fmt.Errorf("invalid argument SHARD '%s': must be non-negative", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		o.parsedShardIndex = idx
 	} else {
 		// In non-interactive mode, SHARD argument must be specified
 		if !tui.IsInteractiveMode() {
-			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
+			return clierrors.NewUsageError("SHARD argument is required in non-interactive mode").
+				WithSuggestion("Specify the database shard index, e.g., 'metaplay debug database nimbly 0'")
 		}
 	}
 	// Non-interactive mode requires the query in the command line
-	if o.flagQuery == "" && !tui.IsInteractiveMode() {
-		return fmt.Errorf("in non-interactive mode, argument QUERY must be specified")
+	if o.flagQuery == "" && o.flagQueryFile == "" && !tui.IsInteractiveMode() {
+		return clierrors.NewUsageError("Query is required in non-interactive mode").
+			WithSuggestion("Use --query '<SQL>' or --query-file <path> to specify the query")
 	}
 	return nil
 }
@@ -198,7 +205,8 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 	if shardIndex < 0 || shardIndex >= len(shards) {
-		return fmt.Errorf("invalid database shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
+		return clierrors.Newf("Invalid database shard index %d", shardIndex).
+			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
 	}
 	targetShard := shards[shardIndex]
 
@@ -228,7 +236,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 	// Use of --output is only allowed with a non-interactive query
 	if o.flagOutput != "" && isInteractive {
-		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
+		return clierrors.NewUsageError("--output flag requires a non-interactive query").
+			WithSuggestion("Use --output together with --query or --query-file")
 	}
 
 	// Build mariadb command with extra args
@@ -267,40 +276,47 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Setup stdin for piping queries or interactive mode
+	// Setup stdin for piping queries or interactive mode.
+	// For interactive mode, use mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
 	var stdin io.Reader
+	var stdout io.Writer
+	var stderr io.Writer
 	if isInteractive {
-		stdin = os.Stdin
-	} else if o.flagQuery != "" {
-		// Pipe the query to mariadb stdin
-		stdin = strings.NewReader(o.flagQuery)
-	} else if o.flagQueryFile != "" {
-		// Stream query file directly to mariadb stdin
-		queryFile, err := os.Open(o.flagQueryFile)
-		if err != nil {
-			return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+		stdin, stdout, stderr = mobyterm.StdStreams()
+	} else {
+		stderr = os.Stderr
+		if o.flagQuery != "" {
+			// Pipe the query to mariadb stdin
+			stdin = strings.NewReader(o.flagQuery)
+		} else if o.flagQueryFile != "" {
+			// Stream query file directly to mariadb stdin
+			queryFile, err := os.Open(o.flagQueryFile)
+			if err != nil {
+				return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+			}
+			defer queryFile.Close()
+			stdin = queryFile
 		}
-		defer queryFile.Close()
-		stdin = queryFile
-	}
 
-	// Setup output channel to stdout or file
-	var out io.Writer = os.Stdout
-	var file *os.File
-	if o.flagOutput != "" && !isInteractive {
-		var err error
-		file, err = os.Create(o.flagOutput)
-		if err != nil {
-			return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+		// Setup output channel to stdout or file
+		stdout = os.Stdout
+		if o.flagOutput != "" {
+			file, err := os.Create(o.flagOutput)
+			if err != nil {
+				return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+			}
+			defer file.Close()
+			stdout = file
 		}
-		defer file.Close()
-		out = file
 	}
 
 	ioStreams := IOStreams{
 		In:     stdin,
-		Out:    out,
-		ErrOut: os.Stderr,
+		Out:    stdout,
+		ErrOut: stderr,
 	}
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
@@ -315,7 +331,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 // The 'shards' argument should be a slice of databaseShardConfig.
 func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 	if !tui.IsInteractiveMode() {
-		return nil, fmt.Errorf("in non-interactive mode, database shard must be explicitly specified")
+		return nil, clierrors.NewUsageError("Database shard selection requires interactive mode").
+			WithSuggestion("Specify the shard index explicitly, e.g., 'metaplay debug database nimbly 0'")
 	}
 
 	selected, err := tui.ChooseFromListDialog(

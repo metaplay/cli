@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
@@ -23,7 +24,7 @@ import (
 
 // Support initializing projects with SDK versions up to this version.
 // Only enforced when downloading the SDK from the portal.
-var latestSupportedSdkVersion = version.Must(version.NewVersion("35.999.999"))
+var latestSupportedSdkVersion = version.Must(version.NewVersion("36.999.999"))
 
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
@@ -119,13 +120,15 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 	// --sdk-version and --sdk-source are mutually exclusive.
 	if o.flagSdkVersion != "" && o.flagSdkSource != "" {
-		return fmt.Errorf("--sdk-version and --sdk-source are mutually exclusive; only one can be used at a time")
+		return clierrors.NewUsageError("--sdk-version and --sdk-source cannot be used together").
+			WithSuggestion("Use --sdk-version to download a specific version, or --sdk-source to use a local SDK archive")
 	}
 
 	// Check if metaplay-project.yaml already exists
 	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 	if _, err := os.Stat(configFilePath); err == nil {
-		return fmt.Errorf("config file %s exists, project has already been initialized", configFilePath)
+		return clierrors.Newf("Project already initialized at %s", configFilePath).
+			WithSuggestion("To re-initialize, first remove the existing metaplay-project.yaml file")
 	}
 
 	// If Unity project path is not specified, try to find it within the project.
@@ -167,7 +170,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	if o.flagSdkSource != "" {
 		metaplaySdkSource, err = filepath.Abs(o.flagSdkSource)
 		if err != nil {
-			return fmt.Errorf("Could not resolve sdk source location: %w", err)
+			return fmt.Errorf("could not resolve SDK source location: %w", err)
 		}
 	}
 	// Check if MetaplaySDK/ already exists: if so, we do migration only.
@@ -175,7 +178,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		metaplaySdkPath := filepath.Join(o.projectPath, "MetaplaySDK")
 		_, err = os.Stat(metaplaySdkPath)
 		if err == nil {
-			return fmt.Errorf("MetaplaySDK/ directory already exists!")
+			return clierrors.New("MetaplaySDK/ directory already exists").
+				WithSuggestion("Remove or rename the existing MetaplaySDK/ directory to proceed")
 		}
 	}
 
@@ -209,7 +213,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 			}
 
 			if sdkVersionInfo == nil {
-				return fmt.Errorf("SDK version '%s' not found in Metaplay portal", o.flagSdkVersion)
+				return clierrors.Newf("SDK version '%s' not found", o.flagSdkVersion).
+					WithSuggestion("Check available versions with 'metaplay get sdk-versions'")
 			}
 		}
 
@@ -326,9 +331,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		// Copy files from the template.
 		log.Debug().Msgf("Initialize SDK resources in the project")
 		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
-			"PROJECT_HUMAN_ID":          targetProject.HumanID,
-			"PROJECT_DISPLAY_NAME":      targetProject.Name,    // Added in R34
-			"PROJECT_NAME":              targetProject.HumanID, // Remove in R34
+			"PROJECT_DISPLAY_NAME": targetProject.Name,
 			"BACKEND_SOLUTION_FILENAME": "Server.sln",
 		}, o.flagNoSample)
 		if err != nil {
@@ -428,12 +431,15 @@ func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
 
 	// Check that the SDK version is the minimum supported by the CLI.
 	if vsn.LessThan(metaproj.OldestSupportedSdkVersion) {
-		return nil, fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions %s and above", versionStr, metaproj.OldestSupportedSdkVersion)
+		return nil, clierrors.Newf("SDK version %s is too old", versionStr).
+			WithDetails(fmt.Sprintf("Minimum supported version is %s", metaproj.OldestSupportedSdkVersion)).
+			WithSuggestion("Update Metaplay SDK to a more recent version (or use the legacy AuthCLI if you must use an older version)")
 	}
 
 	// Must not be newer than the latest supported version.
 	if vsn.GreaterThan(latestSupportedSdkVersion) {
-		return nil, fmt.Errorf("SDK version %s is not supported by this CLI version; upgrade the CLI to the latest version with 'metaplay update cli'", versionStr)
+		return nil, clierrors.Newf("SDK version %s is not supported by this CLI version", versionStr).
+			WithSuggestion("Upgrade the CLI with 'metaplay update cli'")
 	}
 
 	return vsn, nil

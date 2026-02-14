@@ -11,6 +11,7 @@ import (
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -22,6 +23,7 @@ type initSdkOpts struct {
 	flagSdkVersion         string // Required: Metaplay SDK version (e.g., "34.0") or version name
 	flagSdkDirectory       string // Optional when metaplay-project.yaml is present: directory where MetaplaySDK/ should be created
 	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
+	flagOverwrite          bool   // Remove existing MetaplaySDK/ directory before extracting.
 }
 
 func init() {
@@ -55,6 +57,7 @@ func init() {
 	flags.StringVar(&o.flagSdkVersion, "sdk-version", "", "Metaplay SDK version to download (required)")
 	flags.StringVar(&o.flagSdkDirectory, "sdk-directory", "MetaplaySDK", "Directory where MetaplaySDK/ should be created")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
+	flags.BoolVar(&o.flagOverwrite, "overwrite", false, "Remove existing MetaplaySDK/ directory and replace with new contents")
 
 	// For internal use only
 	initCmd.Hidden = true
@@ -118,9 +121,46 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("selected SDK version does not have a downloadable file")
 	}
 
-	// Prevent accidental overwrite when MetaplaySDK already exists in target
+	// Handle existing MetaplaySDK directory
 	if _, err := os.Stat(targetSdkDirAbs); err == nil {
-		return fmt.Errorf("MetaplaySDK/ directory already exists at %s", targetSdkDirAbs)
+		// Try to resolve the existing SDK version (fail gracefully if not found)
+		existingVersionStr := "unknown"
+		existingMetadata, err := metaproj.LoadSdkVersionMetadata(targetSdkDirAbs)
+		if err == nil && existingMetadata != nil && existingMetadata.SdkVersion != nil {
+			existingVersionStr = existingMetadata.SdkVersion.String()
+		}
+
+		// If --overwrite flag wasn't given, ask for confirmation in interactive mode.
+		if !o.flagOverwrite {
+			// Ask the user for confirmation in interactive mode
+			if !tui.IsInteractiveMode() {
+				return fmt.Errorf("MetaplaySDK/ directory already exists at %s (use --overwrite to replace)", targetSdkDirAbs)
+			}
+
+			// Display information about the existing SDK and the requested version
+			log.Info().Msg("")
+			log.Info().Msg(styles.RenderWarning("⚠️  MetaplaySDK directory already exists"))
+			log.Info().Msg("")
+			log.Info().Msgf("  Location:         %s", styles.RenderTechnical(targetSdkDirAbs))
+			log.Info().Msgf("  Existing version: %s", styles.RenderTechnical(existingVersionStr))
+			log.Info().Msgf("  New version:      %s", styles.RenderTechnical(sdkVersionInfo.Version))
+			log.Info().Msg("")
+
+			confirmed, err := tui.DoConfirmQuestion(cmd.Context(), "Do you want to overwrite the existing SDK?")
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				log.Info().Msg(styles.RenderError("❌ Operation canceled"))
+				return nil
+			}
+		}
+
+		// Remove existing directory
+		log.Info().Msgf("Removing existing MetaplaySDK directory: %s", targetSdkDirAbs)
+		if err := os.RemoveAll(targetSdkDirAbs); err != nil {
+			return fmt.Errorf("failed to remove existing MetaplaySDK directory: %w", err)
+		}
 	}
 
 	// Ensure parent directory exists

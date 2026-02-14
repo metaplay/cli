@@ -25,6 +25,18 @@
       ],
       enabled: false,
     },
+    // Helm must be pinned to v3.19.4 for now because v3.19.5 had breaking
+    // behavior causing Grafana dashboards to be lost. There's a workaround
+    // in chart v0.9.1.
+    {
+      matchManagers: [
+        'gomod',
+      ],
+      matchPackageNames: [
+        'helm.sh/helm/v3',
+      ],
+      enabled: false,
+    },
     {
       matchManagers: [
         'github-actions',

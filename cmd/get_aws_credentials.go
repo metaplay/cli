@@ -7,8 +7,8 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -25,7 +25,7 @@ func init() {
 	o := getAWSCredentialsOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:     "aws-credentials ENVIRONMENT [flags]",
@@ -52,13 +52,13 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Get credentials in human-readable text format (default)
-			metaplay get aws-credentials tough-falcons
+			metaplay get aws-credentials nimbly
 
 			# Get credentials in JSON format for scripting
-			metaplay get aws-credentials tough-falcons --format json
+			metaplay get aws-credentials nimbly --format json
 
 			# Example of using the credentials with AWS CLI (bash):
-			eval $(metaplay get aws-credentials tough-falcons --format json | jq -r '
+			eval $(metaplay get aws-credentials nimbly --format json | jq -r '
 			  "export AWS_ACCESS_KEY_ID=\(.AccessKeyId)
 			   export AWS_SECRET_ACCESS_KEY=\(.SecretAccessKey)
 			   export AWS_SESSION_TOKEN=\(.SessionToken)"
@@ -74,7 +74,8 @@ func init() {
 
 func (o *getAWSCredentialsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagFormat != "text" && o.flagFormat != "json" {
-		return fmt.Errorf("invalid format %q; must be either \"text\" or \"json\"", o.flagFormat)
+		return clierrors.NewUsageErrorf("Invalid format '%s'", o.flagFormat).
+			WithSuggestion("Use --format=text for human-readable or --format=json for scripting")
 	}
 
 	return nil
@@ -99,8 +100,7 @@ func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
 	// Get AWS credentials
 	credentials, err := targetEnv.GetAWSCredentials()
 	if err != nil {
-		log.Error().Msgf("Failed to get AWS credentials: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to get AWS credentials")
 	}
 
 	// Output the credentials in the requested format
