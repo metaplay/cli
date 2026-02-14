@@ -14,7 +14,8 @@
       "Bash(git show:*)",
       "Bash(go run:*)",
       "Bash(go fmt:*)",
-      "Bash(go list:*)"
+      "Bash(go list:*)",
+      "Bash(ls:*)"
     ]
   }
 }

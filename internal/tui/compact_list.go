@@ -107,6 +107,102 @@ func (m compactListModel) View() string {
 	return content
 }
 
+// multiSelectDelegate renders list items with checkbox indicators.
+type multiSelectDelegate struct {
+	checked map[int]bool
+}
+
+func (d multiSelectDelegate) Height() int                               { return 1 }
+func (d multiSelectDelegate) Spacing() int                              { return 0 }
+func (d multiSelectDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+
+func (d multiSelectDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(compactListItem)
+	if !ok {
+		return
+	}
+
+	title := item.Title()
+	checkbox := "☐ "
+	if d.checked[item.index] {
+		checkbox = "☑ "
+	}
+
+	if index == m.Index() {
+		styledTitle := "▸ " + checkbox + title
+		fmt.Fprint(w, lipgloss.NewStyle().Foreground(styles.ColorOrange).Render(styledTitle))
+	} else {
+		fmt.Fprint(w, "  "+checkbox+title)
+	}
+}
+
+// multiSelectModel for the multi-select list.
+type multiSelectModel struct {
+	title    string
+	model    list.Model
+	checked  map[int]bool
+	delegate *multiSelectDelegate
+	done     bool
+	quitting bool
+	err      error
+}
+
+func newMultiSelectModel(title string, model list.Model, delegate *multiSelectDelegate) multiSelectModel {
+	return multiSelectModel{
+		title:    title,
+		model:    model,
+		checked:  delegate.checked,
+		delegate: delegate,
+	}
+}
+
+func (m multiSelectModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.model.SetWidth(msg.Width)
+		return m, nil
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+		case " ":
+			// Toggle selection of the current item
+			if item, ok := m.model.SelectedItem().(compactListItem); ok {
+				if m.checked[item.index] {
+					delete(m.checked, item.index)
+				} else {
+					m.checked[item.index] = true
+				}
+			}
+			return m, nil
+		case "enter":
+			m.done = true
+			m.quitting = true
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.model, cmd = m.model.Update(msg)
+	return m, cmd
+}
+
+func (m multiSelectModel) View() string {
+	content := "\n" + styles.RenderTitle(m.title) + "\n"
+	content += styles.RenderMuted("  (space to toggle, enter to confirm)") + "\n\n"
+
+	if !m.quitting {
+		content += styles.ListStyle.Render(m.model.View())
+	}
+
+	return content
+}
+
 // min returns the smaller of x or y
 func min(x, y int) int {
 	if x < y {
@@ -174,4 +270,67 @@ func ChooseFromListDialog[TItem any](title string, items []TItem, toItemFunc fun
 	}
 
 	return &items[chosen], nil
+}
+
+// ChooseMultipleFromListDialog shows a dialog to select multiple items from a list using checkboxes.
+// The toItemFunc() is used to convert the items into a (name, description) tuple for display.
+// Returns the selected items (or error). Returns an error if no items are selected.
+func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItemFunc func(item *TItem) (string, string)) ([]TItem, error) {
+	if len(items) == 0 {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderTitle(title))
+		log.Info().Msg("")
+		return nil, fmt.Errorf("ChooseMultipleFromListDialog(): an empty list was provided")
+	}
+
+	// Convert items to list items.
+	listItems := make([]list.Item, len(items))
+	for ndx := range items {
+		item := &items[ndx]
+		name, description := toItemFunc(item)
+		listItems[ndx] = compactListItem{
+			index:       ndx,
+			name:        name,
+			description: description,
+		}
+	}
+
+	// Initialize list with multi-select delegate
+	checked := make(map[int]bool)
+	delegate := &multiSelectDelegate{checked: checked}
+	l := list.New(listItems, delegate, 0, min(2+len(listItems), 20))
+	l.SetShowTitle(false)
+	l.SetFilteringEnabled(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+
+	// Create and run model
+	model := newMultiSelectModel(title, l, delegate)
+	program := tea.NewProgram(model)
+	finalModel, err := program.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run multi-select dialog: %w", err)
+	}
+
+	finalM := finalModel.(multiSelectModel)
+	if finalM.err != nil {
+		return nil, finalM.err
+	}
+	if !finalM.done {
+		return nil, fmt.Errorf("selection canceled")
+	}
+
+	// Collect selected items in order
+	var selected []TItem
+	for ndx := range items {
+		if finalM.checked[ndx] {
+			selected = append(selected, items[ndx])
+		}
+	}
+
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("no items selected")
+	}
+
+	return selected, nil
 }

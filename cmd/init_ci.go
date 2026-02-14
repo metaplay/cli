@@ -180,9 +180,9 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	} else if o.environment != nil {
 		environments = []metaproj.ProjectEnvironmentConfig{*o.environment}
 	} else {
-		// Interactive selection
-		env, err := tui.ChooseFromListDialog(
-			"Select Target Environment",
+		// Interactive multi-select
+		selected, err := tui.ChooseMultipleFromListDialog(
+			"Select Target Environments",
 			o.project.Config.Environments,
 			func(env *metaproj.ProjectEnvironmentConfig) (string, string) {
 				return env.Name, fmt.Sprintf("[%s]", env.HumanID)
@@ -191,8 +191,10 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
-		environments = []metaproj.ProjectEnvironmentConfig{*env}
-		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), env.Name, styles.RenderMuted(fmt.Sprintf("[%s]", env.HumanID)))
+		environments = selected
+		for _, env := range environments {
+			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), env.Name, styles.RenderMuted(fmt.Sprintf("[%s]", env.HumanID)))
+		}
 	}
 
 	// Determine output directory
@@ -403,7 +405,7 @@ func renderBitbucketTemplate(tmpl string, data bitbucketTemplateData) (string, e
 	return buf.String(), nil
 }
 
-// GitHub Actions template (CLIv2)
+// GitHub Actions template
 const githubActionsTemplate = `# Rename this action to what you want, this is what shows in the left sidebar in Github Actions
 name: Build game server and deploy to {{.EnvironmentDisplayName}} ({{.EnvironmentHumanID}})
 
@@ -437,15 +439,15 @@ jobs:
         run: metaplay deploy server {{.EnvironmentHumanID}} gameserver:$GITHUB_SHA
 `
 
-// Bitbucket Pipelines template (CLIv2)
+// Bitbucket Pipelines template
 const bitbucketPipelinesTemplate = `image: atlassian/default-image:5
 
-definitions:
-  clone:
-    # Ensure we get the images from the repository
-    lfs: true
-    depth: 5
+clone:
+  # Ensure we get the images from the repository
+  lfs: true
+  depth: 5
 
+definitions:
   services:
     # Give docker some extra memory to cope with the builds
     # Be aware: if Docker runs out of memory in Bitbucket Pipelines, the CI job just hangs!
@@ -477,7 +479,7 @@ pipelines:
             - metaplay deploy server {{.HumanID}} gameserver:$BITBUCKET_COMMIT
 {{end}}`
 
-// Generic CI template (CLIv2)
+// Generic CI template
 const genericCITemplate = `#!/bin/bash
 # CI script for deploying to {{.EnvironmentDisplayName}} ({{.EnvironmentHumanID}})
 #
