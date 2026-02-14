@@ -22,7 +22,7 @@ const (
 type CLIError struct {
 	Message    string   // User-friendly message (shown prominently)
 	Cause      error    // Underlying Go error (shown dimmed)
-	Suggestion string   // "Suggest: ..." hint for fixing the error
+	Suggestion string   // "Hint: ..." actionable suggestion for fixing the error
 	Details    []string // Extra bullet points with additional context
 	Code       ExitCode // Exit code (1=runtime, 2=usage)
 }

@@ -196,7 +196,8 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	}
 
 	if len(envInfos) > 1 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: multiple results returned")
+		return nil, clierrors.Newf("Multiple environments match '%s'", humanID).
+			WithSuggestion("Contact support — this is unexpected and may indicate a configuration issue")
 	}
 
 	return &envInfos[0], nil

@@ -157,8 +157,9 @@ func Execute() {
 	}
 }
 
-// displayCobraError formats Cobra's built-in errors (flag parsing, etc.)
-// to match our CLIError style.
+// displayCobraError formats Cobra's built-in errors (flag parsing, unknown commands, etc.)
+// This uses fmt.Fprintln directly instead of stderrLogger because Cobra errors can occur
+// before PersistentPreRun has initialized the logger (e.g., completely malformed commands).
 func displayCobraError(err error) {
 	// Add empty line for separation from usage text, then styled error
 	fmt.Fprintln(os.Stderr, "")
@@ -367,7 +368,9 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
-			// Prepare errors are usage errors by default (show usage help)
+			// Show usage help for Prepare errors that are either explicit usage errors
+			// or plain Go errors (which are assumed to be usage errors since Prepare
+			// validates arguments). CLIErrors with ExitRuntime skip usage text.
 			if clierrors.IsUsageError(err) || !isCLIError(err) {
 				stderrLogger.Info().Msgf("%s", cmd.UsageString())
 			}

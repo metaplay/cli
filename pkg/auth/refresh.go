@@ -6,7 +6,6 @@ package auth
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -76,7 +75,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			// Persist the refreshed tokens.
 			err = SaveSessionState(authProvider.GetSessionID(), sessionState.UserType, tokenSet)
 			if err != nil {
-				return nil, fmt.Errorf("failed to persist refreshed tokens: %w", err)
+				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
 			}
 		} else {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
@@ -101,9 +100,10 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	if err != nil {
 		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
-			return nil, errors.New("failed to refresh tokens: SSL certificate validation failed. Is someone tampering with your internet connection?")
+			return nil, clierrors.Wrap(err, "SSL certificate validation failed during token refresh").
+				WithSuggestion("Check your network connection — someone may be intercepting your traffic")
 		}
-		return nil, fmt.Errorf("failed to refresh tokens via %s: %w", authProvider.TokenEndpoint, err)
+		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint)
 	}
 
 	// Check for a non-OK response (after retries exhausted for transient errors)
@@ -114,7 +114,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		// Remove the session state (something has gone badly wrong).
 		err = DeleteSessionState(authProvider.GetSessionID())
 		if err != nil {
-			return nil, fmt.Errorf("failed to delete bad tokens: %w", err)
+			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
 		}
 
 		log.Debug().Msg("Local credentials removed.")
@@ -126,7 +126,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	err = json.Unmarshal(body, &tokens)
 	if err != nil {
 		log.Error().Msgf("Failed to parse tokens from response: %v", err)
-		return nil, fmt.Errorf("failed to parse tokens: %w", err)
+		return nil, clierrors.Wrap(err, "Failed to parse authentication tokens")
 	}
 
 	return &tokens, nil

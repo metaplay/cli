@@ -5,6 +5,7 @@
 package metaproj
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
@@ -403,6 +404,47 @@ func TestFindEnvironmentConfig_ByAlias(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Test that formatEnvironmentList returns a readable list with names and aliases
+func TestFormatEnvironmentList(t *testing.T) {
+	config := &ProjectConfig{
+		Environments: []ProjectEnvironmentConfig{
+			{
+				Name:    "Development",
+				HumanID: "test-dev",
+				Aliases: []string{"dev", "develop"},
+			},
+			{
+				Name:    "Production",
+				HumanID: "test-prod",
+			},
+		},
+	}
+
+	result := formatEnvironmentList(config)
+
+	// Should contain environment humanIDs and names
+	if !strings.Contains(result, "test-dev") {
+		t.Error("Expected result to contain 'test-dev'")
+	}
+	if !strings.Contains(result, "Development") {
+		t.Error("Expected result to contain 'Development'")
+	}
+	if !strings.Contains(result, "test-prod") {
+		t.Error("Expected result to contain 'test-prod'")
+	}
+	if !strings.Contains(result, "Production") {
+		t.Error("Expected result to contain 'Production'")
+	}
+
+	// Should contain aliases for the dev environment
+	if !strings.Contains(result, "dev") {
+		t.Error("Expected result to contain alias 'dev'")
+	}
+	if !strings.Contains(result, "develop") {
+		t.Error("Expected result to contain alias 'develop'")
 	}
 }
 

@@ -5,8 +5,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -68,6 +66,9 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return clierrors.Wrap(err, "Failed to get kubeconfig for environment")
+	}
 	log.Debug().Msgf("Resolved kubeconfig to access environment")
 
 	// Configure Helm.
@@ -78,6 +79,9 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve all deployed game server Helm releases.
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayLoadTestChartName)
+	if err != nil {
+		return clierrors.Wrap(err, "Failed to list botclient Helm releases")
+	}
 	if len(helmReleases) == 0 {
 		log.Info().Msgf("No existing botclient deployment found in this environment, nothing to do.")
 		return nil
@@ -89,7 +93,7 @@ func (o *removeBotClientOpts) Run(cmd *cobra.Command) error {
 
 		err := helmutil.UninstallRelease(actionConfig, release)
 		if err != nil {
-			return fmt.Errorf("failed to uninstall Helm release %s: %w", release.Name, err)
+			return clierrors.Wrapf(err, "Failed to uninstall Helm release %s", release.Name)
 		}
 	}
 

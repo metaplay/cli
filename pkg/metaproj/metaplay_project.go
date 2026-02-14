@@ -597,7 +597,8 @@ func (projectConfig *ProjectConfig) GetEnvironmentByHumanID(humanID string) (*Pr
 			return &envConfig, nil
 		}
 	}
-	return nil, fmt.Errorf("no environment with humanID '%s' found", humanID)
+	return nil, clierrors.Newf("Environment '%s' not found", humanID).
+		WithSuggestion(formatEnvironmentList(projectConfig))
 }
 
 // formatEnvironmentList returns a formatted list of available environments,
