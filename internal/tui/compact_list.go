@@ -123,9 +123,9 @@ func (d multiSelectDelegate) Render(w io.Writer, m list.Model, index int, listIt
 	}
 
 	title := item.Title()
-	checkbox := "☐ "
+	checkbox := "[ ] "
 	if d.checked[item.index] {
-		checkbox = "☑ "
+		checkbox = "[x] "
 	}
 
 	if index == m.Index() {
@@ -193,11 +193,11 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m multiSelectModel) View() string {
-	content := "\n" + styles.RenderTitle(m.title) + "\n"
-	content += styles.RenderMuted("  (space to toggle, enter to confirm)") + "\n\n"
+	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
 
 	if !m.quitting {
 		content += styles.ListStyle.Render(m.model.View())
+		content += styles.RenderMuted("  space to toggle, enter to confirm")
 	}
 
 	return content
@@ -295,8 +295,11 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 		}
 	}
 
-	// Initialize list with multi-select delegate
-	checked := make(map[int]bool)
+	// Initialize list with multi-select delegate, all items pre-selected
+	checked := make(map[int]bool, len(items))
+	for ndx := range items {
+		checked[ndx] = true
+	}
 	delegate := &multiSelectDelegate{checked: checked}
 	l := list.New(listItems, delegate, 0, min(2+len(listItems), 20))
 	l.SetShowTitle(false)

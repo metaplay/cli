@@ -6,15 +6,17 @@ package cmd
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metaproj"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -37,7 +39,7 @@ type ciProviderInfo struct {
 }
 
 var ciProviders = []ciProviderInfo{
-	{CIProviderGitHubActions, "GitHub Actions", "Deploy using Metaplay's reusable workflows (recommended)"},
+	{CIProviderGitHubActions, "GitHub Actions", "Deploy using Metaplay's reusable workflows"},
 	{CIProviderBitbucket, "Bitbucket Pipelines", "Deploy using Bitbucket's native CI/CD"},
 	{CIProviderGeneric, "Generic CI / Manual", "Deploy using any CI system or manually"},
 }
@@ -48,10 +50,10 @@ type initCIOpts struct {
 	flagAutoConfirm bool   // Automatically confirm changes
 	flagOutputDir   string // Output directory for CI files (defaults to project root)
 
-	projectDir  string                             // Resolved project directory
-	project     *metaproj.MetaplayProject          // Loaded project
-	environment *metaproj.ProjectEnvironmentConfig // Target environment
-	ciProvider  CIProvider                         // Selected CI provider
+	projectDir   string                              // Resolved project directory
+	project      *metaproj.MetaplayProject           // Loaded project
+	environments []metaproj.ProjectEnvironmentConfig  // Resolved target environments (from flag)
+	ciProvider   CIProvider                           // Selected CI provider
 }
 
 func init() {
@@ -82,20 +84,20 @@ func init() {
 			metaplay init ci
 
 			# Initialize GitHub Actions for a specific environment
-			metaplay init ci --ci-provider=github --environment=nimbly
+			metaplay init ci --provider=github --environment=nimbly
 
-			# Non-interactive mode with auto-confirmation
-			metaplay init ci --ci-provider=github --environment=nimbly --yes
+			# Initialize for multiple environments
+			metaplay init ci --provider=github --environment=nimbly,prod --yes
 
 			# Initialize for all configured environments
-			metaplay init ci --ci-provider=github --environment=all --yes
+			metaplay init ci --provider=github --environment=all --yes
 		`),
 	}
 
 	// Register flags.
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagCIProvider, "ci-provider", "", "CI provider to use: github, bitbucket, or generic")
-	flags.StringVarP(&o.flagEnvironment, "environment", "e", "", "Target environment human ID (or 'all' for all environments)")
+	flags.StringVar(&o.flagCIProvider, "provider", "", "CI provider to use: github, bitbucket, or generic")
+	flags.StringVarP(&o.flagEnvironment, "environment", "e", "", "Target environment(s): human ID, comma-separated list, or 'all'")
 	flags.BoolVarP(&o.flagAutoConfirm, "yes", "y", false, "Automatically confirm file creation")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "", "Output directory for CI files (defaults to project root)")
 
@@ -130,11 +132,19 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 			WithSuggestion("Update the local file with 'metaplay update project-environments' or create a new environment via https://portal.metaplay.dev")
 	}
 
-	// Validate environment if specified
+	// Validate and resolve environment(s) if specified
 	if o.flagEnvironment != "" && o.flagEnvironment != "all" {
-		o.environment, err = o.project.Config.FindEnvironmentConfig(o.flagEnvironment)
-		if err != nil {
-			return err
+		parts := strings.Split(o.flagEnvironment, ",")
+		for _, part := range parts {
+			name := strings.TrimSpace(part)
+			if name == "" {
+				continue
+			}
+			env, err := o.project.Config.FindEnvironmentConfig(name)
+			if err != nil {
+				return err
+			}
+			o.environments = append(o.environments, *env)
 		}
 	}
 
@@ -155,7 +165,7 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 			return clierrors.NewUsageError("Use --yes to automatically confirm changes when running in non-interactive mode")
 		}
 		if o.flagCIProvider == "" {
-			return clierrors.NewUsageError("--ci-provider is required in non-interactive mode")
+			return clierrors.NewUsageError("--provider is required in non-interactive mode")
 		}
 		if o.flagEnvironment == "" {
 			return clierrors.NewUsageError("--environment is required in non-interactive mode")
@@ -188,8 +198,8 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	var environments []metaproj.ProjectEnvironmentConfig
 	if o.flagEnvironment == "all" {
 		environments = o.project.Config.Environments
-	} else if o.environment != nil {
-		environments = []metaproj.ProjectEnvironmentConfig{*o.environment}
+	} else if len(o.environments) > 0 {
+		environments = o.environments
 	} else {
 		// Interactive multi-select
 		selected, err := tui.ChooseMultipleFromListDialog(
@@ -214,42 +224,98 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		outputDir = o.flagOutputDir
 	}
 
-	// Generate CI files. Bitbucket uses a single file for all environments,
-	// so it is handled separately from the per-environment providers.
-	anyCreated := false
-	if o.ciProvider == CIProviderBitbucket {
-		written, err := o.generateBitbucketFile(ctx, outputDir, environments)
+	// Collect all files to generate.
+	files, err := o.collectCIFiles(outputDir, environments)
+	if err != nil {
+		return err
+	}
+
+	// Show summary of all files.
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("CI Configuration"))
+	log.Info().Msg("")
+	log.Info().Msgf("CI Provider:  %s", styles.RenderTechnical(string(o.ciProvider)))
+	log.Info().Msg("Files:")
+	for _, f := range files {
+		exists := ""
+		if _, err := os.Stat(f.path); err == nil {
+			exists = styles.RenderAttention(" (overwrite)")
+		}
+		log.Info().Msgf("  %s%s", styles.RenderTechnical(f.path), exists)
+	}
+	log.Info().Msg("")
+
+	// Confirm once for all files.
+	if !o.flagAutoConfirm {
+		question := fmt.Sprintf("Create %d file(s)?", len(files))
+		confirmed, err := tui.DoConfirmQuestion(ctx, question)
 		if err != nil {
 			return err
 		}
-		anyCreated = anyCreated || written
-	} else {
-		for _, env := range environments {
-			written, err := o.generateCIFile(ctx, outputDir, env)
-			if err != nil {
-				return err
-			}
-			anyCreated = anyCreated || written
+		if !confirmed {
+			log.Info().Msg("Aborted.")
+			return nil
 		}
 	}
 
-	if anyCreated {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderSuccess("CI configuration initialized successfully!"))
-		log.Info().Msg("")
-		log.Info().Msg("Next steps:")
-		log.Info().Msg("  1. Create a machine user in the Metaplay portal (if not created yet)")
-		log.Info().Msg("  2. Store the machine user credentials in your CI system's secrets with name `METAPLAY_CREDENTIALS`")
-		log.Info().Msg("  3. Add the machine user to your project and environment with the 'game-admin' role")
-		log.Info().Msg("  4. Review, commit and push the generated CI configuration files")
+	// Write all files.
+	for _, f := range files {
+		dir := filepath.Dir(f.path)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return clierrors.Wrap(err, fmt.Sprintf("Failed to create directory %s", dir)).
+				WithSuggestion("Check that you have write permissions to the output directory")
+		}
+		if err := os.WriteFile(f.path, []byte(f.content), f.perm); err != nil {
+			return clierrors.Wrap(err, fmt.Sprintf("Failed to write file %s", f.path)).
+				WithSuggestion("Check that you have write permissions to the output directory")
+		}
+		log.Info().Msgf(" %s Created %s", styles.RenderSuccess("✓"), styles.RenderTechnical(f.path))
 	}
+
+	// Build portal link (best-effort: fall back to root URL if not logged in).
+	portalLink := "https://portal.metaplay.dev"
+	if orgUUID := o.tryGetOrganizationUUID(cmd); orgUUID != "" {
+		portalLink = fmt.Sprintf("https://portal.metaplay.dev/orgs/%s?tab=1", orgUUID)
+	}
+
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderSuccess("CI configuration initialized successfully!"))
+	log.Info().Msg("")
+	log.Info().Msg("Next steps:")
+	log.Info().Msgf("  1. Create a machine user in the Metaplay portal at %s (if not created yet)", styles.RenderTechnical(portalLink))
+	log.Info().Msgf("  2. Store the machine user credentials in your CI system's secrets with name %s", styles.RenderTechnical("METAPLAY_CREDENTIALS"))
+	log.Info().Msgf("  3. Add the machine user to your project and environment with the %s role", styles.RenderTechnical("game-admin"))
+	log.Info().Msg("  4. Review, commit and push the generated CI configuration files")
 
 	return nil
 }
 
-// generateCIFile generates a CI configuration file for a single environment (GitHub Actions or Generic).
-// Returns true if a file was written.
-func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env metaproj.ProjectEnvironmentConfig) (bool, error) {
+// ciFile represents a file to be generated.
+type ciFile struct {
+	path    string
+	content string
+	perm    os.FileMode
+}
+
+// collectCIFiles builds the list of files to generate without writing anything.
+func (o *initCIOpts) collectCIFiles(outputDir string, environments []metaproj.ProjectEnvironmentConfig) ([]ciFile, error) {
+	if o.ciProvider == CIProviderBitbucket {
+		return o.collectBitbucketFile(outputDir, environments)
+	}
+
+	var files []ciFile
+	for _, env := range environments {
+		f, err := o.collectCIFile(outputDir, env)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, nil
+}
+
+// collectCIFile renders a single GitHub Actions or Generic CI file.
+func (o *initCIOpts) collectCIFile(outputDir string, env metaproj.ProjectEnvironmentConfig) (ciFile, error) {
 	data := ciTemplateData{
 		EnvironmentDisplayName: env.Name,
 		EnvironmentHumanID:     env.HumanID,
@@ -267,38 +333,23 @@ func (o *initCIOpts) generateCIFile(ctx context.Context, outputDir string, env m
 		filePath = filepath.Join(outputDir, fmt.Sprintf("deploy-%s.sh", env.HumanID))
 		content, err = renderTemplate(genericCITmpl, data)
 	default:
-		return false, clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
+		return ciFile{}, clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
 	}
 
 	if err != nil {
-		return false, clierrors.Wrap(err, "Failed to render CI template")
+		return ciFile{}, clierrors.Wrap(err, "Failed to render CI template")
 	}
 
-	// Use executable permissions for shell scripts
 	perm := os.FileMode(0644)
 	if o.ciProvider == CIProviderGeneric {
 		perm = 0755
 	}
 
-	// Show what will be created
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle(fmt.Sprintf("CI Configuration for %s", env.Name)))
-	log.Info().Msg("")
-	log.Info().Msgf("Environment:  %s %s", styles.RenderTechnical(env.Name), styles.RenderMuted(fmt.Sprintf("[%s]", env.HumanID)))
-	log.Info().Msgf("CI Provider:  %s", styles.RenderTechnical(string(o.ciProvider)))
-	log.Info().Msgf("Output file:  %s", styles.RenderTechnical(filePath))
-	log.Info().Msg("")
-
-	written, err := o.confirmAndWriteFile(ctx, filePath, content, perm)
-	if err != nil {
-		return false, err
-	}
-	return written, nil
+	return ciFile{path: filePath, content: content, perm: perm}, nil
 }
 
-// generateBitbucketFile generates a single Bitbucket Pipelines file containing all environments.
-// Returns true if a file was written.
-func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string, environments []metaproj.ProjectEnvironmentConfig) (bool, error) {
+// collectBitbucketFile renders a single Bitbucket Pipelines file for all environments.
+func (o *initCIOpts) collectBitbucketFile(outputDir string, environments []metaproj.ProjectEnvironmentConfig) ([]ciFile, error) {
 	var envData []bitbucketEnvironmentData
 	for _, env := range environments {
 		envData = append(envData, bitbucketEnvironmentData{
@@ -307,73 +358,32 @@ func (o *initCIOpts) generateBitbucketFile(ctx context.Context, outputDir string
 		})
 	}
 
-	data := bitbucketTemplateData{
-		Environments: envData,
-	}
-
-	content, err := renderTemplate(bitbucketPipelinesTmpl, data)
+	content, err := renderTemplate(bitbucketPipelinesTmpl, bitbucketTemplateData{Environments: envData})
 	if err != nil {
-		return false, clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
+		return nil, clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
 	}
 
 	filePath := filepath.Join(outputDir, "bitbucket-pipelines.yml")
-
-	// Show what will be created
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle("CI Configuration for Bitbucket Pipelines"))
-	log.Info().Msg("")
-	for _, env := range environments {
-		log.Info().Msgf("Environment:  %s %s", styles.RenderTechnical(env.Name), styles.RenderMuted(fmt.Sprintf("[%s]", env.HumanID)))
-	}
-	log.Info().Msgf("Output file:  %s", styles.RenderTechnical(filePath))
-	log.Info().Msg("")
-
-	return o.confirmAndWriteFile(ctx, filePath, content, 0644)
+	return []ciFile{{path: filePath, content: content, perm: 0644}}, nil
 }
 
-// confirmAndWriteFile prompts the user for confirmation (unless --yes) and writes the file.
-// Returns true if the file was written, false if skipped.
-func (o *initCIOpts) confirmAndWriteFile(ctx context.Context, filePath string, content string, perm os.FileMode) (bool, error) {
-	// Check if file already exists
-	if _, err := os.Stat(filePath); err == nil {
-		log.Info().Msgf("%s File already exists: %s", styles.RenderAttention("⚠"), filePath)
-		if !o.flagAutoConfirm {
-			confirmed, err := tui.DoConfirmQuestion(ctx, "Overwrite existing file?")
-			if err != nil {
-				return false, err
-			}
-			if !confirmed {
-				log.Info().Msg("Skipping file...")
-				return false, nil
-			}
-		}
-	} else if !o.flagAutoConfirm {
-		confirmed, err := tui.DoConfirmQuestion(ctx, "Create this file?")
-		if err != nil {
-			return false, err
-		}
-		if !confirmed {
-			log.Info().Msg("Skipping file...")
-			return false, nil
-		}
+// tryGetOrganizationUUID attempts to fetch the organization UUID from the portal.
+// Returns empty string if the user is not logged in or the fetch fails.
+func (o *initCIOpts) tryGetOrganizationUUID(cmd *cobra.Command) string {
+	authProvider, err := getAuthProvider(o.project, "metaplay")
+	if err != nil {
+		return ""
 	}
-
-	// Create directory if needed
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return false, clierrors.Wrap(err, fmt.Sprintf("Failed to create directory %s", dir)).
-			WithSuggestion("Check that you have write permissions to the output directory")
+	tokenSet, err := auth.LoadAndRefreshTokenSet(authProvider)
+	if err != nil {
+		return ""
 	}
-
-	// Write the file
-	if err := os.WriteFile(filePath, []byte(content), perm); err != nil {
-		return false, clierrors.Wrap(err, fmt.Sprintf("Failed to write file %s", filePath)).
-			WithSuggestion("Check that you have write permissions to the output directory")
+	portalClient := portalapi.NewClient(tokenSet)
+	projectInfo, err := portalClient.FetchProjectInfo(o.project.Config.ProjectHumanID)
+	if err != nil {
+		return ""
 	}
-
-	log.Info().Msgf(" %s Created %s", styles.RenderSuccess("✓"), styles.RenderTechnical(filePath))
-
-	return true, nil
+	return projectInfo.OrganizationUUID
 }
 
 func isValidCIProvider(provider string) bool {
