@@ -544,7 +544,7 @@ func (o *databaseExportSnapshotOpts) validateZipFileEntry(file *zip.File) error 
 // validateMetadataFile validates the JSON metadata file
 func (o *databaseExportSnapshotOpts) validateMetadataFile(reader io.ReadCloser) error {
 	// Try to decode the JSON to ensure it's valid
-	var metadata map[string]interface{}
+	var metadata map[string]any
 	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&metadata); err != nil {
 		return fmt.Errorf("invalid JSON metadata: %v", err)

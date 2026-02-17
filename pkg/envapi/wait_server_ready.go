@@ -38,11 +38,11 @@ const (
 
 // Metaplay wire protocol constants (from SDK WireProtocol.cs)
 const (
-	metaplayWireProtocolVersion      byte = 10
-	protocolStatusClusterRunning     byte = 3
-	protocolStatusClusterStarting    byte = 4
+	metaplayWireProtocolVersion       byte = 10
+	protocolStatusClusterRunning      byte = 3
+	protocolStatusClusterStarting     byte = 4
 	protocolStatusClusterShuttingDown byte = 5
-	protocolHeaderSize                    = 8
+	protocolHeaderSize                     = 8
 )
 
 // protocolHeaderInfo holds the parsed fields of the Metaplay protocol header.
@@ -195,7 +195,7 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
 
 		// Check that all expected pods are found.
-		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
+		for shardNdx := range numExpectedReplicas {
 			// Find matching pod with name '<shardSet>-<index>'
 			podName := fmt.Sprintf("%s-%d", shardSet.Name, shardNdx)
 			var foundPod *corev1.Pod = nil
@@ -579,7 +579,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
 			allSuccess := true
-			for iter := 0; iter < numAttempts; iter++ {
+			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
 				err := attemptTLSConnection(hostname, port)
 				if err != nil {

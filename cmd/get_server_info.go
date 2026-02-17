@@ -50,7 +50,7 @@ type deploymentImageInfo struct {
 	BuildNumber  string    `json:"build_number"`
 	CommitID     string    `json:"commit_id"`
 	SdkVersion   string    `json:"sdk_version"`
-	CreationTime time.Time `json:"creation_time,omitempty"`
+	CreationTime time.Time `json:"creation_time"`
 }
 
 func init() {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-version"
@@ -543,15 +544,15 @@ func joinWithCommaAnd(items []string) string {
 	if len(items) == 2 {
 		return items[0] + " and " + items[1]
 	}
-	result := ""
+	var result strings.Builder
 	for i, item := range items {
 		if i == len(items)-1 {
-			result += "and " + item
+			result.WriteString("and " + item)
 		} else {
-			result += item + ", "
+			result.WriteString(item + ", ")
 		}
 	}
-	return result
+	return result.String()
 }
 
 // sortVersionOptions sorts SDK version options by version descending (newest first).

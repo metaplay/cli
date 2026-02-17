@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -25,10 +26,10 @@ type GameServerOptions struct {
 	PollInterval  time.Duration // how often to collect metrics
 	HistoryLimit  int           // max samples kept in memory (0 or <0 => unbounded)
 	Env           map[string]string
-	ExposedPorts  []string // optional override; defaults to []string{Port}
-	ContainerName string   // optional; useful in CI logs
-	Cmd           []string // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
-	ExtraArgs     []string // additional args to append to the default Cmd
+	ExposedPorts  []string          // optional override; defaults to []string{Port}
+	ContainerName string            // optional; useful in CI logs
+	Cmd           []string          // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
+	ExtraArgs     []string          // additional args to append to the default Cmd
 	ExtraEnv      map[string]string // additional env vars to merge with defaults (overrides on conflict)
 }
 
@@ -89,9 +90,7 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 		"ASPNETCORE_ENVIRONMENT":      "Development",
 		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 	}
-	for k, v := range opts.ExtraEnv {
-		defaultEnv[k] = v
-	}
+	maps.Copy(defaultEnv, opts.ExtraEnv)
 	opts.Env = defaultEnv
 
 	// Build default cmd and append any extra args
@@ -142,9 +141,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		if hc.PortBindings == nil {
 			hc.PortBindings = nat.PortMap{}
 		}
-		for port, bindings := range portBindings {
-			hc.PortBindings[port] = bindings
-		}
+		maps.Copy(hc.PortBindings, portBindings)
 	}
 
 	log.Debug().Msgf("Create container: name=%s image=%s ports=%v", s.opts.ContainerName, s.opts.Image, s.opts.ExposedPorts)

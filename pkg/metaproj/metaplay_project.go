@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/go-version"
@@ -51,10 +52,8 @@ func validateAlias(alias string) error {
 		return fmt.Errorf("alias must contain only lowercase alphanumeric characters and dashes, and cannot start or end with a dash")
 	}
 	// Check reserved aliases.
-	for _, reserved := range reservedAliases {
-		if alias == reserved {
-			return fmt.Errorf("alias '%s' is reserved and cannot be used", alias)
-		}
+	if slices.Contains(reservedAliases, alias) {
+		return fmt.Errorf("alias '%s' is reserved and cannot be used", alias)
 	}
 	return nil
 }
@@ -579,10 +578,8 @@ func (projectConfig *ProjectConfig) FindEnvironmentConfig(environment string) (*
 		}
 
 		// Match by alias.
-		for _, alias := range envConfig.Aliases {
-			if alias == environment {
-				return &envConfig, nil
-			}
+		if slices.Contains(envConfig.Aliases, environment) {
+			return &envConfig, nil
 		}
 	}
 

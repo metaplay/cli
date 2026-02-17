@@ -139,10 +139,7 @@ func (o *getSdkVersionsOpts) Run(cmd *cobra.Command) error {
 
 				// Pad version+badges to fixed column width (10 chars total)
 				versionColWidth := 10
-				padding := versionColWidth - len(v.Version) - badgeWidth
-				if padding < 0 {
-					padding = 0
-				}
+				padding := max(versionColWidth-len(v.Version)-badgeWidth, 0)
 				versionWithBadges := styles.RenderTechnical(v.Version) + badges + strings.Repeat(" ", padding)
 				datePadded := fmt.Sprintf("%-12s", releaseDate)
 

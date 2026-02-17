@@ -6,6 +6,7 @@ package helmutil
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 	"time"
@@ -174,9 +175,7 @@ func HelmUpgradeOrInstall(
 func mergeValuesMaps(base, override map[string]any) map[string]any {
 	// Clone base.
 	combined := make(map[string]any, len(base))
-	for k, v := range base {
-		combined[k] = v
-	}
+	maps.Copy(combined, base)
 
 	// Merge all keys from override (recursively merge maps).
 	for k, v := range override {
@@ -261,7 +260,7 @@ func validateValueType(value any, path string) error {
 	switch v.Kind() {
 	case reflect.Slice:
 		// Check if it's []any
-		if t != reflect.TypeOf([]any{}) {
+		if t != reflect.TypeFor[[]any]() {
 			return fmt.Errorf("invalid array type at %s: expected []any, got %s", path, t)
 		}
 		// Recursively validate slice elements
@@ -273,7 +272,7 @@ func validateValueType(value any, path string) error {
 		}
 	case reflect.Map:
 		// Check if it's map[string]any
-		if t != reflect.TypeOf(map[string]any{}) {
+		if t != reflect.TypeFor[map[string]any]() {
 			return fmt.Errorf("invalid map type at %s: expected map[string]any, got %s", path, t)
 		}
 		// Recursively validate map values

@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -168,9 +169,7 @@ func (o *secretsUpdateOpts) Run(cmd *cobra.Command) error {
 
 	// Start with existing data.
 	newData := make(map[string][]byte)
-	for k, v := range existingSecret.Data {
-		newData[k] = v
-	}
+	maps.Copy(newData, existingSecret.Data)
 
 	// Process removals first.
 	removedKeys := []string{}

@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,9 +59,9 @@ func init() {
 	o := testIntegrationOpts{}
 
 	// Build the test list for the Long description from integrationTests.
-	var testListLines string
+	var testListLines strings.Builder
 	for _, t := range integrationTests {
-		testListLines += fmt.Sprintf("\n\t\t\t- %s: %s.", t.name, t.displayName)
+		testListLines.WriteString(fmt.Sprintf("\n\t\t\t- %s: %s.", t.name, t.displayName))
 	}
 
 	cmd := &cobra.Command{
@@ -80,7 +81,7 @@ func init() {
 			For each of the tests, the game server container is first started in the background and then
 			the test-specific container is run against the game server.
 
-			Tests:`+testListLines+`
+			Tests:`+testListLines.String()+`
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -303,9 +304,7 @@ func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, ser
 		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 	}
 	if integrationTestsConfig != nil && integrationTestsConfig.BotClient != nil {
-		for k, v := range integrationTestsConfig.BotClient.Env {
-			botEnv[k] = v
-		}
+		maps.Copy(botEnv, integrationTestsConfig.BotClient.Env)
 	}
 
 	// Build default cmd and append any extra args

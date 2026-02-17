@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -283,12 +284,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 // Check if a value exists in a slice.
 func sliceContains(slice []string, value string) bool {
-	for _, v := range slice {
-		if v == value {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(slice, value)
 }
 
 // Find the first non-empty environment variable from a list of keys.
@@ -315,10 +311,8 @@ func resolveBuildEngine(engine string) (string, error) {
 	}
 
 	// Check validity if specified
-	for _, validEngine := range validBuildEngines {
-		if engine == validEngine {
-			return engine, nil
-		}
+	if slices.Contains(validBuildEngines, engine) {
+		return engine, nil
 	}
 
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
