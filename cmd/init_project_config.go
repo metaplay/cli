@@ -408,7 +408,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 		sharedCodePath = content[startIndex+len(startTag) : endIndex]
 
 		// Replace '$(MSBuildThisFileDirectory)' with the path of the file.
-		sharedCodePath = strings.Replace(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/", -1)
+		sharedCodePath = strings.ReplaceAll(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/")
 
 		// Convert the path to be relative to the project root
 		// The path in Directory.Build.props is relative to the backend directory

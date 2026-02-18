@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -214,7 +215,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
 	}
 	for _, arch := range o.flagArchitectures {
-		if !sliceContains(validArchitectures, arch) {
+		if !slices.Contains(validArchitectures, arch) {
 			return clierrors.NewUsageErrorf("Invalid architecture '%s'", arch).
 				WithDetails(fmt.Sprintf("Valid architectures: %v", validArchitectures)).
 				WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
@@ -281,16 +282,6 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// Check if a value exists in a slice.
-func sliceContains(slice []string, value string) bool {
-	for _, v := range slice {
-		if v == value {
-			return true
-		}
-	}
-	return false
-}
-
 // Find the first non-empty environment variable from a list of keys.
 // If none of the keys have a value, return an empty string.
 func detectEnvVar(keys []string) string {
@@ -315,10 +306,8 @@ func resolveBuildEngine(engine string) (string, error) {
 	}
 
 	// Check validity if specified
-	for _, validEngine := range validBuildEngines {
-		if engine == validEngine {
-			return engine, nil
-		}
+	if slices.Contains(validBuildEngines, engine) {
+		return engine, nil
 	}
 
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
@@ -544,7 +533,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 	}
 
 	// Silence docker's recomendation messages at end-of-build.
-	var dockerEnv []string = os.Environ()
+	dockerEnv := os.Environ()
 	dockerEnv = append(dockerEnv, "DOCKER_CLI_HINTS=false")
 
 	// Handle build engine differences.

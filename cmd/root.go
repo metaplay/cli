@@ -327,7 +327,7 @@ type CommandOptions interface {
 func getUsePositionalArgs(opts CommandOptions) (UsePositionalArgs, bool) {
 	// Use reflection to access the embedded UsePositionalArgs (to parse PositionalArgs)
 	v := reflect.ValueOf(opts)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 

@@ -38,11 +38,11 @@ const (
 
 // Metaplay wire protocol constants (from SDK WireProtocol.cs)
 const (
-	metaplayWireProtocolVersion      byte = 10
-	protocolStatusClusterRunning     byte = 3
-	protocolStatusClusterStarting    byte = 4
+	metaplayWireProtocolVersion       byte = 10
+	protocolStatusClusterRunning      byte = 3
+	protocolStatusClusterStarting     byte = 4
 	protocolStatusClusterShuttingDown byte = 5
-	protocolHeaderSize                    = 8
+	protocolHeaderSize                     = 8
 )
 
 // protocolHeaderInfo holds the parsed fields of the Metaplay protocol header.
@@ -195,7 +195,7 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
 
 		// Check that all expected pods are found.
-		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
+		for shardNdx := range numExpectedReplicas {
 			// Find matching pod with name '<shardSet>-<index>'
 			podName := fmt.Sprintf("%s-%d", shardSet.Name, shardNdx)
 			var foundPod *corev1.Pod = nil
@@ -411,9 +411,8 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
 					} else {
 						// Format logs with each line prefixed by '> '
-						lines := strings.Split(podLogs, "\n")
 						var sb strings.Builder
-						for _, line := range lines {
+						for line := range strings.SplitSeq(podLogs, "\n") {
 							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
 						}
 						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
@@ -579,7 +578,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
 			allSuccess := true
-			for iter := 0; iter < numAttempts; iter++ {
+			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
 				err := attemptTLSConnection(hostname, port)
 				if err != nil {
@@ -642,7 +641,7 @@ func attemptTLSConnection(hostname string, port int) error {
 
 	// Log received bytes for debugging.
 	hexBytes := make([]string, totalRead)
-	for i := 0; i < totalRead; i++ {
+	for i := range totalRead {
 		hexBytes[i] = fmt.Sprintf("%02x", buffer[i])
 	}
 	log.Debug().Msgf("Received %d bytes from server: %s", totalRead, hexBytes)

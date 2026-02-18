@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -451,9 +452,7 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 		"PROJECT_HUMAN_ID":     project.Config.ProjectHumanID,
 		"PROJECT_NAME":         project.Config.ProjectHumanID, // Removed in R34
 	}
-	for k, v := range extraReplacements {
-		templateReplacements[k] = v
-	}
+	maps.Copy(templateReplacements, extraReplacements)
 
 	// Log template replacements.
 	log.Debug().Msgf("Template replacements:")

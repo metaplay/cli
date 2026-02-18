@@ -18,7 +18,7 @@ import (
 // NewGameServerCR represents the structured CRD for the new operator GameServer.
 type NewGameServerCR struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
 
 	Spec struct {
 		Config struct {
@@ -30,7 +30,7 @@ type NewGameServerCR struct {
 					Key string `json:"key,omitempty"`
 				} `json:"keyRef,omitempty"`
 			} `json:"secretRefs,omitempty"`
-		} `json:"config,omitempty"`
+		} `json:"config"`
 
 		EnvironmentFamily string `json:"environmentFamily,omitempty"`
 
@@ -38,7 +38,7 @@ type NewGameServerCR struct {
 			PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
 			Repository string            `json:"repository,omitempty"`
 			Tag        string            `json:"tag,omitempty"`
-		} `json:"image,omitempty"`
+		} `json:"image"`
 
 		Shards []struct {
 			ClusterLabelSelector map[string]string `json:"clusterLabelSelector,omitempty"`
@@ -48,16 +48,16 @@ type NewGameServerCR struct {
 			PodTemplate          struct {
 				ContainerTemplate struct {
 					ExtraPorts []corev1.ContainerPort      `json:"extraPorts,omitempty"`
-					Resources  corev1.ResourceRequirements `json:"resources,omitempty"`
-				} `json:"containerTemplate,omitempty"`
-			} `json:"podTemplate,omitempty"`
+					Resources  corev1.ResourceRequirements `json:"resources"`
+				} `json:"containerTemplate"`
+			} `json:"podTemplate"`
 			Public     bool   `json:"public,omitempty"`
 			Scaling    string `json:"scaling,omitempty"`
 			Connection bool   `json:"connection,omitempty"`
 			Admin      bool   `json:"admin,omitempty"`
 			NodeCount  *int   `json:"nodeCount,omitempty"`
 		} `json:"shards,omitempty"`
-	} `json:"spec,omitempty"`
+	} `json:"spec"`
 
 	Status struct {
 		NodeSetConfigs []struct {
@@ -78,7 +78,7 @@ type NewGameServerCR struct {
 			ClusterName  string `json:"clusterName,omitempty"`
 			GlobalSuffix string `json:"globalSuffix,omitempty"`
 		} `json:"shards,omitempty"`
-	} `json:"status,omitempty"`
+	} `json:"status"`
 }
 
 // Get a gameserver CR used by the new operator from the cluster.
