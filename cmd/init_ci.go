@@ -455,11 +455,14 @@ jobs:
         with:
           credentials: ${{ secrets.METAPLAY_CREDENTIALS }}
 
+      - name: Generate unique image tag
+        run: echo "IMAGE_TAG=$(date -u +%Y%m%d-%H%M%S)-$GITHUB_SHA" >> $GITHUB_ENV
+
       - name: Build server image
-        run: metaplay build image gameserver:$GITHUB_SHA
+        run: metaplay build image gameserver:${{ env.IMAGE_TAG }}
 
       - name: Deploy server to target environment
-        run: metaplay deploy server [[.EnvironmentHumanID]] gameserver:$GITHUB_SHA
+        run: metaplay deploy server [[.EnvironmentHumanID]] gameserver:${{ env.IMAGE_TAG }}
 `
 
 // Bitbucket Pipelines template
@@ -496,10 +499,12 @@ pipelines:
             - bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
             # Login to Metaplay cloud (using machine user with credentials from the METAPLAY_CREDENTIALS secret)
             - metaplay auth machine-login
-            # Build the game server docker image using the commit hash as the tag
-            - metaplay build image gameserver:$BITBUCKET_COMMIT
+            # Generate unique image tag
+            - export IMAGE_TAG=$(date -u +%Y%m%d-%H%M%S)-$BITBUCKET_COMMIT
+            # Build the game server docker image
+            - metaplay build image gameserver:$IMAGE_TAG
             # Deploy the game server
-            - metaplay deploy server {{.HumanID}} gameserver:$BITBUCKET_COMMIT
+            - metaplay deploy server {{.HumanID}} gameserver:$IMAGE_TAG
 {{end}}`
 
 // Generic CI template
@@ -515,11 +520,12 @@ set -eo pipefail
 # For manual deployment, you can set this environment variable before running the script
 export METAPLAY_CREDENTIALS="${METAPLAY_CREDENTIALS:?METAPLAY_CREDENTIALS environment variable is required}"
 
-# Configure build identity: image tag & versions
-# In CI, these should come from your CI system's environment variables
-export IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse HEAD)}"
+# Configure build identity
 export COMMIT_ID="${COMMIT_ID:-$(git rev-parse HEAD)}"
 export BUILD_NUMBER="${BUILD_NUMBER:-local}"
+
+# Generate unique image tag
+export IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)-$COMMIT_ID"
 
 # Install metaplay CLI (skip if already installed)
 if ! command -v metaplay &> /dev/null; then
