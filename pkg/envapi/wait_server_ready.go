@@ -411,9 +411,8 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
 					} else {
 						// Format logs with each line prefixed by '> '
-						lines := strings.Split(podLogs, "\n")
 						var sb strings.Builder
-						for _, line := range lines {
+						for line := range strings.SplitSeq(podLogs, "\n") {
 							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
 						}
 						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
@@ -642,7 +641,7 @@ func attemptTLSConnection(hostname string, port int) error {
 
 	// Log received bytes for debugging.
 	hexBytes := make([]string, totalRead)
-	for i := 0; i < totalRead; i++ {
+	for i := range totalRead {
 		hexBytes[i] = fmt.Sprintf("%02x", buffer[i])
 	}
 	log.Debug().Msgf("Received %d bytes from server: %s", totalRead, hexBytes)

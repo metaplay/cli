@@ -215,7 +215,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
 	}
 	for _, arch := range o.flagArchitectures {
-		if !sliceContains(validArchitectures, arch) {
+		if !slices.Contains(validArchitectures, arch) {
 			return clierrors.NewUsageErrorf("Invalid architecture '%s'", arch).
 				WithDetails(fmt.Sprintf("Valid architectures: %v", validArchitectures)).
 				WithSuggestion("Use --architecture=amd64 or --architecture=arm64")
@@ -280,11 +280,6 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Available environments: %s", strings.Join(envsIDs, ", "))
 
 	return nil
-}
-
-// Check if a value exists in a slice.
-func sliceContains(slice []string, value string) bool {
-	return slices.Contains(slice, value)
 }
 
 // Find the first non-empty environment variable from a list of keys.
@@ -538,7 +533,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 	}
 
 	// Silence docker's recomendation messages at end-of-build.
-	var dockerEnv []string = os.Environ()
+	dockerEnv := os.Environ()
 	dockerEnv = append(dockerEnv, "DOCKER_CLI_HINTS=false")
 
 	// Handle build engine differences.

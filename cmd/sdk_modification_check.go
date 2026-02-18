@@ -229,7 +229,7 @@ func readZipFileContent(file *zip.File) ([]byte, error) {
 // isBinaryContent checks if content appears to be binary (contains null bytes).
 func isBinaryContent(data []byte) bool {
 	checkSize := min(len(data), 8192)
-	for i := 0; i < checkSize; i++ {
+	for i := range checkSize {
 		if data[i] == 0 {
 			return true
 		}
@@ -387,7 +387,7 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 		newLineNum := 1
 
 		// Calculate starting positions by scanning ops before hunk
-		for i := 0; i < hunkStart; i++ {
+		for i := range hunkStart {
 			switch ops[i].op {
 			case diffmatchpatch.DiffEqual:
 				oldLineNum++
@@ -661,7 +661,7 @@ func printModifiedFilesList(modifications []ModifiedFile, maxDisplay int) {
 	// Show individual files up to limit
 	displayCount := min(len(modifications), maxDisplay)
 
-	for i := 0; i < displayCount; i++ {
+	for i := range displayCount {
 		m := modifications[i]
 		if m.IsBinary {
 			log.Info().Msgf("  [%s] %s (binary)", m.ModType, m.RelativePath)

@@ -315,12 +315,10 @@ func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (
 
 // parseMinorPatch parses "3" or "3.1" into minor and patch numbers.
 func parseMinorPatch(s string) (minor, patch int) {
-	parts := strings.SplitN(s, ".", 2)
-	if len(parts) >= 1 {
-		minor, _ = strconv.Atoi(parts[0])
-	}
-	if len(parts) >= 2 {
-		patch, _ = strconv.Atoi(parts[1])
+	minorStr, patchStr, hasPatch := strings.Cut(s, ".")
+	minor, _ = strconv.Atoi(minorStr)
+	if hasPatch {
+		patch, _ = strconv.Atoi(patchStr)
 	}
 	return minor, patch
 }

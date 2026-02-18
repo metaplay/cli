@@ -264,7 +264,7 @@ func validateValueType(value any, path string) error {
 			return fmt.Errorf("invalid array type at %s: expected []any, got %s", path, t)
 		}
 		// Recursively validate slice elements
-		for i := 0; i < v.Len(); i++ {
+		for i := range v.Len() {
 			elementPath := fmt.Sprintf("%s[%d]", path, i)
 			if err := validateValueType(v.Index(i).Interface(), elementPath); err != nil {
 				return err
