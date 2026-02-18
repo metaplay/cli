@@ -290,12 +290,11 @@ func readPodLogs(ctx context.Context, source *podLogSource, cutoffTime *time.Tim
 	for scanner.Scan() {
 		// Parse the timestamp and payload from the line. We assume Kubernetes format.
 		line := scanner.Text()
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
+		tsStr, msg, ok := strings.Cut(line, " ")
+		if !ok {
 			log.Warn().Msgf("Malformed line from pod %s: '%s'", source.prefix, line)
 			continue
 		}
-		tsStr, msg := parts[0], parts[1]
 
 		// Parse timestamp
 		timestamp, err := time.Parse(time.RFC3339Nano, tsStr)

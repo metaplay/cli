@@ -93,12 +93,10 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Resolve literal payload key-value pairs.
 	for _, pair := range o.flagLiteralValues {
 		// Split the literal pair into key and value
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
 			return fmt.Errorf("Invalid --from-literal format: '%s'. Expected 'key=value'.", pair)
 		}
-		key := parts[0]
-		value := parts[1]
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {
@@ -112,12 +110,10 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Resolve file entries.
 	for _, pair := range o.flagFileValues {
 		// Split the literal pair into key and value
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
+		key, filePath, ok := strings.Cut(pair, "=")
+		if !ok {
 			return fmt.Errorf("invalid --from-file format: '%s'. Expected 'key=filepath'.", pair)
 		}
-		key := parts[0]
-		filePath := parts[1]
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {

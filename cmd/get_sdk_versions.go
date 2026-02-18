@@ -7,10 +7,9 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
-	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
@@ -83,15 +82,7 @@ func (o *getSdkVersionsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Sort versions by semantic version (descending - newest first).
-	sort.Slice(versions, func(i, j int) bool {
-		vi, errI := version.NewVersion(versions[i].Version)
-		vj, errJ := version.NewVersion(versions[j].Version)
-		if errI != nil || errJ != nil {
-			// Fall back to string comparison if parsing fails.
-			return versions[i].Version > versions[j].Version
-		}
-		return vi.GreaterThan(vj)
-	})
+	slices.SortFunc(versions, compareSdkVersionsDesc)
 
 	// Output in desired format.
 	if o.flagFormat == "json" {

@@ -408,12 +408,10 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecr
 	}
 
 	authorization := string(decoded)
-	parts := strings.SplitN(authorization, ":", 2)
-	if len(parts) != 2 {
+	username, password, ok := strings.Cut(authorization, ":")
+	if !ok {
 		return nil, errors.New("failed to parse authorization token")
 	}
-	username := parts[0]
-	password := parts[1]
 
 	log.Debug().Msgf("ECR: username=%s, proxyEndpoint=%s", username, registryURL)
 

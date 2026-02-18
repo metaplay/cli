@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -513,13 +514,7 @@ func getUniqueMajorVersions(versions []portalapi.SdkVersionInfo) []int {
 	}
 
 	// Sort ascending
-	for i := 0; i < len(majors)-1; i++ {
-		for j := i + 1; j < len(majors); j++ {
-			if majors[j] < majors[i] {
-				majors[i], majors[j] = majors[j], majors[i]
-			}
-		}
-	}
+	slices.Sort(majors)
 
 	return majors
 }
@@ -555,28 +550,32 @@ func joinWithCommaAnd(items []string) string {
 	return result.String()
 }
 
+// compareSdkVersionsDesc compares two SdkVersionInfo by version, descending.
+func compareSdkVersionsDesc(a, b portalapi.SdkVersionInfo) int {
+	va, errA := version.NewVersion(a.Version)
+	vb, errB := version.NewVersion(b.Version)
+	if errA != nil || errB != nil {
+		return strings.Compare(b.Version, a.Version)
+	}
+	if va.GreaterThan(vb) {
+		return -1
+	}
+	if vb.GreaterThan(va) {
+		return 1
+	}
+	return 0
+}
+
 // sortVersionOptions sorts SDK version options by version descending (newest first).
 func sortVersionOptions(options []sdkVersionOption) {
-	for i := 0; i < len(options)-1; i++ {
-		for j := i + 1; j < len(options); j++ {
-			if options[j].parsed.GreaterThan(options[i].parsed) {
-				options[i], options[j] = options[j], options[i]
-			}
-		}
-	}
+	slices.SortFunc(options, func(a, b sdkVersionOption) int {
+		return compareSdkVersionsDesc(*a.version, *b.version)
+	})
 }
 
 // sortVersionInfos sorts SDK version infos by version descending (newest first).
 func sortVersionInfos(versions []portalapi.SdkVersionInfo) {
-	for i := 0; i < len(versions)-1; i++ {
-		for j := i + 1; j < len(versions); j++ {
-			vi, _ := version.NewVersion(versions[i].Version)
-			vj, _ := version.NewVersion(versions[j].Version)
-			if vi != nil && vj != nil && vj.GreaterThan(vi) {
-				versions[i], versions[j] = versions[j], versions[i]
-			}
-		}
-	}
+	slices.SortFunc(versions, compareSdkVersionsDesc)
 }
 
 // findLatestInMajor finds the latest version for a specific major version.

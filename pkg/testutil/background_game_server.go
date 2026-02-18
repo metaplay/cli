@@ -6,6 +6,7 @@ import (
 	"io"
 	"maps"
 	"net/url"
+	"slices"
 	"os"
 	"os/exec"
 	"strings"
@@ -52,7 +53,7 @@ func (c *containerLogConsumer) Write(p []byte) (int, error) {
 	if c == nil {
 		return len(p), nil
 	}
-	c.Accept(tc.Log{Content: append([]byte(nil), p...)})
+	c.Accept(tc.Log{Content: slices.Clone(p)})
 	return len(p), nil
 }
 
