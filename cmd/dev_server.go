@@ -16,6 +16,7 @@ import (
 type devServerOpts struct {
 	UsePositionalArgs
 
+	flagWatch bool
 	extraArgs []string
 }
 
@@ -48,8 +49,13 @@ func init() {
 
 			# Pass additional arguments to the game server (dotnet run).
 			metaplay dev server -- -ExitAfter=00:00:30
+
+			# Run with file watching (auto-restart on code changes).
+			metaplay dev server --watch
 		`),
 	}
+
+	cmd.Flags().BoolVarP(&o.flagWatch, "watch", "w", false, "Enable file watching to auto-restart on code changes")
 
 	devCmd.AddCommand(cmd)
 }
@@ -79,15 +85,23 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	// Resolve server path.
 	serverPath := project.GetServerDir()
 
-	// Build the game server .NET project.
-	if err := execChildInteractive(serverPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
-		return fmt.Errorf("failed to build the game server .NET project: %s", err)
-	}
+	if o.flagWatch {
+		// Run with file watching (auto-restart on code changes).
+		watchArgs := append([]string{"watch", "run", "--no-hot-reload", "/p:Configuration=Watch"}, o.extraArgs...)
+		if err := execChildInteractive(serverPath, "dotnet", watchArgs, commonDotnetEnvVars); err != nil {
+			return fmt.Errorf("game server exited with error: %s", err)
+		}
+	} else {
+		// Build the game server .NET project.
+		if err := execChildInteractive(serverPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
+			return fmt.Errorf("failed to build the game server .NET project: %s", err)
+		}
 
-	// Run the game server (skip build).
-	runArgs := append([]string{"run", "--no-build"}, o.extraArgs...)
-	if err := execChildInteractive(serverPath, "dotnet", runArgs, commonDotnetEnvVars); err != nil {
-		return fmt.Errorf("game server exited with error: %s", err)
+		// Run the game server (skip build).
+		runArgs := append([]string{"run", "--no-build"}, o.extraArgs...)
+		if err := execChildInteractive(serverPath, "dotnet", runArgs, commonDotnetEnvVars); err != nil {
+			return fmt.Errorf("game server exited with error: %s", err)
+		}
 	}
 
 	// The server exited normally

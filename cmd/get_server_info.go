@@ -50,7 +50,7 @@ type deploymentImageInfo struct {
 	BuildNumber  string    `json:"build_number"`
 	CommitID     string    `json:"commit_id"`
 	SdkVersion   string    `json:"sdk_version"`
-	CreationTime time.Time `json:"creation_time,omitempty"`
+	CreationTime time.Time `json:"creation_time"`
 }
 
 func init() {
@@ -83,7 +83,7 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Show server deployment information in text format (default)
-			metaplay get server-info lovely-wombats-build-nimbly
+			metaplay get server-info nimbly
 		`),
 	}
 

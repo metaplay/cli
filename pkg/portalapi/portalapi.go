@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"path/filepath"
+	"strconv"
+	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
@@ -82,7 +85,7 @@ func (c *Client) AgreeToContract(contractID string) error {
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.Put[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
+	_, err := metahttp.PutJSON[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}
@@ -108,9 +111,11 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 	// Handle server errors.
 	if resp.IsError() {
 		if resp.StatusCode() == 403 {
-			return "", fmt.Errorf("you must agree to the SDK terms and conditions in https://portal.metaplay.dev first")
+			return "", clierrors.New("SDK download requires accepting the terms and conditions").
+				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
 		}
-		return "", fmt.Errorf("failed to download the Metaplay SDK from the portal with status code %d", resp.StatusCode())
+		return "", clierrors.Newf("Failed to download the Metaplay SDK (status %d)", resp.StatusCode()).
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
@@ -118,31 +123,30 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 }
 
 // Fetch the organizations and projects (within each org) that the user has access to.
+// Note: It's considered an error if the user has no accessible organizations.
 func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) {
 	path := fmt.Sprintf("/api/v1/organizations/user-organizations")
-	orgWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
+	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user's organizations and projects: %w", err)
 	}
-	return orgWithProjects, err
-}
 
-func (c *Client) FetchAllUserProjects() ([]ProjectInfo, error) {
-	// Fetch with the combined getter.
-	orgsWithProjects, err := c.FetchUserOrgsAndProjects()
-	if err != nil {
-		return nil, err
+	// It's an error if the user has no accessible organizations.
+	if len(orgsWithProjects) == 0 {
+		return nil, clierrors.New("No accessible organizations found").
+			WithSuggestion("Create a new organization at https://portal.metaplay.dev, or request access to an existing one from your team")
 	}
 
-	// Linearize all projects.
-	projects := []ProjectInfo{}
+	// Sanity check the returned data.
 	for _, org := range orgsWithProjects {
-		for _, proj := range org.Projects {
-			projects = append(projects, proj)
+		for _, project := range org.Projects {
+			if project.HumanID == "" {
+				return nil, fmt.Errorf("internal error: portal project '%s' has empty human ID", project.Name)
+			}
 		}
 	}
 
-	return projects, nil
+	return orgsWithProjects, err
 }
 
 // FetchProjectInfo fetches information about a project using its human ID.
@@ -155,7 +159,8 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 
 	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)
 	if len(projectInfos) == 0 {
-		return nil, fmt.Errorf("no project with ID %s found in the Metaplay portal. Are you sure it's correct and you have access?", projectHumanID)
+		return nil, clierrors.Newf("Project '%s' not found", projectHumanID).
+			WithSuggestion("Check the project ID is correct, or run 'metaplay auth whoami' to verify your account has access")
 	} else if len(projectInfos) > 2 {
 		return nil, fmt.Errorf("portal returned %d matching projects, expecting only one", len(projectInfos))
 	}
@@ -186,11 +191,13 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	}
 
 	if len(envInfos) == 0 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: no such environment")
+		return nil, clierrors.Newf("Environment '%s' not found", humanID).
+			WithSuggestion("Run 'metaplay update project-environments' to sync with portal, or check available environments in the portal")
 	}
 
 	if len(envInfos) > 1 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: multiple results returned")
+		return nil, clierrors.Newf("Multiple environments match '%s'", humanID).
+			WithSuggestion("Contact support — this is unexpected and may indicate a configuration issue")
 	}
 
 	return &envInfos[0], nil
@@ -228,18 +235,35 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 }
 
 // FindSdkVersionByVersionOrName attempts to find an SDK version by its version string or name.
+// If only a major version is provided (e.g., "34"), returns the latest minor/patch for that major.
 // Returns nil if no matching version is found.
 func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersionInfo, error) {
+	log.Debug().Msgf("FindSdkVersionByVersionOrName: looking for '%s'", versionOrName)
+
 	// Get all SDK versions
 	versions, err := c.GetSdkVersions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
 
-	// First, try to find an exact match for the version string
+	// If input looks like a major version only (digits with no dots), find the latest for that major.
+	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
+	if isMajorVersionOnly(versionOrName) {
+		result, err := findLatestForMajorVersion(versions, versionOrName)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
+			return result, nil
+		}
+		// No "X.y" versions found, fall through to check for exact match (e.g., "36" without minor versions)
+		log.Debug().Msgf("No minor versions found for major version %s, checking for exact match", versionOrName)
+	}
+
+	// Try to find an exact match for the version string.
 	for _, v := range versions {
 		if v.Version == versionOrName {
-			// Check if the version has a storage path
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version '%s' found but it has no downloadable file", versionOrName)
 			}
@@ -250,7 +274,6 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 	// If no exact version match, try to find a match in the name
 	for _, v := range versions {
 		if v.Name == versionOrName {
-			// Check if the version has a storage path
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version with name '%s' found but it has no downloadable file", versionOrName)
 			}
@@ -260,6 +283,57 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 
 	// No match found
 	return nil, nil
+}
+
+// isMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
+func isMajorVersionOnly(version string) bool {
+	if version == "" {
+		return false
+	}
+	for _, c := range version {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// findLatestForMajorVersion finds the latest SDK version matching the given major version.
+func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (*SdkVersionInfo, error) {
+	prefix := majorVersion + "."
+	var best *SdkVersionInfo
+	var bestMinor, bestPatch int = -1, -1
+
+	for i := range versions {
+		v := &versions[i]
+		if !strings.HasPrefix(v.Version, prefix) {
+			continue
+		}
+		if v.StoragePath == nil {
+			continue
+		}
+
+		rest := strings.TrimPrefix(v.Version, prefix)
+		minor, patch := parseMinorPatch(rest)
+
+		if minor > bestMinor || (minor == bestMinor && patch > bestPatch) {
+			best = v
+			bestMinor = minor
+			bestPatch = patch
+		}
+	}
+
+	return best, nil
+}
+
+// parseMinorPatch parses "3" or "3.1" into minor and patch numbers.
+func parseMinorPatch(s string) (minor, patch int) {
+	minorStr, patchStr, hasPatch := strings.Cut(s, ".")
+	minor, _ = strconv.Atoi(minorStr)
+	if hasPatch {
+		patch, _ = strconv.Atoi(patchStr)
+	}
+	return minor, patch
 }
 
 // DownloadLatestSdk downloads the latest SDK to the specified target directory.

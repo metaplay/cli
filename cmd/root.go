@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/common"
@@ -35,8 +36,9 @@ var skipAppVersionCheck bool     // Skip check for a new version of the CLI (--s
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "metaplay",
-	Short: "Metaplay CLI for development, deployment, and operations",
+	Use:           "metaplay",
+	Short:         "Metaplay CLI for development, deployment, and operations",
+	SilenceErrors: true, // We handle errors ourselves in Execute()
 	Example: renderExample(`
 		# Initialize a new Metaplay project in an existing Unity project
 		MyGame$ metaplay init project
@@ -148,8 +150,20 @@ var rootCmd = &cobra.Command{
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
-		os.Exit(1)
+		// Handle Cobra errors (unknown flags, missing arguments, etc.)
+		// Usage was already shown by Cobra, now show formatted error at the end
+		displayCobraError(err)
+		os.Exit(2)
 	}
+}
+
+// displayCobraError formats Cobra's built-in errors (flag parsing, unknown commands, etc.)
+// This uses fmt.Fprintln directly instead of stderrLogger because Cobra errors can occur
+// before PersistentPreRun has initialized the logger (e.g., completely malformed commands).
+func displayCobraError(err error) {
+	// Add empty line for separation from usage text, then styled error
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %v", err)))
 }
 
 func init() {
@@ -184,6 +198,7 @@ func init() {
 	debugCmd.GroupID = "core"
 	deployCmd.GroupID = "core"
 	devCmd.GroupID = "core"
+	testCmd.GroupID = "core"
 
 	// Manage project:
 	initCmd.GroupID = "project"
@@ -312,7 +327,7 @@ type CommandOptions interface {
 func getUsePositionalArgs(opts CommandOptions) (UsePositionalArgs, bool) {
 	// Use reflection to access the embedded UsePositionalArgs (to parse PositionalArgs)
 	v := reflect.ValueOf(opts)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 
@@ -337,10 +352,14 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		if hasPosArgs {
 			err := posArgs.Arguments().ParseCommandLine(args)
 			if err != nil {
-				stderrLogger.Error().Msgf("Expected usage: %s", cmd.UseLine())
-				stderrLogger.Warn().Msgf("%s", posArgs.args.GetHelpText())
-				stderrLogger.Info().Msgf("Run with --help flag for full help.")
-				os.Exit(2)
+				// Add usage suggestion to the error
+				cliErr, ok := clierrors.AsCLIError(err)
+				if ok && cliErr.Suggestion == "" {
+					cliErr.Suggestion = fmt.Sprintf("Run '%s --help' for usage details", cmd.CommandPath())
+				}
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+				displayError(err)
+				os.Exit(clierrors.GetExitCode(err))
 			}
 		} else {
 			// \todo implement me: expect no args provided
@@ -349,17 +368,61 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
-			stderrLogger.Info().Msgf("%s", cmd.UsageString())
-			stderrLogger.Error().Msgf("USAGE ERROR: %v", err)
-			os.Exit(2)
+			// Show usage help for Prepare errors that are either explicit usage errors
+			// or plain Go errors (which are assumed to be usage errors since Prepare
+			// validates arguments). CLIErrors with ExitRuntime skip usage text.
+			if clierrors.IsUsageError(err) || !isCLIError(err) {
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+			}
+			displayError(err)
+			os.Exit(clierrors.GetExitCode(err))
 		}
 
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
-			stderrLogger.Error().Msgf("ERROR: %v", err)
-			os.Exit(1)
+			// Only show usage for explicit usage errors from Run()
+			if clierrors.IsUsageError(err) {
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+			}
+			displayError(err)
+			os.Exit(clierrors.GetExitCode(err))
 		}
+	}
+}
+
+// isCLIError checks if the error is a CLIError type.
+func isCLIError(err error) bool {
+	_, ok := clierrors.AsCLIError(err)
+	return ok
+}
+
+// displayError formats and displays an error to the user.
+// CLIError instances get special formatting with suggestions and details.
+// Regular errors are displayed with a simple "Error:" prefix.
+func displayError(err error) {
+	cliErr, ok := clierrors.AsCLIError(err)
+	if ok {
+		// Display the main error message, with underlying cause on the same line if present
+		if cliErr.Cause != nil {
+			stderrLogger.Error().Msgf("Error: %s %s", cliErr.Message, styles.RenderMuted(fmt.Sprintf("(%v)", cliErr.Cause)))
+		} else {
+			stderrLogger.Error().Msgf("Error: %s", cliErr.Message)
+		}
+
+		// Display any detail bullet points
+		for _, detail := range cliErr.Details {
+			stderrLogger.Info().Msgf("  %s %s", styles.RenderMuted("-"), detail)
+		}
+
+		// Display the suggestion with empty line before and styled "Suggest:" prefix
+		if cliErr.Suggestion != "" {
+			stderrLogger.Info().Msg("")
+			stderrLogger.Info().Msgf("%s %s", styles.RenderPrompt("Hint:"), cliErr.Suggestion)
+		}
+	} else {
+		// Fallback for plain Go errors
+		stderrLogger.Error().Msgf("Error: %v", err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
@@ -27,7 +28,7 @@ func init() {
 	o := getKubeConfigOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
 
 	cmd := &cobra.Command{
@@ -54,17 +55,17 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Get KubeConfig for environment tough-falcons with dynamic credentials
-			metaplay get kubeconfig tough-falcons --type=dynamic
+			# Get KubeConfig for environment nimbly with dynamic credentials
+			metaplay get kubeconfig nimbly --type=dynamic
 
 			# Get KubeConfig with static credentials and save to a file
-			metaplay get kubeconfig tough-falcons --type=static --output=kubeconfig.yaml
+			metaplay get kubeconfig nimbly --type=static --output=kubeconfig.yaml
 
 			# Get KubeConfig with default credentials type (based on user type)
-			metaplay get kubeconfig tough-falcons
+			metaplay get kubeconfig nimbly
 
 			# Get KubeConfig using a custom auth provider
-			metaplay get kubeconfig tough-falcons my-auth-provider
+			metaplay get kubeconfig nimbly my-auth-provider
 		`),
 	}
 	getCmd.AddCommand(cmd)
@@ -129,13 +130,12 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	case "static":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	default:
-		log.Error().Msg("Invalid credentials type; must be either \"static\" or \"dynamic\"")
-		os.Exit(1)
+		return clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
+			WithSuggestion("Use --type=static or --type=dynamic")
 	}
 
 	if err != nil {
-		log.Error().Msgf("Failed to get environment k8s config: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to get environment kubeconfig")
 	}
 
 	// Write the kubeconfig payload to a file or stdout.

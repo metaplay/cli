@@ -7,9 +7,9 @@ package cmd
 import (
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -95,8 +95,8 @@ func (o *authShowTokensOpts) Run(cmd *cobra.Command) error {
 
 	// Handle missing tokens (not logged in).
 	if tokenSet == nil {
-		log.Warn().Msg("Not logged in! Sign in first with 'metaplay auth login' or 'metaplay auth machine-login'")
-		os.Exit(1)
+		return clierrors.New("Not logged in").
+			WithSuggestion("Sign in first with 'metaplay auth login' or 'metaplay auth machine-login'")
 	}
 
 	// Decode and log the access token at debug level

@@ -6,6 +6,8 @@ package helmutil
 
 import (
 	"fmt"
+	"maps"
+	"reflect"
 	"strings"
 	"time"
 
@@ -40,6 +42,14 @@ func HelmUpgradeOrInstall(
 	timeout time.Duration,
 	validateValuesSchema bool,
 ) (*release.Release, error) {
+	// Validate that defaultValues and requiredValues have correct types
+	if err := validateHelmValuesTypes(defaultValues, "defaultValues"); err != nil {
+		return nil, fmt.Errorf("invalid defaultValues: %w", err)
+	}
+	if err := validateHelmValuesTypes(requiredValues, "requiredValues"); err != nil {
+		return nil, fmt.Errorf("invalid requiredValues: %w", err)
+	}
+
 	// Show header at top
 	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
 	output.SetHeaderLines([]string{headerLine})
@@ -165,9 +175,7 @@ func HelmUpgradeOrInstall(
 func mergeValuesMaps(base, override map[string]any) map[string]any {
 	// Clone base.
 	combined := make(map[string]any, len(base))
-	for k, v := range base {
-		combined[k] = v
-	}
+	maps.Copy(combined, base)
 
 	// Merge all keys from override (recursively merge maps).
 	for k, v := range override {
@@ -220,5 +228,63 @@ func doCheckRequiredValues(inspected, required map[string]any, path string) erro
 			return fmt.Errorf("scalar %q must not be set or must be %q, but got %q", path+k, requiredV, inspectedV)
 		}
 	}
+	return nil
+}
+
+// validateHelmValuesTypes recursively validates that all arrays are []any and all maps are map[string]any.
+// The underlying library that handles Helm values validation within the Helm library requires the values
+// to be exactly of these types. Properly-typed arrays and maps cause validation errors.
+func validateHelmValuesTypes(values map[string]any, path string) error {
+	for key, value := range values {
+		currentPath := path + "." + key
+		if path == "" {
+			currentPath = key
+		}
+
+		if err := validateValueType(value, currentPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateValueType validates a single value recursively. See validateHelmValuesTypes for details.
+func validateValueType(value any, path string) error {
+	if value == nil {
+		return nil
+	}
+
+	v := reflect.ValueOf(value)
+	t := v.Type()
+
+	switch v.Kind() {
+	case reflect.Slice:
+		// Check if it's []any
+		if t != reflect.TypeFor[[]any]() {
+			return fmt.Errorf("invalid array type at %s: expected []any, got %s", path, t)
+		}
+		// Recursively validate slice elements
+		for i := range v.Len() {
+			elementPath := fmt.Sprintf("%s[%d]", path, i)
+			if err := validateValueType(v.Index(i).Interface(), elementPath); err != nil {
+				return err
+			}
+		}
+	case reflect.Map:
+		// Check if it's map[string]any
+		if t != reflect.TypeFor[map[string]any]() {
+			return fmt.Errorf("invalid map type at %s: expected map[string]any, got %s", path, t)
+		}
+		// Recursively validate map values
+		for _, mapKey := range v.MapKeys() {
+			keyStr := mapKey.String()
+			mapValue := v.MapIndex(mapKey).Interface()
+			mapPath := path + "." + keyStr
+			if err := validateValueType(mapValue, mapPath); err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }

@@ -28,7 +28,7 @@ func init() {
 	o := secretsListOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:   "list ENVIRONMENT [flags]",
@@ -45,18 +45,19 @@ func init() {
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
+			- 'metaplay secrets update ENVIRONMENT NAME ...' to update an existing user secret.
 			- 'metaplay secrets delete ENVIRONMENT NAME ...' to delete a user secret.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: renderExample(`
 			# Show all secrets in text format (default) with their values censored.
-			metaplay secrets list tough-falcons
+			metaplay secrets list nimbly
 
 			# Show all secrets with their values shown.
-			metaplay secrets list tough-falcons --show-values
+			metaplay secrets list nimbly --show-values
 
 			# Show all secrets in JSON format (with all Kubernetes metadata included).
-			metaplay secrets list tough-falcons --format=json
+			metaplay secrets list nimbly --format=json
 		`),
 	}
 

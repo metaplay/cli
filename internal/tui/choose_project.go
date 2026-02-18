@@ -7,7 +7,6 @@ package tui
 import (
 	"fmt"
 
-	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -15,22 +14,13 @@ import (
 
 // ChooseOrgAndProject fetches all the organizations and projects from the portal (that the user has
 // access to) and then displays an interactive list for the user to choose the project from.
-func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error) {
+func ChooseOrgAndProject(orgsAndProjects []portalapi.OrganizationWithProjects) (*portalapi.ProjectInfo, error) {
+	// Must be in interactive mode.
 	if !isInteractiveMode {
 		return nil, fmt.Errorf("interactive mode required for project selection")
 	}
 
-	// Get available organizations from the portal.
-	portalClient := portalapi.NewClient(tokenSet)
-	orgsAndProjects, err := portalClient.FetchUserOrgsAndProjects()
-	if err != nil {
-		return nil, err
-	}
-	if len(orgsAndProjects) == 0 {
-		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
-	}
-
-	// Let the user choose their organization.
+	// Let the user choose the organization.
 	selectedOrg, err := ChooseFromListDialog(
 		"Choose Target Organization",
 		orgsAndProjects,
@@ -41,7 +31,7 @@ func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error
 		return nil, err
 	}
 
-	// Must have at least one project in the organization.
+	// Must have at least one project in the chosen organization.
 	orgProjects := selectedOrg.Projects
 	if len(orgProjects) == 0 {
 		return nil, fmt.Errorf("no accessible projects found in the chosen organization; either create one in https://portal.metaplay.dev or request access to an existing one from your team")
@@ -50,7 +40,13 @@ func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error
 	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedOrg.Name)
 
 	// Let the user choose the project (within the organization)
-	selectedProject, err := ChooseProjectDialog(orgProjects)
+	selectedProject, err := ChooseFromListDialog[portalapi.ProjectInfo](
+		"Select Target Project",
+		orgProjects,
+		func(proj *portalapi.ProjectInfo) (string, string) {
+			return proj.Name, fmt.Sprintf("[%s]", proj.HumanID)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -58,26 +54,6 @@ func ChooseOrgAndProject(tokenSet *auth.TokenSet) (*portalapi.ProjectInfo, error
 	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), selectedProject.Name, styles.RenderMuted(fmt.Sprintf("[%s]", selectedProject.HumanID)))
 
 	return selectedProject, nil
-}
-
-func ChooseProjectDialog(projects []portalapi.ProjectInfo) (*portalapi.ProjectInfo, error) {
-	return ChooseFromListDialog[portalapi.ProjectInfo](
-		"Select Target Project",
-		projects,
-		func(proj *portalapi.ProjectInfo) (string, string) {
-			return proj.Name, fmt.Sprintf("[%s]", proj.HumanID)
-		},
-	)
-}
-
-func ChooseEnvironmentDialog(environments []portalapi.EnvironmentInfo) (*portalapi.EnvironmentInfo, error) {
-	return ChooseFromListDialog[portalapi.EnvironmentInfo](
-		"Select Target Environment",
-		environments,
-		func(env *portalapi.EnvironmentInfo) (string, string) {
-			return env.Name, fmt.Sprintf("[%s]", env.HumanID)
-		},
-	)
 }
 
 // Pluralize a word based on the count. This is a dumb version that only adds an

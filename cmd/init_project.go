@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
@@ -21,13 +22,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Support initializing projects with SDK versions up to this version.
+// Only enforced when downloading the SDK from the portal.
+var latestSupportedSdkVersion = version.Must(version.NewVersion("36.999.999"))
+
 type initProjectOpts struct {
 	flagProjectID          string // Human ID of the project.
-	flagSdkVersion         string // Metaplay SDK version to use (e.g., "32.0").
+	flagSdkVersion         string // Metaplay SDK version to use (e.g., "34.0").
 	flagSdkSource          string // Path to Metaplay SDK release .zip to use.
 	flagUnityProjectPath   string // Path to the Unity project files within the project.
 	flagAutoAgreeContracts bool   // Automatically agree to the terms & conditions.
 	flagAutoConfirm        bool   // Automatically confirm the 'Does this look correct?'
+	flagNoSample           bool   // Skip installing the MetaplayHelloWorld sample.
 
 	projectPath              string // User-provided path to project root (relative or absolute).
 	absoluteProjectPath      string // Absolute path to the project root.
@@ -73,11 +79,11 @@ func init() {
 			# Initialize SDK in your project at a specific path.
 			metaplay init project --project ../project-path
 
-			# Specify Metaplay SDK version to use (only 32.0 and above are supported).
-			metaplay init project --sdk-version=32.0
+			# Specify Metaplay SDK version to use (only 34.0 and above are supported).
+			metaplay init project --sdk-version=34.0
 
 			# Use a pre-downloaded Metaplay SDK archive.
-			metaplay init project --sdk-source=metaplay-sdk-release-32.0.zip
+			metaplay init project --sdk-source=metaplay-sdk-release-34.0.zip
 		`),
 	}
 
@@ -85,10 +91,11 @@ func init() {
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagProjectID, "project-id", "", "The ID for your project, eg, 'fancy-gorgeous-bear' (optional)")
 	flags.StringVar(&o.flagSdkVersion, "sdk-version", "", "Specify Metaplay SDK version to use, defaults to latest (optional)")
-	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-32.0.zip' (optional)")
+	flags.StringVar(&o.flagSdkSource, "sdk-source", "", "Install from the specified SDK archive file or use existing MetaplaySDK directory, eg, 'metaplay-sdk-release-34.0.zip' (optional)")
 	flags.StringVar(&o.flagUnityProjectPath, "unity-project", "", "Path to the Unity project files within the project (default: auto-detect)")
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to the privacy policy and terms and conditions")
 	flags.BoolVar(&o.flagAutoConfirm, "yes", false, "Automatically confirm the 'Does this look correct?' confirmation")
+	flags.BoolVar(&o.flagNoSample, "no-sample", false, "Skip installing the MetaplayHelloWorld sample scene")
 
 	initCmd.AddCommand(cmd)
 }
@@ -113,13 +120,15 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 	// --sdk-version and --sdk-source are mutually exclusive.
 	if o.flagSdkVersion != "" && o.flagSdkSource != "" {
-		return fmt.Errorf("--sdk-version and --sdk-source are mutually exclusive; only one can be used at a time")
+		return clierrors.NewUsageError("--sdk-version and --sdk-source cannot be used together").
+			WithSuggestion("Use --sdk-version to download a specific version, or --sdk-source to use a local SDK archive")
 	}
 
 	// Check if metaplay-project.yaml already exists
 	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 	if _, err := os.Stat(configFilePath); err == nil {
-		return fmt.Errorf("config file %s exists, project has already been initialized", configFilePath)
+		return clierrors.Newf("Project already initialized at %s", configFilePath).
+			WithSuggestion("To re-initialize, first remove the existing metaplay-project.yaml file")
 	}
 
 	// If Unity project path is not specified, try to find it within the project.
@@ -161,7 +170,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	if o.flagSdkSource != "" {
 		metaplaySdkSource, err = filepath.Abs(o.flagSdkSource)
 		if err != nil {
-			return fmt.Errorf("Could not resolve sdk source location: %w", err)
+			return fmt.Errorf("could not resolve SDK source location: %w", err)
 		}
 	}
 	// Check if MetaplaySDK/ already exists: if so, we do migration only.
@@ -169,7 +178,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		metaplaySdkPath := filepath.Join(o.projectPath, "MetaplaySDK")
 		_, err = os.Stat(metaplaySdkPath)
 		if err == nil {
-			return fmt.Errorf("MetaplaySDK/ directory already exists!")
+			return clierrors.New("MetaplaySDK/ directory already exists").
+				WithSuggestion("Remove or rename the existing MetaplaySDK/ directory to proceed")
 		}
 	}
 
@@ -178,21 +188,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	var sdkVersionInfo *portalapi.SdkVersionInfo = nil
 	var sdkVersionBadge string = ""
 	if o.flagSdkSource == "" {
-		// Handle agreeing to general terms & conditions.
-		log.Debug().Msg("Fetch the user state to see which contracts have been signed")
-		userState, err := portalClient.GetUserState()
-		if err != nil {
-			return err
-		}
-
 		// Ensure Privacy Policy is accepted.
-		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.PrivacyPolicy)
-		if err != nil {
-			return err
-		}
-
-		// Ensure Terms & Conditions is accepted.
-		err = o.ensureContractAccepted(cmd.Context(), portalClient, &userState.Contracts.TermsAndConditions)
+		err = ensureSdkDownloadContractsAccepted(cmd.Context(), portalClient, o.flagAutoAgreeContracts)
 		if err != nil {
 			return err
 		}
@@ -216,20 +213,16 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 			}
 
 			if sdkVersionInfo == nil {
-				return fmt.Errorf("SDK version '%s' not found in Metaplay portal", o.flagSdkVersion)
+				return clierrors.Newf("SDK version '%s' not found", o.flagSdkVersion).
+					WithSuggestion("Check available versions with 'metaplay get sdk-versions'")
 			}
 		}
 
-		// Validate the selected SDK version.
-		vsn, err := version.NewVersion(sdkVersionInfo.Version)
+		// Validate SDK version.
+		// \todo Enforce version when using --sdk-source?
+		_, err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
 		if err != nil {
-			return fmt.Errorf("invalid SDK version string '%s': %w", sdkVersionInfo.Version, err)
-		}
-
-		// Must be at least 32.0 (allow pre versions too).
-		requiredVersion := version.Must(version.NewVersion("32.0-aaaaa"))
-		if vsn.LessThan(requiredVersion) {
-			return fmt.Errorf("SDK version %s is too old; this operation only works with SDK versions 32.0 and above", sdkVersionInfo.Version)
+			return err
 		}
 
 		// The SDK version must be downloadable.
@@ -238,20 +231,10 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Choose target project either with human ID provided as flag or interactively
-	// let the user choose from a list of projects fetched from the portal.
-	var targetProject *portalapi.ProjectInfo
-	if o.flagProjectID != "" {
-		portal := portalapi.NewClient(tokenSet)
-		targetProject, err = portal.FetchProjectInfo(o.flagProjectID)
-		if err != nil {
-			return err
-		}
-	} else {
-		targetProject, err = tui.ChooseOrgAndProject(tokenSet)
-		if err != nil {
-			return err
-		}
+	// Choose target project either with provided human ID or let user choose interactively.
+	targetProject, err := chooseOrgAndProject(portalClient, o.flagProjectID)
+	if err != nil {
+		return err
 	}
 
 	// Fetch all project's environments (for populating the metaplay-config.yaml).
@@ -268,7 +251,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Project root:       %s", styles.RenderTechnical(o.absoluteProjectPath))
 	log.Info().Msgf("Unity project dir:  %s", styles.RenderTechnical(filepath.Join(o.absoluteProjectPath, o.relativeUnityProjectPath)))
 	if sdkVersionInfo != nil {
-		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
+		log.Info().Msgf("Metaplay version:   %s %s", styles.RenderTechnical(sdkVersionInfo.Version), sdkVersionBadge)
 		log.Info().Msgf("Metaplay SDK dir:   %s%s", styles.RenderTechnical("MetaplaySDK"), styles.RenderAttention(" [new]"))
 	} else if isDirectory(metaplaySdkSource) {
 		log.Info().Msgf("Metaplay SDK:       %s %s", styles.RenderTechnical(metaplaySdkSource), styles.RenderAttention("[use existing]"))
@@ -316,7 +299,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 				return err
 			}
 		}
-		log.Debug().Msgf("Relative path to MetaplaySDK: %s", relativePathToSdk)
+		log.Debug().Msgf("Relative path to MetaplaySDK (from project root): %s", relativePathToSdk)
 
 		return nil
 	})
@@ -347,7 +330,10 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 		// Copy files from the template.
 		log.Debug().Msgf("Initialize SDK resources in the project")
-		err = installFromTemplate(project, ".", "project_template.json")
+		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
+			"PROJECT_DISPLAY_NAME": targetProject.Name,
+			"BACKEND_SOLUTION_FILENAME": "Server.sln",
+		}, o.flagNoSample)
 		if err != nil {
 			return fmt.Errorf("failed to run SDK installer: %w", err)
 		}
@@ -371,22 +357,45 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg("The following changes were made to your project:")
 	log.Info().Msgf("- Added project configuration file %s", styles.RenderTechnical("metaplay-project.yaml"))
-	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical("UnityClient/Assets/SharedCode/"))
-	log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical("UnityClient/Assets/MetaplayHelloWorld/"))
-	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical("UnityClient/Assets/StreamingAssets/"))
-	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical("UnityClient/Package/manifest.json"))
+	log.Info().Msgf("- Added shared game logic code at %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/SharedCode/"))))
+	if !o.flagNoSample {
+		log.Info().Msgf("- Added sample scene in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/MetaplayHelloWorld/"))))
+	}
+	log.Info().Msgf("- Added pre-built game config archive to %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Assets/StreamingAssets/"))))
+	log.Info().Msgf("- Added reference to Metaplay Client SDK in %s", styles.RenderTechnical(filepath.ToSlash(filepath.Join(o.relativeUnityProjectPath, "Packages/manifest.json"))))
 
 	return nil
 }
 
-func (o *initProjectOpts) ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client, contractState *portalapi.UserCoreContract) error {
+// ensureSdkDownloadContractsAccepted ensures that the user has agreed to the Privacy Policy and Terms & Conditions
+// before SDK download. If auto-agree is specified, the contracts are accepted automatically, otherwise the user is
+// prompted to agree to the contracts.
+func ensureSdkDownloadContractsAccepted(ctx context.Context, portalClient *portalapi.Client, autoAgree bool) error {
+	log.Debug().Msg("Fetch the user state to see which contracts have been signed")
+	userState, err := portalClient.GetUserState()
+	if err != nil {
+		return err
+	}
+
+	if err := ensureContractAccepted(ctx, portalClient, &userState.Contracts.PrivacyPolicy, autoAgree); err != nil {
+		return err
+	}
+	if err := ensureContractAccepted(ctx, portalClient, &userState.Contracts.TermsAndConditions, autoAgree); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureContractAccepted ensures that the specified contract has been signed by the user. If the contract is not
+// yet accepted, the user is prompted to do so, or if auto-agree is specified, the contract is accepted automatically.
+func ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client, contractState *portalapi.UserCoreContract, autoAgree bool) error {
 	// If already signed, return immediately.
 	if contractState.ContractSignature != nil {
 		return nil
 	}
 
 	// If auto-agree not specified, confirm the user for agreement to contract.
-	if !o.flagAutoAgreeContracts {
+	if !autoAgree {
 		contractURL := fmt.Sprintf("%s/contracts/%s", common.PortalBaseURL, contractState.ID)
 		choice, err := tui.DoConfirmDialog(
 			ctx,
@@ -410,4 +419,28 @@ func (o *initProjectOpts) ensureContractAccepted(ctx context.Context, portalClie
 
 	log.Info().Msgf(" %s Agreed to %s!", styles.RenderSuccess("✓"), contractState.Name)
 	return nil
+}
+
+// Parse an SDK version and validate that it's compatible with this CLI version.
+func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
+	// Validate the selected SDK version.
+	vsn, err := version.NewVersion(versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid SDK version string '%s': %w", versionStr, err)
+	}
+
+	// Check that the SDK version is the minimum supported by the CLI.
+	if vsn.LessThan(metaproj.OldestSupportedSdkVersion) {
+		return nil, clierrors.Newf("SDK version %s is too old", versionStr).
+			WithDetails(fmt.Sprintf("Minimum supported version is %s", metaproj.OldestSupportedSdkVersion)).
+			WithSuggestion("Update Metaplay SDK to a more recent version (or use the legacy AuthCLI if you must use an older version)")
+	}
+
+	// Must not be newer than the latest supported version.
+	if vsn.GreaterThan(latestSupportedSdkVersion) {
+		return nil, clierrors.Newf("SDK version %s is not supported by this CLI version", versionStr).
+			WithSuggestion("Upgrade the CLI with 'metaplay update cli'")
+	}
+
+	return vsn, nil
 }

@@ -6,12 +6,13 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -44,17 +45,15 @@ func init() {
 	}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.Environment, "ENVIRONMENT", "Target environment, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.Environment, "ENVIRONMENT", "Target environment, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.PodName, "POD", "Target pod name, eg, 'all-0'.")
 
 	cmd := &cobra.Command{
 		Use:     "shell [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"sh"},
-		Short:   "[preview] Start a debug container targeting the specified pod",
+		Short:   "Start a debug container targeting the specified pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change
-
 			Start a debug container targeting a game server pod in the specified environment.
 			This command creates a Kubernetes ephemeral debug container that attaches to an existing
 			game server pod, allowing you to inspect and troubleshoot the running server.
@@ -70,11 +69,11 @@ func init() {
 			{Arguments}
 		`),
 		Example: renderExample(`
-			# Start a debug container in the 'tough-falcons' environment (when only one pod is running).
-			metaplay debug shell tough-falcons
+			# Start a debug container in the 'nimbly' environment, interactively choose target pod.
+			metaplay debug shell nimbly
 
-			# Start a debug container pod named 'service-0' in the environment 'tough-falcons'.
-			metaplay debug shell tough-falcons service-0
+			# Start a debug container in the 'nimbly' environment, targeting pod 'service-0'.
+			metaplay debug shell nimbly service-0
 		`),
 	}
 
@@ -120,11 +119,15 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 	defer cleanup()
 
-	// Setup IO streams
+	// Setup IO streams using mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
+	stdIn, stdOut, stdErr := mobyterm.StdStreams()
 	ioStreams := IOStreams{
-		In:     cmd.InOrStdin(),
-		Out:    cmd.OutOrStdout(),
-		ErrOut: cmd.ErrOrStderr(),
+		In:     stdIn,
+		Out:    stdOut,
+		ErrOut: stdErr,
 	}
 
 	// Attach to the running shell in the container.
@@ -180,11 +183,13 @@ func resolveTargetPod(gameServer *envapi.TargetGameServer, podName string) (*env
 
 func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) (*envapi.KubeClient, *corev1.Pod, error) {
 	if !tui.IsInteractiveMode() {
-		return nil, nil, fmt.Errorf("interactive mode required for selecting target pod")
+		return nil, nil, clierrors.NewUsageError("Interactive mode required for pod selection").
+			WithSuggestion("Specify the pod name explicitly, e.g., 'metaplay debug shell nimbly service-0'")
 	}
 
 	if len(shardSetsWithPods) == 0 {
-		return nil, nil, fmt.Errorf("no stateful sets exist in the gameserver")
+		return nil, nil, clierrors.New("No game server pods found in the environment").
+			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 
 	// Create a flattened list of all pods with their shard set context
@@ -205,7 +210,8 @@ func chooseTargetShardAndPodDialog(shardSetsWithPods []envapi.ShardSetWithPods) 
 	}
 
 	if len(allPods) == 0 {
-		return nil, nil, fmt.Errorf("no pods found in any shard set")
+		return nil, nil, clierrors.New("No running pods found in the game server").
+			WithSuggestion("Check if the game server deployment is healthy with 'metaplay debug server-status'")
 	}
 
 	// Let the user choose from the flattened pod list

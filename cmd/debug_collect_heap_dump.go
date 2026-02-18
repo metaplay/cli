@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -36,7 +37,7 @@ func init() {
 	o := debugCollectHeapDumpOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argPodName, "POD", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 
 	cmd := &cobra.Command{
@@ -49,7 +50,7 @@ func init() {
 
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
-			WARNING: This operation is very intrusive as it completely freeze the target process
+			WARNING: This operation is very intrusive as it completely freezes the target process
 			for the duration of the operation. This can be from seconds to minutes, depending on
 			the process heap size.
 
@@ -65,33 +66,34 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Collect heap dump from the only running pod.
-			metaplay debug collect-heap-dump tough-falcons
+			metaplay debug collect-heap-dump nimbly
 
 			# Collect heap dump from pod 'service-0'.
-			metaplay debug collect-heap-dump tough-falcons service-0
+			metaplay debug collect-heap-dump nimbly service-0
 
 			# Use 'dotnet-dump' for full process dump instead of 'dotnet-gcdump'.
-			metaplay debug collect-heap-dump tough-falcons --mode dump
+			metaplay debug collect-heap-dump nimbly --mode=dump
 
 			# Specify custom output path. Use .gcdump extension for gcdump mode, and no extension for dump mode.
-			metaplay debug collect-heap-dump tough-falcons -o /path/to/output.gcdump
-			metaplay debug collect-heap-dump tough-falcons --mode dump -o /path/to/core_250901_093000
+			metaplay debug collect-heap-dump nimbly -o /path/to/output.gcdump
+			metaplay debug collect-heap-dump nimbly --mode=dump -o /path/to/core_250901_093000
 
 			# Don't ask for confirmation on the operation.
-			metaplay debug collect-heap-dump tough-falcons --yes
+			metaplay debug collect-heap-dump nimbly --yes
 		`),
 	}
 	debugCmd.AddCommand(cmd)
 
 	cmd.Flags().StringVarP(&o.flagOutputPath, "output", "o", "", "Output path for the heap dump file (default: dump-YYYYMMDD-hhmmss.gcdump for gcdump mode, core_YYMMDD_HHMMSS for dump mode)")
-	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump) (default: gcdump)")
+	cmd.Flags().StringVar(&o.flagCollectMode, "mode", "gcdump", "Collection mode: 'gcdump' (managed heap) or 'dump' (full process dump)")
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip heap size warning and proceed with dump")
 }
 
 func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate collection mode
 	if o.flagCollectMode != "gcdump" && o.flagCollectMode != "dump" {
-		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
+		return clierrors.NewUsageErrorf("Invalid collection mode '%s'", o.flagCollectMode).
+			WithSuggestion("Use --mode=gcdump for managed heap or --mode=dump for full process dump")
 	}
 
 	// Set default output path if not specified
@@ -110,11 +112,13 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 		actualExtension := filepath.Ext(o.flagOutputPath)
 		if o.flagCollectMode == "gcdump" {
 			if actualExtension != ".gcdump" {
-				return fmt.Errorf("invalid extension for gcdump mode: expected '.gcdump' but got '%s'", actualExtension)
+				return clierrors.NewUsageErrorf("Invalid file extension '%s' for gcdump mode", actualExtension).
+					WithSuggestion("Use .gcdump extension for gcdump mode, e.g., 'dump.gcdump'")
 			}
 		} else if o.flagCollectMode == "dump" {
 			if actualExtension != "" {
-				return fmt.Errorf("dump mode must not have a file extension, but got '%s'", actualExtension)
+				return clierrors.NewUsageErrorf("Invalid file extension '%s' for dump mode", actualExtension).
+					WithSuggestion("Use no extension for dump mode, e.g., 'core_250901_093000'")
 			}
 		}
 	}

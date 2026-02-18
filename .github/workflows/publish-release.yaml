@@ -5,6 +5,8 @@ on:
     tags:
       - '[0-9]+.[0-9]+.[0-9]+' # only official release tags
 
+run-name: Publish v${{ github.ref_name }}
+
 permissions:
   contents: write
   id-token: write
@@ -14,16 +16,19 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      - name: Log version
+        run: echo "### Published version ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Fetch tokens from the vault
         id: secrets

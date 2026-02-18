@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -67,15 +68,12 @@ func init() {
 
 			# Auto-accept reset without confirmation prompt
 			metaplay database reset nimbly --yes
-
-			# Force reset even if a game server is deployed (dangerous!)
-			metaplay database reset nimbly --force --yes
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with reset")
-	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed")
+	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with reset even if a game server is deployed (DANGEROUS!!)")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when resetting production environments")
 
 	databaseCmd.AddCommand(cmd)
@@ -84,12 +82,14 @@ func init() {
 func (o *databaseResetOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Environment argument is required
 	if o.argEnvironment == "" {
-		return fmt.Errorf("ENVIRONMENT argument is required")
+		return clierrors.NewUsageError("ENVIRONMENT argument is required").
+			WithSuggestion("Specify the target environment, e.g., 'metaplay database reset develop'")
 	}
 
 	// In non-interactive mode, --yes flag is required for safety
 	if !tui.IsInteractiveMode() && !o.flagYes {
-		return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database reset operation")
+		return clierrors.NewUsageError("Confirmation required for destructive operation").
+			WithSuggestion("Use --yes flag in non-interactive mode to confirm database reset")
 	}
 
 	return nil
@@ -110,7 +110,8 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 
 	// Check if this is a production environment and require additional confirmation
 	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
-		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when resetting production environments", envConfig.Name)
+		return clierrors.Newf("Production environment detected: %s", envConfig.Name).
+			WithSuggestion("Use --confirm-production flag to confirm reset of production environments")
 	}
 
 	// Resolve target environment & game server
@@ -132,18 +133,21 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	// Check for any active game server Helm deployments - refuse to reset if found
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
 	if err != nil {
-		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+		return clierrors.Wrap(err, "Failed to check for existing Helm releases")
 	}
 
 	// Check if there's a game server deployed.
 	log.Info().Msg("")
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
-			return fmt.Errorf("cannot reset database: active game server deployment detected in environment '%s'. Remove the game server deployment before resetting the database, or use --force to proceed anyway", o.argEnvironment)
+			return clierrors.New("Cannot reset database while game server is deployed").
+				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s'", o.argEnvironment))
 		}
 
-		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
-		log.Info().Msgf("   Proceeding with database reset due to --force flag")
+		log.Warn().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
+		log.Warn().Msgf("   Proceeding with database reset due to --force flag.")
+		log.Warn().Msgf("   Your game server will stop functioning and you'll need to re-deploy it after the reset.")
+		log.Info().Msg("")
 	} else {
 		log.Info().Msgf("%s %s", styles.RenderSuccess("✓"), "No active game server deployments found, proceeding with database reset")
 	}

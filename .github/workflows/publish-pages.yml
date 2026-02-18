@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       # Copy the install.sh to be available publicly at https://metaplay.github.io/cli/install.sh.
       # GitHub Pages isn't throttled like the https://raw.githubusercontent.com/metaplay/cli/main/install.sh.

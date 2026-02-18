@@ -5,8 +5,7 @@
 package cmd
 
 import (
-	"os"
-
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -59,8 +58,7 @@ func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
-		log.Error().Msgf("Failed to find project: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	log.Info().Msg("")
@@ -69,8 +67,8 @@ func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Check for .NET SDK installation and required version (based on SDK version).
 	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
-		log.Error().Msgf("Failed to resolve .NET version: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to verify .NET SDK version").
+			WithSuggestion("Install the required .NET SDK version")
 	}
 
 	// Resolve backend root path.
@@ -78,8 +76,8 @@ func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 
 	// Build the project
 	if err := execChildTask(botClientPath, "dotnet", []string{"build"}); err != nil {
-		log.Error().Msgf("Failed to build the game server .NET project: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to build BotClient .NET project").
+			WithSuggestion("Check the build output above for details")
 	}
 
 	// Server built successfully

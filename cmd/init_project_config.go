@@ -171,24 +171,14 @@ func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Choose target project either with human ID provided as flag or interactively
-	// let the user choose from a list of projects fetched from the portal.
-	var targetProject *portalapi.ProjectInfo
-	if o.flagProjectID != "" {
-		portal := portalapi.NewClient(tokenSet)
-		targetProject, err = portal.FetchProjectInfo(o.flagProjectID)
-		if err != nil {
-			return err
-		}
-	} else {
-		targetProject, err = tui.ChooseOrgAndProject(tokenSet)
-		if err != nil {
-			return err
-		}
+	// Choose target project either with provided human ID or let user choose interactively.
+	portalClient := portalapi.NewClient(tokenSet)
+	targetProject, err := chooseOrgAndProject(portalClient, o.flagProjectID)
+	if err != nil {
+		return err
 	}
 
 	// Fetch all project's environments (for populating the metaplay-config.yaml).
-	portalClient := portalapi.NewClient(tokenSet)
 	environments, err := portalClient.FetchProjectEnvironments(targetProject.UUID)
 	if err != nil {
 		return err
@@ -418,7 +408,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 		sharedCodePath = content[startIndex+len(startTag) : endIndex]
 
 		// Replace '$(MSBuildThisFileDirectory)' with the path of the file.
-		sharedCodePath = strings.Replace(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/", -1)
+		sharedCodePath = strings.ReplaceAll(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/")
 
 		// Convert the path to be relative to the project root
 		// The path in Directory.Build.props is relative to the backend directory
@@ -443,7 +433,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			}
 			parts := strings.Split(globalJSON.SDK.Version, ".")
 			if len(parts) < 2 {
-				return nil, fmt.Errorf("invalid .NET runtime vesion in global.json")
+				return nil, fmt.Errorf("invalid .NET runtime version in global.json")
 			}
 			// Only keep major.minor, e.g., '9.0'.
 			dotnetRuntimeVersion = strings.Join(parts[0:2], ".")

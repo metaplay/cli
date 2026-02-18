@@ -87,7 +87,7 @@ type EnvironmentInfo struct {
 	URL         string          `json:"url"`          // TODO: What is this URL?
 	CreatedAt   string          `json:"created_at"`   // Creation time of the environment (ISO8601 string)
 	Type        EnvironmentType `json:"type"`         // Type of the environment (e.g., 'development' or 'production')
-	HumanID     string          `json:"human_id"`     // Immutable human-readable identifier, eg, 'tiny-squids'
+	HumanID     string          `json:"human_id"`     // Immutable human-readable identifier, eg, 'lovely-wombats-build-nimbly'
 	EnvDomain   string          `json:"env_domain"`   // Domain that the environment uses
 	StackDomain string          `json:"stack_domain"` // Domain of the infra stack
 	HostingType HostingType     `json:"hosting_type"`

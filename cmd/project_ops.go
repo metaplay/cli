@@ -10,8 +10,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/metaplay/cli/pkg/auth"
@@ -19,7 +21,6 @@ import (
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 	"github.com/tidwall/sjson"
-	"gopkg.in/yaml.v3"
 )
 
 // Check if the specified path is a valid directory.
@@ -138,6 +139,54 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 	}
 
 	return nil
+}
+
+// applyReplacements replaces placeholder tokens of the form {{{KEY}}} in the input string
+// using the provided replacements map. It logs discovered placeholders and whether a
+// replacement was provided. Returns the updated string and an error if unreplaced placeholders remain.
+// Example: input "Assets/{{{UNITY_PROJECT_DIR}}}/Foo" with map{"UNITY_PROJECT_DIR": "UnityClient"}
+// becomes "Assets/UnityClient/Foo".
+func applyReplacements(input string, replacements map[string]string) (string, error) {
+	// Detect all triple-braced placeholders in the input and print them.
+	// Pattern matches {{{SOME_TOKEN}}}, capturing the token name in group 1.
+	re := regexp.MustCompile(`\{\{\{([^}]+)\}\}\}`)
+	matches := re.FindAllStringSubmatch(input, -1)
+	if len(matches) > 0 {
+		log.Debug().Msgf("Found %d template placeholder(s):", len(matches))
+		seen := map[string]bool{}
+		for _, m := range matches {
+			if len(m) < 2 {
+				continue
+			}
+			key := m[1]
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = true
+			if val, ok := replacements[key]; ok {
+				log.Debug().Msgf("  {{{%s}}} -> %q", key, val)
+			} else {
+				return "", fmt.Errorf("no replacement provided for placeholder {{{%s}}}", key)
+			}
+		}
+	}
+
+	// Perform token substitution. We intentionally do not attempt to normalize
+	// separators here since the input may be used for both Windows and
+	// Unity-style (forward slash) paths.
+	out := input
+	for k, v := range replacements {
+		token := "{{{" + k + "}}}"
+		out = strings.ReplaceAll(out, token, v)
+	}
+
+	// Return an error listing the unreplaced placeholders
+	remaining := re.FindAllString(out, -1)
+	if len(remaining) > 0 {
+		return out, fmt.Errorf("unreplaced placeholders remain: %v", remaining)
+	}
+
+	return out, nil
 }
 
 // Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
@@ -347,7 +396,8 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 
 // Install files from installer template file in SDK/Installer.
 // dstPath - Root directory for installed files, relative to metaplay project dir.
-func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string) error {
+// skipSample - If true, skip files in MetaplayHelloWorld directory.
+func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
 	// Single template file within an installer project. Text files have non-empty
 	// `File` and binary files a non-empty `Bytes`. Text files support text replacement.
 	type installerTemplateFile struct {
@@ -395,27 +445,33 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 		unityProjectDir = unityProjectDir + "/"
 	}
 
-	// Use human ID as technical project name (eg, GlobalOptions.ProjectName)
-	projectName := project.Config.ProjectHumanID
-	backendSolutionFileName := "Server.sln"
+	// Fill in template replacement rules (including ones passed from outside).
+	templateReplacements := map[string]string{
+		"RELATIVE_PATH_TO_SDK": project.Config.SdkRootDir,
+		"UNITY_PROJECT_DIR":    unityProjectDir,
+		"PROJECT_HUMAN_ID":     project.Config.ProjectHumanID,
+		"PROJECT_NAME":         project.Config.ProjectHumanID, // Removed in R34
+	}
+	maps.Copy(templateReplacements, extraReplacements)
 
-	// Template replace rules.
-	relativePathToSdk := project.Config.SdkRootDir
-	log.Debug().Msgf("Template replace:")
-	log.Debug().Msgf("  PROJECT_NAME: %s", projectName)
-	log.Debug().Msgf("  PROJECT_HUMAN_ID: %s", project.Config.ProjectHumanID)
-	log.Debug().Msgf("  BACKEND_SOLUTION_FILENAME: %s", backendSolutionFileName)
-	log.Debug().Msgf("  RELATIVE_PATH_TO_SDK: %s", relativePathToSdk)
-	log.Debug().Msgf("  UNITY_PROJECT_DIR: %s", unityProjectDir)
+	// Log template replacements.
+	log.Debug().Msgf("Template replacements:")
+	for k, v := range templateReplacements {
+		log.Debug().Msgf("  %s: %s", k, v)
+	}
 
 	// Extract all files from the template definition
 	for _, file := range template.Files {
+		// Skip MetaplayHelloWorld files if requested
+		if skipSample && strings.Contains(file.Path, "MetaplayHelloWorld") {
+			log.Debug().Msgf("Skipping sample file: %s", file.Path)
+			continue
+		}
+
 		// Resolve destination path (fill in templates)
-		dstPath := filepath.Join(dstRoot, file.Path)
-		dstPath = strings.ReplaceAll(dstPath, "{{{BACKEND_SOLUTION_FILENAME}}}", backendSolutionFileName)
-		dstPath = strings.ReplaceAll(dstPath, "{{{UNITY_PROJECT_DIR}}}", unityProjectDir)
-		if strings.Contains(dstPath, "{{{") || strings.Contains(dstPath, "}}}") {
-			return fmt.Errorf("template file path %s contains unhandled template strings", dstPath)
+		dstPath, err := applyReplacements(filepath.Join(dstRoot, file.Path), templateReplacements)
+		if err != nil {
+			return fmt.Errorf("failed to apply replacements to file path %s: %v", file.Path, err)
 		}
 
 		// Ensure destination directory exists
@@ -427,13 +483,9 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 		// Write the file: with template replacements for text files, base64-decoding for binary files
 		if file.Text != "" {
 			log.Debug().Msgf("Write: %s text", dstPath)
-			content := file.Text
-			content = strings.ReplaceAll(content, "{{{RELATIVE_PATH_TO_SDK}}}", relativePathToSdk)
-			content = strings.ReplaceAll(content, "{{{PROJECT_NAME}}}", projectName)
-			content = strings.ReplaceAll(content, "{{{PROJECT_HUMAN_ID}}}", project.Config.ProjectHumanID)
-			content = strings.ReplaceAll(content, "{{{UNITY_PROJECT_DIR}}}", unityProjectDir)
-			if strings.Contains(content, "{{{") || strings.Contains(content, "}}}") {
-				return fmt.Errorf("template file %s contains unhandled template strings", dstPath)
+			content, err := applyReplacements(file.Text, templateReplacements)
+			if err != nil {
+				return fmt.Errorf("failed to apply replacements to file content %s: %v", file.Path, err)
 			}
 			if err := os.WriteFile(dstPath, []byte(content), 0644); err != nil {
 				return fmt.Errorf("failed to write file %s: %v", dstPath, err)
@@ -453,40 +505,6 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	return nil
 }
 
-func readUnityProductName(unityProjectPath string) (string, error) {
-	// Derive path to the Unity ProjectSettings asset file
-	projectSettingsPath := filepath.Join(unityProjectPath, "ProjectSettings", "ProjectSettings.asset")
-
-	// Read the file content.
-	content, err := os.ReadFile(projectSettingsPath)
-	if err != nil {
-		return "", err
-	}
-
-	type PlayerSettings struct {
-		ProductName string `yaml:"productName"`
-	}
-	var settings struct {
-		PlayerSettings PlayerSettings `yaml:"PlayerSettings"`
-	}
-
-	if err := yaml.Unmarshal(content, &settings); err != nil {
-		return "", err
-	}
-	log.Debug().Msgf("Project name from Unity PlayerSettings: %s", settings.PlayerSettings.ProductName)
-	return settings.PlayerSettings.ProductName, nil
-}
-
-func filterInvalidFileNameChars(productName string) string {
-	invalidChars := `<>:"/\|?*`
-	return strings.Map(func(r rune) rune {
-		if strings.ContainsRune(invalidChars, r) {
-			return -1
-		}
-		return r
-	}, productName)
-}
-
 // Add reference to the MetaplaySDK/Client project in the Unity project Packages/manifest.json.
 func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	const packageName = "io.metaplay.unitysdk"
@@ -498,7 +516,7 @@ func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	if err != nil {
 		return fmt.Errorf("failed to compute relative path: %w", err)
 	}
-	log.Debug().Msgf("Relative path to MetaplaySDK: %s", relativePath)
+	log.Debug().Msgf("Relative path to MetaplaySDK (from Unity Packages/ directory): %s", relativePath)
 
 	// // Check if the SDK directory exists
 	// if _, err := os.Stat(relativePathToSdk); os.IsNotExist(err) {

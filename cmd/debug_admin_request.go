@@ -18,24 +18,28 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// \todo Add a --no-retry flag to avoid HTTP retries on failed requests
+
 // Command to make HTTP requests to the game server admin API.
 type debugAdminRequestOpts struct {
 	UsePositionalArgs
 
-	argEnvironment string
-	argMethod      string
-	argPath        string
-	flagBody       string
-	flagFile       string
+	argEnvironment  string
+	argMethod       string
+	argPath         string
+	flagBody        string
+	flagFile        string
+	flagContentType string
+	flagOutput      string
 }
 
 func init() {
 	o := debugAdminRequestOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argMethod, "METHOD", "HTTP method to use: GET, POST, DELETE, PUT.")
-	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg '/api/v1/status'.")
+	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg 'api/hello'.")
 
 	cmd := &cobra.Command{
 		Use:     "admin-request ENVIRONMENT METHOD PATH [flags]",
@@ -51,6 +55,8 @@ func init() {
 			various HTTP methods. You can pass a request body using either the --body flag for
 			providing raw content directly or the --file flag to read content from a file.
 
+			Requests are automatically retried a few times to mitigate transient network errors.
+
 			{Arguments}
 
 			Related commands:
@@ -58,24 +64,32 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Get the server hello message.
-			metaplay debug admin-request tough-falcons GET /api/hello
+			metaplay debug admin-request nimbly GET api/hello
 
 			# Pipe JSON output to jq for colored rendering.
-			metaplay debug admin-request tough-falcons GET /api/hello | jq
+			metaplay debug admin-request nimbly GET api/hello | jq
 
 			# Send a POST request with request body from command line.
-			metaplay debug admin-request tough-falcons POST /api/some-endpoint --body '{"name":"test-resource"}'
+			metaplay debug admin-request nimbly POST api/some-endpoint --body '{"name":"test-resource"}'
+
+			# Send a POST request with request body containing json data from command line.
+			metaplay debug admin-request nimbly POST api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
 
 			# Send a PUT request with request payload from file.
-			metaplay debug admin-request tough-falcons PUT /api/some-endpoint --file update.json
+			metaplay debug admin-request nimbly PUT api/some-endpoint --file update.json
 
 			# Send a DELETE request.
-			metaplay debug admin-request tough-falcons DELETE /api/some-endpoint
+			metaplay debug admin-request nimbly DELETE api/some-endpoint
+
+			# Download a binary file (e.g., game config archive).
+			metaplay debug admin-request nimbly GET api/GameConfig/.../download -o gameconfig.mca
 		`),
 	}
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
+	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
+	cmd.Flags().StringVarP(&o.flagOutput, "output", "o", "", "Save response to file (for binary/non-JSON downloads)")
 
 	debugCmd.AddCommand(cmd)
 }
@@ -113,6 +127,11 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 	return nil
 }
 
+func IsJSON(str string) bool {
+	var js json.RawMessage
+	return json.Unmarshal([]byte(str), &js) == nil
+}
+
 func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
@@ -142,16 +161,31 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Prepare request body if needed
 	var requestBody any
 
+	var contentType string = o.flagContentType
+
 	if o.flagBody != "" {
 		// Use raw body content
 		requestBody = o.flagBody
+		// Detect if passed string is JSON, otherwise fallback to default resty behavior
+		if o.flagContentType == "" && IsJSON(o.flagBody) {
+			contentType = "application/json"
+		}
 	} else if o.flagFile != "" {
 		// Read content from file
 		fileContent, err := os.ReadFile(o.flagFile)
 		if err != nil {
 			return fmt.Errorf("failed to read file %s: %v", o.flagFile, err)
 		}
-		requestBody = string(fileContent)
+		requestBody = fileContent
+
+		// Detect if file content is JSON, otherwise use octet-stream
+		if o.flagContentType == "" {
+			if IsJSON(string(fileContent)) {
+				contentType = "application/json"
+			} else {
+				contentType = "application/octet-stream"
+			}
+		}
 	}
 
 	// Debug logging
@@ -172,7 +206,33 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msg("")
 
-	// Make the HTTP request based on the method
+	// Binary download mode: save raw response to file
+	if o.flagOutput != "" {
+		request := adminClient.Resty.R()
+		if contentType != "" {
+			request.SetHeader("Content-Type", contentType)
+		}
+		if requestBody != nil {
+			request.SetBody(requestBody)
+		}
+
+		response, err := request.Execute(o.argMethod, o.argPath)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
+			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
+		}
+
+		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
+			return fmt.Errorf("failed to write output file: %v", err)
+		}
+
+		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
+		return nil
+	}
+
+	// JSON mode: make the HTTP request and unmarshal response
 	var response any
 	var requestErr error
 
@@ -180,11 +240,11 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	case http.MethodGet:
 		response, requestErr = metahttp.Get[any](adminClient, o.argPath)
 	case http.MethodPost:
-		response, requestErr = metahttp.Post[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Post[any](adminClient, o.argPath, requestBody, contentType)
 	case http.MethodPut:
-		response, requestErr = metahttp.Put[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Put[any](adminClient, o.argPath, requestBody, contentType)
 	case http.MethodDelete:
-		response, requestErr = metahttp.Delete[any](adminClient, o.argPath, requestBody)
+		response, requestErr = metahttp.Delete[any](adminClient, o.argPath, requestBody, contentType)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", o.argMethod)
 	}

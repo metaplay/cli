@@ -34,7 +34,7 @@ func init() {
 	o := debugCollectCPUProfileOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argPodName, "POD", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 	args.SetExtraArgs(&o.extrArgs, "Passed as-is to 'dotnet-trace'")
 
@@ -59,22 +59,22 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Collect CPU profile from the only running pod.
-			metaplay debug collect-cpu-profile tough-falcons
+			metaplay debug collect-cpu-profile nimbly
 
 			# Collect CPU profile from pod 'service-0'.
-			metaplay debug collect-cpu-profile tough-falcons service-0
+			metaplay debug collect-cpu-profile nimbly service-0
 
 			# Specify custom output path on your disk.
-			metaplay debug collect-cpu-profile tough-falcons -o /path/to/output.nettrace
+			metaplay debug collect-cpu-profile nimbly -o /path/to/output.nettrace
 
 			# Specify format (speedscope, chromium, nettrace)
-			metaplay debug collect-cpu-profile tough-falcons --format speedscope
+			metaplay debug collect-cpu-profile nimbly --format speedscope
 
 			# Specify duration in seconds (default: 30)
-			metaplay debug collect-cpu-profile tough-falcons --duration 60
+			metaplay debug collect-cpu-profile nimbly --duration 60
 
 			# Pass extra arguments to dotnet-trace (after --)
-			metaplay debug collect-cpu-profile tough-falcons -- --providers Microsoft-Windows-DotNETRuntime:4:4
+			metaplay debug collect-cpu-profile nimbly -- --providers Microsoft-Windows-DotNETRuntime:4:4
 		`),
 	}
 	debugCmd.AddCommand(cmd)

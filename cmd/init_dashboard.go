@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -99,7 +100,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
 	// Install custom project from template in MetaplaySDK
-	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json")
+	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json", map[string]string{}, false)
 	if err != nil {
 		return fmt.Errorf("failed to run dashboard project installer: %v", err)
 	}
@@ -121,8 +122,8 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
 	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
-		log.Error().Msgf("Failed to run 'pnpm install': %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to run 'pnpm install'").
+			WithSuggestion("Check that pnpm is installed and try running 'pnpm install' manually")
 	}
 
 	log.Info().Msg("")

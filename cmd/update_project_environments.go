@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
@@ -141,27 +142,78 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		panic(err)
 	}
 
+	// Find the 'environments' node -- should be an array but can also be null
+	envsPath, err := yaml.PathString("$.environments")
+	if err != nil {
+		return fmt.Errorf("failed to create environments path: %v", err)
+	}
+
+	// Get the environments node
+	envsNode, err := envsPath.FilterFile(root)
+	if err != nil {
+		return fmt.Errorf("failed to find 'environments' in metaplay-project.yaml: %v", err)
+	}
+
+	// Handle the case where environments exists but is null/empty (e.g., "environments:" with no value).
+	// This happens with projects that have no environments in them.
+	// Only convert null to a sequence if there are environments to add - otherwise keep as null.
+	if _, isNull := envsNode.(*ast.NullNode); isNull {
+		if len(newPortalEnvironments) == 0 {
+			// No environments to add, keep the null node as-is to avoid outputting "environments: []"
+			log.Info().Msgf("%s No environments found for this project in the portal.", styles.RenderMuted("i"))
+			log.Info().Msg("")
+			log.Info().Msgf("%s Updated environments in %s", styles.RenderSuccess("✓"), styles.RenderTechnical("metaplay-project.yaml"))
+			return nil
+		}
+
+		// Replace the null node with an empty sequence
+		if err := envsPath.ReplaceWithReader(root, strings.NewReader("[]")); err != nil {
+			return fmt.Errorf("failed to replace null 'environments' with empty sequence: %v", err)
+		}
+		// Re-fetch the environments node after replacement
+		envsNode, err = envsPath.FilterFile(root)
+		if err != nil {
+			return fmt.Errorf("failed to find node 'environments' after replacement: %v", err)
+		}
+		// Ensure block-style output (not flow-style like [a, b, c]) and reset indentation
+		if seqNode, ok := envsNode.(*ast.SequenceNode); ok {
+			seqNode.IsFlowStyle = false
+			// Reset the Start token position to fix indentation (2 spaces indent)
+			if seqNode.Start != nil {
+				seqNode.Start.Position.Column = 3
+				seqNode.Start.Position.IndentNum = 2
+			}
+		}
+	}
+
+	// Cast to sequence node (now guaranteed to be valid after null handling above)
+	envsSeqNode, ok := envsNode.(*ast.SequenceNode)
+	if !ok {
+		return fmt.Errorf("the 'environments' node in metaplay-project.yaml is not a valid sequence")
+	}
+
+	// Ensure block-style output (not flow-style like []) when there are environments to add.
+	// This handles the case where the YAML file already has "environments: []".
+	// Also fix indentation when converting from flow-style to block-style.
+	if len(newPortalEnvironments) > 0 {
+		envsSeqNode.IsFlowStyle = false
+		// Reset the Start token position to fix indentation (2 spaces indent)
+		if envsSeqNode.Start != nil {
+			envsSeqNode.Start.Position.Column = 3
+			envsSeqNode.Start.Position.IndentNum = 2
+		}
+	}
+
+	// Print a note if no environments exist in the portal.
+	if len(newPortalEnvironments) == 0 {
+		log.Info().Msgf("%s No environments found for this project in the portal.", styles.RenderMuted("i"))
+	}
+
+	// Handle all environments from the portal.
 	for _, portalEnv := range newPortalEnvironments {
-		// Find the environments array
-		envsPath, err := yaml.PathString("$.environments")
-		if err != nil {
-			return fmt.Errorf("failed to create environments path: %v", err)
-		}
-
-		// Get the environments node
-		envsNode, err := envsPath.FilterFile(root)
-		if err != nil {
-			return fmt.Errorf("failed to get environments: %v", err)
-		}
-
 		// Find the index of the environment with matching humanId
-		seqNode, ok := envsNode.(*ast.SequenceNode)
-		if !ok {
-			return fmt.Errorf("environments is not a sequence")
-		}
-
 		foundIndex := -1
-		for i, envNode := range seqNode.Values {
+		for i, envNode := range envsSeqNode.Values {
 			mapNode, ok := envNode.(*ast.MappingNode)
 			if !ok {
 				continue
@@ -212,10 +264,10 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 		// Update an existing node or append a new node to the end.
 		if foundIndex == -1 {
 			log.Info().Msgf("%s Add new environment %s", styles.RenderSuccess("+"), styles.RenderTechnical(portalEnv.HumanID))
-			seqNode.Values = append(seqNode.Values, envAST.Docs[0].Body)
+			envsSeqNode.Values = append(envsSeqNode.Values, envAST.Docs[0].Body)
 		} else {
 			log.Info().Msgf("%s Update existing environment %s", styles.RenderSuccess("*"), styles.RenderTechnical(portalEnv.HumanID))
-			seqNode.Values[foundIndex] = envAST.Docs[0].Body
+			envsSeqNode.Values[foundIndex] = envAST.Docs[0].Body
 		}
 	}
 
