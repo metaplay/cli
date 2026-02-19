@@ -127,8 +127,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle("Project Modification Summary"))
-	log.Info().Msg("")
+	log.Info().Msg("Files to be modified:")
 	plan.Preview()
 
 	if plan.HasReadOnlyFiles() {
@@ -137,8 +136,8 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Confirm before writing.
+	log.Info().Msg("")
 	if tui.IsInteractiveMode() {
-		log.Info().Msg("")
 		confirmed, err := tui.DoConfirmQuestion(cmd.Context(), "Proceed?")
 		if err != nil {
 			return err
@@ -155,6 +154,8 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
+	log.Info().Msg("")
+	log.Info().Msgf("Running %s to install dashboard dependencies...", styles.RenderTechnical("pnpm install"))
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
 	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
 		return clierrors.Wrap(err, "Failed to run 'pnpm install'").
