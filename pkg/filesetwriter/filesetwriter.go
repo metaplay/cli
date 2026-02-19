@@ -143,6 +143,21 @@ func (p *Plan) AddZipExtraction(zipPath, prefix, destDir string) *Plan {
 	return p
 }
 
+// SetConflictPolicy changes the conflict policy on all planned files.
+// For Rename, AlternatePath is set to Path + renameSuffix.
+// Resets scan state so Scan() must be called again.
+func (p *Plan) SetConflictPolicy(policy ConflictPolicy, renameSuffix string) {
+	for i := range p.files {
+		p.files[i].OnConflict = policy
+		if policy == Rename {
+			p.files[i].AlternatePath = p.files[i].Path + renameSuffix
+		} else {
+			p.files[i].AlternatePath = ""
+		}
+	}
+	p.scanned = false
+}
+
 // Scan inspects the filesystem and resolves the action for each planned file.
 // For zip extractions, it counts the files to be extracted.
 func (p *Plan) Scan() error {

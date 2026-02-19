@@ -812,6 +812,114 @@ func TestAddZipExtractionWithPrefix(t *testing.T) {
 	}
 }
 
+// --- SetConflictPolicy tests ---
+
+func TestSetConflictPolicyOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	os.WriteFile(path, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.AddSkipExisting(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Results()[0].Action != ActionSkip {
+		t.Fatalf("expected ActionSkip before policy change, got %d", p.Results()[0].Action)
+	}
+
+	p.SetConflictPolicy(Overwrite, "")
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := p.Results()[0]
+	if r.Action != ActionOverwrite {
+		t.Fatalf("expected ActionOverwrite after policy change, got %d", r.Action)
+	}
+	if r.WritePath != path {
+		t.Fatalf("expected WritePath=%s, got %s", path, r.WritePath)
+	}
+}
+
+func TestSetConflictPolicySkip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	os.WriteFile(path, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.Add(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if p.Results()[0].Action != ActionOverwrite {
+		t.Fatalf("expected ActionOverwrite before policy change, got %d", p.Results()[0].Action)
+	}
+
+	p.SetConflictPolicy(Skip, "")
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := p.Results()[0]
+	if r.Action != ActionSkip {
+		t.Fatalf("expected ActionSkip after policy change, got %d", r.Action)
+	}
+	if p.FilesToWrite() != 0 {
+		t.Fatalf("expected 0 files to write, got %d", p.FilesToWrite())
+	}
+}
+
+func TestSetConflictPolicyRename(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+	os.WriteFile(path, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.Add(path, []byte("new"), 0644)
+
+	p.SetConflictPolicy(Rename, ".new")
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := p.Results()[0]
+	if r.Action != ActionRename {
+		t.Fatalf("expected ActionRename, got %d", r.Action)
+	}
+	expectedAlt := path + ".new"
+	if r.WritePath != expectedAlt {
+		t.Fatalf("expected WritePath=%s, got %s", expectedAlt, r.WritePath)
+	}
+	if r.File.AlternatePath != expectedAlt {
+		t.Fatalf("expected AlternatePath=%s, got %s", expectedAlt, r.File.AlternatePath)
+	}
+}
+
+func TestSetConflictPolicyNewFilesUnaffected(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new.txt")
+
+	p := NewPlan(false)
+	p.Add(path, []byte("content"), 0644)
+
+	// Change to Skip — but since the file doesn't exist, it should still be ActionCreate.
+	p.SetConflictPolicy(Skip, "")
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := p.Results()[0]
+	if r.Action != ActionCreate {
+		t.Fatalf("expected ActionCreate for non-existing file regardless of policy, got %d", r.Action)
+	}
+	if p.FilesToWrite() != 1 {
+		t.Fatalf("expected 1 file to write, got %d", p.FilesToWrite())
+	}
+}
+
 func TestFilesToWriteIncludesZipFiles(t *testing.T) {
 	dir := t.TempDir()
 	zipPath := createTestZip(t, dir, map[string]string{

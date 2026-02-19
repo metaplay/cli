@@ -48,7 +48,8 @@ var ciProviders = []ciProviderInfo{
 type initCIOpts struct {
 	flagCIProvider  string // CI provider to use (github, bitbucket, generic)
 	flagEnvironment string // Target environment human ID
-	flagAutoConfirm bool   // Automatically confirm changes
+	flagOnConflict  string // Conflict resolution: overwrite, rename, skip
+	flagAutoConfirm bool   // Automatically confirm file writes
 	flagOutputDir   string // Output directory for CI files (defaults to project root)
 
 	projectDir   string                              // Resolved project directory
@@ -87,11 +88,11 @@ func init() {
 			# Initialize GitHub Actions for a specific environment
 			metaplay init ci --provider=github --environment=nimbly
 
-			# Initialize for multiple environments
-			metaplay init ci --provider=github --environment=nimbly,prod --yes
+			# Initialize for multiple environments, overwriting existing files
+			metaplay init ci --provider=github --environment=nimbly,prod --on-conflict=overwrite --yes
 
-			# Initialize for all configured environments
-			metaplay init ci --provider=github --environment=all --yes
+			# Re-generate files with .new suffix to compare against existing ones
+			metaplay init ci --provider=github --environment=all --on-conflict=rename --yes
 		`),
 	}
 
@@ -99,7 +100,8 @@ func init() {
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagCIProvider, "provider", "", "CI provider to use: github, bitbucket, or generic")
 	flags.StringVarP(&o.flagEnvironment, "environment", "e", "", "Target environment(s): human ID, comma-separated list, or 'all'")
-	flags.BoolVarP(&o.flagAutoConfirm, "yes", "y", false, "Automatically confirm file creation")
+	flags.StringVar(&o.flagOnConflict, "on-conflict", "", "How to handle existing files: overwrite, rename, or skip")
+	flags.BoolVarP(&o.flagAutoConfirm, "yes", "y", false, "Automatically confirm file writes")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "", "Output directory for CI files (defaults to project root)")
 
 	initCmd.AddCommand(cmd)
@@ -125,6 +127,14 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 				WithDetails("Valid options are: github, bitbucket, generic")
 		}
 		o.ciProvider = CIProvider(o.flagCIProvider)
+	}
+
+	// Validate --on-conflict if specified
+	if o.flagOnConflict != "" {
+		if !isValidConflictPolicy(o.flagOnConflict) {
+			return clierrors.NewUsageErrorf("Invalid --on-conflict value '%s'", o.flagOnConflict).
+				WithDetails("Valid options are: overwrite, rename, skip")
+		}
 	}
 
 	// Check for environments before validating a specific one
@@ -176,6 +186,19 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// conflictOption is used for the interactive conflict resolution dialog.
+type conflictOption struct {
+	Policy      filesetwriter.ConflictPolicy
+	Name        string
+	Description string
+}
+
+var conflictOptions = []conflictOption{
+	{filesetwriter.Overwrite, "Overwrite", "Replace existing files with freshly generated versions"},
+	{filesetwriter.Rename, "Rename", "Write new versions with .new suffix (e.g. deploy-dev.sh.new)"},
+	{filesetwriter.Skip, "Skip", "Keep existing files, only write new ones"},
+}
+
 func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
@@ -225,15 +248,47 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		outputDir = o.flagOutputDir
 	}
 
-	// Build a plan with all files to write.
+	// Add all files to plan with default Overwrite policy.
 	plan := filesetwriter.NewPlan(tui.IsInteractiveMode())
 	if err := o.collectCIFiles(plan, outputDir, environments); err != nil {
 		return err
 	}
-
-	// Scan the filesystem and show file preview.
 	if err := plan.Scan(); err != nil {
 		return err
+	}
+
+	// If conflicts exist, resolve them via --on-conflict flag or interactive dialog.
+	if plan.HasConflicts() {
+		var policy filesetwriter.ConflictPolicy
+		if o.flagOnConflict != "" {
+			policy = parseConflictPolicy(o.flagOnConflict)
+		} else if !o.flagAutoConfirm {
+			selected, err := tui.ChooseFromListDialog(
+				"Some files already exist. How should conflicts be handled?",
+				conflictOptions,
+				func(opt *conflictOption) (string, string) {
+					return opt.Name, opt.Description
+				},
+			)
+			if err != nil {
+				return err
+			}
+			log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selected.Name)
+			policy = selected.Policy
+		} else {
+			policy = filesetwriter.Overwrite
+		}
+		plan.SetConflictPolicy(policy, ".new")
+		if err := plan.Scan(); err != nil {
+			return err
+		}
+	}
+
+	// If all files were skipped, nothing to do.
+	if plan.FilesToWrite() == 0 {
+		log.Info().Msg("")
+		log.Info().Msg("All files already exist, nothing to write.")
+		return nil
 	}
 
 	log.Info().Msg("")
@@ -334,7 +389,7 @@ func (o *initCIOpts) collectCIFile(plan *filesetwriter.Plan, outputDir string, e
 	return nil
 }
 
-// collectBitbucketFile renders a single Bitbucket Pipelines file for all environments and adds it to the plan.
+// collectBitbucketFile renders a single Bitbucket Pipelines file and adds it to the plan.
 func (o *initCIOpts) collectBitbucketFile(plan *filesetwriter.Plan, outputDir string, environments []metaproj.ProjectEnvironmentConfig) error {
 	var envData []bitbucketEnvironmentData
 	for _, env := range environments {
@@ -371,6 +426,26 @@ func (o *initCIOpts) tryGetOrganizationUUID(cmd *cobra.Command) string {
 		return ""
 	}
 	return projectInfo.OrganizationUUID
+}
+
+func isValidConflictPolicy(value string) bool {
+	switch value {
+	case "overwrite", "rename", "skip":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseConflictPolicy(value string) filesetwriter.ConflictPolicy {
+	switch value {
+	case "rename":
+		return filesetwriter.Rename
+	case "skip":
+		return filesetwriter.Skip
+	default:
+		return filesetwriter.Overwrite
+	}
 }
 
 func isValidCIProvider(provider string) bool {
