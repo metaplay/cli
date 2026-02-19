@@ -141,18 +141,16 @@ type multiSelectModel struct {
 	title    string
 	model    list.Model
 	checked  map[int]bool
-	delegate *multiSelectDelegate
 	done     bool
 	quitting bool
 	err      error
 }
 
-func newMultiSelectModel(title string, model list.Model, delegate *multiSelectDelegate) multiSelectModel {
+func newMultiSelectModel(title string, model list.Model, checked map[int]bool) multiSelectModel {
 	return multiSelectModel{
-		title:    title,
-		model:    model,
-		checked:  delegate.checked,
-		delegate: delegate,
+		title:   title,
+		model:   model,
+		checked: checked,
 	}
 }
 
@@ -299,7 +297,7 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 	l.SetShowHelp(false)
 
 	// Create and run model
-	model := newMultiSelectModel(title, l, delegate)
+	model := newMultiSelectModel(title, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
 	if err != nil {

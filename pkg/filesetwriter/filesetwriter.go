@@ -6,6 +6,7 @@ package filesetwriter
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +48,7 @@ const (
 	ActionSkip                        // File exists, will be skipped.
 	ActionRename                      // File exists, will be written to alternate path.
 	ActionUpdate                      // File exists, will be updated with explanation.
+	ActionUnchanged                   // File exists with identical content, no write needed.
 )
 
 // FileResult is the scan result for a single planned file.
@@ -175,6 +177,10 @@ func (p *Plan) Scan() error {
 			// File does not exist: always create regardless of policy.
 			r.Action = ActionCreate
 			r.WritePath = f.Path
+		} else if contentEqual(f.Path, f.Content) {
+			// Existing file has identical content — no write needed.
+			r.Action = ActionUnchanged
+			r.WritePath = ""
 		} else {
 			switch f.OnConflict {
 			case Overwrite:
@@ -238,7 +244,7 @@ func (p *Plan) FilesToWrite() int {
 	}
 	count := 0
 	for _, r := range p.results {
-		if r.Action != ActionSkip {
+		if r.Action != ActionSkip && r.Action != ActionUnchanged {
 			count++
 		}
 	}
@@ -420,6 +426,8 @@ func (p *Plan) Preview(collapseDirectories bool) {
 			} else {
 				badge = styles.RenderSuccess(" (update)")
 			}
+		case ActionUnchanged:
+			badge = styles.RenderMuted(" (unchanged)")
 		}
 
 		readOnlyBadge := ""
@@ -428,7 +436,7 @@ func (p *Plan) Preview(collapseDirectories bool) {
 		}
 
 		displayPath := r.WritePath
-		if r.Action == ActionSkip {
+		if r.Action == ActionSkip || r.Action == ActionUnchanged {
 			displayPath = r.File.Path
 		}
 		displayPath = filepath.ToSlash(displayPath)
@@ -455,8 +463,7 @@ func (p *Plan) Execute() error {
 	}
 
 	for _, r := range p.results {
-		if r.Action == ActionSkip {
-			log.Info().Msgf("  %s", styles.RenderMuted(fmt.Sprintf("Skipped %s (already exists)", r.File.Path)))
+		if r.Action == ActionSkip || r.Action == ActionUnchanged {
 			continue
 		}
 
@@ -586,4 +593,14 @@ func (p *Plan) wrapWriteError(err error, message string) error {
 // permission bits.
 func isReadOnly(info os.FileInfo) bool {
 	return info.Mode().Perm()&0200 == 0
+}
+
+// contentEqual returns true if the file at path has exactly the content given.
+// Returns false on any read error.
+func contentEqual(path string, content []byte) bool {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(existing, content)
 }

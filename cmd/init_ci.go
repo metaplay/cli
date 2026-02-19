@@ -333,7 +333,7 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 
 	// Build portal link (best-effort: fall back to root URL if not logged in).
 	portalLink := "https://portal.metaplay.dev"
-	if orgUUID := o.tryGetOrganizationUUID(cmd); orgUUID != "" {
+	if orgUUID := o.tryGetOrganizationUUID(); orgUUID != "" {
 		portalLink = fmt.Sprintf("https://portal.metaplay.dev/orgs/%s?tab=1", orgUUID)
 	}
 
@@ -420,7 +420,7 @@ func (o *initCIOpts) collectBitbucketFile(plan *filesetwriter.Plan, outputDir st
 
 // tryGetOrganizationUUID attempts to fetch the organization UUID from the portal.
 // Returns empty string if the user is not logged in or the fetch fails.
-func (o *initCIOpts) tryGetOrganizationUUID(cmd *cobra.Command) string {
+func (o *initCIOpts) tryGetOrganizationUUID() string {
 	authProvider, err := getAuthProvider(o.project, "metaplay")
 	if err != nil {
 		return ""
