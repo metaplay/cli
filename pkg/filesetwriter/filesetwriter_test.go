@@ -12,7 +12,7 @@ import (
 )
 
 func TestNewPlanIsEmpty(t *testing.T) {
-	p := NewPlan()
+	p := NewPlan(false)
 	if err := p.Scan(); err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestAddCreatesNewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path, []byte("hello"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -59,7 +59,7 @@ func TestAddOverwritesExistingFile(t *testing.T) {
 	path := filepath.Join(dir, "existing.txt")
 	os.WriteFile(path, []byte("old"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -83,7 +83,7 @@ func TestAddSkipExistingSkipsWhenPresent(t *testing.T) {
 	path := filepath.Join(dir, "existing.txt")
 	os.WriteFile(path, []byte("keep"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -106,7 +106,7 @@ func TestAddSkipExistingCreatesWhenAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "new.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("content"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -128,7 +128,7 @@ func TestAddWithRenameUsesAlternateWhenExists(t *testing.T) {
 	alternate := filepath.Join(dir, "alternate.txt")
 	os.WriteFile(primary, []byte("original"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -152,7 +152,7 @@ func TestAddWithRenameCreatesPrimaryWhenAbsent(t *testing.T) {
 	primary := filepath.Join(dir, "primary.txt")
 	alternate := filepath.Join(dir, "alternate.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("content"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -173,7 +173,7 @@ func TestReadOnlyDetection(t *testing.T) {
 	path := filepath.Join(dir, "readonly.txt")
 	os.WriteFile(path, []byte("locked"), 0444)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -194,7 +194,7 @@ func TestReadOnlySkippedFileNotReported(t *testing.T) {
 	path := filepath.Join(dir, "readonly.txt")
 	os.WriteFile(path, []byte("locked"), 0444)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -213,7 +213,7 @@ func TestReadOnlyAlternatePath(t *testing.T) {
 	os.WriteFile(primary, []byte("original"), 0644)
 	os.WriteFile(alternate, []byte("locked"), 0444)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -231,7 +231,7 @@ func TestExecuteCreatesFiles(t *testing.T) {
 	path1 := filepath.Join(dir, "sub", "file1.txt")
 	path2 := filepath.Join(dir, "file2.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path1, []byte("content1"), 0644)
 	p.Add(path2, []byte("content2"), 0644)
 
@@ -270,7 +270,7 @@ func TestExecuteOverwritesExisting(t *testing.T) {
 	path := filepath.Join(dir, "file.txt")
 	os.WriteFile(path, []byte("old"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -291,7 +291,7 @@ func TestExecuteSkipsExisting(t *testing.T) {
 	path := filepath.Join(dir, "file.txt")
 	os.WriteFile(path, []byte("keep"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("ignored"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -316,7 +316,7 @@ func TestExecuteRenames(t *testing.T) {
 	alternate := filepath.Join(dir, "alternate.txt")
 	os.WriteFile(primary, []byte("original"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -349,7 +349,7 @@ func TestExecuteTracksPartialWrites(t *testing.T) {
 	os.WriteFile(blocker, []byte("I'm a file"), 0644)
 	bad := filepath.Join(blocker, "sub", "bad.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(good, []byte("ok"), 0644)
 	p.Add(bad, []byte("fail"), 0644)
 
@@ -370,7 +370,7 @@ func TestExecuteTracksPartialWrites(t *testing.T) {
 func TestChainingAPI(t *testing.T) {
 	dir := t.TempDir()
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(filepath.Join(dir, "a.txt"), []byte("a"), 0644).
 		Add(filepath.Join(dir, "b.txt"), []byte("b"), 0644).
 		AddSkipExisting(filepath.Join(dir, "c.txt"), []byte("c"), 0644)
@@ -396,7 +396,7 @@ func TestMultiplePoliciesMixed(t *testing.T) {
 	overwrite := filepath.Join(dir, "overwrite.txt")
 	os.WriteFile(overwrite, []byte("old2"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(newFile, []byte("new"), 0644)
 	p.AddSkipExisting(skipFile, []byte("skip"), 0644)
 	p.Add(overwrite, []byte("replaced"), 0644)
@@ -427,7 +427,7 @@ func TestMultiplePoliciesMixed(t *testing.T) {
 }
 
 func TestWrittenEmptyBeforeExecute(t *testing.T) {
-	p := NewPlan()
+	p := NewPlan(false)
 	if got := p.Written(); got != nil {
 		t.Fatalf("expected nil Written before Execute, got %v", got)
 	}
@@ -437,7 +437,7 @@ func TestExecuteCreatesSubdirectories(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a", "b", "c", "file.txt")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(path, []byte("deep"), 0644)
 
 	if err := p.Scan(); err != nil {
@@ -598,7 +598,7 @@ func TestAddUpdateWhenFileExists(t *testing.T) {
 	path := filepath.Join(dir, "manifest.json")
 	os.WriteFile(path, []byte("old"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddUpdate(path, []byte("updated"), 0644, "added reference")
 
 	if err := p.Scan(); err != nil {
@@ -624,7 +624,7 @@ func TestAddUpdateWhenFileAbsent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "manifest.json")
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddUpdate(path, []byte("new"), 0644, "initial")
 
 	if err := p.Scan(); err != nil {
@@ -642,7 +642,7 @@ func TestExecuteUpdatesExisting(t *testing.T) {
 	path := filepath.Join(dir, "file.json")
 	os.WriteFile(path, []byte("old content"), 0644)
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddUpdate(path, []byte("new content"), 0644, "updated field")
 
 	if err := p.Scan(); err != nil {
@@ -726,7 +726,7 @@ func TestAddZipExtractionScanCounts(t *testing.T) {
 		"Other/d.txt":           "d",
 	})
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddZipExtraction(zipPath, "MetaplaySDK/", dir)
 
 	if err := p.Scan(); err != nil {
@@ -749,7 +749,7 @@ func TestAddZipExtractionExecute(t *testing.T) {
 		"MetaplaySDK/sub/nested.go": "package main",
 	})
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddZipExtraction(zipPath, "MetaplaySDK/", destDir)
 
 	if err := p.Scan(); err != nil {
@@ -788,7 +788,7 @@ func TestAddZipExtractionWithPrefix(t *testing.T) {
 		"other.txt":                    "no",
 	})
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.AddZipExtraction(zipPath, "MetaplaySDK/", destDir)
 
 	if err := p.Scan(); err != nil {
@@ -819,7 +819,7 @@ func TestFilesToWriteIncludesZipFiles(t *testing.T) {
 		"SDK/b.txt": "b",
 	})
 
-	p := NewPlan()
+	p := NewPlan(false)
 	p.Add(filepath.Join(dir, "regular.txt"), []byte("r"), 0644)
 	p.AddZipExtraction(zipPath, "SDK/", dir)
 

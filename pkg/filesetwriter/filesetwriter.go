@@ -76,16 +76,11 @@ type Plan struct {
 	interactive    bool     // Show animated progress (spinner, \r overwrites).
 }
 
-// NewPlan creates a new empty file plan.
-func NewPlan() *Plan {
-	return &Plan{interactive: true}
-}
-
-// SetInteractive controls whether Execute shows animated progress (spinner,
-// \r line overwrites). Set to false for CI / non-interactive environments.
-func (p *Plan) SetInteractive(interactive bool) *Plan {
-	p.interactive = interactive
-	return p
+// NewPlan creates a new empty file plan. Set interactive to true for animated
+// progress (spinner, \r line overwrites) or false for CI / non-interactive
+// environments.
+func NewPlan(interactive bool) *Plan {
+	return &Plan{interactive: interactive}
 }
 
 // Add appends a file that will overwrite any existing file at the path.
@@ -137,8 +132,8 @@ func (p *Plan) AddUpdate(path string, content []byte, perm os.FileMode, message 
 }
 
 // AddZipExtraction adds a zip archive to be extracted during Execute.
-// Only entries matching the given prefix are extracted. The prefix is stripped
-// from the entry path before writing to destDir.
+// Only entries whose name starts with prefix are extracted. Entries are
+// written to destDir with their full zip path (the prefix is not stripped).
 func (p *Plan) AddZipExtraction(zipPath, prefix, destDir string) *Plan {
 	p.zipExtractions = append(p.zipExtractions, ZipExtraction{
 		ZipPath: zipPath,

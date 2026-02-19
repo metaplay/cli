@@ -293,13 +293,13 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	if sdkZipPath != "" && sdkMetadata == nil {
 		sdkMetadata, err = validateSdkZipFile(sdkZipPath)
 		if err != nil {
-			return fmt.Errorf("invalid Metaplay SDK archive: %v", err)
+			return fmt.Errorf("invalid Metaplay SDK archive: %w", err)
 		}
 		log.Debug().Msgf("SDK archive validated: v%s", sdkMetadata.SdkVersion)
 	}
 
 	// --- Step 3: Collect project files ---
-	plan := filesetwriter.NewPlan().SetInteractive(tui.IsInteractiveMode())
+	plan := filesetwriter.NewPlan(tui.IsInteractiveMode())
 
 	// Render metaplay-project.yaml content.
 	yamlContent, projectConfig, err := metaproj.RenderProjectConfigYAML(

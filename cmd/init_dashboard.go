@@ -97,12 +97,12 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
 	// Build a plan with all files to write
-	plan := filesetwriter.NewPlan().SetInteractive(tui.IsInteractiveMode())
+	plan := filesetwriter.NewPlan(tui.IsInteractiveMode())
 
 	// Collect template files into the plan
 	err = collectFromTemplate(plan, project, dashboardDirRelative, "dashboard_template.json", map[string]string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to collect dashboard template files: %v", err)
+		return fmt.Errorf("failed to collect dashboard template files: %w", err)
 	}
 
 	// Render pnpm-workspace.yaml content
@@ -111,14 +111,14 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 		filepath.ToSlash(dashboardDirRelative),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to render pnpm-workspace.yaml: %v", err)
+		return fmt.Errorf("failed to render pnpm-workspace.yaml: %w", err)
 	}
 	plan.Add(filepath.Join(project.RelativeDir, "pnpm-workspace.yaml"), pnpmContent, 0644)
 
 	// Compute updated metaplay-project.yaml content
 	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
 	if err != nil {
-		return fmt.Errorf("failed to compute metaplay-project.yaml update: %v", err)
+		return fmt.Errorf("failed to compute metaplay-project.yaml update: %w", err)
 	}
 	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 

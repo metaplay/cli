@@ -67,7 +67,8 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	rawBody := resp.RawBody()
 	defer rawBody.Close()
 
-	// Check for HTTP errors before streaming to disk.
+	// On HTTP error, return the response without a Go error so the caller can
+	// inspect resp.StatusCode() and produce a domain-specific error message.
 	if resp.IsError() {
 		return resp, nil
 	}
