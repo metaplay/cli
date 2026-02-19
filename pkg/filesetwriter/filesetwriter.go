@@ -260,7 +260,7 @@ func (p *Plan) HasReadOnlyFiles() bool {
 		panic("filesetwriter: HasReadOnlyFiles() called before Scan()")
 	}
 	for _, r := range p.results {
-		if r.ReadOnly && r.Action != ActionSkip {
+		if r.ReadOnly && r.Action != ActionSkip && r.Action != ActionUnchanged {
 			return true
 		}
 	}

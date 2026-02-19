@@ -200,6 +200,7 @@ func (m multiSelectModel) View() string {
 
 	return content
 }
+
 func chooseFromList(title string, items []list.Item) (int, error) {
 	// Initialize list with custom delegate
 	list := list.New(items, compactListDelegate{}, 0, min(2+len(items), 20))

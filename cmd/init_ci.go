@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -356,8 +357,31 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
+// safeIDPattern matches identifiers safe for use in shell commands, YAML keys, and file names.
+var safeIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*$`)
+
+// validateCIEnvironment checks that environment fields are safe for embedding
+// in CI templates (shell commands, YAML keys, file names).
+func validateCIEnvironment(env metaproj.ProjectEnvironmentConfig) error {
+	if !safeIDPattern.MatchString(env.HumanID) {
+		return clierrors.Newf("Environment ID '%s' contains characters that are unsafe for CI templates", env.HumanID).
+			WithDetails("Environment IDs must contain only letters, digits, and hyphens")
+	}
+	if strings.ContainsAny(env.Name, "'\"$`\\") {
+		return clierrors.Newf("Environment name '%s' contains characters that are unsafe for CI templates", env.Name).
+			WithDetails("Environment names must not contain quotes, dollar signs, backticks, or backslashes")
+	}
+	return nil
+}
+
 // collectCIFiles adds all files to generate to the plan.
 func (o *initCIOpts) collectCIFiles(plan *filesetwriter.Plan, outputDir string, environments []metaproj.ProjectEnvironmentConfig) error {
+	for _, env := range environments {
+		if err := validateCIEnvironment(env); err != nil {
+			return err
+		}
+	}
+
 	if o.ciProvider == CIProviderBitbucket {
 		return o.collectBitbucketFile(plan, outputDir, environments)
 	}
