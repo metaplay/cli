@@ -257,6 +257,13 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// If all files are unchanged, nothing to do.
+	if plan.FilesToWrite() == 0 {
+		log.Info().Msg("")
+		log.Info().Msg("All CI configuration files are already up to date.")
+		return nil
+	}
+
 	// Show file preview.
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("CI Configuration"))
