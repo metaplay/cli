@@ -151,10 +151,9 @@ func (p *Plan) Scan() error {
 	for _, f := range p.files {
 		r := FileResult{File: f}
 
+		// Any stat error (including ENOTDIR on Linux) means the file doesn't
+		// exist for our purposes. Path problems surface later during Execute.
 		info, err := os.Stat(f.Path)
-		if err != nil && !os.IsNotExist(err) {
-			return clierrors.Wrap(err, fmt.Sprintf("Failed to stat %s", f.Path))
-		}
 		r.Exists = err == nil
 
 		if !r.Exists {
