@@ -67,6 +67,11 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	rawBody := resp.RawBody()
 	defer rawBody.Close()
 
+	// Check for HTTP errors before streaming to disk.
+	if resp.IsError() {
+		return resp, nil
+	}
+
 	// Create the output file.
 	outFile, err := os.Create(filePath)
 	if err != nil {
