@@ -80,6 +80,7 @@ func renderPnpmWorkspaceContent(entries []string) ([]byte, error) {
 func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Initialize Custom LiveOps Dashboard in Your Project"))
+	log.Info().Msg("")
 
 	// Load project config.
 	project, err := resolveProject()
@@ -119,14 +120,13 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to compute metaplay-project.yaml update: %v", err)
 	}
-	plan.Add(configPath, configContent, 0644)
+	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 
 	// Scan the filesystem and show file preview
 	if err := plan.Scan(); err != nil {
 		return err
 	}
 
-	log.Info().Msg("")
 	log.Info().Msg("Files to be modified:")
 	plan.Preview()
 

@@ -474,7 +474,6 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 	defer reader.Close()
 
 	displayName := strings.TrimSuffix(ze.Prefix, "/")
-	cleanDest := filepath.Clean(ze.DestDir)
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	start := time.Now()
 	extracted := 0
@@ -489,7 +488,8 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 
 		// Construct target path and guard against zip slip.
 		targetPath := filepath.Join(ze.DestDir, file.Name)
-		if !strings.HasPrefix(filepath.Clean(targetPath), cleanDest+string(filepath.Separator)) {
+		rel, relErr := filepath.Rel(ze.DestDir, targetPath)
+		if relErr != nil || strings.HasPrefix(rel, "..") {
 			return clierrors.Newf("Zip entry %q escapes destination directory", file.Name)
 		}
 
