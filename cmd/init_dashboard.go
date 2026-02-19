@@ -128,7 +128,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("Files to be modified:")
-	plan.Preview()
+	plan.Preview(true)
 
 	if plan.HasReadOnlyFiles() {
 		log.Info().Msg("")

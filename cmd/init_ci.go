@@ -257,6 +257,19 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Show file preview.
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("CI Configuration"))
+	log.Info().Msg("")
+	log.Info().Msgf("CI Provider:  %s", styles.RenderTechnical(string(o.ciProvider)))
+	log.Info().Msg("Files to be modified:")
+	plan.Preview(false)
+
+	if plan.HasReadOnlyFiles() {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderWarning("Some files are read-only and cannot be written."))
+	}
+
 	// If conflicts exist, resolve them via --on-conflict flag or interactive dialog.
 	if plan.HasConflicts() {
 		var policy filesetwriter.ConflictPolicy
@@ -278,35 +291,31 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		} else {
 			policy = filesetwriter.Overwrite
 		}
-		plan.SetConflictPolicy(policy, ".new")
-		if err := plan.Scan(); err != nil {
-			return err
+
+		// Re-scan and re-preview if the policy changed the outcome.
+		if policy != filesetwriter.Overwrite {
+			plan.SetConflictPolicy(policy, ".new")
+			if err := plan.Scan(); err != nil {
+				return err
+			}
+
+			// If all files were skipped, nothing to do.
+			if plan.FilesToWrite() == 0 {
+				log.Info().Msg("")
+				log.Info().Msg("All files already exist, nothing to write.")
+				return nil
+			}
+
+			log.Info().Msg("")
+			log.Info().Msg("Files to be modified:")
+			plan.Preview(false)
 		}
-	}
-
-	// If all files were skipped, nothing to do.
-	if plan.FilesToWrite() == 0 {
-		log.Info().Msg("")
-		log.Info().Msg("All files already exist, nothing to write.")
-		return nil
-	}
-
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle("CI Configuration"))
-	log.Info().Msg("")
-	log.Info().Msgf("CI Provider:  %s", styles.RenderTechnical(string(o.ciProvider)))
-	log.Info().Msg("Files:")
-	plan.Preview()
-
-	if plan.HasReadOnlyFiles() {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderWarning("Some files are read-only and cannot be written."))
 	}
 
 	// Confirm once for all files.
 	log.Info().Msg("")
 	if !o.flagAutoConfirm {
-		question := fmt.Sprintf("Create %d file(s)?", plan.FilesToWrite())
+		question := fmt.Sprintf("Write %d file(s)?", plan.FilesToWrite())
 		confirmed, err := tui.DoConfirmQuestion(ctx, question)
 		if err != nil {
 			return err

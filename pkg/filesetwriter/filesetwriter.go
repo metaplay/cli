@@ -371,14 +371,22 @@ func findCollapseDir(path string, tainted map[string]bool) string {
 	return best
 }
 
-// Preview logs a summary of the planned file operations, collapsing
-// directories that contain only new files into summary lines.
-func (p *Plan) Preview() {
+// Preview logs a summary of the planned file operations. When
+// collapseDirectories is true, directories containing only new files are
+// collapsed into summary lines.
+func (p *Plan) Preview(collapseDirectories bool) {
 	if !p.scanned {
 		panic("filesetwriter: Preview() called before Scan()")
 	}
 
-	entries := buildPreviewEntries(p.results)
+	var entries []previewEntry
+	if collapseDirectories {
+		entries = buildPreviewEntries(p.results)
+	} else {
+		for _, r := range p.results {
+			entries = append(entries, previewEntry{result: r})
+		}
+	}
 
 	// Show zip extractions first.
 	for _, ze := range p.zipExtractions {
