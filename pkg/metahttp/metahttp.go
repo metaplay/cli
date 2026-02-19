@@ -77,7 +77,6 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	if err != nil {
 		return resp, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
 	}
-	defer outFile.Close()
 
 	// Determine total size from Content-Length header.
 	var total int64
@@ -92,9 +91,11 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 		onProgress: onProgress,
 	}
 
-	_, err = io.Copy(outFile, pr)
-	if err != nil {
-		return resp, fmt.Errorf("Failed to write downloaded file %s: %w", filePath, err)
+	_, copyErr := io.Copy(outFile, pr)
+	outFile.Close()
+	if copyErr != nil {
+		os.Remove(filePath)
+		return resp, fmt.Errorf("Failed to write downloaded file %s: %w", filePath, copyErr)
 	}
 
 	return resp, nil
