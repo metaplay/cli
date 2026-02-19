@@ -16,7 +16,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/filesetwriter"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
@@ -187,6 +189,28 @@ func applyReplacements(input string, replacements map[string]string) (string, er
 	}
 
 	return out, nil
+}
+
+// downloadSdkWithProgress downloads the SDK zip to a temp file with a progress bar.
+// Returns the path to the downloaded zip file. The caller must remove it when done.
+func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.SdkVersionInfo) (string, error) {
+	tmpDir := os.TempDir()
+	portalClient := portalapi.NewClient(tokenSet)
+
+	label := fmt.Sprintf("Downloading Metaplay SDK v%s", sdkVersionInfo.Version)
+	var sdkZipPath string
+
+	err := tui.RunWithProgressBar(label, func(update func(current, total int64)) error {
+		var dlErr error
+		sdkZipPath, dlErr = portalClient.DownloadSdkByVersionIDWithProgress(tmpDir, sdkVersionInfo.ID, update)
+		return dlErr
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to download SDK version '%s': %w", sdkVersionInfo.Version, err)
+	}
+
+	log.Debug().Msgf("Downloaded SDK version '%s' (ID: %s)", sdkVersionInfo.Version, sdkVersionInfo.ID)
+	return sdkZipPath, nil
 }
 
 // Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
@@ -394,24 +418,99 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 	return nil
 }
 
-// Install files from installer template file in SDK/Installer.
+// installerTemplateFile is a single file entry within an installer template.
+// Text files have a non-empty Text field and binary files have a non-empty Bytes field.
+type installerTemplateFile struct {
+	Path  string
+	Text  string
+	Bytes string
+}
+
+// installerTemplateProject is the parsed form of a project/dashboard template JSON.
+type installerTemplateProject struct {
+	Version int
+	Files   []installerTemplateFile
+}
+
+// processTemplateFiles adds all template files to the plan with appropriate replacements
+// and conflict policies. This is the shared logic used by both collectFromTemplate and
+// collectFromTemplateInZip.
+func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplateProject, dstRoot string, replacements map[string]string, skipSample bool) error {
+	for _, file := range template.Files {
+		// Skip MetaplayHelloWorld files if requested
+		if skipSample && strings.Contains(file.Path, "MetaplayHelloWorld") {
+			log.Debug().Msgf("Skipping sample file: %s", file.Path)
+			continue
+		}
+
+		// Resolve destination path (fill in templates)
+		fileDstPath, err := applyReplacements(filepath.Join(dstRoot, file.Path), replacements)
+		if err != nil {
+			return fmt.Errorf("failed to apply replacements to file path %s: %v", file.Path, err)
+		}
+
+		// Unity .meta files are skipped on conflict to preserve existing GUIDs
+		isMetaFile := strings.HasSuffix(file.Path, ".meta")
+
+		// Resolve file content: with template replacements for text files, base64-decoding for binary files
+		if file.Text != "" {
+			content, err := applyReplacements(file.Text, replacements)
+			if err != nil {
+				return fmt.Errorf("failed to apply replacements to file content %s: %v", file.Path, err)
+			}
+			if isMetaFile {
+				plan.AddSkipExisting(fileDstPath, []byte(content), 0644)
+			} else {
+				plan.Add(fileDstPath, []byte(content), 0644)
+			}
+		} else if file.Bytes != "" {
+			bytes, err := base64.StdEncoding.DecodeString(file.Bytes)
+			if err != nil {
+				return fmt.Errorf("failed to decode base64 string for file %s: %v", fileDstPath, err)
+			}
+			if isMetaFile {
+				plan.AddSkipExisting(fileDstPath, bytes, 0644)
+			} else {
+				plan.Add(fileDstPath, bytes, 0644)
+			}
+		}
+	}
+
+	return nil
+}
+
+// buildTemplateReplacements constructs the replacement map from a project config and
+// extra replacements. Used by both collectFromTemplate and collectFromTemplateInZip.
+func buildTemplateReplacements(config *metaproj.ProjectConfig, extraReplacements map[string]string) map[string]string {
+	unityProjectDir := config.UnityProjectDir
+	if unityProjectDir == "." {
+		unityProjectDir = ""
+	} else if unityProjectDir != "" && !strings.HasSuffix(unityProjectDir, "/") {
+		unityProjectDir = unityProjectDir + "/"
+	}
+
+	templateReplacements := map[string]string{
+		"RELATIVE_PATH_TO_SDK": config.SdkRootDir,
+		"UNITY_PROJECT_DIR":    unityProjectDir,
+		"PROJECT_HUMAN_ID":     config.ProjectHumanID,
+		"PROJECT_NAME":         config.ProjectHumanID, // Removed in R34
+	}
+	maps.Copy(templateReplacements, extraReplacements)
+
+	// Log template replacements.
+	log.Debug().Msgf("Template replacements:")
+	for k, v := range templateReplacements {
+		log.Debug().Msgf("  %s: %s", k, v)
+	}
+
+	return templateReplacements
+}
+
+// collectFromTemplate reads the installer template from the SDK on disk and adds all
+// resolved files to the given plan without writing anything to disk.
 // dstPath - Root directory for installed files, relative to metaplay project dir.
 // skipSample - If true, skip files in MetaplayHelloWorld directory.
-func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
-	// Single template file within an installer project. Text files have non-empty
-	// `File` and binary files a non-empty `Bytes`. Text files support text replacement.
-	type installerTemplateFile struct {
-		Path  string
-		Text  string
-		Bytes string
-	}
-
-	// SDK installer project template. Project is either the SDK or the dashboard.
-	type installerTemplateProject struct {
-		Version int
-		Files   []installerTemplateFile
-	}
-
+func collectFromTemplate(plan *filesetwriter.Plan, project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
 	// Resolve path to installer template file
 	templatePath := filepath.Join(project.GetSdkRootDir(), "Installer", templateFileName)
 	if _, err := os.Stat(templatePath); err != nil {
@@ -438,75 +537,82 @@ func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, temp
 	}
 
 	dstRoot := filepath.Join(project.RelativeDir, dstPath)
-	unityProjectDir := project.Config.UnityProjectDir
-	if unityProjectDir == "." {
-		unityProjectDir = ""
-	} else if unityProjectDir != "" && !strings.HasSuffix(unityProjectDir, "/") {
-		unityProjectDir = unityProjectDir + "/"
-	}
+	replacements := buildTemplateReplacements(&project.Config, extraReplacements)
 
-	// Fill in template replacement rules (including ones passed from outside).
-	templateReplacements := map[string]string{
-		"RELATIVE_PATH_TO_SDK": project.Config.SdkRootDir,
-		"UNITY_PROJECT_DIR":    unityProjectDir,
-		"PROJECT_HUMAN_ID":     project.Config.ProjectHumanID,
-		"PROJECT_NAME":         project.Config.ProjectHumanID, // Removed in R34
-	}
-	maps.Copy(templateReplacements, extraReplacements)
-
-	// Log template replacements.
-	log.Debug().Msgf("Template replacements:")
-	for k, v := range templateReplacements {
-		log.Debug().Msgf("  %s: %s", k, v)
-	}
-
-	// Extract all files from the template definition
-	for _, file := range template.Files {
-		// Skip MetaplayHelloWorld files if requested
-		if skipSample && strings.Contains(file.Path, "MetaplayHelloWorld") {
-			log.Debug().Msgf("Skipping sample file: %s", file.Path)
-			continue
-		}
-
-		// Resolve destination path (fill in templates)
-		dstPath, err := applyReplacements(filepath.Join(dstRoot, file.Path), templateReplacements)
-		if err != nil {
-			return fmt.Errorf("failed to apply replacements to file path %s: %v", file.Path, err)
-		}
-
-		// Ensure destination directory exists
-		dirName := filepath.Dir(dstPath)
-		if err := os.MkdirAll(dirName, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %v", dirName, err)
-		}
-
-		// Write the file: with template replacements for text files, base64-decoding for binary files
-		if file.Text != "" {
-			log.Debug().Msgf("Write: %s text", dstPath)
-			content, err := applyReplacements(file.Text, templateReplacements)
-			if err != nil {
-				return fmt.Errorf("failed to apply replacements to file content %s: %v", file.Path, err)
-			}
-			if err := os.WriteFile(dstPath, []byte(content), 0644); err != nil {
-				return fmt.Errorf("failed to write file %s: %v", dstPath, err)
-			}
-		} else if file.Bytes != "" {
-			log.Debug().Msgf("Write: %s binary", dstPath)
-			bytes, err := base64.StdEncoding.DecodeString(file.Bytes)
-			if err != nil {
-				return fmt.Errorf("failed to decode base64 string for file %s: %v", dstPath, err)
-			}
-			if err := os.WriteFile(dstPath, bytes, 0644); err != nil {
-				return fmt.Errorf("failed to write file %s: %v", dstPath, err)
-			}
-		}
-	}
-
-	return nil
+	return processTemplateFiles(plan, template, dstRoot, replacements, skipSample)
 }
 
-// Add reference to the MetaplaySDK/Client project in the Unity project Packages/manifest.json.
-func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
+// collectFromTemplateInZip reads the installer template from inside a zip archive
+// and adds all resolved files to the plan. Used when the SDK has not been extracted
+// to disk yet (the template is read directly from the zip).
+func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, templateFileName string, dstRoot string, config *metaproj.ProjectConfig, extraReplacements map[string]string, skipSample bool) error {
+	// Open the zip archive.
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open zip archive: %v", err)
+	}
+	defer reader.Close()
+
+	// Find the template file inside the zip.
+	entryName := "MetaplaySDK/Installer/" + templateFileName
+	var templateFile *zip.File
+	for _, f := range reader.File {
+		if f.Name == entryName {
+			templateFile = f
+			break
+		}
+	}
+	if templateFile == nil {
+		return fmt.Errorf("template file %s not found in zip archive", entryName)
+	}
+
+	// Read the template JSON from the zip.
+	rc, err := templateFile.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open template file in zip: %v", err)
+	}
+	defer rc.Close()
+
+	templateJSON, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("failed to read template file from zip: %v", err)
+	}
+
+	// Parse the template.
+	var template installerTemplateProject
+	if err := json.Unmarshal(templateJSON, &template); err != nil {
+		return fmt.Errorf("failed to parse template file: %v", err)
+	}
+
+	if template.Version != 1 {
+		return fmt.Errorf("unsupported installer project template version %d", template.Version)
+	}
+	if len(template.Files) == 0 {
+		return fmt.Errorf("installer project template does not have any files")
+	}
+
+	replacements := buildTemplateReplacements(config, extraReplacements)
+
+	return processTemplateFiles(plan, template, dstRoot, replacements, skipSample)
+}
+
+// installFromTemplate installs files from an installer template file in SDK/Installer.
+// This is a convenience wrapper around collectFromTemplate that creates, scans, and
+// executes a plan in one step. Used by init dashboard.
+func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
+	plan := filesetwriter.NewPlan()
+	if err := collectFromTemplate(plan, project, dstPath, templateFileName, extraReplacements, skipSample); err != nil {
+		return err
+	}
+	if err := plan.Scan(); err != nil {
+		return err
+	}
+	return plan.Execute()
+}
+
+// computeManifestUpdate reads the Unity project's Packages/manifest.json, adds
+// the MetaplaySDK/Client reference, and returns the updated content without writing.
+func computeManifestUpdate(project *metaproj.MetaplayProject) (string, []byte, error) {
 	const packageName = "io.metaplay.unitysdk"
 
 	manifestPath := filepath.Join(project.GetUnityProjectDir(), "Packages", "manifest.json")
@@ -514,25 +620,14 @@ func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	// Convert the SDK directory to a relative path from manifest.json.
 	relativePath, err := filepath.Rel(filepath.Dir(manifestPath), project.GetSdkRootDir())
 	if err != nil {
-		return fmt.Errorf("failed to compute relative path: %w", err)
+		return "", nil, fmt.Errorf("failed to compute relative path: %w", err)
 	}
 	log.Debug().Msgf("Relative path to MetaplaySDK (from Unity Packages/ directory): %s", relativePath)
-
-	// // Check if the SDK directory exists
-	// if _, err := os.Stat(relativePathToSdk); os.IsNotExist(err) {
-	// 	return fmt.Errorf("SDK directory \"%s\" not found", relativePathToSdk)
-	// }
-
-	// // Check if the Client/package.json file exists
-	// clientPackagePath := filepath.Join(relativePathToSdk, "Client", "package.json")
-	// if _, err := os.Stat(clientPackagePath); os.IsNotExist(err) {
-	// 	return fmt.Errorf("SDK directory \"%s\" is invalid -- does not contain Client/package.json", relativePathToSdk)
-	// }
 
 	// Read the Unity project's Packages/manifest.json file
 	manifestData, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return fmt.Errorf("failed to read manifest.json: %w", err)
+		return "", nil, fmt.Errorf("failed to read manifest.json: %w", err)
 	}
 
 	// Prepare the client reference
@@ -543,14 +638,22 @@ func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
 	escapedPackageName := strings.ReplaceAll(packageName, ".", "\\.")
 	updatedManifest, err := sjson.SetBytes(manifestData, fmt.Sprintf("dependencies.%s", escapedPackageName), clientRef)
 	if err != nil {
-		return fmt.Errorf("failed to update manifest.json: %w", err)
+		return "", nil, fmt.Errorf("failed to update manifest.json: %w", err)
 	}
 
-	// Write the updated manifest.json back to disk
-	if err := os.WriteFile(manifestPath, updatedManifest, 0644); err != nil {
+	log.Debug().Msgf("Successfully computed manifest.json update: \"%s\" from \"%s\"", packageName, clientRef)
+	return manifestPath, updatedManifest, nil
+}
+
+// addReferenceToUnityManifest adds a reference to the MetaplaySDK/Client project
+// in the Unity project Packages/manifest.json.
+func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
+	manifestPath, content, err := computeManifestUpdate(project)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(manifestPath, content, 0644); err != nil {
 		return fmt.Errorf("failed to write manifest.json: %w", err)
 	}
-
-	log.Debug().Msgf("Successfully added reference to manifest.json: \"%s\" from \"%s\"", packageName, clientRef)
 	return nil
 }

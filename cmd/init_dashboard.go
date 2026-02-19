@@ -14,6 +14,8 @@ import (
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/filesetwriter"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -61,8 +63,9 @@ func (o *initDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func writePnpmWorkspaceFile(outfilePath string, entries []string) error {
-	log.Debug().Msgf("Write pnpm-workspace.yaml with entries:")
+// renderPnpmWorkspaceContent renders a pnpm-workspace.yaml with the given package entries.
+func renderPnpmWorkspaceContent(entries []string) ([]byte, error) {
+	log.Debug().Msgf("Render pnpm-workspace.yaml with entries:")
 	for _, entry := range entries {
 		log.Debug().Msgf("  %s", entry)
 	}
@@ -71,14 +74,7 @@ func writePnpmWorkspaceFile(outfilePath string, entries []string) error {
 	}{
 		Packages: entries,
 	}
-	bytes, err := yaml.Marshal(data)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(outfilePath, bytes, 0644); err != nil {
-		return err
-	}
-	return nil
+	return yaml.Marshal(data)
 }
 
 func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
@@ -99,24 +95,63 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Resolve project dashboard dir (only Backend/Dashboard supported for now)
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
-	// Install custom project from template in MetaplaySDK
-	err = installFromTemplate(project, dashboardDirRelative, "dashboard_template.json", map[string]string{}, false)
+	// Build a plan with all files to write
+	plan := filesetwriter.NewPlan()
+
+	// Collect template files into the plan
+	err = collectFromTemplate(plan, project, dashboardDirRelative, "dashboard_template.json", map[string]string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to run dashboard project installer: %v", err)
+		return fmt.Errorf("failed to collect dashboard template files: %v", err)
 	}
 
-	// Write pnpm-workspace.yaml
-	if err = writePnpmWorkspaceFile(filepath.Join(project.RelativeDir, "pnpm-workspace.yaml"), []string{
+	// Render pnpm-workspace.yaml content
+	pnpmContent, err := renderPnpmWorkspaceContent([]string{
 		filepath.ToSlash(filepath.Join(project.Config.SdkRootDir, "Frontend", "*")),
 		filepath.ToSlash(dashboardDirRelative),
-	}); err != nil {
+	})
+	if err != nil {
+		return fmt.Errorf("failed to render pnpm-workspace.yaml: %v", err)
+	}
+	plan.Add(filepath.Join(project.RelativeDir, "pnpm-workspace.yaml"), pnpmContent, 0644)
+
+	// Compute updated metaplay-project.yaml content
+	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
+	if err != nil {
+		return fmt.Errorf("failed to compute metaplay-project.yaml update: %v", err)
+	}
+	plan.Add(configPath, configContent, 0644)
+
+	// Scan the filesystem and show file preview
+	if err := plan.Scan(); err != nil {
 		return err
 	}
 
-	// Update metaplay-project.yaml to refer to newly initialized dashboard project
-	err = updateProjectConfigCustomDashboard(project, dashboardDirRelative)
-	if err != nil {
-		return fmt.Errorf("failed to update metaplay-project.yaml: %v", err)
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Project Modification Summary"))
+	log.Info().Msg("")
+	plan.Preview()
+
+	if plan.HasReadOnlyFiles() {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderWarning("Some files are read-only and may need 'p4 edit'."))
+	}
+
+	// Confirm before writing.
+	if tui.IsInteractiveMode() {
+		log.Info().Msg("")
+		confirmed, err := tui.DoConfirmQuestion(cmd.Context(), "Proceed?")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			log.Info().Msg("Aborted.")
+			return nil
+		}
+	}
+
+	// Write all files at once
+	if err := plan.Execute(); err != nil {
+		return err
 	}
 
 	// Install dashboard dependencies (need to resolve the path in case '-p' was used to run this command)
@@ -139,20 +174,20 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// Update the metaplay-project.yaml features.dashboard section by enabling the custom dashboard
-// and setting the dashboard root directory.
-func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashboardDir string) error {
+// computeProjectConfigDashboardUpdate reads the metaplay-project.yaml, enables the custom
+// dashboard in the features.dashboard section, and returns the updated content without writing.
+func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dashboardDir string) (string, []byte, error) {
 	// Load the existing metaplay-project.yaml
 	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to read project config file: %v", err)
 	}
 
 	// Parse the YAML to AST
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
-		panic(err)
+		return "", nil, fmt.Errorf("failed to parse project config file: %v", err)
 	}
 
 	// Update features.dashboard with new values.
@@ -161,12 +196,7 @@ func updateProjectConfigCustomDashboard(project *metaproj.MetaplayProject, dashb
 		RootDir:   dashboardDir,
 	})
 
-	// Write the updated YAML back to the file
-	if err := os.WriteFile(projectConfigFilePath, []byte(root.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write updated config: %v", err)
-	}
-
-	return nil
+	return projectConfigFilePath, []byte(root.String()), nil
 }
 
 // Replace a target node with 'value' (marshaled into YAML).
