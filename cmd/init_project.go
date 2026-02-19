@@ -299,7 +299,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// --- Step 3: Collect project files ---
-	plan := filesetwriter.NewPlan()
+	plan := filesetwriter.NewPlan().SetInteractive(tui.IsInteractiveMode())
 
 	// Render metaplay-project.yaml content.
 	yamlContent, projectConfig, err := metaproj.RenderProjectConfigYAML(

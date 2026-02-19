@@ -596,20 +596,6 @@ func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, template
 	return processTemplateFiles(plan, template, dstRoot, replacements, skipSample)
 }
 
-// installFromTemplate installs files from an installer template file in SDK/Installer.
-// This is a convenience wrapper around collectFromTemplate that creates, scans, and
-// executes a plan in one step. Used by init dashboard.
-func installFromTemplate(project *metaproj.MetaplayProject, dstPath string, templateFileName string, extraReplacements map[string]string, skipSample bool) error {
-	plan := filesetwriter.NewPlan()
-	if err := collectFromTemplate(plan, project, dstPath, templateFileName, extraReplacements, skipSample); err != nil {
-		return err
-	}
-	if err := plan.Scan(); err != nil {
-		return err
-	}
-	return plan.Execute()
-}
-
 // computeManifestUpdate reads the Unity project's Packages/manifest.json, adds
 // the MetaplaySDK/Client reference, and returns the updated content without writing.
 func computeManifestUpdate(project *metaproj.MetaplayProject) (string, []byte, error) {
@@ -645,15 +631,3 @@ func computeManifestUpdate(project *metaproj.MetaplayProject) (string, []byte, e
 	return manifestPath, updatedManifest, nil
 }
 
-// addReferenceToUnityManifest adds a reference to the MetaplaySDK/Client project
-// in the Unity project Packages/manifest.json.
-func addReferenceToUnityManifest(project *metaproj.MetaplayProject) error {
-	manifestPath, content, err := computeManifestUpdate(project)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(manifestPath, content, 0644); err != nil {
-		return fmt.Errorf("failed to write manifest.json: %w", err)
-	}
-	return nil
-}

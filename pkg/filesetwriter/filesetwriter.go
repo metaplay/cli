@@ -73,11 +73,19 @@ type Plan struct {
 	results        []FileResult
 	scanned        bool
 	written        []string // Paths successfully written during Execute.
+	interactive    bool     // Show animated progress (spinner, \r overwrites).
 }
 
 // NewPlan creates a new empty file plan.
 func NewPlan() *Plan {
-	return &Plan{}
+	return &Plan{interactive: true}
+}
+
+// SetInteractive controls whether Execute shows animated progress (spinner,
+// \r line overwrites). Set to false for CI / non-interactive environments.
+func (p *Plan) SetInteractive(interactive bool) *Plan {
+	p.interactive = interactive
+	return p
 }
 
 // Add appends a file that will overwrite any existing file at the path.
@@ -466,6 +474,7 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 	defer reader.Close()
 
 	displayName := strings.TrimSuffix(ze.Prefix, "/")
+	cleanDest := filepath.Clean(ze.DestDir)
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	start := time.Now()
 	extracted := 0
@@ -478,8 +487,11 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 			continue
 		}
 
-		// Construct target path.
+		// Construct target path and guard against zip slip.
 		targetPath := filepath.Join(ze.DestDir, file.Name)
+		if !strings.HasPrefix(filepath.Clean(targetPath), cleanDest+string(filepath.Separator)) {
+			return clierrors.Newf("Zip entry %q escapes destination directory", file.Name)
+		}
 
 		// Create parent directories.
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
@@ -493,15 +505,19 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 
 		extracted++
 
-		// Log progress on stderr using \r for in-place updates.
-		fmt.Fprintf(os.Stderr, "\r %s Extracting %s... %d/%d files",
-			styles.RenderMuted(spinnerFrames[extracted%len(spinnerFrames)]), displayName, extracted, ze.count)
+		// Show animated progress in interactive mode only.
+		if p.interactive {
+			fmt.Fprintf(os.Stderr, "\r %s Extracting %s... %d/%d files",
+				styles.RenderMuted(spinnerFrames[extracted%len(spinnerFrames)]), displayName, extracted, ze.count)
+		}
 	}
 
 	elapsed := time.Since(start)
 
-	// Clear the progress line and print final status.
-	fmt.Fprintf(os.Stderr, "\r\033[K")
+	if p.interactive {
+		// Clear the progress line.
+		fmt.Fprintf(os.Stderr, "\r\033[K")
+	}
 	log.Info().Msgf(" %s Extracted %s (%d files) %s",
 		styles.RenderSuccess("✓"), displayName, extracted,
 		styles.RenderMuted(fmt.Sprintf("[%.1fs]", elapsed.Seconds())))

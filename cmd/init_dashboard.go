@@ -96,7 +96,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
 
 	// Build a plan with all files to write
-	plan := filesetwriter.NewPlan()
+	plan := filesetwriter.NewPlan().SetInteractive(tui.IsInteractiveMode())
 
 	// Collect template files into the plan
 	err = collectFromTemplate(plan, project, dashboardDirRelative, "dashboard_template.json", map[string]string{}, false)
