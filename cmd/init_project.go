@@ -15,6 +15,7 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
+	"github.com/metaplay/cli/pkg/filesetwriter"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -262,97 +263,128 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Game backend dir:   %s%s", styles.RenderTechnical("Backend"), styles.RenderAttention(" [new]"))
 	log.Info().Msg("")
 
-	// Confirm from the user that the proposed operation looks correct.
-	if !o.flagAutoConfirm {
-		isOk, err := tui.DoConfirmQuestion(cmd.Context(), "Does this look correct?")
+	// --- Step 1: Download SDK zip (with progress bar) ---
+	var relativePathToSdk string
+	var sdkMetadata *metaproj.MetaplayVersionMetadata
+	var sdkZipPath string
+
+	if metaplaySdkSource == "" {
+		// Download from portal with progress bar.
+		relativePathToSdk = "MetaplaySDK"
+		sdkZipPath, err = downloadSdkWithProgress(tokenSet, sdkVersionInfo)
 		if err != nil {
 			return err
 		}
-		if !isOk {
-			log.Info().Msg(styles.RenderError("❌ Operation canceled"))
+		defer os.Remove(sdkZipPath)
+	} else if isDirectory(metaplaySdkSource) {
+		// Existing directory: just reference it, no zip involved.
+		relativePathToSdk, sdkMetadata, err = resolveSdkSource(o.absoluteProjectPath, metaplaySdkSource)
+		if err != nil {
+			return err
+		}
+	} else {
+		// Local zip file: use it directly.
+		sdkZipPath = metaplaySdkSource
+		relativePathToSdk = "MetaplaySDK"
+	}
+	log.Debug().Msgf("Relative path to MetaplaySDK (from project root): %s", relativePathToSdk)
+
+	// --- Step 2: Validate zip ---
+	if sdkZipPath != "" && sdkMetadata == nil {
+		sdkMetadata, err = validateSdkZipFile(sdkZipPath)
+		if err != nil {
+			return fmt.Errorf("invalid Metaplay SDK archive: %w", err)
+		}
+		log.Debug().Msgf("SDK archive validated: v%s", sdkMetadata.SdkVersion)
+	}
+
+	// --- Step 3: Collect project files ---
+	plan := filesetwriter.NewPlan(tui.IsInteractiveMode())
+
+	// Render metaplay-project.yaml content.
+	yamlContent, projectConfig, err := metaproj.RenderProjectConfigYAML(
+		sdkMetadata,
+		o.relativeUnityProjectPath,
+		relativePathToSdk,
+		filepath.Join(o.relativeUnityProjectPath, "Assets", "SharedCode"),
+		"Backend", // game backend dir
+		"",        // game dashboard dir
+		targetProject,
+		environments)
+	if err != nil {
+		return err
+	}
+
+	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
+
+	// Create MetaplayProject for template and manifest operations.
+	project, err := metaproj.NewMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
+	if err != nil {
+		return err
+	}
+
+	// Read template from inside zip (or from disk for directory source).
+	log.Debug().Msgf("Collect SDK resources for the project")
+	templateReplacements := map[string]string{
+		"PROJECT_DISPLAY_NAME":      targetProject.Name,
+		"BACKEND_SOLUTION_FILENAME": "Server.sln",
+	}
+	if sdkZipPath != "" {
+		err = collectFromTemplateInZip(plan, sdkZipPath, "project_template.json", ".", projectConfig, templateReplacements, o.flagNoSample)
+	} else {
+		err = collectFromTemplate(plan, project, ".", "project_template.json", templateReplacements, o.flagNoSample)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to collect SDK template files: %w", err)
+	}
+
+	// Compute manifest.json update.
+	log.Debug().Msgf("Compute Metaplay Client SDK reference for Unity manifest.json")
+	manifestPath, manifestContent, err := computeManifestUpdate(project)
+	if err != nil {
+		return err
+	}
+	plan.AddUpdate(manifestPath, manifestContent, 0644, "add reference to io.metaplay.unitysdk")
+	plan.Add(configFilePath, []byte(yamlContent), 0644)
+
+	// --- Step 4: Add zip extraction to plan ---
+	if sdkZipPath != "" {
+		plan.AddZipExtraction(sdkZipPath, "MetaplaySDK/", o.projectPath)
+	}
+
+	// --- Step 5: Scan, preview, confirm, execute ---
+	if err := plan.Scan(); err != nil {
+		return err
+	}
+
+	log.Info().Msg("")
+	log.Info().Msg("Files to be modified:")
+	plan.Preview()
+
+	if plan.HasReadOnlyFiles() {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderWarning("Some files are read-only and may need 'p4 edit'."))
+	}
+
+	// Confirm before writing.
+	log.Info().Msg("")
+	if !o.flagAutoConfirm {
+		confirmed, err := tui.DoConfirmQuestion(cmd.Context(), "Proceed?")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			log.Info().Msg("Aborted.")
 			return nil
 		}
 	}
 
-	// Create task runner
-	runner := tui.NewTaskRunner()
-
-	var relativePathToSdk string
-	var sdkMetadata *metaproj.MetaplayVersionMetadata
-
-	// Only download/extract SDK if not migrating existing project
-	runner.AddTask("Download & extract Metaplay SDK", func(output *tui.TaskOutput) error {
-		// Resolve the SDK source to use based on --sdk-source flag:
-		// - If not specified, download .zip from portal and extract it to project directory.
-		// - If points to a Metaplay release .zip file, extract it to project directory.
-		// - If points to a MetaplaySDK directory, refer to the directory (don't copy).
-		if metaplaySdkSource == "" {
-			// Download and extract to target project dir.
-			relativePathToSdk = "MetaplaySDK"
-			sdkMetadata, err = downloadAndExtractSdk(tokenSet, o.absoluteProjectPath, sdkVersionInfo)
-			if err != nil {
-				return err
-			}
-		} else {
-			relativePathToSdk, sdkMetadata, err = resolveSdkSource(o.absoluteProjectPath, metaplaySdkSource)
-			if err != nil {
-				return err
-			}
-		}
-		log.Debug().Msgf("Relative path to MetaplaySDK (from project root): %s", relativePathToSdk)
-
-		return nil
-	})
-
-	// Generate the metaplay-project.yaml in project root.
-	var projectConfig *metaproj.ProjectConfig
-	runner.AddTask("Generate metaplay-project.yaml", func(output *tui.TaskOutput) error {
-		projectConfig, err = metaproj.GenerateProjectConfigFile(
-			sdkMetadata,
-			o.absoluteProjectPath,
-			o.relativeUnityProjectPath,
-			relativePathToSdk,
-			filepath.Join(o.relativeUnityProjectPath, "Assets", "SharedCode"),
-			"Backend", // game backend dir
-			"",        // game dashboard dir
-			targetProject,
-			environments)
-		return err
-	})
-
-	// Only extract files if not migrating existing project
-	runner.AddTask("Update files to project", func(output *tui.TaskOutput) error {
-		// Create MetaplayProject.
-		project, err := metaproj.NewMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
-		if err != nil {
-			return err
-		}
-
-		// Copy files from the template.
-		log.Debug().Msgf("Initialize SDK resources in the project")
-		err = installFromTemplate(project, ".", "project_template.json", map[string]string{
-			"PROJECT_DISPLAY_NAME": targetProject.Name,
-			"BACKEND_SOLUTION_FILENAME": "Server.sln",
-		}, o.flagNoSample)
-		if err != nil {
-			return fmt.Errorf("failed to run SDK installer: %w", err)
-		}
-
-		// Add MetaplaySDK to the Unity project package.json.
-		log.Debug().Msgf("Add reference to Metaplay Client SDK to project's Unity manifest.json..")
-		err = addReferenceToUnityManifest(project)
-		if err != nil {
-			return err
-		}
-
-		return nil
-	})
-
-	// Run the tasks
-	if err := runner.Run(); err != nil {
+	// Write all files and extract zip archives.
+	if err := plan.Execute(); err != nil {
 		return err
 	}
 
+	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("✅ SDK integrated successfully!"))
 	log.Info().Msg("")
 	log.Info().Msg("The following changes were made to your project:")

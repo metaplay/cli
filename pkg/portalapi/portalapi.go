@@ -7,6 +7,7 @@ package portalapi
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -110,6 +111,38 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 
 	// Handle server errors.
 	if resp.IsError() {
+		os.Remove(tmpSdkZipPath)
+		if resp.StatusCode() == 403 {
+			return "", clierrors.New("SDK download requires accepting the terms and conditions").
+				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
+		}
+		return "", clierrors.Newf("Failed to download the Metaplay SDK (status %d)", resp.StatusCode()).
+			WithSuggestion("Check your network connection and try again")
+	}
+
+	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
+	return tmpSdkZipPath, nil
+}
+
+// DownloadSdkByVersionIDWithProgress downloads the SDK with progress reporting.
+// The onProgress callback receives (bytesDownloaded, totalBytes).
+func (c *Client) DownloadSdkByVersionIDWithProgress(targetDir, versionID string, onProgress func(downloaded, total int64)) (string, error) {
+	if versionID == "" {
+		return "", fmt.Errorf("version ID is required")
+	}
+
+	// Download the SDK to a temp file.
+	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionID)
+	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
+	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
+	resp, err := metahttp.DownloadWithProgress(c.httpClient, path, tmpSdkZipPath, onProgress)
+	if err != nil {
+		return "", fmt.Errorf("failed to download SDK: %w", err)
+	}
+
+	// Handle server errors.
+	if resp.IsError() {
+		os.Remove(tmpSdkZipPath)
 		if resp.StatusCode() == 403 {
 			return "", clierrors.New("SDK download requires accepting the terms and conditions").
 				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
