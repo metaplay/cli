@@ -15,6 +15,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/filesetwriter"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -224,30 +225,33 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		outputDir = o.flagOutputDir
 	}
 
-	// Collect all files to generate.
-	files, err := o.collectCIFiles(outputDir, environments)
-	if err != nil {
+	// Build a plan with all files to write.
+	plan := filesetwriter.NewPlan(tui.IsInteractiveMode())
+	if err := o.collectCIFiles(plan, outputDir, environments); err != nil {
 		return err
 	}
 
-	// Show summary of all files.
+	// Scan the filesystem and show file preview.
+	if err := plan.Scan(); err != nil {
+		return err
+	}
+
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("CI Configuration"))
 	log.Info().Msg("")
 	log.Info().Msgf("CI Provider:  %s", styles.RenderTechnical(string(o.ciProvider)))
 	log.Info().Msg("Files:")
-	for _, f := range files {
-		exists := ""
-		if _, err := os.Stat(f.path); err == nil {
-			exists = styles.RenderAttention(" (overwrite)")
-		}
-		log.Info().Msgf("  %s%s", styles.RenderTechnical(f.path), exists)
+	plan.Preview()
+
+	if plan.HasReadOnlyFiles() {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderWarning("Some files are read-only and cannot be written."))
 	}
-	log.Info().Msg("")
 
 	// Confirm once for all files.
+	log.Info().Msg("")
 	if !o.flagAutoConfirm {
-		question := fmt.Sprintf("Create %d file(s)?", len(files))
+		question := fmt.Sprintf("Create %d file(s)?", plan.FilesToWrite())
 		confirmed, err := tui.DoConfirmQuestion(ctx, question)
 		if err != nil {
 			return err
@@ -259,17 +263,8 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Write all files.
-	for _, f := range files {
-		dir := filepath.Dir(f.path)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return clierrors.Wrap(err, fmt.Sprintf("Failed to create directory %s", dir)).
-				WithSuggestion("Check that you have write permissions to the output directory")
-		}
-		if err := os.WriteFile(f.path, []byte(f.content), f.perm); err != nil {
-			return clierrors.Wrap(err, fmt.Sprintf("Failed to write file %s", f.path)).
-				WithSuggestion("Check that you have write permissions to the output directory")
-		}
-		log.Info().Msgf(" %s Created %s", styles.RenderSuccess("✓"), styles.RenderTechnical(f.path))
+	if err := plan.Execute(); err != nil {
+		return err
 	}
 
 	// Build portal link (best-effort: fall back to root URL if not logged in).
@@ -290,32 +285,22 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// ciFile represents a file to be generated.
-type ciFile struct {
-	path    string
-	content string
-	perm    os.FileMode
-}
-
-// collectCIFiles builds the list of files to generate without writing anything.
-func (o *initCIOpts) collectCIFiles(outputDir string, environments []metaproj.ProjectEnvironmentConfig) ([]ciFile, error) {
+// collectCIFiles adds all files to generate to the plan.
+func (o *initCIOpts) collectCIFiles(plan *filesetwriter.Plan, outputDir string, environments []metaproj.ProjectEnvironmentConfig) error {
 	if o.ciProvider == CIProviderBitbucket {
-		return o.collectBitbucketFile(outputDir, environments)
+		return o.collectBitbucketFile(plan, outputDir, environments)
 	}
 
-	var files []ciFile
 	for _, env := range environments {
-		f, err := o.collectCIFile(outputDir, env)
-		if err != nil {
-			return nil, err
+		if err := o.collectCIFile(plan, outputDir, env); err != nil {
+			return err
 		}
-		files = append(files, f)
 	}
-	return files, nil
+	return nil
 }
 
-// collectCIFile renders a single GitHub Actions or Generic CI file.
-func (o *initCIOpts) collectCIFile(outputDir string, env metaproj.ProjectEnvironmentConfig) (ciFile, error) {
+// collectCIFile renders a single GitHub Actions or Generic CI file and adds it to the plan.
+func (o *initCIOpts) collectCIFile(plan *filesetwriter.Plan, outputDir string, env metaproj.ProjectEnvironmentConfig) error {
 	data := ciTemplateData{
 		EnvironmentDisplayName: env.Name,
 		EnvironmentHumanID:     env.HumanID,
@@ -333,11 +318,11 @@ func (o *initCIOpts) collectCIFile(outputDir string, env metaproj.ProjectEnviron
 		filePath = filepath.Join(outputDir, fmt.Sprintf("deploy-%s.sh", env.HumanID))
 		content, err = renderTemplate(genericCITmpl, data)
 	default:
-		return ciFile{}, clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
+		return clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
 	}
 
 	if err != nil {
-		return ciFile{}, clierrors.Wrap(err, "Failed to render CI template")
+		return clierrors.Wrap(err, "Failed to render CI template")
 	}
 
 	perm := os.FileMode(0644)
@@ -345,11 +330,12 @@ func (o *initCIOpts) collectCIFile(outputDir string, env metaproj.ProjectEnviron
 		perm = 0755
 	}
 
-	return ciFile{path: filePath, content: content, perm: perm}, nil
+	plan.Add(filePath, []byte(content), perm)
+	return nil
 }
 
-// collectBitbucketFile renders a single Bitbucket Pipelines file for all environments.
-func (o *initCIOpts) collectBitbucketFile(outputDir string, environments []metaproj.ProjectEnvironmentConfig) ([]ciFile, error) {
+// collectBitbucketFile renders a single Bitbucket Pipelines file for all environments and adds it to the plan.
+func (o *initCIOpts) collectBitbucketFile(plan *filesetwriter.Plan, outputDir string, environments []metaproj.ProjectEnvironmentConfig) error {
 	var envData []bitbucketEnvironmentData
 	for _, env := range environments {
 		envData = append(envData, bitbucketEnvironmentData{
@@ -360,11 +346,12 @@ func (o *initCIOpts) collectBitbucketFile(outputDir string, environments []metap
 
 	content, err := renderTemplate(bitbucketPipelinesTmpl, bitbucketTemplateData{Environments: envData})
 	if err != nil {
-		return nil, clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
+		return clierrors.Wrap(err, "Failed to render Bitbucket Pipelines template")
 	}
 
 	filePath := filepath.Join(outputDir, "bitbucket-pipelines.yml")
-	return []ciFile{{path: filePath, content: content, perm: 0644}}, nil
+	plan.Add(filePath, []byte(content), 0644)
+	return nil
 }
 
 // tryGetOrganizationUUID attempts to fetch the organization UUID from the portal.
