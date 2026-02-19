@@ -518,7 +518,7 @@ on:
   # Trigger on all commits to branch 'main'
   # TODO: Replace this with your own desired trigger (see https://docs.github.com/en/actions/using-workflows/triggering-a-workflow)
   push:
-    branches: main
+    branches: [main]
 
 jobs:
   # Build the server and deploy into the cloud
