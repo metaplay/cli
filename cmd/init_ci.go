@@ -360,6 +360,28 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 // safeIDPattern matches identifiers safe for use in shell commands, YAML keys, and file names.
 var safeIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9-]*$`)
 
+// nonAlphanumPattern matches runs of one or more non-alphanumeric characters.
+var nonAlphanumPattern = regexp.MustCompile(`[^a-z0-9]+`)
+
+// sanitizeEnvNameForFileName derives a file-name component from the environment's
+// display name: lowercased, non-alphanumeric runs replaced by a single dash,
+// leading/trailing dashes stripped. If the result is very short (<= 3 chars),
+// falls back to the environment's human ID with the project prefix stripped.
+func sanitizeEnvNameForFileName(env metaproj.ProjectEnvironmentConfig, projectHumanID string) string {
+	s := strings.ToLower(env.Name)
+	s = nonAlphanumPattern.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if len(s) > 3 {
+		return s
+	}
+	// Fall back to the human ID, stripping the "<projectID>-" prefix if present.
+	id := env.HumanID
+	if prefix := projectHumanID + "-"; strings.HasPrefix(id, prefix) {
+		id = id[len(prefix):]
+	}
+	return id
+}
+
 // validateCIEnvironment checks that environment fields are safe for embedding
 // in CI templates (shell commands, YAML keys, file names).
 func validateCIEnvironment(env metaproj.ProjectEnvironmentConfig) error {
@@ -407,10 +429,10 @@ func (o *initCIOpts) collectCIFile(plan *filesetwriter.Plan, outputDir string, e
 
 	switch o.ciProvider {
 	case CIProviderGitHubActions:
-		filePath = filepath.Join(outputDir, ".github", "workflows", fmt.Sprintf("build-deploy-server-%s.yaml", env.HumanID))
+		filePath = filepath.Join(outputDir, ".github", "workflows", fmt.Sprintf("deploy-server-%s.yaml", sanitizeEnvNameForFileName(env, o.project.Config.ProjectHumanID)))
 		content, err = renderTemplate(githubActionsTmpl, data)
 	case CIProviderGeneric:
-		filePath = filepath.Join(outputDir, fmt.Sprintf("deploy-%s.sh", env.HumanID))
+		filePath = filepath.Join(outputDir, fmt.Sprintf("deploy-server-%s.sh", sanitizeEnvNameForFileName(env, o.project.Config.ProjectHumanID)))
 		content, err = renderTemplate(genericCITmpl, data)
 	default:
 		return clierrors.Newf("Unknown CI provider: %s", o.ciProvider)
@@ -539,10 +561,10 @@ on:
   # Enable manual triggering
   workflow_dispatch:
 
-  # Trigger on all commits to branch 'main'
-  # TODO: Replace this with your own desired trigger (see https://docs.github.com/en/actions/using-workflows/triggering-a-workflow)
-  push:
-    branches: [main]
+  # TODO: Add your own trigger (see https://docs.github.com/en/actions/using-workflows/triggering-a-workflow)
+  # push:
+  #   branches: [main]  # deploy on every push to main
+  #   tags: ['v*']      # deploy on version tags
 
 jobs:
   # Build the server and deploy into the cloud
