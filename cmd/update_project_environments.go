@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
@@ -98,7 +99,7 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	// \todo why make two requests? can we combine this with the previous fetch?
 	projectEnvClientConfigs, err := portalClient.FetchProjectEnvironmentClientConfigs(projectInfo.UUID)
 	if err != nil {
-		return fmt.Errorf("failed to fetch project environment client configs from the portal: %w", err)
+		return clierrors.Wrap(err, "Unable to fetch environment configs from the portal")
 	}
 	log.Debug().Msgf("Found following environment client configs for project: %d environments", len(projectEnvClientConfigs))
 	for _, config := range projectEnvClientConfigs {
@@ -307,7 +308,7 @@ func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metapr
 		log.Warn().Msg("Skipping environment configs update. To enable this feature, ensure the file exists in your Unity project.")
 		return nil
 	} else if err != nil {
-		return fmt.Errorf("failed to check EnvironmentConfigs.json: %w", err)
+		return clierrors.Wrap(err, "Unable to access EnvironmentConfigs.json")
 	}
 
 	log.Info().Msgf("Found EnvironmentConfigs.json at %s", environmentConfigsPath)

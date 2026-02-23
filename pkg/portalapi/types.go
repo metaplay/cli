@@ -94,7 +94,7 @@ type EnvironmentInfo struct {
 	// Slug        string          `json:"slug"`         // Slug for the environment (simplified version of name)
 }
 
-// EnvironmtneClientConfig contains the configuration information required by the
+// EnvironmentClientConfig contains the configuration information required by the
 // client to connect to the environment.
 // \todo Tighten up the optionality on the OAuth2 params where possible.
 type EnvironmentClientConfig struct {
