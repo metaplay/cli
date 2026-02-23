@@ -36,6 +36,60 @@ const (
 	PhaseFailed  GameServerPodPhase = "Failed"
 )
 
+// Metaplay wire protocol constants (from SDK WireProtocol.cs)
+const (
+	metaplayWireProtocolVersion       byte = 10
+	protocolStatusClusterRunning      byte = 3
+	protocolStatusClusterStarting     byte = 4
+	protocolStatusClusterShuttingDown byte = 5
+	protocolHeaderSize                     = 8
+)
+
+// protocolHeaderInfo holds the parsed fields of the Metaplay protocol header.
+type protocolHeaderInfo struct {
+	Magic    [4]byte
+	Version  byte
+	Status   byte
+	Reserved [2]byte
+}
+
+// buildHealthCheckPacket returns the 8-byte wire protocol HealthCheck request packet.
+// Wire packet header: [flags:1][payloadSize:3], where flags bits 0-2 = WirePacketType.
+// HealthCheck = 0x04, payload = 4-byte big-endian HealthCheckTypeBits (GlobalState = 0x01).
+func buildHealthCheckPacket() []byte {
+	return []byte{0x04, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01}
+}
+
+// parseProtocolHeader parses the 8-byte Metaplay protocol header from the given buffer.
+func parseProtocolHeader(data []byte) (protocolHeaderInfo, error) {
+	if len(data) < protocolHeaderSize {
+		return protocolHeaderInfo{}, fmt.Errorf("protocol header too short: got %d bytes, need %d", len(data), protocolHeaderSize)
+	}
+	var info protocolHeaderInfo
+	copy(info.Magic[:], data[0:4])
+	info.Version = data[4]
+	info.Status = data[5]
+	copy(info.Reserved[:], data[6:8])
+	return info, nil
+}
+
+// validateProtocolHeader checks that the protocol header indicates a healthy server.
+func validateProtocolHeader(info protocolHeaderInfo) error {
+	if info.Version != metaplayWireProtocolVersion {
+		return fmt.Errorf("unexpected protocol version: got %d, expected %d", info.Version, metaplayWireProtocolVersion)
+	}
+	switch info.Status {
+	case protocolStatusClusterRunning:
+		return nil
+	case protocolStatusClusterStarting:
+		return fmt.Errorf("server cluster is still starting (status=%d)", info.Status)
+	case protocolStatusClusterShuttingDown:
+		return fmt.Errorf("server cluster is shutting down (status=%d)", info.Status)
+	default:
+		return fmt.Errorf("unexpected protocol status: %d", info.Status)
+	}
+}
+
 type GameServerPodStatus struct {
 	Phase   GameServerPodPhase `json:"phase"`
 	Message string             `json:"message"`
@@ -141,7 +195,7 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
 
 		// Check that all expected pods are found.
-		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
+		for shardNdx := range numExpectedReplicas {
 			// Find matching pod with name '<shardSet>-<index>'
 			podName := fmt.Sprintf("%s-%d", shardSet.Name, shardNdx)
 			var foundPod *corev1.Pod = nil
@@ -357,9 +411,8 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
 					} else {
 						// Format logs with each line prefixed by '> '
-						lines := strings.Split(podLogs, "\n")
 						var sb strings.Builder
-						for _, line := range lines {
+						for line := range strings.SplitSeq(podLogs, "\n") {
 							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
 						}
 						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
@@ -525,7 +578,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
 			allSuccess := true
-			for iter := 0; iter < numAttempts; iter++ {
+			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
 				err := attemptTLSConnection(hostname, port)
 				if err != nil {
@@ -551,7 +604,9 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 	}
 }
 
-// attemptTLSConnection performs a TLS handshake and waits for initial data.
+// attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
+// (client-speaks-first pattern to work behind TLS-terminating proxies), then
+// reads and validates the server's protocol header.
 func attemptTLSConnection(hostname string, port int) error {
 	address := fmt.Sprintf("%s:%d", hostname, port)
 	conn, err := tls.Dial("tcp", address, &tls.Config{
@@ -562,21 +617,46 @@ func attemptTLSConnection(hostname string, port int) error {
 	}
 	defer conn.Close()
 
-	log.Debug().Msgf("TLS handshake completed, waiting to receive data from the server...")
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		return fmt.Errorf("error reading data from server: %v", err)
+	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
+	// proxies that use lazy upstream connections (client-speaks-first pattern).
+	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	healthCheckPacket := buildHealthCheckPacket()
+	if _, err := conn.Write(healthCheckPacket); err != nil {
+		return fmt.Errorf("failed to send HealthCheck packet: %v", err)
 	}
 
-	hexBytes := make([]string, n)
-	for i := 0; i < n; i++ {
+	// Read the protocol header from the server.
+	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, protocolHeaderSize)
+	totalRead := 0
+	for totalRead < protocolHeaderSize {
+		n, err := conn.Read(buffer[totalRead:])
+		if err != nil {
+			return fmt.Errorf("error reading protocol header from server (got %d/%d bytes): %v", totalRead, protocolHeaderSize, err)
+		}
+		totalRead += n
+	}
+
+	// Log received bytes for debugging.
+	hexBytes := make([]string, totalRead)
+	for i := range totalRead {
 		hexBytes[i] = fmt.Sprintf("%02x", buffer[i])
 	}
+	log.Debug().Msgf("Received %d bytes from server: %s", totalRead, hexBytes)
 
-	log.Debug().Msgf("Received %d bytes from server: %s", n, hexBytes)
+	// Parse and validate the protocol header.
+	header, err := parseProtocolHeader(buffer[:totalRead])
+	if err != nil {
+		return fmt.Errorf("failed to parse protocol header: %v", err)
+	}
+	log.Debug().Msgf("Protocol header: version=%d, status=%d, magic=%x", header.Version, header.Status, header.Magic)
+
+	if err := validateProtocolHeader(header); err != nil {
+		return fmt.Errorf("protocol header validation failed: %v", err)
+	}
+
 	return nil
 }
 

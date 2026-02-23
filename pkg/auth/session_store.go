@@ -13,10 +13,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
 )
@@ -27,16 +31,20 @@ const (
 	keyringKey     = "encryption-key"
 )
 
-// Hard-coded encryption key for Linux as it doesn't have a reliable keyring.
-// We rely on the filesystem access control to protect the secrets.
-var hardCodedKey = []byte{7, 246, 197, 129, 44, 88, 77, 229, 221, 48, 42, 6, 54, 141, 173, 238, 162, 83, 31, 12, 241, 254, 170, 86, 247, 233, 103, 130, 205, 243, 36, 61}
+// linuxFallbackKey is a hard-coded encryption key used on Linux systems where
+// the system keyring (Secret Service) is not available. This includes headless
+// servers, containers, and minimal installs without GNOME Keyring or KWallet.
+//
+// When this key is used, the implementation relies on filesystem permissions
+// (0600) as the security boundary rather than a secure credential store.
+var linuxFallbackKey = []byte{7, 246, 197, 129, 44, 88, 77, 229, 221, 48, 42, 6, 54, 141, 173, 238, 162, 83, 31, 12, 241, 254, 170, 86, 247, 233, 103, 130, 205, 243, 36, 61}
 
 // Type of user in portal (human or machine).
 type UserType string
 
 const (
 	UserTypeHuman   UserType = "human"
-	UserTypeMachine          = "machine"
+	UserTypeMachine UserType = "machine"
 )
 
 // In-memory session state.
@@ -47,8 +55,9 @@ type SessionState struct {
 
 // Persisted session state (with encrypted tokenSet).
 type PersistedSessionState struct {
-	UserType        UserType `json:"userType"` // Type of the user (human or machine)
-	EncodedTokenSet string   `json:"tokenSet"` // Encrypted tokenSet
+	UserType       UserType `json:"userType"`              // Type of the user (human or machine)
+	TokenSetLegacy string   `json:"tokenSet,omitempty"`    // Legacy CFB-encrypted tokenSet (deprecated)
+	TokenSetGCM    string   `json:"tokenSetGcm,omitempty"` // GCM-encrypted tokenSet
 }
 
 // Represents the config.json persisted on disk.
@@ -62,64 +71,143 @@ func newPersistedConfig() *PersistedConfig {
 	}
 }
 
-// Generate or retrieve the AES encryption key from the keyring.
-func getOrCreateAESKey() ([]byte, error) {
-	// On Linux, there is no reliably keyring available, so we resort to a fixed key.
-	if runtime.GOOS == "linux" {
-		return hardCodedKey, nil
-	}
+// ErrKeyNotFound is returned when the encryption key is not found in the keyring.
+var ErrKeyNotFound = errors.New("encryption key not found in keyring")
 
+// Retrieve the AES encryption key from the keyring.
+// Returns ErrKeyNotFound if the key does not exist.
+func getAESKey() ([]byte, error) {
 	// Get the AES key from the OS keyring.
 	key, err := keyring.Get(keyringService, keyringKey)
-	if err != nil {
-		if errors.Is(err, keyring.ErrNotFound) {
-			// Generate a new AES key
-			log.Debug().Msg("Generate new AES encryption key")
-			newKey := make([]byte, 32) // AES-256
-			if _, err := rand.Read(newKey); err != nil {
-				return nil, fmt.Errorf("failed to generate AES key: %w", err)
-			}
-
-			// Store the key in the keyring
-			log.Debug().Msg("Store encryption key in keyring")
-			err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
-			if err != nil {
-				return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
-			}
-			return newKey, nil
+	if err == nil {
+		// Decode the stored key
+		decodedKey, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AES key: %w", err)
 		}
-		return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
+		return decodedKey, nil
 	}
 
-	// Decode the stored key
-	decodedKey, err := base64.StdEncoding.DecodeString(key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode AES key: %w", err)
+	if errors.Is(err, keyring.ErrNotFound) {
+		// On Linux, fall back to fixed key if keyring has no key stored.
+		if runtime.GOOS == "linux" {
+			log.Debug().Msg("No key in system keyring, using fallback key (tokens protected by filesystem permissions)")
+			return linuxFallbackKey, nil
+		}
+		return nil, ErrKeyNotFound
 	}
-	return decodedKey, nil
+
+	// On Linux, keyring may be unavailable (no Secret Service daemon).
+	// Fall back to fixed key which relies on filesystem permissions for security.
+	if runtime.GOOS == "linux" {
+		log.Debug().Msg("System keyring unavailable, using fallback key (tokens protected by filesystem permissions)")
+		return linuxFallbackKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
 }
 
-// Encrypt data using AES encryption.
-func encrypt(data []byte, key []byte) ([]byte, error) {
+// Generate or retrieve the AES encryption key from the keyring.
+// Creates a new key if one does not exist.
+func getOrCreateAESKey() ([]byte, error) {
+	// Try to get existing key from keyring
+	key, err := keyring.Get(keyringService, keyringKey)
+	if err == nil {
+		decodedKey, err := base64.StdEncoding.DecodeString(key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AES key: %w", err)
+		}
+		return decodedKey, nil
+	}
+
+	// If keyring is available but key doesn't exist, create one
+	if errors.Is(err, keyring.ErrNotFound) {
+		// Generate a new AES key
+		log.Debug().Msg("Generate new AES encryption key")
+		newKey := make([]byte, 32) // AES-256
+		if _, err := rand.Read(newKey); err != nil {
+			return nil, fmt.Errorf("failed to generate AES key: %w", err)
+		}
+
+		// Store the key in the keyring
+		log.Debug().Msg("Store encryption key in keyring")
+		err = keyring.Set(keyringService, keyringKey, base64.StdEncoding.EncodeToString(newKey))
+		if err != nil {
+			// On Linux, keyring.Set may fail even if Get returned ErrNotFound
+			// (e.g., Secret Service available for read but not write).
+			if runtime.GOOS == "linux" {
+				log.Debug().Msg("Failed to store key in keyring, using fallback key (tokens protected by filesystem permissions)")
+				return linuxFallbackKey, nil
+			}
+			return nil, fmt.Errorf("failed to save AES key to keyring: %w", err)
+		}
+		return newKey, nil
+	}
+
+	// Keyring error (not ErrNotFound) - keyring may be unavailable
+	if runtime.GOOS == "linux" {
+		log.Debug().Msg("System keyring unavailable, using fallback key (tokens protected by filesystem permissions)")
+		return linuxFallbackKey, nil
+	}
+
+	return nil, fmt.Errorf("failed to retrieve AES key: %w", err)
+}
+
+// Encrypt data using AES-GCM encryption (authenticated encryption).
+func encryptGCM(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	ciphertext := make([]byte, aes.BlockSize+len(data))
-	iv := ciphertext[:aes.BlockSize]
-	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
-		return nil, fmt.Errorf("failed to generate IV: %w", err)
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	stream := cipher.NewCFBEncrypter(block, iv)
-	stream.XORKeyStream(ciphertext[aes.BlockSize:], data)
+	// Generate a random nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
 
+	// Encrypt and authenticate the data, prepending the nonce
+	ciphertext := gcm.Seal(nonce, nonce, data, nil)
 	return ciphertext, nil
 }
 
-// Decrypt data using AES decryption.
-func decrypt(data []byte, key []byte) ([]byte, error) {
+// Decrypt data using AES-GCM decryption (authenticated encryption).
+// Returns an error if the key is wrong or the data has been tampered with.
+func decryptGCM(data []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// \todo Remove legacy CFB decryption support in a future release (deprecated in 1.7.0, early Jan 2026).
+
+// decryptLegacyCFB decrypts data using AES-CFB decryption.
+// Deprecated: Use decryptGCM instead. This function is only kept for migration purposes.
+func decryptLegacyCFB(data []byte, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
@@ -210,7 +298,7 @@ func savePersistedConfig(config *PersistedConfig) error {
 	// Write sessionState to file.
 	err = os.WriteFile(filePath, configJSON, 0600)
 	if err != nil {
-		return fmt.Errorf("failed to write session sate to file: %w", err)
+		return fmt.Errorf("failed to write session state to file: %w", err)
 	}
 
 	return nil
@@ -234,7 +322,7 @@ func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 	return savePersistedConfig(configState)
 }
 
-// SaveSessionState saves the current session state (with encrypted tokenSet).
+// SaveSessionState saves the current session state (with GCM-encrypted tokenSet).
 func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
@@ -248,16 +336,16 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 		return err
 	}
 
-	// Encrypt the tokenSet
-	encryptedTokenSet, err := encrypt(tokenSetJSON, key)
+	// Encrypt the tokenSet using GCM (authenticated encryption)
+	encryptedTokenSet, err := encryptGCM(tokenSetJSON, key)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt TokenSet: %w", err)
 	}
 
-	// Construct session state.
+	// Construct session state (only using GCM field, legacy field is omitted).
 	sessionState := PersistedSessionState{
-		UserType:        userType,
-		EncodedTokenSet: base64.StdEncoding.EncodeToString(encryptedTokenSet),
+		UserType:    userType,
+		TokenSetGCM: base64.StdEncoding.EncodeToString(encryptedTokenSet),
 	}
 
 	// Update session state in persisted config.
@@ -271,6 +359,9 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 
 // LoadSessionState loads a session state and decrypts the tokenSet.
 // Returns nil if there is no existing session.
+// If a legacy CFB-encrypted session is found, it is automatically migrated to GCM.
+// On Linux, sessions encrypted with the fallback key are re-encrypted with the
+// keyring-based key if a keyring becomes available.
 func LoadSessionState(sessionID string) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
@@ -285,22 +376,61 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 		return nil, nil
 	}
 
-	// Base64 decode to get encrypted tokenSet bytes.
-	tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.EncodedTokenSet)
+	// Get encryption key (read-only, do not create if missing).
+	key, err := getAESKey()
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode encrypted tokenSet: %w", err)
-	}
-
-	// Get encryption key.
-	key, err := getOrCreateAESKey()
-	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			return nil, fmt.Errorf("encryption key not found, please log in again")
+		}
 		return nil, err
 	}
 
-	// Decrypt the tokenSet
-	tokenSetJSON, err := decrypt(tokenSetBytes, key)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt TokenSet: %w", err)
+	var tokenSetJSON []byte
+	needsMigration := false
+
+	// Try GCM-encrypted field first (preferred)
+	if sessionState.TokenSetGCM != "" {
+		tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.TokenSetGCM)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode GCM-encrypted tokenSet: %w", err)
+		}
+
+		tokenSetJSON, err = decryptGCM(tokenSetBytes, key)
+		if err != nil {
+			// On Linux, try fallback key. This handles the case where a session was
+			// created without keyring, but keyring is now available.
+			if runtime.GOOS == "linux" {
+				tokenSetJSON, err = decryptGCM(tokenSetBytes, linuxFallbackKey)
+				if err == nil {
+					needsMigration = true
+				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt session (encryption key may have changed, please log in again): %w", err)
+			}
+		}
+	} else if sessionState.TokenSetLegacy != "" {
+		// Fall back to legacy CFB-encrypted field
+		tokenSetBytes, err := base64.StdEncoding.DecodeString(sessionState.TokenSetLegacy)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode legacy-encrypted tokenSet: %w", err)
+		}
+
+		tokenSetJSON, err = decryptLegacyCFB(tokenSetBytes, key)
+		if err != nil {
+			// On Linux, try fallback key in case session was created without keyring.
+			if runtime.GOOS == "linux" {
+				tokenSetJSON, err = decryptLegacyCFB(tokenSetBytes, linuxFallbackKey)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt legacy TokenSet: %w", err)
+			}
+		}
+
+		needsMigration = true
+	} else {
+		// No token set data found
+		return nil, fmt.Errorf("session state has no token data")
 	}
 
 	// Deserialize the JSON into a TokenSet.
@@ -308,6 +438,12 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 	err = json.Unmarshal(tokenSetJSON, &tokenSet)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize TokenSet: %w", err)
+	}
+
+	// Migrate legacy session to GCM encryption
+	if needsMigration {
+		// Re-save with GCM encryption. Ignore errors as we can retry next time.
+		_ = SaveSessionState(sessionID, sessionState.UserType, &tokenSet)
 	}
 
 	return &SessionState{
@@ -323,4 +459,65 @@ func DeleteSessionState(sessionID string) error {
 		delete(config.Sessions, sessionID)
 		return nil
 	})
+}
+
+// RevokeRefreshToken revokes a refresh token at the authorization server per RFC 7009.
+// This is best-effort: errors are logged at Warn level but not returned, since local
+// cleanup should proceed regardless of server-side revocation success.
+func RevokeRefreshToken(authProvider *AuthProviderConfig, refreshToken string) {
+	// Skip if no refresh token
+	if refreshToken == "" {
+		return
+	}
+
+	// Get revocation endpoint
+	revokeEndpoint := authProvider.RevokeEndpoint
+	if revokeEndpoint == "" {
+		log.Warn().Msg("No revocation endpoint available, skipping token revocation")
+		return
+	}
+
+	// Build form data per RFC 7009
+	data := url.Values{}
+	data.Set("token", refreshToken)
+	data.Set("token_type_hint", "refresh_token")
+	data.Set("client_id", authProvider.ClientID)
+
+	// POST with 5-second timeout
+	client := resty.New().SetTimeout(5 * time.Second)
+	resp, err := client.R().
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetBody(data.Encode()).
+		Post(revokeEndpoint)
+
+	if err != nil {
+		log.Warn().Msgf("Failed to revoke refresh token: %v", err)
+		return
+	}
+
+	// HTTP 200 = success (even for invalid/already-revoked tokens per RFC 7009)
+	if resp.StatusCode() == http.StatusOK {
+		log.Debug().Msg("Refresh token revoked successfully")
+	} else {
+		log.Warn().Msgf("Token revocation returned status %d: %s", resp.StatusCode(), resp.String())
+	}
+}
+
+// RevokeAndDeleteSession revokes tokens server-side and removes local session state.
+// Server-side revocation is best-effort; local deletion always proceeds.
+func RevokeAndDeleteSession(authProvider *AuthProviderConfig, sessionID string) error {
+	// Load session to get tokens
+	sessionState, err := LoadSessionState(sessionID)
+	if err != nil {
+		log.Warn().Msgf("Failed to load session for revocation: %v", err)
+		// Proceed with local deletion anyway
+	}
+
+	// Revoke refresh token if we have one
+	if sessionState != nil && sessionState.TokenSet != nil && sessionState.TokenSet.RefreshToken != "" {
+		RevokeRefreshToken(authProvider, sessionState.TokenSet.RefreshToken)
+	}
+
+	// Always delete local session state
+	return DeleteSessionState(sessionID)
 }

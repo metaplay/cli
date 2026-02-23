@@ -9,10 +9,10 @@ import (
 	"container/heap"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -42,7 +42,7 @@ func init() {
 	o := debugLogsOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:   "logs [ENVIRONMENT] [flags]",
@@ -57,20 +57,20 @@ func init() {
 			- 'metaplay deploy server ...' to deploy a game server into the cloud.
 		`),
 		Example: renderExample(`
-			# Show logs from environment 'tough-falcons' up until now.
-			metaplay debug logs tough-falcons
+			# Show logs from environment 'nimbly' up until now.
+			metaplay debug logs nimbly
 
 			# Show logs and keep streaming them until terminated.
-			metaplay debug logs tough-falcons -f
+			metaplay debug logs nimbly -f
 
 			# Show logs only from the 'service-0' pod.
-			metaplay debug logs tough-falcons --pod service-0
+			metaplay debug logs nimbly --pod service-0
 
 			# Show logs more recent than 3 hours.
-			metaplay debug logs tough-falcons --since=3h
+			metaplay debug logs nimbly --since=3h
 
 			# Show logs since Dec 27th, 2024 15:04:05 UTC.
-			metaplay debug logs tough-falcons --since-time=2024-12-27T15:04:05Z
+			metaplay debug logs nimbly --since-time=2024-12-27T15:04:05Z
 		`),
 	}
 
@@ -87,14 +87,16 @@ func init() {
 func (o *debugLogsOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// --since and --since-time are mutually exclusive.
 	if o.flagSince != 0 && o.flagSinceTime != "" {
-		return fmt.Errorf("only one of either --since or --since-time can be used, not both")
+		return clierrors.NewUsageError("Cannot use both --since and --since-time").
+			WithSuggestion("Use only one of --since or --since-time")
 	}
 
 	// Parse --since-time (if specified).
 	if o.flagSinceTime != "" {
 		t, err := time.Parse(time.RFC3339, o.flagSinceTime)
 		if err != nil {
-			return fmt.Errorf("unable to parse --since-time: %v", err)
+			return clierrors.WrapUsageError(err, "Invalid --since-time format").
+				WithSuggestion("Use RFC3339 format, e.g., '2024-12-27T15:04:05Z'")
 		}
 		o.sinceTime = &t
 	}
@@ -133,12 +135,12 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	// \todo Keep updating the list of pods to dynamically adapt to new/delete pods.
 	pods, err := envapi.FetchGameServerPods(cmd.Context(), kubeCli)
 	if err != nil {
-		log.Error().Msgf("Failed to determine game server pods in the environment: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to find game server pods").
+			WithSuggestion("Make sure you have deployed a game server to this environment")
 	}
 	if len(pods) == 0 {
-		log.Error().Msgf("No game server pods found in the environment. Make sure you have a game server deployed.")
-		os.Exit(1)
+		return clierrors.New("No game server pods found in the environment").
+			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 	log.Debug().Msgf("Found %d game server pods: %s", len(pods), strings.Join(getPodNames(pods), ", "))
 
@@ -152,7 +154,8 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 		}
 
 		if len(filteredPods) == 0 {
-			return fmt.Errorf("no game server pods match the specified name: %s", o.flagPodName)
+			return clierrors.Newf("No game server pods match the name '%s'", o.flagPodName).
+				WithSuggestion("Check available pods with 'kubectl get pods' or omit --pod to see all pods")
 		}
 
 		pods = filteredPods
@@ -287,12 +290,11 @@ func readPodLogs(ctx context.Context, source *podLogSource, cutoffTime *time.Tim
 	for scanner.Scan() {
 		// Parse the timestamp and payload from the line. We assume Kubernetes format.
 		line := scanner.Text()
-		parts := strings.SplitN(line, " ", 2)
-		if len(parts) < 2 {
+		tsStr, msg, ok := strings.Cut(line, " ")
+		if !ok {
 			log.Warn().Msgf("Malformed line from pod %s: '%s'", source.prefix, line)
 			continue
 		}
-		tsStr, msg := parts[0], parts[1]
 
 		// Parse timestamp
 		timestamp, err := time.Parse(time.RFC3339Nano, tsStr)

@@ -6,12 +6,12 @@ package helmutil
 
 import (
 	"fmt"
-	"net/http"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
@@ -72,22 +72,16 @@ func FetchHelmChartVersions(repository string, chartName string, minVersion *ver
 
 	// Fetch the index.yaml file from the repository
 	url := strings.TrimSuffix(repository, "/") + "/index.yaml"
-	log.Printf("Fetching Helm chart versions from '%s'...", url)
+	log.Debug().Msgf("Fetching Helm chart versions from '%s'...", url)
 
-	resp, err := http.Get(url)
+	body, err := httputil.GetBytesWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch repository index: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Parse the YAML index file
 	var repoIndex HelmChartRepoIndex
-	err = yaml.NewDecoder(resp.Body).Decode(&repoIndex)
-	if err != nil {
+	if err := yaml.Unmarshal(body, &repoIndex); err != nil {
 		return nil, fmt.Errorf("failed to parse chart repository index.yaml: %w", err)
 	}
 
@@ -97,7 +91,7 @@ func FetchHelmChartVersions(repository string, chartName string, minVersion *ver
 		for _, entry := range chartEntries {
 			v, err := version.NewVersion(entry.Version)
 			if err != nil {
-				log.Warn().Msgf("Skipping invalid Helm chart version '%s': %v\n", entry.Version, err)
+				log.Warn().Msgf("Skipping invalid Helm chart version '%s': %v", entry.Version, err)
 				continue
 			}
 
@@ -121,7 +115,7 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 	for _, vStr := range availableVersions {
 		v, err := version.NewVersion(vStr)
 		if err != nil {
-			log.Warn().Msgf("Skipping invalid Helm chart version '%s': %v\n", vStr, err)
+			log.Warn().Msgf("Skipping invalid Helm chart version '%s': %v", vStr, err)
 			continue
 		}
 
@@ -137,11 +131,11 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 		return "", fmt.Errorf("no matching Helm chart versions found")
 	}
 
-	// Sort the versions in descending order
-	sort.Sort(sort.Reverse(version.Collection(satisfyingVersions)))
-
 	// Return the highest version
-	return satisfyingVersions[0].String(), nil
+	best := slices.MaxFunc(satisfyingVersions, func(a, b *version.Version) int {
+		return a.Compare(b)
+	})
+	return best.String(), nil
 }
 
 // Find the best matching Helm chart version from a remote chart repository.

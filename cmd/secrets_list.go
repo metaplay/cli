@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -27,15 +28,13 @@ func init() {
 	o := secretsListOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
 		Use:   "list ENVIRONMENT [flags]",
-		Short: "[preview] List the user secrets in the target environment",
+		Short: "List the user secrets in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Show all user-created secrets in the target environment.
 
 			In the default output mode, the secrets are sanitized to avoid accidentally showing
@@ -46,18 +45,19 @@ func init() {
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
+			- 'metaplay secrets update ENVIRONMENT NAME ...' to update an existing user secret.
 			- 'metaplay secrets delete ENVIRONMENT NAME ...' to delete a user secret.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: renderExample(`
 			# Show all secrets in text format (default) with their values censored.
-			metaplay secrets list tough-falcons
+			metaplay secrets list nimbly
 
 			# Show all secrets with their values shown.
-			metaplay secrets list tough-falcons --show-values
+			metaplay secrets list nimbly --show-values
 
 			# Show all secrets in JSON format (with all Kubernetes metadata included).
-			metaplay secrets list tough-falcons --format=json
+			metaplay secrets list nimbly --format=json
 		`),
 	}
 
@@ -108,6 +108,7 @@ func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 
 		log.Info().Msgf("%s", string(secretsJSON))
 	} else {
+		log.Info().Msg("")
 		if len(secrets) == 0 {
 			log.Info().Msgf("No secrets found in the environment")
 		} else {
@@ -162,14 +163,14 @@ func formatAge(duration time.Duration) string {
 
 func logSecret(secret *corev1.Secret, showValues bool) {
 	age := time.Now().Sub(secret.CreationTimestamp.Time)
-	log.Info().Msgf("Name: %s", secret.Name)
-	log.Info().Msgf("Age: %s", formatAge(age))
+	log.Info().Msgf("Name: %s", styles.RenderTechnical(secret.Name))
+	log.Info().Msgf("Age:  %s", styles.RenderTechnical(formatAge(age)))
 	log.Info().Msgf("Data:")
 	for key, value := range secret.Data {
 		// Censor values unless they're requested to be shown.
 		if !showValues {
 			value = []byte("*****")
 		}
-		log.Info().Msgf("  %s: %s", key, value)
+		log.Info().Msgf("  %s: %s", styles.RenderTechnical(key), value)
 	}
 }

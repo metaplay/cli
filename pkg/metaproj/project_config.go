@@ -23,6 +23,24 @@ type ProjectFeaturesConfig struct {
 	Dashboard DashboardFeatureConfig `yaml:"dashboard"`
 }
 
+// IntegrationTestsConfig configures integration test behavior ($.integrationTests in metaplay-project.yaml).
+type IntegrationTestsConfig struct {
+	Docker    *IntegrationTestDockerConfig    `yaml:"docker,omitempty"`
+	Server    *IntegrationTestContainerConfig `yaml:"server,omitempty"`
+	BotClient *IntegrationTestContainerConfig `yaml:"botClient,omitempty"`
+}
+
+// IntegrationTestDockerConfig configures docker build options for integration tests.
+type IntegrationTestDockerConfig struct {
+	BuildArgs []string `yaml:"buildArgs,omitempty"`
+}
+
+// IntegrationTestContainerConfig configures container runtime options for integration tests.
+type IntegrationTestContainerConfig struct {
+	Args []string          `yaml:"args,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
+}
+
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update ValidateProjectConfig().
 type ProjectConfig struct {
@@ -42,6 +60,8 @@ type ProjectConfig struct {
 	AuthProviders map[string]*auth.AuthProviderConfig `yaml:"authProviders,omitempty"`
 
 	Features ProjectFeaturesConfig `yaml:"features"`
+
+	IntegrationTests *IntegrationTestsConfig `yaml:"integrationTests,omitempty"`
 
 	Environments []ProjectEnvironmentConfig `yaml:"environments"`
 }

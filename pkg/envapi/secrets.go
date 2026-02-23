@@ -116,3 +116,35 @@ func (targetEnv *TargetEnvironment) ListSecrets(ctx context.Context) ([]corev1.S
 
 	return secrets.Items, nil
 }
+
+// UpdateSecret updates an existing Kubernetes secret with new data.
+// The newData map replaces the entire secret data.
+func (targetEnv *TargetEnvironment) UpdateSecret(ctx context.Context, name string, newData map[string][]byte) error {
+	// Initialize a Kubernetes kubeCli against the environment
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
+	if err != nil {
+		return err
+	}
+
+	// Get the existing secret
+	secret, err := kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to retrieve secret: %w", err)
+	}
+
+	// Check that the secret is a valid user secret
+	if value, ok := secret.Labels[userSecretLabelName]; !ok || value != userSecretLabelValue {
+		return fmt.Errorf("secret %s is not a valid user secret", name)
+	}
+
+	// Update the secret data
+	secret.Data = newData
+
+	// Update the secret in Kubernetes
+	_, err = kubeCli.Clientset.CoreV1().Secrets(kubeCli.Namespace).Update(ctx, secret, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update secret: %w", err)
+	}
+
+	return nil
+}

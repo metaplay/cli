@@ -6,13 +6,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -38,13 +38,14 @@ type deployGameServerOpts struct {
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
 	flagHelmValuesPath      string
+	flagDryRun              bool
 }
 
 func init() {
 	o := deployGameServerOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
@@ -56,7 +57,7 @@ func init() {
 		Long: renderLong(&o, `
 			Deploy a game server into a cloud environment using the specified docker image version.
 
-			After deploying the server image, various checks are run against the deployment to help
+			After deploying the server image, various checks are run against the deployment to
 			help diagnose any potential issues:
 			- All expected pods are present, healthy, and ready.
 			- Client-facing domain name resolves correctly.
@@ -77,26 +78,26 @@ func init() {
 			- 'metaplay debug shell ...' to start a shell on a running server pod.
 		`),
 		Example: renderExample(`
-			# Push the local image and deploy to the environment tough-falcons.
-			metaplay deploy server tough-falcons mygame:364cff09
+			# Push the local image and deploy to the environment nimbly.
+			metaplay deploy server nimbly mygame:364cff09
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy server tough-falcons 364cff09
+			metaplay deploy server nimbly 364cff09
 
 			# Deploy the latest locally built image for this project.
-			metaplay deploy server tough-falcons latest-local
+			metaplay deploy server nimbly latest-local
 
 			# Pass extra arguments to Helm.
-			metaplay deploy server tough-falcons mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server nimbly mygame:364cff09 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy server tough-falcons mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server nimbly mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server nimbly mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy server tough-falcons mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server nimbly mygame:364cff09 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -107,6 +108,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
 	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.BoolVar(&o.flagDryRun, "dry-run", false, "Show what would be deployed without actually performing the deployment")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -192,7 +194,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 		// If there are no images for this project, error out.
 		if len(localImages) == 0 {
-			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+			return clierrors.Newf("No Docker images matching project '%s' found locally", project.Config.ProjectHumanID).
+				WithSuggestion("Build an image first with 'metaplay build image'")
 		}
 
 		// Use the first entry (they are reverse sorted by creation time).
@@ -309,17 +312,16 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		// Environment type (prod, staging, development) must match that in the portal.
 		// Otherwise, the game server will be using wrong environment type-specific defaults.
 		if envConfig.Type != portalInfo.Type {
-			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
-			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
-			os.Exit(1)
+			return clierrors.Newf("Environment type mismatch: local config has '%s', portal has '%s'", envConfig.Type, portalInfo.Type).
+				WithSuggestion("Run 'metaplay update project-environments' to sync with portal")
 		}
 	}
 
 	// Default shard config based on environment type.
 	// \todo Auto-detect these from the infrastructure.
-	var shardConfig []map[string]any
+	var shardsConfig []map[string]any
 	if envConfig.Type == portalapi.EnvironmentTypeProduction || envConfig.Type == portalapi.EnvironmentTypeStaging {
-		shardConfig = []map[string]any{
+		shardsConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
@@ -330,7 +332,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			},
 		}
 	} else {
-		shardConfig = []map[string]any{
+		shardsConfig = []map[string]any{
 			{
 				"name":      "all",
 				"singleton": true,
@@ -342,6 +344,16 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
+	// Convert shardConfig to []any to avoid JSON schema validation type errors.
+	// This happens because Helm, or https://github.com/santhosh-tekuri/jsonschema where the inputs are validated,
+	// doesn't allow []map[string]any. Its typeOf() function only accepts `[]any` as array types, not other types
+	// of arrays, like []map[string]any.
+	// Bug report in Helm: https://github.com/helm/helm/issues/31148 -- if the issue gets fixed, this code can be removed.
+	untypedShardsConfig := make([]any, len(shardsConfig))
+	for i, v := range shardsConfig {
+		untypedShardsConfig[i] = v
+	}
+
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
@@ -349,7 +361,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"environment":       envConfig.Name,
 		"environmentFamily": envConfig.GetEnvironmentFamily(),
 		"config": map[string]any{
-			"files": []string{
+			"files": []any{
 				"./Config/Options.base.yaml",
 				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
 			},
@@ -360,7 +372,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		"sdk": map[string]any{
 			"version": imageInfo.SdkVersion,
 		},
-		"shards": shardConfig,
+		"shards": untypedShardsConfig,
 	}
 	helmRequiredValues := map[string]any{
 		"image": map[string]any{
@@ -398,6 +410,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  ID:                 %s", styles.RenderTechnical(envConfig.HumanID))
 	log.Info().Msgf("  Type:               %s", styles.RenderTechnical(string(envConfig.Type)))
 	log.Info().Msgf("  Stack domain:       %s", styles.RenderTechnical(envConfig.StackDomain))
+	log.Info().Msg("")
 	log.Info().Msgf("Build information:")
 	if useLocalImage {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(o.argImageNameTag))
@@ -408,6 +421,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
 	log.Info().Msgf("  Created:            %s", styles.RenderTechnical(humanize.Time(imageInfo.CreatedTime)))
 	log.Info().Msgf("  Metaplay SDK:       %s", styles.RenderTechnical(imageInfo.SdkVersion))
+	log.Info().Msg("")
 	log.Info().Msgf("Deployment info:")
 	if o.flagHelmChartLocalPath != "" {
 		log.Info().Msgf("  Helm chart path:    %s", styles.RenderTechnical(helmChartPath))
@@ -419,26 +433,65 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(strings.Join(valuesFiles, ", ")))
 	}
 	// \todo list of runtime options files
+	// Show current Helm release info if it exists.
+	if existingRelease != nil {
+		log.Info().Msg("")
+		log.Info().Msg("Existing deployment:")
+		if existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
+			log.Info().Msgf("  %-19s %s", "Chart version:", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
+		}
+		log.Info().Msgf("  %-19s %s", "Status:", styles.RenderTechnical(existingRelease.Info.Status.String()))
+		log.Info().Msgf("  %-19s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", existingRelease.Version)))
+		lastDeployedAt := "Unknown"
+		if !existingRelease.Info.LastDeployed.IsZero() {
+			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed.Time)
+		}
+		log.Info().Msgf("  %-19s %s", "Last Deployed:", styles.RenderTechnical(lastDeployedAt))
+	}
 	log.Info().Msg("")
 
 	// Check if the existing release is in some kind of pending state
+	uninstallExistingRelease := false
 	if existingRelease != nil {
-		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the server with 'metaplay remove server'", releaseName)
+			return clierrors.New("Cannot deploy: existing Helm release is in state 'uninstalling'").
+				WithSuggestion("Wait for the uninstall to complete, or manually remove with 'metaplay remove server'")
 		} else if releaseStatus.IsPending() {
-			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the server with 'metaplay remove server'", releaseName, releaseStatus)
+			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
+			uninstallExistingRelease = true
 		}
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
 	}
 
+	// If dry-run mode, stop here.
+	if o.flagDryRun {
+		log.Info().Msg(styles.RenderMuted("Dry-run mode: skipping deployment"))
+		return nil
+	}
+
+	// Use TaskRunner to visualize progress.
 	taskRunner := tui.NewTaskRunner()
 
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
 			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+		})
+	}
+
+	// If there's a pending release, uninstall it first.
+	if uninstallExistingRelease {
+		taskRunner.AddTask(fmt.Sprintf("Uninstall existing Helm release"), func(output *tui.TaskOutput) error {
+			output.SetHeaderLines([]string{
+				fmt.Sprintf("Release status: %s", existingRelease.Info.Status),
+			})
+			err := helmutil.UninstallRelease(actionConfig, existingRelease)
+			if err != nil {
+				return fmt.Errorf("failed to uninstall Helm release %s: %v", existingRelease.Name, err)
+			}
+			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			return nil
 		})
 	}
 
@@ -449,6 +502,50 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
 			return err
 		})
+	}
+
+	// Figure out whether the values file JSON schema can be validated:
+	// - v0.9+ (including v1.x+, v0.10.x+, and prereleases) can be validated.
+	// - v0.8.1+ (including prereleases) can be validated, but v0.8.0 cannot.
+	// - v0.7.x and earlier cannot be validated.
+	// - Local charts are validated (we assume recent versions are used).
+	validateJsonSchema := false
+	if useHelmChartVersion != "local" {
+		chartVersion, err := semver.NewVersion(useHelmChartVersion)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to parse Helm chart version '%s', skipping schema validation", useHelmChartVersion)
+			validateJsonSchema = false
+		} else {
+			major := chartVersion.Major()
+			minor := chartVersion.Minor()
+			patch := chartVersion.Patch()
+
+			if major >= 1 || (major == 0 && minor >= 9) {
+				// v0.9 and later can be validated (including v0.10.x, v1.x.x and later, and v0.9.x-pre versions)
+				validateJsonSchema = true
+			} else if major == 0 && minor == 8 {
+				// For v0.8 series: don't validate for v0.8.0, but do validate for >=v0.8.1 (including pre releases)
+				if patch == 0 {
+					// Exactly v0.8.0 cannot be validated
+					validateJsonSchema = false
+				} else {
+					// v0.8.1+ (including prereleases) can be validated
+					validateJsonSchema = true
+				}
+			} else {
+				// v0.7 and earlier cannot be validated
+				log.Warn().Msgf("Helm chart version '%s' is below minimum supported version, skipping schema validation", useHelmChartVersion)
+				validateJsonSchema = false
+			}
+
+			log.Debug().Msgf("Helm chart version '%s': schema validation %s", useHelmChartVersion,
+				map[bool]string{true: "enabled", false: "disabled"}[validateJsonSchema])
+		}
+	} else {
+		// For local charts, we assume recent versions, and enable validation.
+		// \todo Add flag for disabling this, if needed.
+		log.Debug().Msg("Using local Helm chart, enable schema validation")
+		validateJsonSchema = true
 	}
 
 	// Install or upgrade the Helm chart.
@@ -464,7 +561,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			valuesFiles,
 			helmDefaultValues,
 			helmRequiredValues,
-			5*time.Minute)
+			5*time.Minute,
+			validateJsonSchema)
 		return err
 	})
 
@@ -492,7 +590,8 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	// If there are no images for this project, error out.
 	if len(localImages) == 0 {
-		return nil, fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", projectHumanID)
+		return nil, clierrors.Newf("No Docker images matching project '%s' found locally", projectHumanID).
+			WithSuggestion("Build an image first with 'metaplay build image'")
 	}
 
 	// Let the user choose from the list of images.

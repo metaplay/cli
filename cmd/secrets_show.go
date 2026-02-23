@@ -25,16 +25,14 @@ func init() {
 	o := secretsShowOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
 
 	cmd := &cobra.Command{
 		Use:   "show ENVIRONMENT NAME [flags]",
-		Short: "[preview] Show a user secret in the target environment",
+		Short: "Show a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Show the contents of a single user secret.
 
 			By default, a human-readable text format is used. When using in a script, use
@@ -44,21 +42,22 @@ func init() {
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
+			- 'metaplay secrets update ENVIRONMENT NAME ...' to update an existing user secret.
 			- 'metaplay secrets delete ENVIRONMENT NAME ...' to delete a user secret.
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 		`),
 		Example: renderExample(`
-			# Show the contents of secret user-mysecret in environment tough-falcons.
-			metaplay secrets show tough-falcons user-mysecret
+			# Show the contents of secret user-mysecret in environment nimbly.
+			metaplay secrets show nimbly user-mysecret
 
 			# Show the contents of secret in text format (default).
-			metaplay secrets show tough-falcons user-mysecret --format=text
+			metaplay secrets show nimbly user-mysecret --format=text
 
 			# Show the contents of secret in JSON format.
-			metaplay secrets show tough-falcons user-mysecret --format=json
+			metaplay secrets show nimbly user-mysecret --format=json
 
 			# Extract the value of the secret field named 'default' and decode the raw value of it.
-			metaplay secrets show tough-falcons user-mysecret --format=json | jq -r .data.default | base64 -d
+			metaplay secrets show nimbly user-mysecret --format=json | jq -r .data.default | base64 -d
 		`),
 	}
 
@@ -107,6 +106,7 @@ func (o *secretsShowOpts) Run(cmd *cobra.Command) error {
 
 		log.Info().Msgf("%s", string(secretJSON))
 	} else {
+		log.Info().Msg("")
 		logSecret(secret, true)
 	}
 

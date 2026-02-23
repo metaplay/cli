@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -21,28 +22,27 @@ func init() {
 	o := secretsDeleteOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argSecretName, "NAME", "Name of the secret, e.g., 'user-some-secret'.")
 
 	cmd := &cobra.Command{
 		Use:   "delete ENVIRONMENT NAME [flags]",
-		Short: "[preview] Delete a user secret in the target environment",
+		Short: "Delete a user secret in the target environment",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Delete a user-created secret with the given name from the target environment.
 
 			{Arguments}
 
 			Related commands:
 			- 'metaplay secrets create ENVIRONMENT NAME ...' to create a new user secret.
+			- 'metaplay secrets update ENVIRONMENT NAME ...' to update an existing user secret.
 			- 'metaplay secrets list ENVIRONMENT ...' to list all user secrets.
 			- 'metaplay secrets show ENVIRONMENT NAME ...' to show the contents of a user secret.
 		`),
 		Example: renderExample(`
-			# Delete the secret 'user-mysecret' from the environment 'tough-falcons'.
-			metaplay secrets delete tough-falcons user-mysecret
+			# Delete the secret 'user-mysecret' from the environment 'nimbly'.
+			metaplay secrets delete nimbly user-mysecret
 		`),
 	}
 
@@ -69,12 +69,19 @@ func (o *secretsDeleteOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
+	// Print secret info.
+	log.Info().Msg("")
+	log.Info().Msgf("Delete secret:")
+	log.Info().Msgf("  Target environment: %s", styles.RenderTechnical(envConfig.HumanID))
+	log.Info().Msgf("  Secret name:        %s", styles.RenderTechnical(o.argSecretName))
+	log.Info().Msg("")
+
 	// Delete the secret.
 	err = targetEnv.DeleteSecret(cmd.Context(), o.argSecretName)
 	if err != nil {
 		return err
 	}
 
-	log.Info().Msgf("Secret %s deleted", o.argSecretName)
+	log.Info().Msgf("✅ Secret %s deleted", o.argSecretName)
 	return nil
 }

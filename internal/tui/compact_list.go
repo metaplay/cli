@@ -107,14 +107,6 @@ func (m compactListModel) View() string {
 	return content
 }
 
-// min returns the smaller of x or y
-func min(x, y int) int {
-	if x < y {
-		return x
-	}
-	return y
-}
-
 func chooseFromList(title string, items []list.Item) (int, error) {
 	// Initialize list with custom delegate
 	list := list.New(items, compactListDelegate{}, 0, min(2+len(items), 20))
@@ -152,7 +144,7 @@ func ChooseFromListDialog[TItem any](title string, items []TItem, toItemFunc fun
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderTitle(title))
 		log.Info().Msg("")
-		return nil, fmt.Errorf("no items in the list")
+		return nil, fmt.Errorf("ChooseFromListDialog(): an empty list was provided")
 	}
 
 	// Convert items to list items.

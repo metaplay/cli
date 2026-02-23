@@ -10,36 +10,22 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/metaplay/cli/pkg/styles"
+	mobyterm "github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	scheme "k8s.io/client-go/kubernetes/scheme"
 )
 
-// Structure to hold the database shard configuration parsed from the YAML file
-type databaseShardConfig struct {
-	ShardIndex    int    // added via code, not in the YAML file
-	DatabaseName  string `yaml:"DatabaseName"`
-	Password      string `yaml:"Password"`
-	ReadOnlyHost  string `yaml:"ReadOnlyHost"`
-	ReadWriteHost string `yaml:"ReadWriteHost"`
-	UserId        string `yaml:"UserId"`
-}
-
-type metaplayInfraDatabase struct {
-	Backend         string                `yaml:"Backend"`
-	NumActiveShards int                   `yaml:"NumActiveShards"`
-	Shards          []databaseShardConfig `yaml:"Shards"`
-}
-
-type metaplayInfraOptions struct {
-	Database metaplayInfraDatabase `yaml:"Database"`
-}
+// Image to use for database operations
+const debugDatabaseImage = "joseluisq/alpine-mysql-client:1.8"
 
 // debugDatabaseOpts holds the options for the 'debug database' command
 type debugDatabaseOpts struct {
@@ -48,38 +34,33 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int    // parsed and validated in Prepare
-	flagReadWrite    bool   // If true, connect to read-write replica; otherwise, read-only
-	flagQuery        string // If set, run this SQL query and exit, otherwise run in interactive mode
-	flagQueryFile    string // If set, read SQL query from this file and exit (non-interactive)
-	flagOutput       string // If set, write output to this file instead of stdout
-
-	DiagnosticsImage string // Diagnostic container image name to use
+	parsedShardIndex int      // parsed and validated in Prepare
+	extraArgs        []string // Extra arguments to pass to mariadb
+	flagReadWrite    bool     // If true, connect to read-write replica; otherwise, read-only
+	flagQuery        string   // If set, run this SQL query and exit, otherwise run in interactive mode
+	flagQueryFile    string   // If set, read SQL query from this file and exit (non-interactive)
+	flagOutput       string   // If set, write output to this file instead of stdout
 }
 
 func init() {
-	o := debugDatabaseOpts{
-		DiagnosticsImage: "metaplay/diagnostics:latest",
-	}
+	o := debugDatabaseOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'tough-falcons'.")
+	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to mariadb CLI.")
 
 	cmd := &cobra.Command{
-		Use:     "database [ENVIRONMENT] [POD] [SHARD] [flags]",
+		Use:     "database [ENVIRONMENT] [SHARD] [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"db"},
 		Short:   "[preview] Connect to a database shard for the specified environment",
 		Long: renderLong(&o, `
 			PREVIEW: This is a preview feature and interface may change in the future.
 
-			Connect to a database shard for the specified environment using MySQL CLI.
+			Connect to a database shard for the specified environment using MariaDB CLI.
 
-			This command starts an ephemeral debug container and runs the MySQL client inside
-			it, connecting to the desired database replica (read-only or read-write) and database
-			shard.
-
-			If a shard name is not specified, the first shard (index 0) will be used.
+			This command starts a temporary debug pod and runs an SQL client inside it, connecting
+			to the specified database replica (read-only or read-write), and shard.
 
 			By default, the read-only replica will be used, for safety. Use --read-write to connect
 			to the read-write replica.
@@ -91,6 +72,9 @@ func init() {
 			--output <filename> to write the output to a file instead of stdout.
 
 			{Arguments}
+
+			Related commands:
+			- 'metaplay debug shell' starts a debug shell in a running game server pod.
 		`),
 		Example: renderExample(`
 			# Connect to a database shard in the 'nimbly' environment using the first shard
@@ -110,6 +94,15 @@ func init() {
 
 			# Run a query from a file on the first shard and exit immediately after
 			metaplay debug database nimbly 0 --query-file ./my_query.sql
+
+			# Pass extra arguments to mariadb CLI (e.g., for formatting)
+			metaplay debug database nimbly 0 -- --batch --skip-column-names
+
+			# Get player entity payload as binary and write to a file
+			metaplay debug database nimbly 0 --query "SELECT Payload FROM Players WHERE EntityId='Player:0000000000'" -- -N -B --raw > player.bin
+
+			# Fetch multiple players into a file as JSON objects, with one player/object per line, payload encoded with base64
+			metaplay debug database nimbly 0 --query "SELECT json_object('EntityId', EntityId, 'Payload', to_base64(Payload)) FROM Players LIMIT 5" -- -N -B --raw > players.json
 		`),
 		Run: runCommand(&o),
 	}
@@ -123,14 +116,8 @@ func init() {
 func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Handle mutually exclusive query flags
 	if o.flagQuery != "" && o.flagQueryFile != "" {
-		return fmt.Errorf("only one of --query or --query-file may be specified")
-	}
-	if o.flagQueryFile != "" {
-		content, err := os.ReadFile(o.flagQueryFile)
-		if err != nil {
-			return fmt.Errorf("failed to read SQL query from file '%s': %v", o.flagQueryFile, err)
-		}
-		o.flagQuery = string(content)
+		return clierrors.NewUsageError("Cannot use both --query and --query-file").
+			WithSuggestion("Use --query for inline SQL or --query-file to read from a file, but not both")
 	}
 
 	// Parse shard index argument if provided
@@ -138,21 +125,25 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
-			return fmt.Errorf("invalid argument SHARD '%s': must be an integer", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		if idx < 0 {
-			return fmt.Errorf("invalid argument SHARD '%s': must be non-negative", o.argShardIndex)
+			return clierrors.NewUsageErrorf("Invalid SHARD argument '%s'", o.argShardIndex).
+				WithSuggestion("SHARD must be a non-negative integer, e.g., 0 or 1")
 		}
 		o.parsedShardIndex = idx
 	} else {
 		// In non-interactive mode, SHARD argument must be specified
 		if !tui.IsInteractiveMode() {
-			return fmt.Errorf("in non-interactive mode, argument SHARD must be specified")
+			return clierrors.NewUsageError("SHARD argument is required in non-interactive mode").
+				WithSuggestion("Specify the database shard index, e.g., 'metaplay debug database nimbly 0'")
 		}
 	}
 	// Non-interactive mode requires the query in the command line
-	if o.flagQuery == "" && !tui.IsInteractiveMode() {
-		return fmt.Errorf("in non-interactive mode, argument QUERY must be specified")
+	if o.flagQuery == "" && o.flagQueryFile == "" && !tui.IsInteractiveMode() {
+		return clierrors.NewUsageError("Query is required in non-interactive mode").
+			WithSuggestion("Use --query '<SQL>' or --query-file <path> to specify the query")
 	}
 	return nil
 }
@@ -172,54 +163,22 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-	gameServer, err := targetEnv.GetGameServer(cmd.Context())
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
 
-	// Get all shard sets and pods from all clusters associated with the game server.
-	shardSetsWithPods, err := gameServer.GetAllShardSetsWithPods()
+	// Fetch the database shard configuration from Kubernetes secret
+	shards, err := kubeutil.FetchDatabaseShardsFromSecret(cmd.Context(), kubeCli, kubeCli.Namespace)
 	if err != nil {
 		return err
-	}
-	if len(shardSetsWithPods) == 0 || len(shardSetsWithPods[0].Pods) == 0 {
-		return fmt.Errorf("no pods found in any shard set")
-	}
-	kubeCli := shardSetsWithPods[0].ShardSet.Cluster.KubeClient
-	pod := &shardSetsWithPods[0].Pods[0]
-
-	// Fetch the infrastructure options YAML using the debug container
-	stderrLogger.Debug().Msgf("Fetch infra options YAML from pod: %s", pod.Name)
-	yamlContent, err := o.fetchInfraOptionsYaml(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName)
-	if err != nil {
-		return err
-	}
-
-	stderrLogger.Debug().Msgf("Infrastructure options YAML:\n%s", yamlContent)
-
-	// Parse the infrastructure options (only database section)
-	var infra metaplayInfraOptions
-	err = yaml.Unmarshal([]byte(yamlContent), &infra)
-	if err != nil {
-		return fmt.Errorf("failed to parse infrastructure options YAML: %v", err)
-	}
-
-	shards := infra.Database.Shards
-	if len(shards) == 0 {
-		return fmt.Errorf("no database shards found in infrastructure configuration")
-	}
-
-	// Fill in shard indices
-	for shardNdx := range shards {
-		shards[shardNdx].ShardIndex = shardNdx
 	}
 
 	// Create a debug container to run MySQL client
-	debugContainerName, cleanup, err := createDebugContainer(
+	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
 		kubeCli,
-		pod.Name,
-		metaplayServerContainerName,
+		debugDatabaseImage,
 		false,
 		false,
 		[]string{"sleep", "3600"},
@@ -246,42 +205,25 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 	if shardIndex < 0 || shardIndex >= len(shards) {
-		return fmt.Errorf("invalid database shard index %d. Must be between 0 and %d (inclusive)", shardIndex, len(shards)-1)
+		return clierrors.Newf("Invalid database shard index %d", shardIndex).
+			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
 	}
 	targetShard := shards[shardIndex]
 
 	// Show info
-	replicaType := "read-only"
-	if o.flagReadWrite {
-		replicaType = "read-write"
-	}
+	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
 	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msgf("Use database shard:   %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
-	stderrLogger.Info().Msgf("Use database replica: %s", styles.RenderTechnical(replicaType))
+	stderrLogger.Info().Msg("Target database:")
+	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	stderrLogger.Info().Msgf("  Replica:     %s", styles.RenderTechnical(replicaType))
 	stderrLogger.Info().Msg("")
 
 	// Connect to the database shard
-	return o.connectToDatabaseShard(cmd.Context(), kubeCli, pod.Name, debugContainerName, targetShard)
-}
-
-// Helper function to fetch the infrastructure options YAML from the pod
-func (o *debugDatabaseOpts) fetchInfraOptionsYaml(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName string) (string, error) {
-	// Use readFileFromPod with followSymlinks=true to handle symlinked files
-	contents, err := readFileFromPod(ctx, kubeCli, podName, containerName, "/etc/metaplay", "runtimeoptions.yaml")
-	if err != nil {
-		stderrLogger.Error().Msgf("Failed to read infrastructure options: %v", err)
-		return "", fmt.Errorf("failed to read infrastructure options: %w", err)
-	}
-
-	if len(contents) == 0 {
-		stderrLogger.Warn().Msg("Infrastructure options file is empty")
-	}
-
-	return string(contents), nil
+	return o.connectToDatabaseShard(cmd.Context(), kubeCli, podName, "debug", targetShard)
 }
 
 // Helper function to connect to the database shard
-func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard databaseShardConfig) error {
+func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig) error {
 	var host string
 	if o.flagReadWrite {
 		host = shard.ReadWriteHost
@@ -290,23 +232,32 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 	}
 
 	// Determine whether to run in interactive mode or a single query
-	isInteractive := o.flagQuery == ""
+	isInteractive := o.flagQuery == "" && o.flagQueryFile == ""
 
 	// Use of --output is only allowed with a non-interactive query
 	if o.flagOutput != "" && isInteractive {
-		return fmt.Errorf("--output is only allowed with a non-interactive query (--query or --query-file)")
+		return clierrors.NewUsageError("--output flag requires a non-interactive query").
+			WithSuggestion("Use --output together with --query or --query-file")
 	}
 
-	// Determine command for starting MySQL CLI.
-	mysqlCmd := fmt.Sprintf("mysql -h %s -u %s -p%s %s",
-		host,
-		shard.UserId,
-		shard.Password,
-		shard.DatabaseName)
+	// Build mariadb command with extra args
+	cmdParts := []string{
+		"mariadb",
+		"-h", host,
+		"-u", shard.UserId,
+		fmt.Sprintf("-p%s", shard.Password),
+		shard.DatabaseName,
+	}
+	cmdParts = append(cmdParts, o.extraArgs...)
+	sqlcliCmd := strings.Join(cmdParts, " ")
+
+	// Log extra arguments if provided
+	if len(o.extraArgs) > 0 {
+		log.Debug().Msgf("Extra args to mariadb: %s", strings.Join(o.extraArgs, " "))
+	}
 
 	if o.flagQuery != "" {
 		stderrLogger.Info().Msgf("Run query: %s", o.flagQuery)
-		mysqlCmd += fmt.Sprintf(" -e %q", o.flagQuery)
 	}
 
 	req := kubeCli.Clientset.CoreV1().
@@ -318,36 +269,54 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/bash", "-c", mysqlCmd},
-			Stdin:     isInteractive,
+			Command:   []string{"/bin/sh", "-c", sqlcliCmd},
+			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
 			TTY:       isInteractive,
 		}, scheme.ParameterCodec)
 
-	// Use shared remote command execution utility
+	// Setup stdin for piping queries or interactive mode.
+	// For interactive mode, use mobyterm.StdStreams() for proper terminal handling.
+	// On Windows, this handles Virtual Terminal Input mode detection and falls back
+	// to an ANSI reader that translates Windows console events (like arrow keys) to
+	// ANSI escape sequences if VT input is not supported.
 	var stdin io.Reader
+	var stdout io.Writer
+	var stderr io.Writer
 	if isInteractive {
-		stdin = os.Stdin
-	}
-
-	// Setup output channel to stdout or file
-	var out io.Writer = os.Stdout
-	var file *os.File
-	if o.flagOutput != "" && !isInteractive {
-		var err error
-		file, err = os.Create(o.flagOutput)
-		if err != nil {
-			return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+		stdin, stdout, stderr = mobyterm.StdStreams()
+	} else {
+		stderr = os.Stderr
+		if o.flagQuery != "" {
+			// Pipe the query to mariadb stdin
+			stdin = strings.NewReader(o.flagQuery)
+		} else if o.flagQueryFile != "" {
+			// Stream query file directly to mariadb stdin
+			queryFile, err := os.Open(o.flagQueryFile)
+			if err != nil {
+				return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
+			}
+			defer queryFile.Close()
+			stdin = queryFile
 		}
-		defer file.Close()
-		out = file
+
+		// Setup output channel to stdout or file
+		stdout = os.Stdout
+		if o.flagOutput != "" {
+			file, err := os.Create(o.flagOutput)
+			if err != nil {
+				return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
+			}
+			defer file.Close()
+			stdout = file
+		}
 	}
 
 	ioStreams := IOStreams{
 		In:     stdin,
-		Out:    out,
-		ErrOut: os.Stderr,
+		Out:    stdout,
+		ErrOut: stderr,
 	}
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, isInteractive, false)
@@ -360,15 +329,16 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
 // The 'shards' argument should be a slice of databaseShardConfig.
-func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []databaseShardConfig) (*databaseShardConfig, error) {
+func (o *debugDatabaseOpts) chooseDatabaseShardDialog(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 	if !tui.IsInteractiveMode() {
-		return nil, fmt.Errorf("in non-interactive mode, database shard must be explicitly specified")
+		return nil, clierrors.NewUsageError("Database shard selection requires interactive mode").
+			WithSuggestion("Specify the shard index explicitly, e.g., 'metaplay debug database nimbly 0'")
 	}
 
 	selected, err := tui.ChooseFromListDialog(
 		"Select Database Shard",
 		shards,
-		func(shard *databaseShardConfig) (string, string) {
+		func(shard *kubeutil.DatabaseShardConfig) (string, string) {
 			indexStr := fmt.Sprintf("#%d", shard.ShardIndex)
 			if o.flagReadWrite {
 				return indexStr, shard.ReadWriteHost

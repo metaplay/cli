@@ -64,12 +64,14 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Install dashboard dependencies
 	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
-		return fmt.Errorf("failed to build the LiveOps Dashboard: %s", err)
+		log.Info().Msg("Have you tried running `metaplay dev clean-dashboard-artifacts`? This removes build artifacts before installing dependencies, potentially fixing some problems.")
+		return fmt.Errorf("failed to install dashboard dependencies: %s", err)
 	}
 
 	// Run the dashboard project in dev mode
 	devArgs := append([]string{"dev"}, o.extraArgs...)
 	if err := execChildInteractive(dashboardPath, "pnpm", devArgs, nil); err != nil {
+		log.Info().Msg("Have you tried running `metaplay dev clean-dashboard-artifacts`? This removes build artifacts before installing dependencies, potentially fixing some problems.")
 		return fmt.Errorf("failed to run the LiveOps Dashboard: %s", err)
 	}
 

@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/rs/zerolog/log"
 )
 
@@ -115,7 +116,8 @@ func NewDockerClient() (*client.Client, error) {
 		pingResponse, err = dockerClient.Ping(context.Background())
 		if err != nil {
 			dockerClient.Close()
-			return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Fallback connection also failed: %w", err)
+			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
+				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
 		}
 
 		dockerClient.NegotiateAPIVersionPing(pingResponse)
@@ -123,7 +125,14 @@ func NewDockerClient() (*client.Client, error) {
 	}
 
 	// For non-connection errors, or non-macOS systems, return the original error.
-	return nil, fmt.Errorf("cannot connect to the Docker daemon. Is the docker daemon running and accessible? Original error: %w", err)
+	dockerSuggestion := "Start Docker Desktop"
+	if runtime.GOOS == "linux" {
+		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
+	} else if runtime.GOOS == "windows" {
+		dockerSuggestion = "Start Docker Desktop from the Start menu"
+	}
+	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
+		WithSuggestion(dockerSuggestion)
 }
 
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
@@ -155,6 +164,11 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
 func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*MetaplayImageInfo, error) {
+	log.Debug().Msgf("Fetch image metadata for a remote container image: %s", imageRef)
+	if imageRef == "" {
+		return nil, fmt.Errorf("empty image reference")
+	}
+
 	// Create a registry authenticator using the provided credentials
 	authenticator := authn.FromConfig(authn.AuthConfig{
 		Username: creds.Username,
@@ -164,23 +178,23 @@ func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (
 	// Parse the image reference (name + tag or digest)
 	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse remote docker image reference: %w", err)
+		return nil, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
 	}
 
 	// Retrieve the image manifest and associated metadata
 	desc, err := remote.Get(ref, remote.WithAuth(authenticator))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image descriptor: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image descriptor '%s': %w", imageRef, err)
 	}
 
 	// Fetch the image configuration blob
 	img, err := desc.Image()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image from descriptor: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image from descriptor '%s': %w", imageRef, err)
 	}
 	cfg, err := img.ConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get remote docker image config file: %w", err)
+		return nil, fmt.Errorf("failed to get remote docker image config file '%s': %w", imageRef, err)
 	}
 
 	// Use the helper function to convert config file data to MetaplayImageInfo

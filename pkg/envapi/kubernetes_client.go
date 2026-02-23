@@ -13,8 +13,8 @@ import (
 // Kubernetes client that wraps all the various Kubernetes client configs
 // and client types into one struct for convenient use.
 type KubeClient struct {
-	Namespace     string
-	KubeConfig    string
+	Namespace     string // Kubernetes namespace
+	KubeConfig    string // Kubeconfig with embedded credentials
 	RestConfig    *rest.Config
 	RestClient    *rest.RESTClient
 	Clientset     *kubernetes.Clientset

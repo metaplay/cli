@@ -5,7 +5,6 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,13 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"time"
 
-	"github.com/go-resty/resty/v2"
+	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
 	"github.com/rs/zerolog/log"
@@ -55,24 +54,23 @@ func generateCodeVerifierAndChallenge() (verifier, challenge string) {
 // Note: We try these in reverse order as 5000 is more likely to be used by other systems.
 func findAvailableCallbackPort() (net.Listener, int, error) {
 	for tryPort := 5004; tryPort >= 5000; tryPort-- {
-		// Verify that both ipv4 and ipv6 are available, using `:port` as addr seems to only check ipv6.
-		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", tryPort))
+		// Bind to IPv4 loopback only - maximum compatibility across systems
+		// (avoids issues on systems with IPv6 disabled or misconfigured)
+		listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", tryPort))
 		if err == nil {
-			ipv6Listener, err := net.Listen("tcp", fmt.Sprintf("[::1]:%d", tryPort))
-			if err == nil {
-				ipv6Listener.Close()
-				return listener, tryPort, nil
-			}
+			return listener, tryPort, nil
 		}
 	}
-	return nil, 0, fmt.Errorf("no available ports between 5000-5004")
+	return nil, 0, clierrors.New("Failed to start authentication callback server").
+		WithDetails("All ports in range 5000-5004 are in use").
+		WithSuggestion("Close applications using these ports, or check your firewall settings")
 }
 
 func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) error {
 	// Set up a local server on a random port.
 	listener, port, err := findAvailableCallbackPort()
 	if err != nil {
-		return fmt.Errorf("failed to find an available port in range 5000..5004: %v", err)
+		return err
 	}
 	defer listener.Close()
 
@@ -102,6 +100,13 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 				if err := query.Get("error"); err != "" {
 					errDescription := query.Get("error_description")
 					http.Error(w, fmt.Sprintf("Authentication failed: %s\nDescription: %s", err, errDescription), http.StatusBadRequest)
+					return
+				}
+
+				// Validate OAuth2 state parameter to prevent CSRF attacks
+				returnedState := query.Get("state")
+				if returnedState != state {
+					http.Error(w, "Authentication failed: Invalid state parameter", http.StatusBadRequest)
 					return
 				}
 
@@ -165,7 +170,8 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
 	case <-time.After(5 * time.Minute):
-		return fmt.Errorf("timeout during authentication")
+		return clierrors.New("Authentication timed out after 5 minutes").
+			WithSuggestion("Log in again")
 	}
 
 	// Shutdown the HTTP server gracefully
@@ -185,24 +191,18 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 		"scope":         {"openid email profile offline_access"},
 	}
 
-	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint
-	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(params.Encode()))
+	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint with retry logic
+	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, params.Encode())
 	if err != nil {
-		return fmt.Errorf("failed to send request to token endpoint: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Parse the response, there should be a non-empty body containing the token as JSON
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read token endpoint response: %w", err)
+		return clierrors.Wrap(err, "Failed to authenticate with Metaplay").
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	// Check for HTTP errors.
-	// TODO: Check whether other 2xx codes with a token in the body should be expected and accepted
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
+	if statusCode != http.StatusOK {
+		return clierrors.Newf("Authentication failed with status %d", statusCode).
+			WithDetails(string(body)).
+			WithSuggestion("Verify your client ID and secret are correct")
 	}
 
 	// Parse a TokenSet object from the response body JSON
@@ -230,18 +230,16 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 }
 
 func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
-	// Resolve userinfo endpoint (on the portal).
 	log.Debug().Msgf("Fetch user info from %s", authProvider.UserInfoEndpoint)
 
-	// Make the request
 	var userinfo UserInfoResponse
-	resp, err := resty.New().R().
+	resp, err := httputil.NewRetryClient().R().
 		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
 		SetResult(&userinfo).               // Unmarshal response into the struct
 		Get(authProvider.UserInfoEndpoint)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch userinfo %w", err)
+		return nil, fmt.Errorf("failed to fetch userinfo: %w", err)
 	}
 
 	if resp.IsError() {
@@ -261,23 +259,17 @@ func exchangeCodeForTokens(code, verifier, redirectURI string, authProvider *Aut
 	data.Set("client_id", authProvider.ClientID)
 	data.Set("code_verifier", verifier)
 
-	// Make the HTTP POST request
-	resp, err := http.Post(authProvider.TokenEndpoint, "application/x-www-form-urlencoded", bytes.NewBufferString(data.Encode()))
+	// Make the HTTP POST request with retry logic for transient errors
+	// Note: Authorization codes are single-use, but retrying on network errors is still safe
+	// since the code won't be consumed if the request never reached the server
+	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, data.Encode())
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request to token endpoint: %w", err)
 	}
-	defer resp.Body.Close()
 
 	// Check for HTTP errors
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("token endpoint returned an error: %s - %s", resp.Status, string(body))
-	}
-
-	// Parse the JSON response
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read token endpoint response: %w", err)
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint returned an error: %d - %s", statusCode, string(body))
 	}
 	// log.Debug().Msgf("Response body: %s", body)
 	// Sample response:

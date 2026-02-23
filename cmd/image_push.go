@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/pkg/jsonmessage"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -35,7 +35,7 @@ func init() {
 	o := imagePushOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'tough-falcons'.")
+	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
 
 	cmd := &cobra.Command{
@@ -52,8 +52,8 @@ func init() {
 			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
 		Example: renderExample(`
-			# Push the docker image 'mygame:1a27c25753' into environment 'tough-falcons'.
-			metaplay image push tough-falcons mygame:1a27c25753
+			# Push the docker image 'mygame:1a27c25753' into environment 'nimbly'.
+			metaplay image push nimbly mygame:1a27c25753
 		`),
 	}
 	imageCmd.AddCommand(cmd)
@@ -62,7 +62,9 @@ func init() {
 func (o *imagePushOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate docker image name: must be a repository:tag pair.
 	if !strings.Contains(o.argImageName, ":") {
-		return fmt.Errorf("IMAGE must be a full docker image name 'NAME:TAG', got '%s'", o.argImageName)
+		return clierrors.NewUsageErrorf("Invalid image name '%s'", o.argImageName).
+			WithDetails("Image name must include a tag (e.g., 'mygame:abc123')").
+			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:abc123'")
 	}
 
 	return nil
@@ -127,13 +129,15 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 func extractDockerImageTag(imageName string) (string, error) {
 	// Check if the image name is empty
 	if imageName == "" {
-		return "", errors.New("must specify a valid docker image name as the image-name argument")
+		return "", clierrors.NewUsageError("Docker image name is required").
+			WithSuggestion("Specify image name in format NAME:TAG")
 	}
 
 	// Split the image name into parts
 	srcImageParts := strings.Split(imageName, ":")
 	if len(srcImageParts) != 2 || len(srcImageParts[0]) == 0 || len(srcImageParts[1]) == 0 {
-		return "", fmt.Errorf("invalid docker image name '%s', expecting the name in format 'name:tag'", imageName)
+		return "", clierrors.NewUsageErrorf("Invalid docker image name '%s'", imageName).
+			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:abc123'")
 	}
 
 	// Return the tag part of the image name
