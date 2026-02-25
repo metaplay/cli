@@ -83,27 +83,18 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		return "", nil, err
 	}
 
-	// Create cleanup function to terminate the ephemeral container.
-	// IMPORTANT: Use a fresh background context for cleanup to ensure it works even if the
-	// original context was cancelled (e.g., by Ctrl+C). Give it a reasonable timeout.
+	// Ephemeral containers cannot be deleted via the Kubernetes API; they run until
+	// their main process exits. The cleanup function is a no-op but kept for API symmetry
+	// with CreateDebugPod so callers can always defer cleanup().
 	cleanup := func() {
-		log.Debug().Msgf("Terminating debug container %s...", debugContainerName)
-
-		// Create a new context with timeout for cleanup operation
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		// Try to terminate the container gracefully by sending exit command
-		_, _, err := ExecInDebugContainer(cleanupCtx, kubeCli, podName, debugContainerName, "exit")
-		if err != nil {
-			log.Debug().Msgf("Container may have already terminated: %v", err)
-		} else {
-			log.Debug().Msgf("Successfully terminated debug container %s", debugContainerName)
-		}
+		log.Debug().Msgf("Debug container %s will terminate when its process exits (ephemeral containers cannot be deleted via the Kubernetes API)", debugContainerName)
 	}
 
 	// Wait for the debug container to be ready
 	err = waitForContainerReady(ctx, kubeCli, podName, debugContainerName)
+	if err != nil {
+		return "", cleanup, fmt.Errorf("debug container %s did not become ready: %w", debugContainerName, err)
+	}
 
 	return debugContainerName, cleanup, nil
 }
