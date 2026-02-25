@@ -137,9 +137,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
 			removeServerCmd := fmt.Sprintf("metaplay remove server %s", o.argEnvironment)
-			log.Error().Msg("Cannot reset database due to game server deployment in environment.")
-			log.Info().Msgf("Remove the game server first with: %s", styles.RenderPrompt(removeServerCmd))
-			os.Exit(1)
+			return fmt.Errorf("cannot reset database: active game server deployment detected in environment '%s'. Remove the game server first with: %s", o.argEnvironment, removeServerCmd)
 		}
 
 		log.Warn().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
@@ -223,7 +221,16 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	return o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards, allShardTables)
+	err = o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards, allShardTables)
+	if err != nil {
+		if cmd.Context().Err() != nil {
+			log.Info().Msg("Database reset cancelled by user")
+			return fmt.Errorf("database reset cancelled: %v", cmd.Context().Err())
+		}
+		return err
+	}
+
+	return nil
 }
 
 // getAllShardTables gets table names from all shards once and returns a map of shard index to table names
