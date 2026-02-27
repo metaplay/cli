@@ -327,7 +327,7 @@ func executeCommand(workingDir string, env []string, command string, args ...str
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Dir = workingDir // Set the working directory
+	cmd.Dir = workingDir
 	return cmd.Run()
 }
 
@@ -476,7 +476,7 @@ type buildDockerImageParams struct {
 	target      string                    // Optional: Dockerfile stage to build
 }
 
-// buildDockerImage builds a Docker image with the given parameters
+// buildDockerImage builds a Docker image with the given parameters.
 func buildDockerImage(params buildDockerImageParams) error {
 	// Resolve docker build root directory. All other paths need to be made relative to it.
 	buildRootDir := params.project.GetBuildRootDir()
