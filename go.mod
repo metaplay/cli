@@ -17,7 +17,7 @@ require (
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/google/go-containerregistry v0.21.0
+	github.com/google/go-containerregistry v0.21.1
 	github.com/hashicorp/go-version v1.8.0
 	github.com/jwalton/go-supportscolor v1.2.0
 	github.com/mattn/go-isatty v0.0.20
