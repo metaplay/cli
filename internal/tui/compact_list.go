@@ -15,6 +15,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Cached style for selected list item
+var selectedStyle = lipgloss.NewStyle().Foreground(styles.ColorOrange)
+
 // Item in our compact list.
 type compactListItem struct {
 	index       int
@@ -45,9 +48,8 @@ func (d compactListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 
 	// Render differently if selected
 	if index == m.Index() {
-		// Add selector and style with blue color
 		styledTitle := "▸ " + title
-		fmt.Fprint(w, lipgloss.NewStyle().Foreground(styles.ColorOrange).Render(styledTitle))
+		fmt.Fprint(w, selectedStyle.Render(styledTitle))
 	} else {
 		fmt.Fprint(w, "  "+title)
 	}

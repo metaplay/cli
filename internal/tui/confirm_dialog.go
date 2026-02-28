@@ -14,7 +14,6 @@ import (
 
 // Model for the confirmation dialog
 type confirmDialog struct {
-	ctx      context.Context
 	title    string
 	body     string
 	question string
@@ -22,9 +21,8 @@ type confirmDialog struct {
 	quitting bool
 }
 
-func newConfirmDialog(ctx context.Context, title string, body string, question string) confirmDialog {
+func newConfirmDialog(_ context.Context, title string, body string, question string) confirmDialog {
 	return confirmDialog{
-		ctx:      ctx,
 		title:    title,
 		body:     body,
 		question: question,

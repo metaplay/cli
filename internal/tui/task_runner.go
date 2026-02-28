@@ -29,6 +29,14 @@ const (
 // Spinner frames for the running state
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// Cached styles for task status rendering
+var (
+	styleRunning   = lipgloss.NewStyle().Foreground(styles.ColorBlue)
+	styleCompleted = lipgloss.NewStyle().Foreground(styles.ColorGreen)
+	styleFailed    = lipgloss.NewStyle().Foreground(styles.ColorRed)
+	stylePending   = lipgloss.NewStyle().Foreground(styles.ColorNeutral)
+)
+
 // TaskOutput contains the outputs from a given task and is shown along with the task's status.
 type TaskOutput struct {
 	headerLines []string   // Header lines (all are shown, updates are logged)
@@ -173,13 +181,13 @@ func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
 func taskStatusStyle(status TaskStatus) lipgloss.Style {
 	switch status {
 	case StatusRunning:
-		return lipgloss.NewStyle().Foreground(styles.ColorBlue)
+		return styleRunning
 	case StatusCompleted:
-		return lipgloss.NewStyle().Foreground(styles.ColorGreen)
+		return styleCompleted
 	case StatusFailed:
-		return lipgloss.NewStyle().Foreground(styles.ColorRed)
+		return styleFailed
 	default:
-		return lipgloss.NewStyle().Foreground(styles.ColorNeutral)
+		return stylePending
 	}
 }
 
