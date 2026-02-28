@@ -13,14 +13,12 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
-	"github.com/muesli/termenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -70,13 +68,6 @@ var rootCmd = &cobra.Command{
 				os.Exit(2)
 			}
 			useColors = hasTerminal
-		}
-
-		// Configure lipgloss to use/not use colors.
-		if useColors {
-			lipgloss.SetColorProfile(termenv.TrueColor)
-		} else {
-			lipgloss.SetColorProfile(termenv.Ascii)
 		}
 
 		// Resolve whether using verbose mode
