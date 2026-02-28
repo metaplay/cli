@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/metaplay/cli/pkg/styles"
 )
 
@@ -37,7 +37,7 @@ func (m confirmDialog) Init() tea.Cmd {
 
 func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "y", "Y", "enter":
 			m.choice = true
@@ -52,7 +52,7 @@ func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m confirmDialog) View() string {
+func (m confirmDialog) View() tea.View {
 	// Render content
 	content := ""
 	if m.title != "" {
@@ -67,7 +67,7 @@ func (m confirmDialog) View() string {
 		content += m.question + styles.RenderPrompt(" [Y/n]") + "\n"
 	}
 
-	return content
+	return tea.NewView(content)
 }
 
 // Show the user a confirm dialog and wait for a yes/no answer.

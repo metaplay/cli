@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
@@ -335,8 +335,8 @@ func (m *TaskRunner) tick() tea.Cmd {
 // Update implements tea.Model
 func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if msg.Type == tea.KeyCtrlC {
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -373,7 +373,7 @@ func humanizeElapsed(d time.Duration) string {
 }
 
 // View implements tea.Model
-func (m TaskRunner) View() string {
+func (m TaskRunner) View() tea.View {
 	// Build the content starting with the title
 	var lines []string
 
@@ -413,5 +413,5 @@ func (m TaskRunner) View() string {
 		sb.WriteString(line)
 		sb.WriteString("\n")
 	}
-	return sb.String()
+	return tea.NewView(sb.String())
 }

@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
@@ -78,7 +78,7 @@ func (m compactListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.model.SetWidth(msg.Width)
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
 			m.quitting = true
@@ -97,14 +97,14 @@ func (m compactListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m compactListModel) View() string {
+func (m compactListModel) View() tea.View {
 	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
 
 	if !m.quitting {
 		content += styles.ListStyle.Render(m.model.View())
 	}
 
-	return content
+	return tea.NewView(content)
 }
 
 func chooseFromList(title string, items []list.Item) (int, error) {
