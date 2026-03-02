@@ -78,7 +78,9 @@ func getGameServerOldCR(ctx context.Context, kubeCli *KubeClient) (*OldGameServe
 	log.Debug().Msgf("OldGameServerCR Name: %s", gameServerCR.Metadata.Name)
 	log.Debug().Msgf("Namespace: %s", gameServerCR.Metadata.Namespace)
 	log.Debug().Msgf("Shard ConfigMap: %s", gameServerCR.Status.ShardConfigMap)
-	log.Debug().Msgf("First Container Image: %s", gameServerCR.Spec.StatefulSetSpec.Template.Spec.Containers[0].Image)
+	if len(gameServerCR.Spec.StatefulSetSpec.Template.Spec.Containers) > 0 {
+		log.Debug().Msgf("First Container Image: %s", gameServerCR.Spec.StatefulSetSpec.Template.Spec.Containers[0].Image)
+	}
 
 	return &gameServerCR, nil
 }

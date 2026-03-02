@@ -194,7 +194,7 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 	if len(projectInfos) == 0 {
 		return nil, clierrors.Newf("Project '%s' not found", projectHumanID).
 			WithSuggestion("Check the project ID is correct, or run 'metaplay auth whoami' to verify your account has access")
-	} else if len(projectInfos) > 2 {
+	} else if len(projectInfos) > 1 {
 		return nil, fmt.Errorf("portal returned %d matching projects, expecting only one", len(projectInfos))
 	}
 

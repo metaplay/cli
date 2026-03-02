@@ -208,6 +208,10 @@ func decryptGCM(data []byte, key []byte) ([]byte, error) {
 // decryptLegacyCFB decrypts data using AES-CFB decryption.
 // Deprecated: Use decryptGCM instead. This function is only kept for migration purposes.
 func decryptLegacyCFB(data []byte, key []byte) ([]byte, error) {
+	if len(data) < aes.BlockSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cipher: %w", err)
@@ -349,12 +353,10 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 	}
 
 	// Update session state in persisted config.
-	updatePersistedConfig(func(config *PersistedConfig) error {
+	return updatePersistedConfig(func(config *PersistedConfig) error {
 		config.Sessions[sessionID] = sessionState
 		return nil
 	})
-
-	return nil
 }
 
 // LoadSessionState loads a session state and decrypts the tokenSet.

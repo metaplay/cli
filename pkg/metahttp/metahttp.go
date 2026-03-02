@@ -48,7 +48,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	response, err := c.Resty.R().SetOutput(filePath).Get(url)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, filePath, err)
+		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
 	}
 
 	return response, nil
@@ -149,12 +149,12 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
 
-	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
-
 	// Handle request errors
 	if err != nil {
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
 	}
+
+	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
 
 	// Debug log the raw response.
 	// log.Info().Msgf("Raw response from %s: %s", url, string(response.Body()))

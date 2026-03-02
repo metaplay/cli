@@ -19,7 +19,8 @@
       "Bash(go fix:*)",
       "Bash(ls:*)",
       "Bash(go get:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(go doc:*)"
     ]
   }
 }
