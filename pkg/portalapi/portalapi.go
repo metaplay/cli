@@ -179,7 +179,7 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 		}
 	}
 
-	return orgsWithProjects, err
+	return orgsWithProjects, nil
 }
 
 // FetchProjectInfo fetches information about a project using its human ID.
