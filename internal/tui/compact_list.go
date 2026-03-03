@@ -165,7 +165,7 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.model.SetWidth(msg.Width)
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
 			m.quitting = true
@@ -192,7 +192,7 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-func (m multiSelectModel) View() string {
+func (m multiSelectModel) View() tea.View {
 	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
 
 	if !m.quitting {
@@ -200,7 +200,7 @@ func (m multiSelectModel) View() string {
 		content += styles.RenderMuted("  space to toggle, enter to confirm")
 	}
 
-	return content
+	return tea.NewView(content)
 }
 
 func chooseFromList(title string, items []list.Item) (int, error) {
