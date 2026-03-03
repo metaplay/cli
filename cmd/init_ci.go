@@ -15,10 +15,8 @@ import (
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
-	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/filesetwriter"
 	"github.com/metaplay/cli/pkg/metaproj"
-	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -43,7 +41,7 @@ type ciProviderInfo struct {
 var ciProviders = []ciProviderInfo{
 	{CIProviderGitHubActions, "GitHub Actions", "Deploy using Metaplay's reusable workflows"},
 	{CIProviderBitbucket, "Bitbucket Pipelines", "Deploy using Bitbucket's native CI/CD"},
-	{CIProviderGeneric, "Generic CI / Manual", "Deploy using any CI system or manually"},
+	{CIProviderGeneric, "Generic CI", "Deploy using any other CI system using a generic script"},
 }
 
 type initCIOpts struct {
@@ -55,8 +53,8 @@ type initCIOpts struct {
 
 	projectDir   string                              // Resolved project directory
 	project      *metaproj.MetaplayProject           // Loaded project
-	environments []metaproj.ProjectEnvironmentConfig  // Resolved target environments (from flag)
-	ciProvider   CIProvider                           // Selected CI provider
+	environments []metaproj.ProjectEnvironmentConfig // Resolved target environments (from flag)
+	ciProvider   CIProvider                          // Selected CI provider
 }
 
 func init() {
@@ -203,6 +201,18 @@ var conflictOptions = []conflictOption{
 func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
+	// Show prerequisite information
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderTitle("Prerequisites"))
+	log.Info().Msg("")
+	log.Info().Msg("Before proceeding, ensure you have:")
+	log.Info().Msg("  a) Created a machine user in the Metaplay portal")
+	log.Info().Msgf("  b) Given it the %s role", styles.RenderTechnical("game-admin"))
+	log.Info().Msg("  c) Stored its credentials in your CI system")
+	log.Info().Msg("")
+	log.Info().Msgf("For instructions, see: %s", styles.RenderTechnical("https://docs.metaplay.io/cloud-deployments/setup-ci-pipeline"))
+	log.Info().Msg("")
+
 	// Select CI provider if not specified
 	if o.ciProvider == "" {
 		provider, err := tui.ChooseFromListDialog(
@@ -279,6 +289,7 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// If conflicts exist, resolve them via --on-conflict flag or interactive dialog.
+	var usedRenamePolicy bool
 	if plan.HasConflicts() {
 		var policy filesetwriter.ConflictPolicy
 		if o.flagOnConflict != "" {
@@ -302,6 +313,9 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 
 		// Re-scan and re-preview if the policy changed the outcome.
 		if policy != filesetwriter.Overwrite {
+			if policy == filesetwriter.Rename {
+				usedRenamePolicy = true
+			}
 			plan.SetConflictPolicy(policy, ".new")
 			if err := plan.Scan(); err != nil {
 				return err
@@ -339,22 +353,36 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Build portal link (best-effort: fall back to root URL if not logged in).
-	portalLink := "https://portal.metaplay.dev"
-	if orgUUID := o.tryGetOrganizationUUID(); orgUUID != "" {
-		portalLink = fmt.Sprintf("https://portal.metaplay.dev/orgs/%s?tab=1", orgUUID)
-	}
-
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderSuccess("CI configuration initialized successfully!"))
 	log.Info().Msg("")
-	log.Info().Msg("Next steps:")
-	log.Info().Msgf("  1. Create a machine user in the Metaplay portal at %s (if not created yet)", styles.RenderTechnical(portalLink))
-	log.Info().Msgf("  2. Store the machine user credentials in your CI system's secrets with name %s", styles.RenderTechnical("METAPLAY_CREDENTIALS"))
-	log.Info().Msgf("  3. Add the machine user to your project and environment with the %s role", styles.RenderTechnical("game-admin"))
-	log.Info().Msg("  4. Review, commit and push the generated CI configuration files")
+
+	// Build provider-specific next steps
+	var steps []string
+	if usedRenamePolicy {
+		steps = append(steps, "Combine the generated .new-suffixed files with your existing CI configuration files.")
+	}
+	switch o.ciProvider {
+	case CIProviderGitHubActions:
+		steps = append(steps, "Configure the workflow triggers in the generated .yaml files.")
+	case CIProviderBitbucket:
+		steps = append(steps, "Configure the pipeline triggers in bitbucket-pipelines.yml.")
+	case CIProviderGeneric:
+		steps = append(steps, "Integrate the generated deploy scripts into your CI system.")
+	}
+	steps = append(steps, "Commit the changed files into your version control.")
+
+	printNumberedSteps(steps)
 
 	return nil
+}
+
+// printNumberedSteps prints a list of steps with numbered prefixes.
+func printNumberedSteps(steps []string) {
+	log.Info().Msg("Next steps:")
+	for i, step := range steps {
+		log.Info().Msgf("  %d. %s", i+1, step)
+	}
 }
 
 // safeIDPattern matches identifiers safe for use in shell commands, YAML keys, and file names.
@@ -471,25 +499,6 @@ func (o *initCIOpts) collectBitbucketFile(plan *filesetwriter.Plan, outputDir st
 	return nil
 }
 
-// tryGetOrganizationUUID attempts to fetch the organization UUID from the portal.
-// Returns empty string if the user is not logged in or the fetch fails.
-func (o *initCIOpts) tryGetOrganizationUUID() string {
-	authProvider, err := getAuthProvider(o.project, "metaplay")
-	if err != nil {
-		return ""
-	}
-	tokenSet, err := auth.LoadAndRefreshTokenSet(authProvider)
-	if err != nil {
-		return ""
-	}
-	portalClient := portalapi.NewClient(tokenSet)
-	projectInfo, err := portalClient.FetchProjectInfo(o.project.Config.ProjectHumanID)
-	if err != nil {
-		return ""
-	}
-	return projectInfo.OrganizationUUID
-}
-
 func isValidConflictPolicy(value string) bool {
 	switch value {
 	case "overwrite", "rename", "skip":
@@ -539,9 +548,9 @@ type bitbucketTemplateData struct {
 // Parsed CI templates (parsed once at package init).
 // The GitHub Actions template uses [[.Field]] delimiters to avoid conflicts with GitHub's ${{ }} syntax.
 var (
-	githubActionsTmpl        = template.Must(template.New("github").Delims("[[", "]]").Parse(githubActionsTemplate))
-	bitbucketPipelinesTmpl   = template.Must(template.New("bitbucket").Parse(bitbucketPipelinesTemplate))
-	genericCITmpl            = template.Must(template.New("generic").Parse(genericCITemplate))
+	githubActionsTmpl      = template.Must(template.New("github").Delims("[[", "]]").Parse(githubActionsTemplate))
+	bitbucketPipelinesTmpl = template.Must(template.New("bitbucket").Parse(bitbucketPipelinesTemplate))
+	genericCITmpl          = template.Must(template.New("generic").Parse(genericCITemplate))
 )
 
 func renderTemplate(tmpl *template.Template, data any) (string, error) {
