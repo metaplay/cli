@@ -562,7 +562,7 @@ func renderTemplate(tmpl *template.Template, data any) (string, error) {
 
 // GitHub Actions template
 const githubActionsTemplate = `# Rename this action to what you want, this is what shows in the left sidebar in Github Actions
-name: Build game server and deploy to [[.EnvironmentDisplayName]] ([[.EnvironmentHumanID]])
+name: Deploy game server to [[.EnvironmentDisplayName]] ([[.EnvironmentHumanID]])
 
 # Configure when this Github Action is triggered
 on:
