@@ -6,6 +6,7 @@ package filesetwriter
 
 import (
 	"archive/zip"
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +48,7 @@ const (
 	ActionSkip                        // File exists, will be skipped.
 	ActionRename                      // File exists, will be written to alternate path.
 	ActionUpdate                      // File exists, will be updated with explanation.
+	ActionUnchanged                   // File exists with identical content, no write needed.
 )
 
 // FileResult is the scan result for a single planned file.
@@ -143,6 +145,21 @@ func (p *Plan) AddZipExtraction(zipPath, prefix, destDir string) *Plan {
 	return p
 }
 
+// SetConflictPolicy changes the conflict policy on all planned files.
+// For Rename, AlternatePath is set to Path + renameSuffix.
+// Resets scan state so Scan() must be called again.
+func (p *Plan) SetConflictPolicy(policy ConflictPolicy, renameSuffix string) {
+	for i := range p.files {
+		p.files[i].OnConflict = policy
+		if policy == Rename {
+			p.files[i].AlternatePath = p.files[i].Path + renameSuffix
+		} else {
+			p.files[i].AlternatePath = ""
+		}
+	}
+	p.scanned = false
+}
+
 // Scan inspects the filesystem and resolves the action for each planned file.
 // For zip extractions, it counts the files to be extracted.
 func (p *Plan) Scan() error {
@@ -160,6 +177,10 @@ func (p *Plan) Scan() error {
 			// File does not exist: always create regardless of policy.
 			r.Action = ActionCreate
 			r.WritePath = f.Path
+		} else if contentEqual(f.Path, f.Content) {
+			// Existing file has identical content — no write needed.
+			r.Action = ActionUnchanged
+			r.WritePath = ""
 		} else {
 			switch f.OnConflict {
 			case Overwrite:
@@ -223,7 +244,7 @@ func (p *Plan) FilesToWrite() int {
 	}
 	count := 0
 	for _, r := range p.results {
-		if r.Action != ActionSkip {
+		if r.Action != ActionSkip && r.Action != ActionUnchanged {
 			count++
 		}
 	}
@@ -239,7 +260,7 @@ func (p *Plan) HasReadOnlyFiles() bool {
 		panic("filesetwriter: HasReadOnlyFiles() called before Scan()")
 	}
 	for _, r := range p.results {
-		if r.ReadOnly && r.Action != ActionSkip {
+		if r.ReadOnly && r.Action != ActionSkip && r.Action != ActionUnchanged {
 			return true
 		}
 	}
@@ -356,14 +377,22 @@ func findCollapseDir(path string, tainted map[string]bool) string {
 	return best
 }
 
-// Preview logs a summary of the planned file operations, collapsing
-// directories that contain only new files into summary lines.
-func (p *Plan) Preview() {
+// Preview logs a summary of the planned file operations. When
+// collapseDirectories is true, directories containing only new files are
+// collapsed into summary lines.
+func (p *Plan) Preview(collapseDirectories bool) {
 	if !p.scanned {
 		panic("filesetwriter: Preview() called before Scan()")
 	}
 
-	entries := buildPreviewEntries(p.results)
+	var entries []previewEntry
+	if collapseDirectories {
+		entries = buildPreviewEntries(p.results)
+	} else {
+		for _, r := range p.results {
+			entries = append(entries, previewEntry{result: r})
+		}
+	}
 
 	// Show zip extractions first.
 	for _, ze := range p.zipExtractions {
@@ -397,6 +426,8 @@ func (p *Plan) Preview() {
 			} else {
 				badge = styles.RenderSuccess(" (update)")
 			}
+		case ActionUnchanged:
+			badge = styles.RenderMuted(" (unchanged)")
 		}
 
 		readOnlyBadge := ""
@@ -405,7 +436,7 @@ func (p *Plan) Preview() {
 		}
 
 		displayPath := r.WritePath
-		if r.Action == ActionSkip {
+		if r.Action == ActionSkip || r.Action == ActionUnchanged {
 			displayPath = r.File.Path
 		}
 		displayPath = filepath.ToSlash(displayPath)
@@ -432,8 +463,7 @@ func (p *Plan) Execute() error {
 	}
 
 	for _, r := range p.results {
-		if r.Action == ActionSkip {
-			log.Info().Msgf("  %s", styles.RenderMuted(fmt.Sprintf("Skipped %s (already exists)", r.File.Path)))
+		if r.Action == ActionSkip || r.Action == ActionUnchanged {
 			continue
 		}
 
@@ -563,4 +593,14 @@ func (p *Plan) wrapWriteError(err error, message string) error {
 // permission bits.
 func isReadOnly(info os.FileInfo) bool {
 	return info.Mode().Perm()&0200 == 0
+}
+
+// contentEqual returns true if the file at path has exactly the content given.
+// Returns false on any read error.
+func contentEqual(path string, content []byte) bool {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(existing, content)
 }
