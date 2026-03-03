@@ -676,6 +676,4 @@ metaplay build image gameserver:$IMAGE_TAG --commit-id=$COMMIT_ID --build-number
 # Deploy the game server
 echo "Deploying game server to {{.EnvironmentHumanID}}..."
 metaplay deploy server {{.EnvironmentHumanID}} gameserver:$IMAGE_TAG
-
-echo "Deployment complete!"
 `
