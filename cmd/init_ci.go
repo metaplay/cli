@@ -211,7 +211,6 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("  c) Stored its credentials in your CI system")
 	log.Info().Msg("")
 	log.Info().Msgf("For instructions, see: %s", styles.RenderTechnical("https://docs.metaplay.io/cloud-deployments/setup-ci-pipeline"))
-	log.Info().Msg("")
 
 	// Select CI provider if not specified
 	if o.ciProvider == "" {
