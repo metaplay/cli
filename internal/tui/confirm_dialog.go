@@ -8,13 +8,12 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/metaplay/cli/pkg/styles"
 )
 
 // Model for the confirmation dialog
 type confirmDialog struct {
-	ctx      context.Context
 	title    string
 	body     string
 	question string
@@ -22,9 +21,8 @@ type confirmDialog struct {
 	quitting bool
 }
 
-func newConfirmDialog(ctx context.Context, title string, body string, question string) confirmDialog {
+func newConfirmDialog(_ context.Context, title string, body string, question string) confirmDialog {
 	return confirmDialog{
-		ctx:      ctx,
 		title:    title,
 		body:     body,
 		question: question,
@@ -37,7 +35,7 @@ func (m confirmDialog) Init() tea.Cmd {
 
 func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "y", "Y", "enter":
 			m.choice = true
@@ -52,7 +50,7 @@ func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m confirmDialog) View() string {
+func (m confirmDialog) View() tea.View {
 	// Render content
 	content := ""
 	if m.title != "" {
@@ -67,7 +65,7 @@ func (m confirmDialog) View() string {
 		content += m.question + styles.RenderPrompt(" [Y/n]") + "\n"
 	}
 
-	return content
+	return tea.NewView(content)
 }
 
 // Show the user a confirm dialog and wait for a yes/no answer.

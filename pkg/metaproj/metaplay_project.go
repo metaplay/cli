@@ -224,7 +224,7 @@ func validateHelmChartRepositoryURL(chartRepo string) error {
 // checks, don't validate existence in the remote repository).
 func validateHelmChartVersion(fieldName string, chartVersion string) error {
 	// Field must be specified.
-	if fieldName == "" {
+	if chartVersion == "" {
 		return fmt.Errorf("missing required field %s: specify the version of the chart you want to use", fieldName)
 	}
 
