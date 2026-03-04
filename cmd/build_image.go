@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
@@ -357,8 +358,16 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 }
 
 // Check if docker is available and running. Uses a short timeout as 'docker' invocation
-// can sometimes hang indefinitely.
+// can sometimes hang indefinitely. In CI environments, uses a longer timeout to account
+// for slower daemon startup.
 func checkDockerAvailable() error {
+	// Use a longer timeout in CI where Docker daemon startup can be slower.
+	// GitHub Actions in particular is known to have long Docker init latencies.
+	timeout := 10 * time.Second
+	if envutil.IsCI() {
+		timeout = 60 * time.Second
+	}
+
 	// Run 'docker info' in background so we can handle timeouts (docker is known to hang
 	// indefinitely in some cases).
 	done := make(chan error)
@@ -366,7 +375,7 @@ func checkDockerAvailable() error {
 		done <- checkCommand("docker", "info")
 	}()
 
-	// Wait for docker to respond .. print a waiting message after 1sec
+	// Wait for docker to respond, printing a waiting message after 1sec.
 	select {
 	case err := <-done:
 		if err != nil {
@@ -378,19 +387,26 @@ func checkDockerAvailable() error {
 		log.Info().Msgf("Waiting for docker daemon to respond...")
 	}
 
-	// Wait for 9sec more (for total of 10sec) before timing out
-	select {
-	case err := <-done:
-		if err != nil {
-			return clierrors.Wrap(err, "Docker is not responding").
-				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
+	// In CI, keep logging every 10sec so the build doesn't look stuck.
+	// For non-CI, just wait for the remaining timeout silently.
+	tick := time.NewTicker(10 * time.Second)
+	defer tick.Stop()
+	deadline := time.After(timeout - time.Second)
+	for {
+		select {
+		case err := <-done:
+			if err != nil {
+				return clierrors.Wrap(err, "Docker is not responding").
+					WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
+			}
+			return nil
+		case <-tick.C:
+			log.Info().Msgf("Still waiting for docker daemon to respond...")
+		case <-deadline:
+			return clierrors.New("Docker daemon timed out").
+				WithSuggestion("Docker may be starting up or unresponsive. Try restarting Docker Desktop.")
 		}
-	case <-time.After(9 * time.Second):
-		return clierrors.New("Docker daemon timed out").
-			WithSuggestion("Docker may be starting up or unresponsive. Try restarting Docker Desktop.")
 	}
-
-	return nil
 }
 
 // Check that the specified docker build engine is available.

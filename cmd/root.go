@@ -14,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/mattn/go-isatty"
+	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
@@ -77,21 +78,7 @@ var rootCmd = &cobra.Command{
 		initLogger(useColors, isVerbose)
 
 		// Check for common CI environment variables
-		isCI := os.Getenv("CI") != "" ||
-			os.Getenv("GITHUB_ACTIONS") != "" ||
-			os.Getenv("GITLAB_CI") != "" ||
-			os.Getenv("BITBUCKET_BUILD_NUMBER") != "" ||
-			os.Getenv("CIRCLECI") != "" ||
-			os.Getenv("TRAVIS") != "" ||
-			os.Getenv("APPVEYOR") != "" ||
-			os.Getenv("TEAMCITY_VERSION") != "" ||
-			os.Getenv("BUILDKITE") != "" ||
-			os.Getenv("HUDSON_URL") != "" ||
-			os.Getenv("JENKINS_URL") != "" ||
-			os.Getenv("BAMBOO_AGENT_HOME") != "" ||
-			os.Getenv("TFS_BUILD") != "" ||
-			os.Getenv("NETLIFY") != "" ||
-			os.Getenv("NOW_BUILDER") != ""
+		isCI := envutil.IsCI()
 
 		// Determine if the CLI is running in interactive mode:
 		// - Interactive mode requires a terminal
