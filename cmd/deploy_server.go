@@ -326,8 +326,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				"name":      "all",
 				"singleton": true,
 				"requests": map[string]any{
-					"cpu":    "1500m",
-					"memory": "3000M",
+					"cpu":    "1000m",
+					"memory": "2000M",
 				},
 			},
 		}
