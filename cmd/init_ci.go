@@ -144,8 +144,8 @@ func (o *initCIOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 	// Validate and resolve environment(s) if specified
 	if o.flagEnvironment != "" && o.flagEnvironment != "all" {
-		parts := strings.Split(o.flagEnvironment, ",")
-		for _, part := range parts {
+		parts := strings.SplitSeq(o.flagEnvironment, ",")
+		for part := range parts {
 			name := strings.TrimSpace(part)
 			if name == "" {
 				continue
