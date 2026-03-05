@@ -12,12 +12,40 @@ import (
 	"strconv"
 	"strings"
 
+	goversion "github.com/hashicorp/go-version"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
 )
+
+// CanonicalizeSdkVersion normalizes an SDK version string to always have three
+// segments (major.minor.patch). The portal omits trailing ".0" segments, e.g.,
+// "36" instead of "36.0.0" and "36.1" instead of "36.1.0". This function
+// ensures a consistent format for downstream comparisons.
+func CanonicalizeSdkVersion(v string) string {
+	parsed, err := goversion.NewVersion(v)
+	if err != nil {
+		return v
+	}
+	seg := parsed.Segments()
+	for len(seg) < 3 {
+		seg = append(seg, 0)
+	}
+	base := fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
+	if pre := parsed.Prerelease(); pre != "" {
+		return base + "-" + pre
+	}
+	return base
+}
+
+// CanonicalizeSdkVersions normalizes the Version field on each SdkVersionInfo.
+func CanonicalizeSdkVersions(versions []SdkVersionInfo) {
+	for i := range versions {
+		versions[i].Version = CanonicalizeSdkVersion(versions[i].Version)
+	}
+}
 
 // NewClient creates a new Portal API client with the given auth token set.
 func NewClient(tokenSet *auth.TokenSet) *Client {
@@ -242,6 +270,7 @@ func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest SDK version info: %w", err)
 	}
+	sdkInfo.Version = CanonicalizeSdkVersion(sdkInfo.Version)
 	return &sdkInfo, nil
 }
 
@@ -251,6 +280,7 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
+	CanonicalizeSdkVersions(sdkVersions)
 	return sdkVersions, nil
 }
 
@@ -258,13 +288,19 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 // If only a major version is provided (e.g., "34"), returns the latest minor/patch for that major.
 // Returns nil if no matching version is found.
 func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersionInfo, error) {
-	log.Debug().Msgf("FindSdkVersionByVersionOrName: looking for '%s'", versionOrName)
+	log.Debug().Msgf("FindSdkVersionByVersionOrName(): looking for '%s'", versionOrName)
 
-	// Get all SDK versions
+	// Get all SDK versions (already canonicalized to X.Y.Z format).
 	versions, err := c.GetSdkVersions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
+
+	versionStrs := make([]string, len(versions))
+	for i, v := range versions {
+		versionStrs[i] = v.Version
+	}
+	log.Debug().Msgf("Available SDK versions: %v", versionStrs)
 
 	// If input looks like a major version only (digits with no dots), find the latest for that major.
 	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
@@ -277,16 +313,19 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
 			return result, nil
 		}
-		// No "X.y" versions found, fall through to check for exact match (e.g., "36" without minor versions)
-		log.Debug().Msgf("No minor versions found for major version %s, checking for exact match", versionOrName)
+		log.Debug().Msgf("No versions found for major version %s, checking for exact match", versionOrName)
 	}
+
+	// Canonicalize the input so partial versions like "36.1" match "36.1.0".
+	canonicalInput := CanonicalizeSdkVersion(versionOrName)
 
 	// Try to find an exact match for the version string.
 	for _, v := range versions {
-		if v.Version == versionOrName {
+		if v.Version == canonicalInput {
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version '%s' found but it has no downloadable file", versionOrName)
 			}
+			log.Debug().Msgf("Matched version '%s' (canonicalized from '%s') to SDK version %s", canonicalInput, versionOrName, v.Version)
 			return &v, nil
 		}
 	}
@@ -297,11 +336,13 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version with name '%s' found but it has no downloadable file", versionOrName)
 			}
+			log.Debug().Msgf("Matched name '%s' to SDK version %s", versionOrName, v.Version)
 			return &v, nil
 		}
 	}
 
 	// No match found
+	log.Debug().Msgf("No match found for '%s' (canonicalized: '%s')", versionOrName, canonicalInput)
 	return nil, nil
 }
 
