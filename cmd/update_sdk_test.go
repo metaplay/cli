@@ -12,11 +12,13 @@ import (
 )
 
 // makeSdkVersion creates a SdkVersionInfo for testing with the given version string.
+// The version is canonicalized to match the behavior of the portal API client.
 func makeSdkVersion(ver string) portalapi.SdkVersionInfo {
 	storagePath := "/path/to/sdk"
+	canonical := portalapi.CanonicalizeSdkVersion(ver)
 	return portalapi.SdkVersionInfo{
-		ID:          "sdk-" + ver,
-		Version:     ver,
+		ID:          "sdk-" + canonical,
+		Version:     canonical,
 		StoragePath: &storagePath,
 	}
 }
@@ -28,32 +30,6 @@ func makeSdkVersions(versions ...string) []portalapi.SdkVersionInfo {
 		result[i] = makeSdkVersion(v)
 	}
 	return result
-}
-
-func TestFormatMajorMinor(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"34.1.0", "34.1"},
-		{"35.2", "35.2"},
-		{"1.0.0", "1.0"},
-		{"100.200.300", "100.200"},
-		{"1", "1.0"}, // single segment is padded by version library
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.input, func(t *testing.T) {
-			v, err := version.NewVersion(tc.input)
-			if err != nil {
-				t.Fatalf("failed to parse version %s: %v", tc.input, err)
-			}
-			result := formatMajorMinor(v)
-			if result != tc.expected {
-				t.Errorf("formatMajorMinor(%s) = %s, expected %s", tc.input, result, tc.expected)
-			}
-		})
-	}
 }
 
 func TestJoinWithCommaAnd(t *testing.T) {
@@ -226,22 +202,22 @@ func TestSortVersionInfos(t *testing.T) {
 		{
 			name:     "single element",
 			input:    []string{"35.1"},
-			expected: []string{"35.1"},
+			expected: []string{"35.1.0"},
 		},
 		{
 			name:     "already sorted descending",
 			input:    []string{"35.3", "35.2", "35.1"},
-			expected: []string{"35.3", "35.2", "35.1"},
+			expected: []string{"35.3.0", "35.2.0", "35.1.0"},
 		},
 		{
 			name:     "needs sorting ascending to descending",
 			input:    []string{"35.1", "35.2", "35.3"},
-			expected: []string{"35.3", "35.2", "35.1"},
+			expected: []string{"35.3.0", "35.2.0", "35.1.0"},
 		},
 		{
 			name:     "mixed majors",
 			input:    []string{"34.5", "36.1", "35.0"},
-			expected: []string{"36.1", "35.0", "34.5"},
+			expected: []string{"36.1.0", "35.0.0", "34.5.0"},
 		},
 	}
 
@@ -286,13 +262,13 @@ func TestFindLatestInMajor(t *testing.T) {
 			name:     "single match",
 			versions: makeSdkVersions("34.1", "35.0", "36.0"),
 			major:    35,
-			expected: "35.0",
+			expected: "35.0.0",
 		},
 		{
 			name:     "multiple matches returns highest",
 			versions: makeSdkVersions("35.1", "35.3", "35.2", "34.5"),
 			major:    35,
-			expected: "35.3",
+			expected: "35.3.0",
 		},
 		{
 			name:     "handles three-part versions",
@@ -347,21 +323,21 @@ func TestFindLatestMinorUpdate(t *testing.T) {
 			versions:       makeSdkVersions("35.0", "35.2", "34.5"),
 			currentMajor:   35,
 			currentVersion: "35.1",
-			expected:       "35.2",
+			expected:       "35.2.0",
 		},
 		{
 			name:           "multiple newer versions returns highest",
 			versions:       makeSdkVersions("35.2", "35.4", "35.3", "34.9"),
 			currentMajor:   35,
 			currentVersion: "35.1",
-			expected:       "35.4",
+			expected:       "35.4.0",
 		},
 		{
 			name:           "ignores different major versions",
 			versions:       makeSdkVersions("35.2", "36.5", "37.0"),
 			currentMajor:   35,
 			currentVersion: "35.1",
-			expected:       "35.2",
+			expected:       "35.2.0",
 		},
 		{
 			name:           "same version is not newer",
@@ -414,13 +390,13 @@ func TestFindLatestMajorUpdate(t *testing.T) {
 			name:         "single higher major",
 			versions:     makeSdkVersions("35.0", "36.1", "35.2"),
 			currentMajor: 35,
-			expected:     "36.1",
+			expected:     "36.1.0",
 		},
 		{
 			name:         "multiple higher majors returns highest overall",
 			versions:     makeSdkVersions("36.0", "37.2", "36.5", "38.1"),
 			currentMajor: 35,
-			expected:     "38.1",
+			expected:     "38.1.0",
 		},
 		{
 			name:         "same major is not higher",
@@ -471,19 +447,19 @@ func TestFindLatestForMajor(t *testing.T) {
 			name:     "single match",
 			versions: makeSdkVersions("34.1", "35.0", "36.0"),
 			majorStr: "35",
-			expected: "35.0",
+			expected: "35.0.0",
 		},
 		{
 			name:     "multiple matches returns highest",
 			versions: makeSdkVersions("35.1", "35.3", "35.2"),
 			majorStr: "35",
-			expected: "35.3",
+			expected: "35.3.0",
 		},
 		{
 			name:     "handles string major input",
 			versions: makeSdkVersions("100.1", "100.5", "100.3"),
 			majorStr: "100",
-			expected: "100.5",
+			expected: "100.5.0",
 		},
 	}
 
@@ -521,21 +497,21 @@ func TestResolveTargetVersion(t *testing.T) {
 			toVersion:      "35.1",
 			versions:       versions,
 			currentVersion: "34.2",
-			expected:       "35.1",
+			expected:       "35.1.0",
 		},
 		{
 			name:           "major-only resolves to latest in major",
 			toVersion:      "35",
 			versions:       versions,
 			currentVersion: "34.2",
-			expected:       "35.2",
+			expected:       "35.2.0",
 		},
 		{
 			name:           "major-only with higher major",
 			toVersion:      "36",
 			versions:       versions,
 			currentVersion: "35.0",
-			expected:       "36.1",
+			expected:       "36.1.0",
 		},
 		{
 			name:           "version not found",
