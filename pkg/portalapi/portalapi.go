@@ -35,7 +35,10 @@ func CanonicalizeSdkVersion(v string) string {
 	}
 	base := fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
 	if pre := parsed.Prerelease(); pre != "" {
-		return base + "-" + pre
+		base += "-" + pre
+	}
+	if meta := parsed.Metadata(); meta != "" {
+		base += "+" + meta
 	}
 	return base
 }
@@ -304,7 +307,7 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 
 	// If input looks like a major version only (digits with no dots), find the latest for that major.
 	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
-	if isMajorVersionOnly(versionOrName) {
+	if IsMajorVersionOnly(versionOrName) {
 		result, err := findLatestForMajorVersion(versions, versionOrName)
 		if err != nil {
 			return nil, err
@@ -346,8 +349,8 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 	return nil, nil
 }
 
-// isMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
-func isMajorVersionOnly(version string) bool {
+// IsMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
+func IsMajorVersionOnly(version string) bool {
 	if version == "" {
 		return false
 	}

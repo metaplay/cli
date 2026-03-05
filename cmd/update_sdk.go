@@ -354,16 +354,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 // resolveTargetVersion resolves the --to-version flag to a specific SDK version.
 // Supports both exact versions (e.g., "35.2") and major-only (e.g., "35" -> latest 35.x).
 func resolveTargetVersion(toVersion string, versions []portalapi.SdkVersionInfo, currentVersion *version.Version) (*portalapi.SdkVersionInfo, error) {
-	// Check if it's a major-only version (all digits, no dots)
-	isMajorOnly := true
-	for _, c := range toVersion {
-		if c < '0' || c > '9' {
-			isMajorOnly = false
-			break
-		}
-	}
-
-	if isMajorOnly {
+	if portalapi.IsMajorVersionOnly(toVersion) {
 		// Find latest version for this major
 		targetVersion := findLatestForMajor(versions, toVersion)
 		if targetVersion == nil {
