@@ -15,9 +15,10 @@ import (
 // The version is canonicalized to match the behavior of the portal API client.
 func makeSdkVersion(ver string) portalapi.SdkVersionInfo {
 	storagePath := "/path/to/sdk"
+	canonical := portalapi.CanonicalizeSdkVersion(ver)
 	return portalapi.SdkVersionInfo{
-		ID:          "sdk-" + ver,
-		Version:     portalapi.CanonicalizeSdkVersion(ver),
+		ID:          "sdk-" + canonical,
+		Version:     canonical,
 		StoragePath: &storagePath,
 	}
 }
