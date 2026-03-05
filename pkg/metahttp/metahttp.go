@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -154,7 +155,19 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
 	}
 
-	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
+	// Log the raw request with sensitive headers redacted.
+	if log.Debug().Enabled() {
+		rawReq := response.Request.RawRequest
+		sanitizedHeaders := make(map[string][]string, len(rawReq.Header))
+		for k, v := range rawReq.Header {
+			if strings.EqualFold(k, "Authorization") {
+				sanitizedHeaders[k] = []string{"REDACTED"}
+			} else {
+				sanitizedHeaders[k] = v
+			}
+		}
+		log.Debug().Msgf("Raw request: %s %s, Headers: %v", rawReq.Method, rawReq.URL, sanitizedHeaders)
+	}
 
 	// Debug log the raw response.
 	// log.Info().Msgf("Raw response from %s: %s", url, string(response.Body()))
