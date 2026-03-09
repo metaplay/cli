@@ -659,11 +659,9 @@ export BUILD_NUMBER="${BUILD_NUMBER:-local}"
 # Generate unique image tag
 export IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)-$COMMIT_ID"
 
-# Install metaplay CLI (skip if already installed)
-if ! command -v metaplay &> /dev/null; then
-    echo "Installing Metaplay CLI..."
-    bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
-fi
+# Always install latest metaplay CLI
+echo "Installing Metaplay CLI..."
+bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
 
 # Login to Metaplay cloud using the machine user
 echo "Logging in to Metaplay cloud..."
