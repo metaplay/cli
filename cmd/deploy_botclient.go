@@ -162,8 +162,9 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
 	imageInfo, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
 	if err != nil {
-		return clierrors.Wrap(err, fmt.Sprintf("Failed to fetch image metadata for '%s'", remoteImageName)).
-			WithSuggestion("Check that the image has been pushed with 'metaplay image push'")
+		return clierrors.Newf("Image '%s' not found in the environment's container registry", o.argImageTag).
+			WithSuggestion("Push the image first with 'metaplay image push'").
+			WithDetails(err.Error())
 	}
 	log.Debug().Msgf("Image SDK version: %s", imageInfo.SdkVersion)
 
