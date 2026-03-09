@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -23,6 +24,10 @@ import (
 )
 
 const metaplayLoadTestChartName = "metaplay-loadtest"
+
+// Minimum SDK version that supports SNI-based routing with FQDN-style hostnames (trailing dot).
+// Earlier versions include the trailing dot in the SNI request which fails with Traefik.
+var minSdkVersionSniHostname = version.Must(version.NewVersion("37.0.0"))
 
 // const metaplayBotClientPodLabelSelector = "app=botclient"
 
@@ -147,6 +152,32 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Get docker credentials to fetch image metadata.
+	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
+	if err != nil {
+		return clierrors.Wrap(err, "Failed to get Docker credentials")
+	}
+
+	// Fetch SDK version from the remote docker image to determine actual SDK version being deployed.
+	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
+	imageInfo, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+	if err != nil {
+		return clierrors.Wrap(err, fmt.Sprintf("Failed to fetch image metadata for '%s'", remoteImageName)).
+			WithSuggestion("Check that the image has been pushed with 'metaplay image push'")
+	}
+	log.Debug().Msgf("Image SDK version: %s", imageInfo.SdkVersion)
+
+	// Workaround: Strip trailing dot from server hostname for SDK versions before 37.0.0,
+	// as older bot clients don't handle FQDN-style hostnames with SNI-based routing correctly.
+	serverHostname := envDetails.Deployment.ServerHostname
+	imageSdkVersion, err := version.NewVersion(imageInfo.SdkVersion)
+	if err != nil {
+		log.Warn().Err(err).Msgf("Failed to parse image SDK version '%s', stripping trailing dot from hostname as a precaution", imageInfo.SdkVersion)
+		serverHostname = strings.TrimRight(serverHostname, ".")
+	} else if imageSdkVersion.LessThan(minSdkVersionSniHostname) {
+		serverHostname = strings.TrimRight(serverHostname, ".")
+	}
+
 	// Resolve path to Helm chart (local or remote).
 	var helmChartPath string
 	var useHelmChartVersion string
@@ -202,7 +233,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 				"repository": envDetails.Deployment.EcrRepo,
 				"tag":        o.argImageTag,
 			},
-			"targetHost":       envDetails.Deployment.ServerHostname,
+			"targetHost":       serverHostname,
 			"targetTlsEnabled": true,
 			"cdnBaseUrl":       fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
 		},
