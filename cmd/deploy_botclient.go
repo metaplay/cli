@@ -17,6 +17,7 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -168,15 +169,19 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Image SDK version: %s", imageInfo.SdkVersion)
 
-	// Workaround: Strip trailing dot from server hostname for SDK versions before 37.0.0,
-	// as older bot clients don't handle FQDN-style hostnames with SNI-based routing correctly.
+	// Workaround: Strip trailing dot from server hostname for SDK versions before 37.0.0
+	// on development environments, as older bot clients don't handle FQDN-style hostnames
+	// with SNI-based routing correctly. Production and staging environments don't use
+	// SNI-based routing so this is not a concern for them.
 	serverHostname := envDetails.Deployment.ServerHostname
-	imageSdkVersion, err := version.NewVersion(imageInfo.SdkVersion)
-	if err != nil {
-		log.Warn().Err(err).Msgf("Failed to parse image SDK version '%s', stripping trailing dot from hostname as a precaution", imageInfo.SdkVersion)
-		serverHostname = strings.TrimRight(serverHostname, ".")
-	} else if imageSdkVersion.LessThan(minSdkVersionSniHostname) {
-		serverHostname = strings.TrimRight(serverHostname, ".")
+	if envConfig.Type != portalapi.EnvironmentTypeProduction && envConfig.Type != portalapi.EnvironmentTypeStaging {
+		imageSdkVersion, err := version.NewVersion(imageInfo.SdkVersion)
+		if err != nil {
+			log.Warn().Err(err).Msgf("Failed to parse image SDK version '%s', stripping trailing dot from hostname as a precaution", imageInfo.SdkVersion)
+			serverHostname = strings.TrimRight(serverHostname, ".")
+		} else if imageSdkVersion.LessThan(minSdkVersionSniHostname) {
+			serverHostname = strings.TrimRight(serverHostname, ".")
+		}
 	}
 
 	// Resolve path to Helm chart (local or remote).
