@@ -229,10 +229,10 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$INSTALL_DIR"; then
   SHELL_PROFILE=""
   SHELL_PATH_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
   case "$(basename "${SHELL:-}")" in
-    zsh)  SHELL_PROFILE="$HOME/.zshrc" ;;
+    zsh)  SHELL_PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
     bash) SHELL_PROFILE="$HOME/.bashrc" ;;
     fish)
-      SHELL_PROFILE="$HOME/.config/fish/config.fish"
+      SHELL_PROFILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
       SHELL_PATH_EXPORT='fish_add_path "$HOME/.local/bin"'
       ;;
     *)
@@ -243,10 +243,11 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$INSTALL_DIR"; then
   esac
 
   if [ -n "$SHELL_PROFILE" ]; then
+    mkdir -p "$(dirname "$SHELL_PROFILE")"
     print_info "Updating your $SHELL_PROFILE to include $INSTALL_DIR in PATH..."
     echo "" >> "$SHELL_PROFILE"
     echo "$SHELL_PATH_EXPORT" >> "$SHELL_PROFILE"
-    print_info "Load the updated path in your shell session with:"
+    print_info "To apply the changes, open a new terminal or run:"
     echo "  source $SHELL_PROFILE"
   else
     print_info "Manually add this to your shell profile:"
