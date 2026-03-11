@@ -58,14 +58,14 @@ type DockerCredentials struct {
 	RegistryURL string
 }
 
-func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
+func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID, authToken string) *TargetEnvironment {
 	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
 		StackApiBaseURL: stackApiBaseURL,
 		HumanID:         humanID,
-		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL),
+		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL, authToken),
 	}
 }
 

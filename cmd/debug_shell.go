@@ -94,13 +94,13 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment config.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.Environment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.Environment)
 	if err != nil {
 		return err
 	}
 
 	// Resolve target environment & game server.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 	gameServer, err := targetEnv.GetGameServer(cmd.Context())
 	if err != nil {
 		return err

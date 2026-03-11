@@ -54,9 +54,10 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	//       and thus the `kubectl` operations using this invocation must be run in the project directory where the metaplay-project.yaml is available.
 	//       Fix this later by passing the auth provider info or the project config file location as an argument?
 	var tokenSet *auth.TokenSet
+	var envAccessToken string
 	if project != nil {
 		// If metaplay-project.yaml was found, resolve the environment from it.
-		_, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
+		_, tokenSet, envAccessToken, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
 		if err != nil {
 			return err
 		}
@@ -66,11 +67,17 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
+
+		// Exchange the Metaplay Auth token for an environment-scoped JWT via Portal.
+		envAccessToken, err = exchangeTokenForEnvironment(tokenSet, o.argEnvironmentHumanID)
+		if err != nil {
+			return err
+		}
 	}
 
 	// \todo Fix stack domain hack
 	stackDomain := strings.Replace(strings.Replace(o.argStackAPIBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID, envAccessToken)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()

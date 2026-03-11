@@ -87,7 +87,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -103,7 +103,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create environment helper.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 
 	// Default to credentialsType==dynamic for human users, and credentialsType==static for machine users
 	credentialsType := o.flagCredentialsType

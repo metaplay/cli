@@ -85,13 +85,13 @@ func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 
 	// List the secret.
 	secrets, err := targetEnv.ListSecrets(cmd.Context())

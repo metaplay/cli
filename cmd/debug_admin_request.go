@@ -140,13 +140,13 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project and environment.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 
 	// Get environment details for admin API hostname
 	envDetails, err := targetEnv.GetDetails()
@@ -156,7 +156,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 
 	// Create a client for the game server admin API
 	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
-	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
+	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL, envAccessToken)
 
 	// Prepare request body if needed
 	var requestBody any

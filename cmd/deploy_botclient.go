@@ -109,7 +109,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project and environment.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 
 	// Validate Helm chart reference.
 	var chartVersionConstraints version.Constraints = nil

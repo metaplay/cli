@@ -123,13 +123,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project and environment.
-	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
