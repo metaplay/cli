@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
@@ -66,7 +66,8 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return errors.New(".NET SDK is not installed or not in PATH.\n" + getDotnetInstallInstructions())
+		return clierrors.New(".NET SDK is not installed or not in PATH").
+			WithSuggestion(getDotnetInstallInstructions())
 	}
 
 	// Parse installed .NET version
@@ -82,8 +83,8 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 
 	// Check that .NET version is recent enough
 	if installedVersion.LessThan(requiredDotnetVersion) {
-		return fmt.Errorf(".NET SDK version %s or higher is required, but found %s.\n%s",
-			requiredDotnetVersion, installedVersion, getDotnetInstallInstructions())
+		return clierrors.Newf(".NET SDK version %s or higher is required, but found %s", requiredDotnetVersion, installedVersion).
+			WithSuggestion(getDotnetInstallInstructions())
 	}
 
 	log.Info().Msg("")

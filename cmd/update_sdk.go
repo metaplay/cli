@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metaproj"
@@ -89,15 +92,6 @@ func (o *updateSdkOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// formatMajorMinor formats a version as "major.minor" (without patch).
-func formatMajorMinor(v *version.Version) string {
-	segments := v.Segments()
-	if len(segments) >= 2 {
-		return fmt.Sprintf("%d.%d", segments[0], segments[1])
-	}
-	return v.String()
-}
-
 func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
@@ -150,33 +144,37 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	var modificationCheckDone bool
 
 	if !o.flagSkipPatch {
-		currentVersionInfo, err := portalClient.FindSdkVersionByVersionOrName(formatMajorMinor(currentVersion))
+		currentVersionInfo, err := portalClient.FindSdkVersionByVersionOrName(currentVersion.String())
 		if err != nil {
-			log.Debug().Msgf("Could not look up current SDK version in portal: %v", err)
+			return clierrors.Wrap(err, "Failed to look up current SDK version in portal").
+				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
+		}
+		if currentVersionInfo == nil {
+			return clierrors.Newf("Could not find current SDK version '%s' in portal", currentVersion.String()).
+				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
 		}
 
-		if currentVersionInfo != nil {
-			log.Info().Msgf("Preparing update...")
-			sdkZipPath, err := downloadSdkZipOnly(tokenSet, currentVersionInfo.ID)
-			if err != nil {
-				log.Debug().Msgf("Could not download current SDK for comparison: %v", err)
-			} else {
-				defer os.Remove(sdkZipPath)
-				result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath)
-				if err != nil {
-					log.Debug().Msgf("Could not check for SDK modifications: %v", err)
-				} else {
-					modifications = result.Modifications
-					patchContent = result.PatchContent
-					modificationCheckDone = true
-				}
-			}
+		log.Info().Msgf("Preparing update...")
+		sdkZipPath, err := downloadSdkZipOnly(tokenSet, currentVersionInfo.ID)
+		if err != nil {
+			return clierrors.Wrap(err, "Failed to download current SDK for modification comparison").
+				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
 		}
+		defer os.Remove(sdkZipPath)
+
+		result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath)
+		if err != nil {
+			return clierrors.Wrap(err, "Failed to check for SDK modifications").
+				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
+		}
+		modifications = result.Modifications
+		patchContent = result.PatchContent
+		modificationCheckDone = true
 	}
 
 	// Display current state
 	log.Info().Msg("")
-	log.Info().Msgf("Current SDK version:  %s", styles.RenderTechnical(formatMajorMinor(currentVersion)))
+	log.Info().Msgf("Current SDK version:  %s", styles.RenderTechnical(currentVersion.String()))
 	log.Info().Msgf("SDK location:         %s", styles.RenderTechnical(sdkRootDirAbs))
 	if modificationCheckDone {
 		if len(modifications) > 0 {
@@ -356,16 +354,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 // resolveTargetVersion resolves the --to-version flag to a specific SDK version.
 // Supports both exact versions (e.g., "35.2") and major-only (e.g., "35" -> latest 35.x).
 func resolveTargetVersion(toVersion string, versions []portalapi.SdkVersionInfo, currentVersion *version.Version) (*portalapi.SdkVersionInfo, error) {
-	// Check if it's a major-only version (all digits, no dots)
-	isMajorOnly := true
-	for _, c := range toVersion {
-		if c < '0' || c > '9' {
-			isMajorOnly = false
-			break
-		}
-	}
-
-	if isMajorOnly {
+	if portalapi.IsMajorVersionOnly(toVersion) {
 		// Find latest version for this major
 		targetVersion := findLatestForMajor(versions, toVersion)
 		if targetVersion == nil {
@@ -382,9 +371,10 @@ func resolveTargetVersion(toVersion string, versions []portalapi.SdkVersionInfo,
 		return targetVersion, nil
 	}
 
-	// Exact version match
+	// Exact version match (canonicalize input so "36.1" matches "36.1.0")
+	canonicalVersion := portalapi.CanonicalizeSdkVersion(toVersion)
 	for i := range versions {
-		if versions[i].Version == toVersion {
+		if versions[i].Version == canonicalVersion {
 			targetParsed, _ := version.NewVersion(versions[i].Version)
 			if !targetParsed.GreaterThan(currentVersion) {
 				return nil, fmt.Errorf("target version %s is not newer than current version %s", versions[i].Version, currentVersion)
@@ -459,7 +449,7 @@ func selectVersionInteractively(versions []portalapi.SdkVersionInfo, currentVers
 	// Check if any updates available
 	if len(options) == 0 {
 		log.Info().Msg("")
-		log.Info().Msg(styles.RenderSuccess(fmt.Sprintf("✅ Your SDK is already up to date (version %s)", formatMajorMinor(currentVersion))))
+		log.Info().Msg(styles.RenderSuccess(fmt.Sprintf("✅ Your SDK is already up to date (version %s)", currentVersion.String())))
 		return nil, nil
 	}
 
@@ -512,13 +502,7 @@ func getUniqueMajorVersions(versions []portalapi.SdkVersionInfo) []int {
 	}
 
 	// Sort ascending
-	for i := 0; i < len(majors)-1; i++ {
-		for j := i + 1; j < len(majors); j++ {
-			if majors[j] < majors[i] {
-				majors[i], majors[j] = majors[j], majors[i]
-			}
-		}
-	}
+	slices.Sort(majors)
 
 	return majors
 }
@@ -543,39 +527,43 @@ func joinWithCommaAnd(items []string) string {
 	if len(items) == 2 {
 		return items[0] + " and " + items[1]
 	}
-	result := ""
+	var result strings.Builder
 	for i, item := range items {
 		if i == len(items)-1 {
-			result += "and " + item
+			result.WriteString("and " + item)
 		} else {
-			result += item + ", "
+			result.WriteString(item + ", ")
 		}
 	}
-	return result
+	return result.String()
+}
+
+// compareSdkVersionsDesc compares two SdkVersionInfo by version, descending.
+func compareSdkVersionsDesc(a, b portalapi.SdkVersionInfo) int {
+	va, errA := version.NewVersion(a.Version)
+	vb, errB := version.NewVersion(b.Version)
+	if errA != nil || errB != nil {
+		return strings.Compare(b.Version, a.Version)
+	}
+	if va.GreaterThan(vb) {
+		return -1
+	}
+	if vb.GreaterThan(va) {
+		return 1
+	}
+	return 0
 }
 
 // sortVersionOptions sorts SDK version options by version descending (newest first).
 func sortVersionOptions(options []sdkVersionOption) {
-	for i := 0; i < len(options)-1; i++ {
-		for j := i + 1; j < len(options); j++ {
-			if options[j].parsed.GreaterThan(options[i].parsed) {
-				options[i], options[j] = options[j], options[i]
-			}
-		}
-	}
+	slices.SortFunc(options, func(a, b sdkVersionOption) int {
+		return compareSdkVersionsDesc(*a.version, *b.version)
+	})
 }
 
 // sortVersionInfos sorts SDK version infos by version descending (newest first).
 func sortVersionInfos(versions []portalapi.SdkVersionInfo) {
-	for i := 0; i < len(versions)-1; i++ {
-		for j := i + 1; j < len(versions); j++ {
-			vi, _ := version.NewVersion(versions[i].Version)
-			vj, _ := version.NewVersion(versions[j].Version)
-			if vi != nil && vj != nil && vj.GreaterThan(vi) {
-				versions[i], versions[j] = versions[j], versions[i]
-			}
-		}
-	}
+	slices.SortFunc(versions, compareSdkVersionsDesc)
 }
 
 // findLatestInMajor finds the latest version for a specific major version.

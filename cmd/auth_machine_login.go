@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -71,27 +72,28 @@ func (o *authMachineLoginOpts) Run(cmd *cobra.Command) error {
 	} else {
 		log.Debug().Msg("Using environment variable METAPLAY_CREDENTIALS for machine login")
 		if envCredentials, ok := os.LookupEnv("METAPLAY_CREDENTIALS"); !ok {
-			log.Error().Msg("Unable to find the credentials, the environment variable METAPLAY_CREDENTIALS is not defined!")
-			os.Exit(2)
+			return clierrors.NewUsageError("Missing credentials for machine login").
+				WithSuggestion("Set the METAPLAY_CREDENTIALS environment variable to the credentials value from the developer portal")
 		} else {
 			credentials = envCredentials
 		}
 	}
 
 	if credentials == "" {
-		log.Error().Msg("Credentials are empty, please set METAPLAY_CREDENTIALS to the value from the developer portal")
-		os.Exit(2)
+		return clierrors.NewUsageError("Credentials are empty").
+			WithSuggestion("Set METAPLAY_CREDENTIALS to the value from the developer portal")
 	}
 
-	if clientID, clientSecret, ok := strings.Cut(credentials, "+"); !ok {
-		log.Error().Msg("Invalid format for credentials, you should copy-paste the value from the developer portal verbatim")
-		os.Exit(2)
-	} else {
-		err := auth.MachineLogin(authProvider, clientID, clientSecret)
-		if err != nil {
-			log.Error().Msgf("Machine login failed: %s", err)
-			os.Exit(1)
-		}
+	clientID, clientSecret, ok := strings.Cut(credentials, "+")
+	if !ok {
+		return clierrors.NewUsageError("Invalid credentials format").
+			WithSuggestion("Copy-paste the credentials value from the developer portal verbatim")
+	}
+
+	err = auth.MachineLogin(authProvider, clientID, clientSecret)
+	if err != nil {
+		return clierrors.Wrap(err, "Machine login failed").
+			WithSuggestion("Check your credentials and try again")
 	}
 
 	return nil

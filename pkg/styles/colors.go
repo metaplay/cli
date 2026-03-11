@@ -5,22 +5,23 @@
 package styles
 
 import (
+	"image/color"
 	"os"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/jwalton/go-supportscolor"
 )
 
 var (
 	// Define colors based on platform
-	ColorNeutral      lipgloss.Color
-	ColorBright       lipgloss.Color
-	ColorOrange       lipgloss.Color
-	ColorGreen        lipgloss.Color
-	ColorCommentGreen lipgloss.Color
-	ColorBlue         lipgloss.Color
-	ColorRed          lipgloss.Color
-	ColorYellow       lipgloss.Color
+	ColorNeutral      color.Color
+	ColorBright       color.Color
+	ColorOrange       color.Color
+	ColorGreen        color.Color
+	ColorCommentGreen color.Color
+	ColorBlue         color.Color
+	ColorRed          color.Color
+	ColorYellow       color.Color
 
 	// Styles using the colors
 	StyleBright    lipgloss.Style

@@ -27,10 +27,9 @@ func init() {
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
 			Debug command to clean cached build artifacts used by the LiveOps Dashboard build process.
-			Removes the 'node_modules/' directories found in the project and SDK, 
-			and the 'dist/' directory inside 'Backend/Dashboard/'.
+			Removes the 'node_modules/' directories found in the project and SDK, and 'Backend/Dashboard/dist/'.
 
-			You can try running this command if you run into otherwise unexplained errors during 
+			You can try running this command if you run into otherwise unexplained errors during
 			'metaplay build dashboard' or 'metaplay dev dashboard' that might be caused by out-of-sync dependencies.
 		`),
 		Example: renderExample(`

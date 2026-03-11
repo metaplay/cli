@@ -6,9 +6,9 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -98,7 +98,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
-		return fmt.Errorf("project does not have a custom dashboard to build")
+		return clierrors.New("Project does not have a custom dashboard to build").
+			WithSuggestion("Initialize a custom dashboard with 'metaplay init dashboard'")
 	}
 
 	log.Info().Msg("")
@@ -128,9 +129,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Install dashboard dependencies...")
 		log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(installArgs, " "))))
 		if err := execChildInteractive(dashboardPath, "pnpm", installArgs, nil); err != nil {
-			log.Error().Msgf("Failed to install LiveOps Dashboard dependencies: %s", err)
-			log.Info().Msg("Have you tried running `metaplay dev clean-dashboard-artifacts`? This removes build artifacts before installing dependencies, potentially fixing some problems.")
-			os.Exit(1)
+			return clierrors.Wrap(err, "Failed to install LiveOps Dashboard dependencies").
+				WithSuggestion("Try running 'metaplay dev clean-dashboard-artifacts' to remove build artifacts, then retry")
 		}
 	} else {
 		log.Info().Msg("Skipping pnpm install because of the --skip-install flag")
@@ -148,8 +148,8 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("> pnpm %s", strings.Join(buildArgs, " "))))
 	err = execChildInteractive(dashboardPath, "pnpm", buildArgs, nil)
 	if err != nil {
-		log.Error().Msgf("Failed to build the LiveOps Dashboard: %s", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to build the LiveOps Dashboard").
+			WithSuggestion("Check the output above for details")
 	}
 
 	// Build done.

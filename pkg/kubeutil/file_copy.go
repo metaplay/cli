@@ -59,12 +59,9 @@ func (pt *ioProgressTracker) Write(p []byte) (int, error) {
 	pt.numProcessed += int64(n)
 
 	// Calculate current progress percentage
-	percentComplete := int(float64(pt.numProcessed) / float64(pt.totalSize) * 100)
-
-	// Ensure we don't exceed 100%
-	if percentComplete > 100 {
-		percentComplete = 100
-	}
+	percentComplete := min(
+		// Ensure we don't exceed 100%
+		int(float64(pt.numProcessed)/float64(pt.totalSize)*100), 100)
 
 	// Update progress if enough time has passed and we have new progress to report.
 	// The final 100% is always reported.

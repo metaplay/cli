@@ -228,11 +228,8 @@ func readZipFileContent(file *zip.File) ([]byte, error) {
 
 // isBinaryContent checks if content appears to be binary (contains null bytes).
 func isBinaryContent(data []byte) bool {
-	checkSize := 8192
-	if len(data) < checkSize {
-		checkSize = len(data)
-	}
-	for i := 0; i < checkSize; i++ {
+	checkSize := min(len(data), 8192)
+	for i := range checkSize {
 		if data[i] == 0 {
 			return true
 		}
@@ -382,21 +379,15 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 	// Generate hunks
 	for _, r := range mergedRanges {
 		// Expand range to include context
-		hunkStart := r.start - contextLines
-		if hunkStart < 0 {
-			hunkStart = 0
-		}
-		hunkEnd := r.end + contextLines
-		if hunkEnd > len(ops) {
-			hunkEnd = len(ops)
-		}
+		hunkStart := max(r.start-contextLines, 0)
+		hunkEnd := min(r.end+contextLines, len(ops))
 
 		// Count old and new lines, track positions
 		oldLineNum := 1
 		newLineNum := 1
 
 		// Calculate starting positions by scanning ops before hunk
-		for i := 0; i < hunkStart; i++ {
+		for i := range hunkStart {
 			switch ops[i].op {
 			case diffmatchpatch.DiffEqual:
 				oldLineNum++
@@ -668,12 +659,9 @@ func printModifiedFilesList(modifications []ModifiedFile, maxDisplay int) {
 	}
 
 	// Show individual files up to limit
-	displayCount := len(modifications)
-	if displayCount > maxDisplay {
-		displayCount = maxDisplay
-	}
+	displayCount := min(len(modifications), maxDisplay)
 
-	for i := 0; i < displayCount; i++ {
+	for i := range displayCount {
 		m := modifications[i]
 		if m.IsBinary {
 			log.Info().Msgf("  [%s] %s (binary)", m.ModType, m.RelativePath)

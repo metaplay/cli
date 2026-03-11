@@ -6,7 +6,21 @@
       "Bash(go mod tidy:*)",
       "Bash(grep:*)",
       "Bash(go build:*)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(git log:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(go run:*)",
+      "Bash(go fmt:*)",
+      "Bash(go list:*)",
+      "Bash(go version:*)",
+      "Bash(go fix:*)",
+      "Bash(ls:*)",
+      "Bash(go get:*)",
+      "Bash(wc:*)",
+      "Bash(go doc:*)"
     ]
   }
 }

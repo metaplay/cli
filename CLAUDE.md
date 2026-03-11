@@ -51,6 +51,39 @@ Commands are organized into groups in `cmd/root.go`:
 - `-v, --verbose` - Enable verbose logging (also `METAPLAYCLI_VERBOSE` env var)
 - `--color yes|no|auto` - Color output control (also `METAPLAYCLI_COLOR` env var)
 
+### Error Handling
+
+Use `clierrors` (`internal/errors`) for all user-facing errors. **Never** use `log.Error()` + `os.Exit()` — return errors instead and let `runCommand()` in `cmd/root.go` handle display and exit codes.
+
+```go
+import clierrors "github.com/metaplay/cli/internal/errors"
+
+// Runtime errors (exit code 1) — something failed during execution
+return clierrors.New("Docker is not responding")
+return clierrors.Wrap(err, "Failed to build image")
+return clierrors.Newf("Project '%s' not found", name)
+
+// Usage errors (exit code 2) — bad arguments/flags, shows usage help
+return clierrors.NewUsageError("Missing required argument: ENVIRONMENT")
+return clierrors.WrapUsageError(err, "Invalid --since-time format")
+
+// Add actionable suggestions and context
+return clierrors.New("No game server pods found").
+    WithSuggestion("Deploy a game server first with 'metaplay deploy server'").
+    WithDetails("Checked namespace: " + ns)
+
+// Wrap with cause (shown dimmed in output)
+return clierrors.Wrap(err, "Failed to connect to Docker").
+    WithSuggestion("Make sure Docker Desktop is running")
+```
+
+**Rules:**
+- `Prepare()` errors are typically usage errors (`NewUsageError`/`NewUsageErrorf`)
+- `Run()` errors are typically runtime errors (`New`/`Wrap`/`Newf`)
+- Always include a `WithSuggestion()` when the user can take a specific action to fix the issue
+- Use `WithDetails()` for extra context (valid values, available options, etc.)
+- Keep messages concise and capitalize the first word
+
 ### Interactive Mode
 The CLI auto-detects CI environments and disables interactive mode when:
 - No terminal is available

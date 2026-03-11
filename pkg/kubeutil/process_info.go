@@ -86,7 +86,7 @@ func GetServerProcessInformation(ctx context.Context, kubeCli *envapi.KubeClient
 	// VmSize:   12345678 kB
 	// VmRSS:     1234567 kB
 	var vmRss int64
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || fields[2] != "kB" {
 			continue

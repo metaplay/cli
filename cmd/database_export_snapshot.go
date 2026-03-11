@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -157,7 +158,8 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 	// Check if there's a game server deployed.
 	if hasGameServer {
 		if !o.flagForce {
-			return fmt.Errorf("cannot export database: active game server deployment detected in environment '%s'. Remove the game server deployment before exporting the database", o.argEnvironment)
+			return clierrors.Newf("Cannot export database when game server is deployed in '%s'", o.argEnvironment).
+				WithSuggestion(fmt.Sprintf("Remove the game server first with 'metaplay remove server %s'", o.argEnvironment))
 		}
 
 		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
@@ -549,7 +551,7 @@ func (o *databaseExportSnapshotOpts) validateZipFileEntry(file *zip.File) error 
 // validateMetadataFile validates the JSON metadata file
 func (o *databaseExportSnapshotOpts) validateMetadataFile(reader io.ReadCloser) error {
 	// Try to decode the JSON to ensure it's valid
-	var metadata map[string]interface{}
+	var metadata map[string]any
 	decoder := json.NewDecoder(reader)
 	if err := decoder.Decode(&metadata); err != nil {
 		return fmt.Errorf("invalid JSON metadata: %v", err)

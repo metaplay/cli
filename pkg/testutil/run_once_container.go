@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -96,9 +97,7 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 					if hc.PortBindings == nil {
 						hc.PortBindings = nat.PortMap{}
 					}
-					for port, bindings := range portBindings {
-						hc.PortBindings[port] = bindings
-					}
+					maps.Copy(hc.PortBindings, portBindings)
 				}
 			} else {
 				originalModifier := req.HostConfigModifier
@@ -107,9 +106,7 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 					if hc.PortBindings == nil {
 						hc.PortBindings = nat.PortMap{}
 					}
-					for port, bindings := range portBindings {
-						hc.PortBindings[port] = bindings
-					}
+					maps.Copy(hc.PortBindings, portBindings)
 				}
 			}
 		}

@@ -7,7 +7,11 @@ package metahttp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -45,10 +49,75 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	response, err := c.Resty.R().SetOutput(filePath).Get(url)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, filePath, err)
+		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
 	}
 
 	return response, nil
+}
+
+// DownloadWithProgress downloads a file from the specified URL to the specified
+// file path, calling onProgress periodically with the number of bytes downloaded
+// and the total size (0 if unknown).
+func DownloadWithProgress(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+	// Use SetDoNotParseResponse to get raw response body for streaming.
+	resp, err := c.Resty.R().SetDoNotParseResponse(true).Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
+	}
+
+	rawBody := resp.RawBody()
+	defer rawBody.Close()
+
+	// On HTTP error, return the response without a Go error so the caller can
+	// inspect resp.StatusCode() and produce a domain-specific error message.
+	if resp.IsError() {
+		return resp, nil
+	}
+
+	// Create the output file.
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		return resp, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
+	}
+
+	// Determine total size from Content-Length header.
+	var total int64
+	if cl := resp.Header().Get("Content-Length"); cl != "" {
+		total, _ = strconv.ParseInt(cl, 10, 64)
+	}
+
+	// Stream response body to file with progress tracking.
+	pr := &progressReader{
+		reader:     rawBody,
+		total:      total,
+		onProgress: onProgress,
+	}
+
+	_, copyErr := io.Copy(outFile, pr)
+	outFile.Close()
+	if copyErr != nil {
+		os.Remove(filePath)
+		return resp, fmt.Errorf("Failed to write downloaded file %s: %w", filePath, copyErr)
+	}
+
+	return resp, nil
+}
+
+// progressReader wraps an io.Reader and reports progress via a callback.
+type progressReader struct {
+	reader     io.Reader
+	downloaded int64
+	total      int64
+	onProgress func(downloaded, total int64)
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	pr.downloaded += int64(n)
+	if pr.onProgress != nil {
+		pr.onProgress(pr.downloaded, pr.total)
+	}
+	return n, err
 }
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
@@ -81,11 +150,23 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
 
-	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
-
 	// Handle request errors
 	if err != nil {
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
+	}
+
+	// Log the raw request with sensitive headers redacted.
+	if log.Debug().Enabled() {
+		rawReq := response.Request.RawRequest
+		sanitizedHeaders := make(map[string][]string, len(rawReq.Header))
+		for k, v := range rawReq.Header {
+			if strings.EqualFold(k, "Authorization") {
+				sanitizedHeaders[k] = []string{"REDACTED"}
+			} else {
+				sanitizedHeaders[k] = v
+			}
+		}
+		log.Debug().Msgf("Raw request: %s %s, Headers: %v", rawReq.Method, rawReq.URL, sanitizedHeaders)
 	}
 
 	// Debug log the raw response.

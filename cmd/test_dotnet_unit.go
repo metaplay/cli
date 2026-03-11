@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -56,8 +57,7 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 	// Resolve project
 	project, err := resolveProject()
 	if err != nil {
-		log.Error().Msgf("Failed to find project: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	log.Info().Msg("")
@@ -81,8 +81,7 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 	for _, projPath := range testProjects {
 		log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
 		if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
-			log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
-			os.Exit(1)
+			return clierrors.Wrapf(err, "Unit tests failed in %s", projPath)
 		}
 	}
 
@@ -101,8 +100,7 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 			log.Info().Msg("")
 			log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
 			if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
-				log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
-				os.Exit(1)
+				return clierrors.Wrapf(err, "Unit tests failed in %s", projPath)
 			}
 		}
 	}
