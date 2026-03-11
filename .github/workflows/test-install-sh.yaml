@@ -113,7 +113,7 @@ jobs:
               zsh -c 'source "$HOME/.zshrc" && metaplay version'
               ;;
             fish)
-              fish -c 'source "$HOME/.config/fish/config.fish" && metaplay version'
+              fish -c 'source "$HOME/.config/fish/config.fish"; metaplay version'
               ;;
           esac
           echo "OK: profile works in ${{ matrix.shell }}"
@@ -124,15 +124,19 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Create .profile
-        run: touch "$HOME/.profile"
-
-      - name: Remove ~/.local/bin from PATH
+      - name: Prepare environment
         run: |
+          # Remove pre-existing profiles so only .profile fallback is available
+          rm -f "$HOME/.bashrc" "$HOME/.zshrc"
+          touch "$HOME/.profile"
+
+          # Remove ~/.local/bin from PATH
           echo "PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | tr '\n' ':' | sed 's/:$//')" >> "$GITHUB_ENV"
 
       - name: Run install.sh with SHELL unset
-        run: env -u SHELL bash install.sh --version 1.9.3 --verbose
+        run: |
+          # SHELL='' to force empty (env -u is insufficient: bash auto-sets $SHELL from passwd)
+          env SHELL='' bash install.sh --version 1.9.3 --verbose
 
       - name: Verify binary was installed
         run: |
