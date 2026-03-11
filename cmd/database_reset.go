@@ -227,7 +227,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		if cmd.Context().Err() != nil {
 			log.Info().Msg("Database reset cancelled by user")
-			return fmt.Errorf("database reset cancelled: %v", cmd.Context().Err())
+			return fmt.Errorf("database reset cancelled: %w", cmd.Context().Err())
 		}
 		return err
 	}
