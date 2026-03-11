@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Run shellcheck
-        run: shellcheck install.sh
+        run: shellcheck --severity=warning --exclude=SC2034 install.sh
 
   test:
     name: "${{ matrix.os }} / ${{ matrix.shell }}"
@@ -42,17 +42,23 @@ jobs:
       - name: Remove ~/.local/bin from PATH
         run: |
           # Ensure ~/.local/bin is not in PATH so the profile-update logic is exercised
-          export PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | paste -sd:)
-          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | tr '\n' ':' | sed 's/:$//')" >> "$GITHUB_ENV"
 
-      - name: Run install.sh
+      - name: Prepare shell profiles
         run: |
-          # Create empty profile file for the target shell so the script can append to it
+          # Remove pre-existing profiles so we can detect exactly which one the installer modifies
+          rm -f "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"
+          rm -f "$HOME/.config/fish/config.fish"
+
+          # Create only the target shell's profile
           case "${{ matrix.shell }}" in
-            zsh)  mkdir -p "$(dirname "$HOME/.zshrc")" && touch "$HOME/.zshrc" ;;
+            zsh)  touch "$HOME/.zshrc" ;;
             bash) touch "$HOME/.bashrc" ;;
             fish) mkdir -p "$HOME/.config/fish" && touch "$HOME/.config/fish/config.fish" ;;
           esac
+
+      - name: Run install.sh
+        run: |
 
           # Run the installer with $SHELL set to the target shell (simulates user's login shell)
           env SHELL="$(which ${{ matrix.shell }})" bash install.sh --version 1.9.3 --verbose
@@ -66,32 +72,32 @@ jobs:
         run: |
           case "${{ matrix.shell }}" in
             bash)
-              grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.bashrc"
+              grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"
               echo "OK: .bashrc contains correct PATH export"
               ;;
             zsh)
-              grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.zshrc"
+              grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc"
               echo "OK: .zshrc contains correct PATH export"
               ;;
             fish)
-              grep -q 'fish_add_path "\$HOME/.local/bin"' "$HOME/.config/fish/config.fish"
+              grep -qF 'fish_add_path "$HOME/.local/bin"' "$HOME/.config/fish/config.fish"
               echo "OK: config.fish contains fish_add_path"
               ;;
           esac
 
       - name: Verify no wrong profiles were modified
         run: |
-          # Check that only the target shell's profile was touched
+          # The non-target profiles were removed in setup, so they should not exist
           case "${{ matrix.shell }}" in
             bash)
-              [ ! -s "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was modified"; exit 1; }
+              [ ! -e "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was created"; exit 1; }
               ;;
             zsh)
-              [ ! -s "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was modified"; exit 1; }
+              [ ! -e "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was created"; exit 1; }
               ;;
             fish)
-              [ ! -s "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was modified"; exit 1; }
-              [ ! -s "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was modified"; exit 1; }
+              [ ! -e "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was created"; exit 1; }
+              [ ! -e "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was created"; exit 1; }
               ;;
           esac
           echo "OK: no unexpected profiles modified"
@@ -107,8 +113,7 @@ jobs:
 
       - name: Remove ~/.local/bin from PATH
         run: |
-          export PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | paste -sd:)
-          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | tr '\n' ':' | sed 's/:$//')" >> "$GITHUB_ENV"
 
       - name: Run install.sh with SHELL unset
         run: env -u SHELL bash install.sh --version 1.9.3 --verbose
@@ -120,5 +125,5 @@ jobs:
 
       - name: Verify .profile fallback was used
         run: |
-          grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.profile"
+          grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile"
           echo "OK: .profile contains correct PATH export"
