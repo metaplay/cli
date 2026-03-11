@@ -102,6 +102,22 @@ jobs:
           esac
           echo "OK: no unexpected profiles modified"
 
+      - name: Verify profile works in target shell
+        run: |
+          # Source the profile in the target shell and verify metaplay is available (like fnm's test script)
+          case "${{ matrix.shell }}" in
+            bash)
+              bash -c 'source "$HOME/.bashrc" && metaplay version'
+              ;;
+            zsh)
+              zsh -c 'source "$HOME/.zshrc" && metaplay version'
+              ;;
+            fish)
+              fish -c 'source "$HOME/.config/fish/config.fish" && metaplay version'
+              ;;
+          esac
+          echo "OK: profile works in ${{ matrix.shell }}"
+
   test-unset-shell:
     name: "Fallback when SHELL is unset"
     runs-on: ubuntu-latest
