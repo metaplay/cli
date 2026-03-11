@@ -227,20 +227,25 @@ if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$INSTALL_DIR"; then
   print_info "Note: $HOME/.local/bin is not in your PATH."
 
   SHELL_PROFILE=""
-  if [ -n "$ZSH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.zshrc"
-  elif [ -n "$BASH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.bashrc"
-  elif [ -n "$FISH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.config/fish/config.fish"
-  elif [ -f "$HOME/.profile" ]; then
-    SHELL_PROFILE="$HOME/.profile"
-  fi
+  SHELL_PATH_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
+  case "$(basename "${SHELL:-}")" in
+    zsh)  SHELL_PROFILE="$HOME/.zshrc" ;;
+    bash) SHELL_PROFILE="$HOME/.bashrc" ;;
+    fish)
+      SHELL_PROFILE="$HOME/.config/fish/config.fish"
+      SHELL_PATH_EXPORT='fish_add_path "$HOME/.local/bin"'
+      ;;
+    *)
+      if [ -f "$HOME/.profile" ]; then
+        SHELL_PROFILE="$HOME/.profile"
+      fi
+      ;;
+  esac
 
   if [ -n "$SHELL_PROFILE" ]; then
     print_info "Updating your $SHELL_PROFILE to include $INSTALL_DIR in PATH..."
     echo "" >> "$SHELL_PROFILE"
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> "$SHELL_PROFILE"
+    echo "$SHELL_PATH_EXPORT" >> "$SHELL_PROFILE"
     print_info "Load the updated path in your shell session with:"
     echo "  source $SHELL_PROFILE"
   else
