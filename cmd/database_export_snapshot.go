@@ -192,11 +192,11 @@ func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
 			log.Info().Msg("Database export cancelled by user")
-			return fmt.Errorf("database export cancelled: %v", cmd.Context().Err())
+			return fmt.Errorf("database export cancelled: %w", cmd.Context().Err())
 		}
 
 		log.Error().Err(err).Msg("Database export failed - removing incomplete zip file")
-		return fmt.Errorf("CRITICAL: database export failed, zip file removed: %v", err)
+		return fmt.Errorf("CRITICAL: database export failed, zip file removed: %w", err)
 	}
 
 	log.Info().Msg("")
