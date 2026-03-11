@@ -63,7 +63,6 @@ jobs:
 
       - name: Run install.sh
         run: |
-
           # Run the installer with $SHELL set to the target shell (simulates user's login shell)
           env SHELL="$(which ${{ matrix.shell }})" bash install.sh --version 1.9.3 --verbose
 
