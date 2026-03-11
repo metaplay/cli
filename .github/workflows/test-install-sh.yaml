@@ -1,0 +1,124 @@
+name: Test install.sh
+
+on:
+  push:
+    paths:
+      - install.sh
+      - .github/workflows/test-install-sh.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run shellcheck
+        run: shellcheck install.sh
+
+  test:
+    name: "${{ matrix.os }} / ${{ matrix.shell }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shell: [bash, zsh, fish]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shell (Ubuntu)
+        if: matrix.os == 'ubuntu-latest' && matrix.shell != 'bash'
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.shell }}
+
+      - name: Install shell (macOS)
+        if: matrix.os == 'macos-latest' && matrix.shell == 'fish'
+        run: brew install fish
+
+      - name: Remove ~/.local/bin from PATH
+        run: |
+          # Ensure ~/.local/bin is not in PATH so the profile-update logic is exercised
+          export PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | paste -sd:)
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - name: Run install.sh
+        run: |
+          # Create empty profile file for the target shell so the script can append to it
+          case "${{ matrix.shell }}" in
+            zsh)  mkdir -p "$(dirname "$HOME/.zshrc")" && touch "$HOME/.zshrc" ;;
+            bash) touch "$HOME/.bashrc" ;;
+            fish) mkdir -p "$HOME/.config/fish" && touch "$HOME/.config/fish/config.fish" ;;
+          esac
+
+          # Run the installer with $SHELL set to the target shell (simulates user's login shell)
+          env SHELL="$(which ${{ matrix.shell }})" bash install.sh --version 1.9.3 --verbose
+
+      - name: Verify binary was installed
+        run: |
+          test -x "$HOME/.local/bin/metaplay"
+          "$HOME/.local/bin/metaplay" version
+
+      - name: Verify correct profile was updated
+        run: |
+          case "${{ matrix.shell }}" in
+            bash)
+              grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.bashrc"
+              echo "OK: .bashrc contains correct PATH export"
+              ;;
+            zsh)
+              grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.zshrc"
+              echo "OK: .zshrc contains correct PATH export"
+              ;;
+            fish)
+              grep -q 'fish_add_path "\$HOME/.local/bin"' "$HOME/.config/fish/config.fish"
+              echo "OK: config.fish contains fish_add_path"
+              ;;
+          esac
+
+      - name: Verify no wrong profiles were modified
+        run: |
+          # Check that only the target shell's profile was touched
+          case "${{ matrix.shell }}" in
+            bash)
+              [ ! -s "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was modified"; exit 1; }
+              ;;
+            zsh)
+              [ ! -s "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was modified"; exit 1; }
+              ;;
+            fish)
+              [ ! -s "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was modified"; exit 1; }
+              [ ! -s "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was modified"; exit 1; }
+              ;;
+          esac
+          echo "OK: no unexpected profiles modified"
+
+  test-unset-shell:
+    name: "Fallback when SHELL is unset"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create .profile
+        run: touch "$HOME/.profile"
+
+      - name: Remove ~/.local/bin from PATH
+        run: |
+          export PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | paste -sd:)
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+
+      - name: Run install.sh with SHELL unset
+        run: env -u SHELL bash install.sh --version 1.9.3 --verbose
+
+      - name: Verify binary was installed
+        run: |
+          test -x "$HOME/.local/bin/metaplay"
+          "$HOME/.local/bin/metaplay" version
+
+      - name: Verify .profile fallback was used
+        run: |
+          grep -q 'export PATH="\$HOME/.local/bin:\$PATH"' "$HOME/.profile"
+          echo "OK: .profile contains correct PATH export"
