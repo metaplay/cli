@@ -82,7 +82,7 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 		log.Debug().Msgf("Deleting debug pod %s...", debugPodName)
 
 		// Create a new context with timeout for cleanup operation
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 		defer cancel()
 
 		deletePolicy := metav1.DeletePropagationForeground

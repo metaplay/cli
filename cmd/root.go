@@ -154,12 +154,6 @@ func ExecuteContext(ctx context.Context) {
 	}
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// Deprecated: Use ExecuteContext instead for proper signal handling.
-func Execute() {
-	ExecuteContext(context.Background())
-}
-
 func init() {
 	// Register global flags.
 	flags := rootCmd.PersistentFlags()

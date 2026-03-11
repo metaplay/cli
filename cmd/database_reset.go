@@ -137,7 +137,9 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	if len(helmReleases) > 0 {
 		if !o.flagForce {
 			removeServerCmd := fmt.Sprintf("metaplay remove server %s", o.argEnvironment)
-			return fmt.Errorf("cannot reset database: active game server deployment detected in environment '%s'. Remove the game server first with: %s", o.argEnvironment, removeServerCmd)
+			log.Error().Msg("Cannot reset database due to game server deployment in environment.")
+			log.Info().Msgf("Remove the game server first with: %s", styles.RenderPrompt(removeServerCmd))
+			return fmt.Errorf("Operation cancelled due to active game server deployment detected in environment '%s'", o.argEnvironment)
 		}
 
 		log.Warn().Msgf("%s %s", styles.RenderWarning("⚠️"), fmt.Sprintf("WARNING: active game server deployment detected in environment '%s'", o.argEnvironment))
