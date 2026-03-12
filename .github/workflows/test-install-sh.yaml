@@ -1,0 +1,152 @@
+name: Test install.sh
+
+on:
+  pull_request:
+    paths:
+      - install.sh
+      - .github/workflows/test-install-sh.yaml
+  push:
+    paths:
+      - install.sh
+      - .github/workflows/test-install-sh.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run shellcheck
+        run: shellcheck --severity=warning --exclude=SC2034 install.sh
+
+  test:
+    name: "${{ matrix.os }} / ${{ matrix.shell }}"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shell: [bash, zsh, fish]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shell (Ubuntu)
+        if: matrix.os == 'ubuntu-latest' && matrix.shell != 'bash'
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.shell }}
+
+      - name: Install shell (macOS)
+        if: matrix.os == 'macos-latest' && matrix.shell == 'fish'
+        run: brew install fish
+
+      - name: Remove ~/.local/bin from PATH
+        run: |
+          # Ensure ~/.local/bin is not in PATH so the profile-update logic is exercised
+          echo "PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | tr '\n' ':' | sed 's/:$//')" >> "$GITHUB_ENV"
+
+      - name: Prepare shell profiles
+        run: |
+          # Remove pre-existing profiles so we can detect exactly which one the installer modifies
+          rm -f "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"
+          rm -rf "$HOME/.config/fish"
+
+          # Create only the target shell's profile (fish dir intentionally not created to test mkdir -p)
+          case "${{ matrix.shell }}" in
+            zsh)  touch "$HOME/.zshrc" ;;
+            bash) touch "$HOME/.bashrc" ;;
+            fish) ;; # don't create — install.sh should mkdir -p the directory
+          esac
+
+      - name: Run install.sh
+        run: |
+          # Run the installer with $SHELL set to the target shell (simulates user's login shell)
+          env SHELL="$(which ${{ matrix.shell }})" bash install.sh --version 1.9.3 --verbose
+
+      - name: Verify binary was installed
+        run: |
+          test -x "$HOME/.local/bin/metaplay"
+          "$HOME/.local/bin/metaplay" version
+
+      - name: Verify correct profile was updated
+        run: |
+          case "${{ matrix.shell }}" in
+            bash)
+              grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"
+              echo "OK: .bashrc contains correct PATH export"
+              ;;
+            zsh)
+              grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc"
+              echo "OK: .zshrc contains correct PATH export"
+              ;;
+            fish)
+              grep -qF 'fish_add_path "$HOME/.local/bin"' "$HOME/.config/fish/config.fish"
+              echo "OK: config.fish contains fish_add_path"
+              ;;
+          esac
+
+      - name: Verify no wrong profiles were modified
+        run: |
+          # The non-target profiles were removed in setup, so they should not exist
+          case "${{ matrix.shell }}" in
+            bash)
+              [ ! -e "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was created"; exit 1; }
+              ;;
+            zsh)
+              [ ! -e "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was created"; exit 1; }
+              ;;
+            fish)
+              [ ! -e "$HOME/.bashrc" ] || { echo "FAIL: .bashrc was created"; exit 1; }
+              [ ! -e "$HOME/.zshrc" ] || { echo "FAIL: .zshrc was created"; exit 1; }
+              ;;
+          esac
+          echo "OK: no unexpected profiles modified"
+
+      - name: Verify profile works in target shell
+        run: |
+          # Source the profile in the target shell and verify metaplay is available (like fnm's test script)
+          case "${{ matrix.shell }}" in
+            bash)
+              bash -c 'source "$HOME/.bashrc" && metaplay version'
+              ;;
+            zsh)
+              zsh -c 'source "$HOME/.zshrc" && metaplay version'
+              ;;
+            fish)
+              fish -c 'source "$HOME/.config/fish/config.fish"; metaplay version'
+              ;;
+          esac
+          echo "OK: profile works in ${{ matrix.shell }}"
+
+  test-unset-shell:
+    name: "Fallback when SHELL is unset"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare environment
+        run: |
+          # Remove pre-existing profiles so only .profile fallback is available
+          rm -f "$HOME/.bashrc" "$HOME/.zshrc"
+          touch "$HOME/.profile"
+
+          # Remove ~/.local/bin from PATH
+          echo "PATH=$(echo "$PATH" | tr ':' '\n' | grep -vxF "$HOME/.local/bin" | tr '\n' ':' | sed 's/:$//')" >> "$GITHUB_ENV"
+
+      - name: Run install.sh with SHELL unset
+        run: |
+          # SHELL='' to force empty (env -u is insufficient: bash auto-sets $SHELL from passwd)
+          env SHELL='' bash install.sh --version 1.9.3 --verbose
+
+      - name: Verify binary was installed
+        run: |
+          test -x "$HOME/.local/bin/metaplay"
+          "$HOME/.local/bin/metaplay" version
+
+      - name: Verify .profile fallback was used
+        run: |
+          grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.profile"
+          echo "OK: .profile contains correct PATH export"
