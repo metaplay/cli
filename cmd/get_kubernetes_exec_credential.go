@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -77,7 +78,7 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	stackDomain := strings.Replace(strings.Replace(o.argStackAPIBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
 	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID, authProvider)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create target environment: %w", err)
 	}
 
 	// Get the Kubernetes credentials in the execcredential format

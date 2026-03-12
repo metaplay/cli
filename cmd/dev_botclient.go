@@ -84,9 +84,9 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 
 		// Create TargetEnvironment.
-		targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+		targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create target environment: %w", err)
 	}
 
 		// Fetch environment info.

@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
@@ -100,9 +101,9 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server.
-	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create target environment: %w", err)
 	}
 	gameServer, err := targetEnv.GetGameServer(cmd.Context())
 	if err != nil {

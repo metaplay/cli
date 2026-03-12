@@ -15,6 +15,7 @@ import (
 
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 
@@ -87,6 +88,12 @@ func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID, authPro
 		EnvironmentAccessToken: envAccessToken,
 		StackApiClient:         metahttp.NewJSONClient(tokenSet, stackApiBaseURL, envAccessToken),
 	}, nil
+}
+
+// NewTargetEnvironmentFromConfig is a convenience wrapper that creates a
+// TargetEnvironment from the resolved environment config and token set.
+func NewTargetEnvironmentFromConfig(tokenSet *auth.TokenSet, envConfig *metaproj.ProjectEnvironmentConfig) (*TargetEnvironment, error) {
+	return NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
 }
 
 func (target *TargetEnvironment) GetKubernetesNamespace() string {
