@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -226,7 +227,8 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
-			return fmt.Errorf("database import cancelled: %w", cmd.Context().Err())
+			return clierrors.Wrap(cmd.Context().Err(), "Database import cancelled").
+				WithSuggestion("Run the command again to retry the import")
 		}
 		return err
 	}

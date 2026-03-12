@@ -228,7 +228,8 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	err = o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards, allShardTables)
 	if err != nil {
 		if cmd.Context().Err() != nil {
-			return fmt.Errorf("database reset cancelled: %w", cmd.Context().Err())
+			return clierrors.Wrap(cmd.Context().Err(), "Database reset cancelled").
+				WithSuggestion("Run the command again to retry the reset")
 		}
 		return err
 	}
