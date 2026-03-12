@@ -22,6 +22,7 @@
 
 # Wrap in a function to ensure the entire script is downloaded before execution (like install.sh),
 # and to allow using 'return' for early exit without closing the user's terminal when run via iex.
+$script:InstallFailed = $false
 function Install-MetaplayCLI {
 [CmdletBinding()]
 param(
@@ -73,7 +74,7 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
     'ARM64' { $Arch = 'arm64' }
     default {
         Print-Error "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE"
-        return
+        $script:InstallFailed = $true; return
     }
 }
 
@@ -144,7 +145,7 @@ if (-not $Version) {
         } catch {
             Print-Error "Failed to determine latest CLI version. Check your network connection."
             Print-Error $_.Exception.Message
-            return
+            $script:InstallFailed = $true; return
         }
     }
 
@@ -159,7 +160,7 @@ if (-not $Version) {
     } catch {
         Print-Error "Failed to fetch releases to determine 'latest-dev' version."
         Print-Error $_.Exception.Message
-        return
+        $script:InstallFailed = $true; return
     }
     Print-Verbose "Detected latest development version: $Version"
 }
@@ -167,7 +168,7 @@ if (-not $Version) {
 if (-not $Version) {
     Print-Error 'Failed to determine CLI version to install. Please check your network connection.'
     Print-Error 'If you are behind a proxy or offline, ensure you can access https://github.com.'
-    return
+    $script:InstallFailed = $true; return
 }
 
 # Construct download URL
@@ -193,7 +194,7 @@ try {
     } catch {
         Print-Error "Failed to download from $DownloadUrl"
         Print-Error $_.Exception.Message
-        return
+        $script:InstallFailed = $true; return
     } finally {
         $ProgressPreference = $prevProgressPref
     }
@@ -204,13 +205,13 @@ try {
     } catch {
         Print-Error 'Failed to extract archive.'
         Print-Error $_.Exception.Message
-        return
+        $script:InstallFailed = $true; return
     }
 
     $ExtractedBinary = Join-Path $TmpDir "$BinaryName.exe"
     if (-not (Test-Path $ExtractedBinary)) {
         Print-Error "Downloaded archive does not contain the expected binary '$BinaryName.exe'."
-        return
+        $script:InstallFailed = $true; return
     }
 
     # Ensure install directory exists and move binary
@@ -224,7 +225,7 @@ try {
         } else {
             Print-Error $_.Exception.Message
         }
-        return
+        $script:InstallFailed = $true; return
     }
 } finally {
     # Clean up temp dir (mirrors install.sh's trap-based cleanup)
@@ -246,7 +247,11 @@ if ($PathEntries | Where-Object { $_ -ieq $InstallDir }) {
 
 # Verify installation
 if (Get-Command "$BinaryName.exe" -ErrorAction SilentlyContinue) {
+    # Temporarily lower ErrorActionPreference: PS5 treats any stderr output from native
+    # commands as a terminating error under 'Stop', even with 2>$null.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $InstalledVersion = & $DestBinary version 2>$null
+    $ErrorActionPreference = $prevEAP
     Print-Success "'$BinaryName' v$InstalledVersion successfully installed!"
 } else {
     Print-Success "'$BinaryName' v$Version installed to $InstallDir."
@@ -256,3 +261,10 @@ if (Get-Command "$BinaryName.exe" -ErrorAction SilentlyContinue) {
 }
 
 Install-MetaplayCLI @args
+
+# When running as a script file (not via iex), exit with error code on failure.
+# $PSCommandPath is empty when evaluated via iex — we must not call exit in that
+# case because it would close the user's terminal.
+if ($script:InstallFailed -and $PSCommandPath) {
+    exit 1
+}

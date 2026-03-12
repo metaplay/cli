@@ -294,7 +294,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		// Check that the specified environment ID is a valid human ID.
 		if err := metaproj.ValidateEnvironmentID(portalapi.HostingTypeMetaplayHosted, environment); err != nil {
 			return nil, nil, clierrors.WrapUsageError(err, "Invalid environment ID format").
-				WithSuggestion("Use the full environment ID (e.g., 'tough-falcons') when metaplay-project.yaml is not available")
+				WithSuggestion("If the name is a custom environment alias, the CLI must be invoked from the folder (or a subfolder) where metaplay-project.yaml is located. Otherwise, use the full environment ID (e.g., 'lovely-wombats-build-nimbly').")
 		}
 
 		// Try to resolve the environment from the portal by its human ID.
