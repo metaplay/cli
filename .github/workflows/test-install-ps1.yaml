@@ -1,0 +1,195 @@
+name: Test install.ps1
+
+on:
+  pull_request:
+    paths:
+      - install.ps1
+      - .github/workflows/test-install-ps1.yaml
+  push:
+    paths:
+      - install.ps1
+      - .github/workflows/test-install-ps1.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning -ExcludeRule PSUseApprovedVerbs
+          if ($results) {
+            $results | Format-Table -AutoSize
+            throw "PSScriptAnalyzer found $($results.Count) issue(s)."
+          }
+          Write-Host "OK: no warnings or errors"
+
+  test:
+    name: "${{ matrix.shell }}"
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Clean pre-existing installation
+        shell: ${{ matrix.shell }}
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
+
+          # Remove install dir from user PATH (registry)
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath) {
+            $cleaned = ($userPath -split ';' | Where-Object { $_ -ine $installDir }) -join ';'
+            [Environment]::SetEnvironmentVariable('Path', $cleaned, 'User')
+          }
+
+          # Remove existing installation
+          $metaplayDir = Join-Path $env:LOCALAPPDATA 'metaplay'
+          if (Test-Path $metaplayDir) {
+            Remove-Item -Recurse -Force $metaplayDir
+          }
+
+      - name: Run install.ps1
+        shell: ${{ matrix.shell }}
+        run: .\install.ps1 -Version 1.9.3 -Verbose
+
+      - name: Verify binary was installed
+        shell: ${{ matrix.shell }}
+        run: |
+          $binary = Join-Path $env:LOCALAPPDATA 'metaplay\bin\metaplay.exe'
+          if (-not (Test-Path $binary)) {
+            throw "Binary not found at $binary"
+          }
+          & $binary version
+          Write-Host "OK: binary installed and runnable"
+
+      - name: Verify PATH was updated
+        shell: ${{ matrix.shell }}
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $matches = ($userPath -split ';') | Where-Object { $_ -ieq $installDir }
+          if (-not $matches) {
+            throw "Install dir not found in user PATH. PATH = $userPath"
+          }
+          Write-Host "OK: $installDir is in user PATH"
+
+      - name: Verify no temp dirs left behind
+        shell: ${{ matrix.shell }}
+        run: |
+          $leftover = Get-ChildItem ([System.IO.Path]::GetTempPath()) -Directory -Filter 'metaplay-install-*' -ErrorAction SilentlyContinue
+          if ($leftover) {
+            throw "Temp directories left behind: $($leftover.FullName -join ', ')"
+          }
+          Write-Host "OK: no leftover temp directories"
+
+      - name: Verify idempotent PATH (re-run install)
+        shell: ${{ matrix.shell }}
+        run: |
+          # Run installer again
+          .\install.ps1 -Version 1.9.3 -Verbose
+
+          # Check for duplicate PATH entries
+          $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $matches = ($userPath -split ';') | Where-Object { $_ -ieq $installDir }
+          if ($matches.Count -gt 1) {
+            throw "Install dir appears $($matches.Count) times in PATH (expected 1). PATH = $userPath"
+          }
+          Write-Host "OK: no duplicate PATH entries after re-install"
+
+  test-iex:
+    name: "iex / ${{ matrix.shell }}"
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [pwsh, powershell]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Clean pre-existing installation
+        shell: ${{ matrix.shell }}
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($userPath) {
+            $cleaned = ($userPath -split ';' | Where-Object { $_ -ine $installDir }) -join ';'
+            [Environment]::SetEnvironmentVariable('Path', $cleaned, 'User')
+          }
+          $metaplayDir = Join-Path $env:LOCALAPPDATA 'metaplay'
+          if (Test-Path $metaplayDir) {
+            Remove-Item -Recurse -Force $metaplayDir
+          }
+
+      - name: Install via iex (piped install method)
+        shell: ${{ matrix.shell }}
+        run: |
+          $env:METAPLAY_VERSION = '1.9.3'
+          Invoke-Expression (Get-Content .\install.ps1 -Raw)
+
+      - name: Verify binary was installed
+        shell: ${{ matrix.shell }}
+        run: |
+          $binary = Join-Path $env:LOCALAPPDATA 'metaplay\bin\metaplay.exe'
+          if (-not (Test-Path $binary)) {
+            throw "Binary not found at $binary"
+          }
+          & $binary version
+          Write-Host "OK: binary installed via iex"
+
+      - name: Verify PATH was updated
+        shell: ${{ matrix.shell }}
+        run: |
+          $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $matches = ($userPath -split ';') | Where-Object { $_ -ieq $installDir }
+          if (-not $matches) {
+            throw "Install dir not found in user PATH"
+          }
+          Write-Host "OK: PATH updated via iex install"
+
+  test-help:
+    name: "-Help flag"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify -Help exits successfully and prints usage
+        shell: pwsh
+        run: |
+          $output = & .\install.ps1 -Help 2>&1 | Out-String
+          if ($output -notmatch 'Usage:') {
+            throw "-Help output does not contain 'Usage:'. Output: $output"
+          }
+          Write-Host "OK: -Help works"
+          Write-Host $output
+
+  test-error-exit-code:
+    name: "Error produces non-zero exit code"
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify unsupported architecture fails with exit code 1
+        shell: pwsh
+        run: |
+          # Run in a subprocess so exit 1 doesn't terminate this shell.
+          # Override PROCESSOR_ARCHITECTURE to trigger the unsupported-arch error path.
+          pwsh -NoProfile -Command '$env:PROCESSOR_ARCHITECTURE = "IA64"; & .\install.ps1 -Version 1.9.3'
+          $exitCode = $LASTEXITCODE
+          # Reset LASTEXITCODE so GH Actions' appended 'exit $LASTEXITCODE' doesn't fail the step.
+          cmd /c "exit 0"
+          if ($exitCode -eq 0) {
+            throw "Expected non-zero exit code for unsupported architecture, got 0"
+          }
+          Write-Host "OK: unsupported architecture exits with code $exitCode"
