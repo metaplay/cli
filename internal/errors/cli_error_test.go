@@ -5,6 +5,7 @@
 package errors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -216,5 +217,67 @@ func TestBuilderChaining(t *testing.T) {
 	}
 	if len(err.Details) != 2 {
 		t.Errorf("expected 2 details, got %d", len(err.Details))
+	}
+}
+
+func TestWrapContextErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	deadlineCtx, deadlineCancel := context.WithTimeout(context.Background(), 0)
+	defer deadlineCancel()
+	// Force the deadline to expire
+	<-deadlineCtx.Done()
+
+	tests := []struct {
+		name       string
+		cause      error
+		message    string
+		suggestion string
+		wantIs     error
+	}{
+		{
+			name:       "canceled context",
+			cause:      ctx.Err(),
+			message:    "Operation was canceled",
+			suggestion: "Try running the command again",
+			wantIs:     context.Canceled,
+		},
+		{
+			name:       "deadline exceeded",
+			cause:      deadlineCtx.Err(),
+			message:    "Operation timed out",
+			suggestion: "Increase the timeout or check connectivity",
+			wantIs:     context.DeadlineExceeded,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := Wrap(tt.cause, tt.message).WithSuggestion(tt.suggestion)
+
+			// Correct .Error() message
+			if err.Error() != tt.message {
+				t.Errorf("expected %q, got %q", tt.message, err.Error())
+			}
+
+			// Unwrappable via errors.Is to the original context error
+			if !errors.Is(err, tt.wantIs) {
+				t.Errorf("errors.Is should find %v through CLIError", tt.wantIs)
+			}
+
+			// Runtime error (exit code 1), not a usage error
+			if err.Code != ExitRuntime {
+				t.Errorf("expected ExitRuntime (1), got %d", err.Code)
+			}
+			if err.IsUsageError() {
+				t.Error("context error should not be a usage error")
+			}
+
+			// Preserves suggestion
+			if err.Suggestion != tt.suggestion {
+				t.Errorf("expected suggestion %q, got %q", tt.suggestion, err.Suggestion)
+			}
+		})
 	}
 }
