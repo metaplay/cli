@@ -112,13 +112,16 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment.
-	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(ctx, project, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
+	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
 
 	// Gather server deployment information.
 	info, err := o.gatherDeployedServerInfo(ctx, targetEnv, envConfig)

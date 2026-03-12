@@ -120,7 +120,7 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment config
-	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -131,7 +131,10 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
+	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
 
 	// Create Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()

@@ -131,27 +131,6 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 		WithDetails(fmt.Sprintf("Available providers: %v", existingAuthProviders))
 }
 
-// isMetaplayAuth returns true if the given auth provider name indicates
-// the built-in Metaplay Auth provider (which requires Portal token exchange).
-func isMetaplayAuth(providerName string) bool {
-	return providerName == "" || providerName == "metaplay"
-}
-
-// exchangeTokenForEnvironment exchanges a Metaplay Auth token for an
-// environment-scoped JWT via Portal. Returns just the JWT string.
-// This is the single entry point for token exchange — future caching
-// logic should be added here.
-func exchangeTokenForEnvironment(tokenSet *auth.TokenSet, environmentHumanID string) (string, error) {
-	log.Debug().Msgf("Exchanging Metaplay Auth token for environment-scoped token (env: %s)", environmentHumanID)
-	portalClient := portalapi.NewClient(tokenSet)
-	envAccessToken, err := portalClient.ExchangeTokenForEnvironment(environmentHumanID)
-	if err != nil {
-		return "", err
-	}
-	log.Debug().Msg("Token exchange successful")
-	return envAccessToken, nil
-}
-
 // Load the metaplay-project.yaml from the specified directory.
 func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 	// Load the project config file.
@@ -196,12 +175,11 @@ func resolveProject() (*metaproj.MetaplayProject, error) {
 	return loadProject(projectDir)
 }
 
-// Resolve the environment configuration and obtain an environment-scoped access
-// token for stack requests. Returns the environment config, the original token set
-// (for Portal/auth-provider calls), and the environment access token (for stack
-// requests). For Metaplay Auth, the environment token is obtained via Portal token
-// exchange. For third-party auth, the access token is used directly.
-func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, environment string) (*metaproj.ProjectEnvironmentConfig, *auth.TokenSet, string, error) {
+// Resolve the environment configuration and authentication. Returns the
+// environment config and the original token set (for Portal/auth-provider calls).
+// The environment-scoped access token for stack requests is obtained later by
+// NewTargetEnvironment, which performs Portal token exchange for Metaplay Auth.
+func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, environment string) (*metaproj.ProjectEnvironmentConfig, *auth.TokenSet, error) {
 	var envConfig *metaproj.ProjectEnvironmentConfig
 	var err error
 
@@ -212,13 +190,13 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		if environment == "" {
 			// Must be in interactive mode.
 			if !tui.IsInteractiveMode() {
-				return nil, nil, "", clierrors.NewUsageError("Target environment must be specified in non-interactive mode").
+				return nil, nil, clierrors.NewUsageError("Target environment must be specified in non-interactive mode").
 					WithSuggestion("Provide the environment name as an argument, e.g., 'metaplay <command> nimbly'")
 			}
 
 			// Error if no environments in the metaplay-project.yaml.
 			if len(project.Config.Environments) == 0 {
-				return nil, nil, "", clierrors.New("No environments found in metaplay-project.yaml").
+				return nil, nil, clierrors.New("No environments found in metaplay-project.yaml").
 					WithSuggestion("Run 'metaplay update project-environments' to sync from portal, or create one at https://portal.metaplay.dev")
 			}
 
@@ -235,7 +213,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 				},
 			)
 			if err != nil {
-				return nil, nil, "", err
+				return nil, nil, err
 			}
 
 			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), envConfig.Name, styles.RenderMuted(fmt.Sprintf("[%s]", envConfig.HumanID)))
@@ -243,33 +221,23 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 			// Find target environment.
 			envConfig, err = project.Config.FindEnvironmentConfig(environment)
 			if err != nil {
-				return nil, nil, "", err
+				return nil, nil, err
 			}
 		}
 
 		// Get auth provider for env.
 		authProvider, err := getAuthProvider(project, envConfig.AuthProvider)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 
 		// Ensure the user is logged in.
 		tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 
-		// For Metaplay Auth, exchange the token for an environment-scoped JWT.
-		// For third-party auth, the access token goes directly to the stack.
-		envAccessToken := tokenSet.AccessToken
-		if isMetaplayAuth(envConfig.AuthProvider) {
-			envAccessToken, err = exchangeTokenForEnvironment(tokenSet, envConfig.HumanID)
-			if err != nil {
-				return nil, nil, "", err
-			}
-		}
-
-		return envConfig, tokenSet, envAccessToken, nil
+		return envConfig, tokenSet, nil
 	}
 
 	// If no metaplay-project.yaml can be located, we know we are using Metaplay auth provider.
@@ -279,7 +247,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 	// Ensure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, err
 	}
 
 	// If target environment not specified, let user choose from all accessible portal projects
@@ -290,24 +258,24 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		// Let the user choose from the accessible ones.
 		project, err := chooseOrgAndProject(portalClient, "")
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 
 		// Fetch all environments of the project.
 		environments, err := portalClient.FetchProjectEnvironments(project.UUID)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 
 		// Must be in interactive mode.
 		if !tui.IsInteractiveMode() {
-			return nil, nil, "", clierrors.NewUsageError("Interactive mode required for project selection").
+			return nil, nil, clierrors.NewUsageError("Interactive mode required for project selection").
 				WithSuggestion("Specify the environment explicitly, or run in an interactive terminal")
 		}
 
 		// Error if no environments in portal project.
 		if len(environments) == 0 {
-			return nil, nil, "", clierrors.Newf("No accessible environments found for project '%s'", project.Name).
+			return nil, nil, clierrors.Newf("No accessible environments found for project '%s'", project.Name).
 				WithSuggestion("Create an environment at https://portal.metaplay.dev or request access from your team")
 		}
 
@@ -320,14 +288,14 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 			},
 		)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 
 		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s]", portalEnv.HumanID)))
 	} else {
 		// Check that the specified environment ID is a valid human ID.
 		if err := metaproj.ValidateEnvironmentID(portalapi.HostingTypeMetaplayHosted, environment); err != nil {
-			return nil, nil, "", clierrors.WrapUsageError(err, "Invalid environment ID format").
+			return nil, nil, clierrors.WrapUsageError(err, "Invalid environment ID format").
 				WithSuggestion("If the name is a custom environment alias, the CLI must be invoked from the folder (or a subfolder) where metaplay-project.yaml is located. Otherwise, use the full environment ID (e.g., 'lovely-wombats-build-nimbly').")
 		}
 
@@ -335,7 +303,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		var err error
 		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, err
 		}
 	}
 
@@ -348,13 +316,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		AuthProvider: "metaplay",
 	}
 
-	// No-project path always uses Metaplay Auth, so always exchange.
-	envAccessToken, err := exchangeTokenForEnvironment(tokenSet, portalEnv.HumanID)
-	if err != nil {
-		return nil, nil, "", err
-	}
-
-	return envConfig, tokenSet, envAccessToken, nil
+	return envConfig, tokenSet, nil
 }
 
 // Helper for resolving both the MetaplayProject and a specific environment at the same time.

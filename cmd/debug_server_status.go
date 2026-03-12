@@ -72,13 +72,16 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project and environment.
-	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
+	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
 
 	// Get environment details.
 	envDetails, err := targetEnv.GetDetails()

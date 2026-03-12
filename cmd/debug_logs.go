@@ -116,13 +116,16 @@ func (o *debugLogsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve environment.
-	envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
+	envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.argEnvironment)
 	if err != nil {
 		return err
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
+	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
 
 	// Create a Kubernetes client.
 	// \todo support multi-region

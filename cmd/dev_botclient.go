@@ -78,13 +78,16 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	targetEnvFlags := []string{}
 	if o.flagEnvironment != "" {
 		// Resolve project and environment.
-		envConfig, tokenSet, envAccessToken, err := resolveEnvironment(cmd.Context(), project, o.flagEnvironment)
+		envConfig, tokenSet, err := resolveEnvironment(cmd.Context(), project, o.flagEnvironment)
 		if err != nil {
 			return err
 		}
 
 		// Create TargetEnvironment.
-		targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envAccessToken)
+		targetEnv, err := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
 
 		// Fetch environment info.
 		envInfo, err := targetEnv.GetDetails()
