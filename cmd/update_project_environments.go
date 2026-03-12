@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -298,6 +299,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 }
 
 // updateEnvironmentConfigs finds and updates the EnvironmentConfigs.json file with new client configs
+// fetched from the portal. Uses untyped JSON to preserve any userland extensions in the config entries.
 func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metaproj.MetaplayProject, clientConfigs []portalapi.EnvironmentClientConfigResponse) error {
 	// Try to find EnvironmentConfigs.json in the expected Unity location
 	environmentConfigsPath := filepath.Join(project.GetUnityProjectDir(), "ProjectSettings", "Metaplay", "EnvironmentConfigs.json")
@@ -311,22 +313,207 @@ func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metapr
 		return clierrors.Wrap(err, "Unable to access EnvironmentConfigs.json")
 	}
 
-	log.Info().Msgf("Found EnvironmentConfigs.json at %s", environmentConfigsPath)
+	log.Info().Msg("")
+	log.Info().Msgf("Updating %s", styles.RenderTechnical("EnvironmentConfigs.json"))
 
-	// TODO: Update each environment's config by merging the new config with the existing config:
-	// - Use the ServerHost as the key to match the configs? Should be more robust than EnvironmentId (which is actually name).
-	// - Use untyped JSON to perform the merges -- there can be userland data in the payload, so we can't know its structure.
-	// - Report any changes that were made, including unknown/failed environments.
-	// - Write updated EnvironmentConfigs.json back to disk.
+	// Read and parse existing EnvironmentConfigs.json as untyped JSON to preserve userland data.
+	existingBytes, err := os.ReadFile(environmentConfigsPath)
+	if err != nil {
+		return clierrors.Wrap(err, "Unable to read EnvironmentConfigs.json")
+	}
 
-	// TODO: Implement the actual update logic here:
-	// 1. Read existing EnvironmentConfigs.json
-	// 2. Parse as untyped JSON to preserve user data
-	// 3. Match configs by ServerHost (more robust than EnvironmentId)
-	// 4. Merge new configs with existing ones
-	// 5. Report changes made
-	// 6. Write updated file back to disk
+	var existingConfigs []map[string]any
+	if err := json.Unmarshal(existingBytes, &existingConfigs); err != nil {
+		return clierrors.Wrap(err, "Unable to parse EnvironmentConfigs.json")
+	}
 
-	log.Info().Msg("Environment configs update logic not yet implemented")
+	// Process each portal client config response.
+	for _, response := range clientConfigs {
+		if response.ClientConfig == nil {
+			log.Warn().Msgf("  %s %s: %s", styles.RenderError("✗"), styles.RenderTechnical(response.EnvironmentHumanID), *response.Error)
+			continue
+		}
+
+		portalConfig := response.ClientConfig
+
+		// Transform the portal format into the EnvironmentConfigs.json entry format.
+		newEntry := transformPortalConfigToEnvironmentConfig(portalConfig)
+
+		// Find existing entry by matching on Id (humanId) for V2 entries,
+		// or by ServerHost in ConnectionEndpointConfig for V1 migration.
+		foundIndex := findExistingConfigIndex(existingConfigs, portalConfig.HumanId, portalConfig.ServerHost)
+
+		if foundIndex == -1 {
+			// Add new entry
+			log.Info().Msgf("  %s Add %s", styles.RenderSuccess("+"), styles.RenderTechnical(portalConfig.HumanId))
+			existingConfigs = append(existingConfigs, newEntry)
+		} else {
+			// Merge into existing entry, preserving userland fields
+			log.Info().Msgf("  %s Update %s", styles.RenderSuccess("*"), styles.RenderTechnical(portalConfig.HumanId))
+			existingConfigs[foundIndex] = mergeEnvironmentConfig(existingConfigs[foundIndex], newEntry)
+		}
+	}
+
+	// Write updated configs back to disk with consistent formatting (indented, LF line endings).
+	outputBytes, err := json.MarshalIndent(existingConfigs, "", "  ")
+	if err != nil {
+		return clierrors.Wrap(err, "Unable to serialize updated environment configs")
+	}
+	// Normalize line endings to LF and ensure trailing newline (matching C# serialization).
+	output := strings.ReplaceAll(string(outputBytes), "\r\n", "\n") + "\n"
+
+	if err := os.WriteFile(environmentConfigsPath, []byte(output), 0644); err != nil {
+		return clierrors.Wrap(err, "Unable to write EnvironmentConfigs.json")
+	}
+
+	log.Info().Msgf("  %s Updated %s", styles.RenderSuccess("✓"), styles.RenderTechnical("EnvironmentConfigs.json"))
 	return nil
+}
+
+// transformPortalConfigToEnvironmentConfig converts the portal's EnvironmentClientConfig format
+// into the EnvironmentConfigs.json entry format used by the Unity SDK.
+func transformPortalConfigToEnvironmentConfig(pc *portalapi.EnvironmentClientConfig) map[string]any {
+	// Determine server port (first entry or 0)
+	serverPort := 0
+	if len(pc.ServerPorts) > 0 {
+		serverPort = pc.ServerPorts[0]
+	}
+	serverPortForWebSocket := 0
+	if len(pc.ServerPortsForWebSocket) > 0 {
+		serverPortForWebSocket = pc.ServerPortsForWebSocket[0]
+	}
+
+	// Build backup gateways from additional ports
+	backupGateways := []any{}
+	if len(pc.ServerPorts) > 1 {
+		for _, port := range pc.ServerPorts[1:] {
+			backupGateways = append(backupGateways, map[string]any{
+				"Id":         "",
+				"ServerHost": pc.ServerHost,
+				"ServerPort": port,
+			})
+		}
+	}
+
+	// Determine auth token provider based on environment family
+	authTokenProvider := "None"
+	if pc.EnvironmentFamily != "Local" {
+		authTokenProvider = "OAuth2"
+	}
+
+	// Build OAuth2 local callback URLs
+	localCallbackUrls := []any{}
+	if pc.OAuth2LocalCallback != "" {
+		localCallbackUrls = append(localCallbackUrls, pc.OAuth2LocalCallback)
+	}
+
+	return map[string]any{
+		"Version":     2,
+		"Id":          pc.HumanId,
+		"DisplayName": pc.DisplayName,
+		"Description": "",
+		"ConnectionEndpointConfig": map[string]any{
+			"ServerHost":             pc.ServerHost,
+			"ServerPort":             serverPort,
+			"ServerPortForWebSocket": serverPortForWebSocket,
+			"EnableTls":              pc.EnableTls,
+			"CdnBaseUrl":             pc.CdnBaseUrl,
+			"PublicWebApiUrl":         pc.PublicWebApiUrl,
+			"BackupGateways":         backupGateways,
+			"IsOfflineMode":          false,
+		},
+		"ClientLoggingConfig": map[string]any{
+			"LogLevel":          "Debug",
+			"LogLevelOverrides": []any{},
+		},
+		"ClientGameConfigBuildApiConfig": map[string]any{
+			"AdminApiBaseUrl":                     pc.AdminApiBaseUrl,
+			"AdminApiAuthenticationTokenProvider": authTokenProvider,
+			"AdminApiCredentialsPath":             "",
+			"AdminApiOAuth2Settings": map[string]any{
+				"ClientId":              pc.OAuth2ClientID,
+				"ClientSecret":          pc.OAuth2ClientSecret,
+				"AuthorizationEndpoint": pc.OAuth2AuthorizationEndpoint,
+				"TokenEndpoint":         pc.OAuth2TokenEndpoint,
+				"Audience":              pc.OAuth2Audience,
+				"LocalCallbackUrls":     localCallbackUrls,
+				"UseStateParameter":     pc.OAuth2UseStateParameter,
+			},
+		},
+	}
+}
+
+// findExistingConfigIndex finds the index of an existing environment config entry
+// by matching on Id (humanId) for V2 entries, or by ServerHost for V1 migration.
+func findExistingConfigIndex(configs []map[string]any, humanId string, serverHost string) int {
+	// First pass: match by Id (V2 entries)
+	for i, config := range configs {
+		if id, ok := config["Id"].(string); ok && id == humanId {
+			return i
+		}
+	}
+
+	// Second pass: match by ServerHost in ConnectionEndpointConfig (V1 migration)
+	for i, config := range configs {
+		connConfig, ok := config["ConnectionEndpointConfig"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if host, ok := connConfig["ServerHost"].(string); ok && host == serverHost {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// mergeEnvironmentConfig merges a new config entry into an existing one.
+// Portal-managed fields are overwritten; any extra userland fields in the existing
+// entry are preserved.
+func mergeEnvironmentConfig(existing, incoming map[string]any) map[string]any {
+	result := make(map[string]any)
+
+	// Copy all existing fields first (preserves userland extensions)
+	for k, v := range existing {
+		result[k] = v
+	}
+
+	// Overwrite with incoming portal-managed fields
+	for k, v := range incoming {
+		if k == "ConnectionEndpointConfig" || k == "ClientGameConfigBuildApiConfig" {
+			// Deep merge nested objects to preserve userland sub-fields
+			existingSub, existOk := existing[k].(map[string]any)
+			incomingSub, incomOk := v.(map[string]any)
+			if existOk && incomOk {
+				merged := make(map[string]any)
+				for sk, sv := range existingSub {
+					merged[sk] = sv
+				}
+				for sk, sv := range incomingSub {
+					// For AdminApiOAuth2Settings, also deep merge
+					if sk == "AdminApiOAuth2Settings" {
+						existOAuth, eOk := existingSub[sk].(map[string]any)
+						incOAuth, iOk := sv.(map[string]any)
+						if eOk && iOk {
+							oauthMerged := make(map[string]any)
+							for ok2, ov := range existOAuth {
+								oauthMerged[ok2] = ov
+							}
+							for ok2, ov := range incOAuth {
+								oauthMerged[ok2] = ov
+							}
+							merged[sk] = oauthMerged
+							continue
+						}
+					}
+					merged[sk] = sv
+				}
+				result[k] = merged
+				continue
+			}
+		}
+		result[k] = v
+	}
+
+	return result
 }

@@ -108,6 +108,7 @@ type EnvironmentClientConfig struct {
 	ServerPortsForWebSocket         []int  `json:"ServerPortsForWebSocket"`
 	EnableTls                       bool   `json:"EnableTls"`
 	CdnBaseUrl                      string `json:"CdnBaseUrl"`
+	PublicWebApiUrl                 string `json:"PublicWebApiUrl"`
 	AdminApiBaseUrl                 string `json:"AdminApiBaseUrl"`
 	AdminApiUseOpenIdConnectIdToken bool   `json:"AdminApiUseOpenIdConnectIdToken"`
 	OAuth2ClientID                  string `json:"OAuth2ClientID"`
