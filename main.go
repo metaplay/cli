@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,10 +15,16 @@ import (
 )
 
 func main() {
-	// Create a context that cancels on SIGINT (Ctrl+C) or SIGTERM
-	// This ensures graceful cleanup when the user interrupts the CLI
+	// Create a context that cancels on SIGINT (Ctrl+C) or SIGTERM.
+	// After the first signal, Go restores default signal handling,
+	// so a second Ctrl+C will terminate the process immediately.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Notify the user that graceful shutdown is in progress after Ctrl+C.
+	context.AfterFunc(ctx, func() {
+		fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up... (press Ctrl+C again to force quit)")
+	})
 
 	cmd.ExecuteContext(ctx)
 }
