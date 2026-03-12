@@ -20,7 +20,8 @@
       "Bash(ls:*)",
       "Bash(go get:*)",
       "Bash(wc:*)",
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "Bash(gh search:*)"
     ]
   }
 }
