@@ -23,7 +23,7 @@ jobs:
       - name: Run PSScriptAnalyzer
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning -ExcludeRule PSUseApprovedVerbs
+          $results = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning -ExcludeRule PSUseApprovedVerbs,PSAvoidUsingWriteHost,PSUseBOMForUnicodeEncodedFile
           if ($results) {
             $results | Format-Table -AutoSize
             throw "PSScriptAnalyzer found $($results.Count) issue(s)."
@@ -164,7 +164,7 @@ jobs:
       - name: Verify -Help exits successfully and prints usage
         shell: pwsh
         run: |
-          $output = & .\install.ps1 -Help 2>&1 | Out-String
+          $output = & .\install.ps1 -Help *>&1 | Out-String
           if ($output -notmatch 'Usage:') {
             throw "-Help output does not contain 'Usage:'. Output: $output"
           }

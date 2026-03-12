@@ -247,7 +247,11 @@ if ($PathEntries | Where-Object { $_ -ieq $InstallDir }) {
 
 # Verify installation
 if (Get-Command "$BinaryName.exe" -ErrorAction SilentlyContinue) {
+    # Temporarily lower ErrorActionPreference: PS5 treats any stderr output from native
+    # commands as a terminating error under 'Stop', even with 2>$null.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $InstalledVersion = & $DestBinary version 2>$null
+    $ErrorActionPreference = $prevEAP
     Print-Success "'$BinaryName' v$InstalledVersion successfully installed!"
 } else {
     Print-Success "'$BinaryName' v$Version installed to $InstallDir."
