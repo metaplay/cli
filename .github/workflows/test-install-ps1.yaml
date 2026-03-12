@@ -33,6 +33,9 @@ jobs:
   test:
     name: "${{ matrix.shell }}"
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,7 +45,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Clean pre-existing installation
-        shell: ${{ matrix.shell }}
         run: |
           $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
 
@@ -60,11 +62,9 @@ jobs:
           }
 
       - name: Run install.ps1
-        shell: ${{ matrix.shell }}
         run: .\install.ps1 -Version 1.9.3 -Verbose
 
       - name: Verify binary was installed
-        shell: ${{ matrix.shell }}
         run: |
           $binary = Join-Path $env:LOCALAPPDATA 'metaplay\bin\metaplay.exe'
           if (-not (Test-Path $binary)) {
@@ -74,7 +74,6 @@ jobs:
           Write-Host "OK: binary installed and runnable"
 
       - name: Verify PATH was updated
-        shell: ${{ matrix.shell }}
         run: |
           $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -85,7 +84,6 @@ jobs:
           Write-Host "OK: $installDir is in user PATH"
 
       - name: Verify no temp dirs left behind
-        shell: ${{ matrix.shell }}
         run: |
           $leftover = Get-ChildItem ([System.IO.Path]::GetTempPath()) -Directory -Filter 'metaplay-install-*' -ErrorAction SilentlyContinue
           if ($leftover) {
@@ -94,7 +92,6 @@ jobs:
           Write-Host "OK: no leftover temp directories"
 
       - name: Verify idempotent PATH (re-run install)
-        shell: ${{ matrix.shell }}
         run: |
           # Run installer again
           .\install.ps1 -Version 1.9.3 -Verbose
@@ -111,6 +108,9 @@ jobs:
   test-iex:
     name: "iex / ${{ matrix.shell }}"
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
     strategy:
       fail-fast: false
       matrix:
@@ -120,7 +120,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Clean pre-existing installation
-        shell: ${{ matrix.shell }}
         run: |
           $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -134,13 +133,11 @@ jobs:
           }
 
       - name: Install via iex (piped install method)
-        shell: ${{ matrix.shell }}
         run: |
           $env:METAPLAY_VERSION = '1.9.3'
           Invoke-Expression (Get-Content .\install.ps1 -Raw)
 
       - name: Verify binary was installed
-        shell: ${{ matrix.shell }}
         run: |
           $binary = Join-Path $env:LOCALAPPDATA 'metaplay\bin\metaplay.exe'
           if (-not (Test-Path $binary)) {
@@ -150,7 +147,6 @@ jobs:
           Write-Host "OK: binary installed via iex"
 
       - name: Verify PATH was updated
-        shell: ${{ matrix.shell }}
         run: |
           $installDir = Join-Path $env:LOCALAPPDATA 'metaplay\bin'
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
