@@ -226,7 +226,6 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
-			log.Info().Msg("Database import cancelled by user")
 			return fmt.Errorf("database import cancelled: %w", cmd.Context().Err())
 		}
 		return err

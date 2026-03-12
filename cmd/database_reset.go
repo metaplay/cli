@@ -210,7 +210,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	// Get table names from all shards once at the beginning
 	allShardTables, err := o.getAllShardTables(cmd.Context(), kubeCli, podName, "debug", shards)
 	if err != nil {
-		return fmt.Errorf("failed to get table information from shards: %v", err)
+		return fmt.Errorf("failed to get table information from shards: %w", err)
 	}
 
 	// Check if database is already empty
@@ -228,7 +228,6 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	err = o.resetDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards, allShardTables)
 	if err != nil {
 		if cmd.Context().Err() != nil {
-			log.Info().Msg("Database reset cancelled by user")
 			return fmt.Errorf("database reset cancelled: %w", cmd.Context().Err())
 		}
 		return err
