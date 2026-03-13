@@ -29,3 +29,6 @@ dist/
 
 # Aider files and directories
 .aider*
+
+# Claude Settings (local)
+.claude/settings.local.json
