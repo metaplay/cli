@@ -105,7 +105,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	// Create environment helper.
 	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create target environment: %w", err)
+		return fmt.Errorf("failed to access target environment: %w", err)
 	}
 
 	// Default to credentialsType==dynamic for human users, and credentialsType==static for machine users
