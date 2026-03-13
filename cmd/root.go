@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -123,10 +124,11 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
+// ExecuteContext adds all child commands to the root command and sets flags appropriately.
+// It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
+func ExecuteContext(ctx context.Context) {
+	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		// Handle Cobra errors (unknown flags, missing arguments, etc.)
 		// Usage was already shown by Cobra, now show formatted error at the end
