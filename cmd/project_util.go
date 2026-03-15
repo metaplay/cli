@@ -175,8 +175,10 @@ func resolveProject() (*metaproj.MetaplayProject, error) {
 	return loadProject(projectDir)
 }
 
-// Resolve the environment configuration. First, try the project config, if available.
-// Otherwise, fetch the information from the portal.
+// Resolve the environment configuration and authentication. Returns the
+// environment config and the original token set (for Portal/auth-provider calls).
+// The environment-scoped access token for stack requests is obtained later by
+// NewTargetEnvironment, which performs Portal token exchange for Metaplay Auth.
 func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, environment string) (*metaproj.ProjectEnvironmentConfig, *auth.TokenSet, error) {
 	var envConfig *metaproj.ProjectEnvironmentConfig
 	var err error
@@ -313,6 +315,7 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		Type:         portalEnv.Type,
 		AuthProvider: "metaplay",
 	}
+
 	return envConfig, tokenSet, nil
 }
 

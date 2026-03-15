@@ -96,7 +96,10 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return fmt.Errorf("failed to access target environment: %w", err)
+	}
 
 	// Fetch the information from the environment via StackAPI.
 	envInfo, err := targetEnv.GetDetails()

@@ -146,7 +146,10 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return fmt.Errorf("failed to access target environment: %w", err)
+	}
 
 	// Get environment details for admin API hostname
 	envDetails, err := targetEnv.GetDetails()
@@ -156,7 +159,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 
 	// Create a client for the game server admin API
 	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
-	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
+	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL, targetEnv.EnvironmentAccessToken)
 
 	// Prepare request body if needed
 	var requestBody any

@@ -129,7 +129,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return fmt.Errorf("failed to access target environment: %w", err)
+	}
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")

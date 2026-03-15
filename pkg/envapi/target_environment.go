@@ -15,6 +15,8 @@ import (
 
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
+	"github.com/metaplay/cli/pkg/metaproj"
+	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -32,10 +34,11 @@ import (
 
 // Wrapper object for accessing an environment within a target stack.
 type TargetEnvironment struct {
-	TokenSet        *auth.TokenSet   // Tokens to use to access the environment.
-	StackApiBaseURL string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
-	HumanID         string           // Environment human ID, eg, 'lovely-wombats-build-nimbly'. Same as Kubernetes namespace.
-	StackApiClient  *metahttp.Client // HTTP client to access environment StackAPI.
+	TokenSet               *auth.TokenSet   // Tokens to use to access the environment.
+	StackApiBaseURL        string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
+	HumanID                string           // Environment human ID, eg, 'lovely-wombats-build-nimbly'. Same as Kubernetes namespace.
+	EnvironmentAccessToken string           // Environment-scoped access token for stack requests (exchanged JWT or third-party access token).
+	StackApiClient         *metahttp.Client // HTTP client to access environment StackAPI.
 
 	primaryKubeClient *KubeClient       // Lazily initialized KubeClient.
 	targetGameServer  *TargetGameServer // Lazily initialized TargetGameServer.
@@ -58,15 +61,39 @@ type DockerCredentials struct {
 	RegistryURL string
 }
 
-func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
+// NewTargetEnvironment creates a new TargetEnvironment for accessing a stack.
+// For Metaplay Auth (authProvider "" or "metaplay"), the access token is exchanged
+// via Portal for a short-lived, environment-scoped JWT. For third-party auth
+// providers, the access token is used directly.
+func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID, authProvider string) (*TargetEnvironment, error) {
+	// Determine the access token for stack requests.
+	envAccessToken := tokenSet.AccessToken
+	if authProvider == "" || authProvider == "metaplay" {
+		log.Debug().Msgf("Exchanging Metaplay Auth token for environment-scoped token (env: %s)", humanID)
+		portal := portalapi.NewClient(tokenSet)
+		exchangedToken, err := portal.ExchangeTokenForEnvironment(humanID)
+		if err != nil {
+			return nil, err
+		}
+		log.Debug().Msg("Token exchange successful")
+		envAccessToken = exchangedToken
+	}
+
 	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
-		TokenSet:        tokenSet,
-		StackApiBaseURL: stackApiBaseURL,
-		HumanID:         humanID,
-		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL),
-	}
+		TokenSet:               tokenSet,
+		StackApiBaseURL:        stackApiBaseURL,
+		HumanID:                humanID,
+		EnvironmentAccessToken: envAccessToken,
+		StackApiClient:         metahttp.NewJSONClient(tokenSet, stackApiBaseURL, envAccessToken),
+	}, nil
+}
+
+// NewTargetEnvironmentFromConfig is a convenience wrapper that creates a
+// TargetEnvironment from the resolved environment config and token set.
+func NewTargetEnvironmentFromConfig(tokenSet *auth.TokenSet, envConfig *metaproj.ProjectEnvironmentConfig) (*TargetEnvironment, error) {
+	return NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
 }
 
 func (target *TargetEnvironment) GetKubernetesNamespace() string {

@@ -162,7 +162,10 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return fmt.Errorf("failed to access target environment: %w", err)
+	}
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
