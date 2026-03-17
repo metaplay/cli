@@ -5,8 +5,6 @@
 package helmutil
 
 import (
-	"fmt"
-
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"helm.sh/helm/v3/pkg/strvals"
 )
@@ -49,7 +47,7 @@ func ParseHelmExtraArgs(args []string) (map[string]any, error) {
 				}
 			} else {
 				return nil, clierrors.NewUsageErrorf("Unrecognized Helm flag '%s'", args[i]).
-					WithSuggestion(fmt.Sprintf("Only --set and --set-string are supported as extra Helm arguments"))
+					WithSuggestion("Only --set and --set-string are supported as extra Helm arguments")
 			}
 		}
 	}
