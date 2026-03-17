@@ -38,6 +38,7 @@ func HelmUpgradeOrInstall(
 	chartVersion string,
 	valuesFiles []string,
 	defaultValues map[string]any,
+	cliSetValues map[string]any,
 	requiredValues map[string]any,
 	timeout time.Duration,
 	validateValuesSchema bool,
@@ -133,6 +134,11 @@ func HelmUpgradeOrInstall(
 
 	// Resolve final configurable values map: use defaultValues as base to allow files to override any defaults.
 	finalValueMap := mergeValuesMaps(baseValues, filesValueMap)
+
+	// Apply CLI --set/--set-string overrides on top of file values.
+	if cliSetValues != nil {
+		finalValueMap = mergeValuesMaps(finalValueMap, cliSetValues)
+	}
 
 	// Apply and verify requiredValues are honored
 	if requiredValues != nil {

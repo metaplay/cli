@@ -306,6 +306,12 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
 	}
 
+	// Parse extra Helm arguments (--set, --set-string).
+	cliSetValues, err := helmutil.ParseHelmExtraArgs(o.extraArgs)
+	if err != nil {
+		return err
+	}
+
 	taskRunner := tui.NewTaskRunner()
 
 	// Install or upgrade the Helm chart.
@@ -320,6 +326,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			useHelmChartVersion,
 			valuesFiles,
 			helmDefaultValues,
+			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
 			true)
