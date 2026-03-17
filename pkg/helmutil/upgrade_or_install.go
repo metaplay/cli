@@ -23,9 +23,11 @@ import (
 
 // HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
 //
-// The values are resolved from valuesFiles, defaultValues, and requiredValues.
+// The values are resolved from valuesFiles, defaultValues, cliSetValues, and requiredValues.
 // Values from the files defined in valuesFiles are applied in order, the later overriding the earlier.
 // If a value is not defined in any values-file, the value from defaultValues is used.
+// Values from cliSetValues (corresponding to --set/--set-string flags) are then applied on top of
+// the file and default values, overriding them where keys overlap.
 //
 // The values from requiredValues are used as-is with the highest priority. Any attempt to override
 // a value defined in requiredValues with a different value results in an error. Overriding with
