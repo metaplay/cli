@@ -487,6 +487,28 @@ func TestPreviewCollapsesAllNewDirectory(t *testing.T) {
 	}
 }
 
+func TestPreviewCollapsesToDeepestCommonDir(t *testing.T) {
+	// All files are under Backend/Dashboard/ — should show that, not Backend/.
+	results := []FileResult{
+		makeResult(filepath.Join("Backend", "Dashboard", "src", "a.ts"), ActionCreate),
+		makeResult(filepath.Join("Backend", "Dashboard", "src", "b.ts"), ActionCreate),
+		makeResult(filepath.Join("Backend", "Dashboard", "package.json"), ActionCreate),
+	}
+	entries := buildPreviewEntries(results)
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if !entries[0].isGroup {
+		t.Fatal("expected group entry")
+	}
+	if entries[0].dir != filepath.Join("Backend", "Dashboard") {
+		t.Fatalf("expected dir=Backend/Dashboard, got %s", entries[0].dir)
+	}
+	if entries[0].count != 3 {
+		t.Fatalf("expected count=3, got %d", entries[0].count)
+	}
+}
+
 func TestPreviewDoesNotCollapseRootFiles(t *testing.T) {
 	results := []FileResult{
 		makeResult("a.txt", ActionCreate),

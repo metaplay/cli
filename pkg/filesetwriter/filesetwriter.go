@@ -337,6 +337,23 @@ func buildPreviewEntries(results []FileResult) []previewEntry {
 		}
 	}
 
+	// Refine each group's display directory to the longest common directory
+	// prefix of its member files. This shows e.g. "Backend/Dashboard/" instead
+	// of "Backend/" when all files share a deeper common path.
+	groupLCP := map[string]string{}
+	for i, r := range results {
+		dir := fileCollapse[i]
+		if dir == "" {
+			continue
+		}
+		fileDir := filepath.Dir(r.WritePath)
+		if prev, ok := groupLCP[dir]; !ok {
+			groupLCP[dir] = fileDir
+		} else {
+			groupLCP[dir] = commonDirPrefix(prev, fileDir)
+		}
+	}
+
 	// Build entries in insertion order.
 	entries := []previewEntry{}
 	emitted := map[string]bool{}
@@ -344,9 +361,13 @@ func buildPreviewEntries(results []FileResult) []previewEntry {
 		if dir := fileCollapse[i]; dir != "" {
 			if !emitted[dir] {
 				emitted[dir] = true
+				displayDir := dir
+				if lcp, ok := groupLCP[dir]; ok && lcp != "" {
+					displayDir = lcp
+				}
 				entries = append(entries, previewEntry{
 					isGroup: true,
-					dir:     dir,
+					dir:     displayDir,
 					count:   groupCounts[dir],
 				})
 			}
@@ -375,6 +396,30 @@ func findCollapseDir(path string, tainted map[string]bool) string {
 		dir = parent
 	}
 	return best
+}
+
+// commonDirPrefix returns the longest directory path that is a prefix of both
+// a and b. For example, commonDirPrefix("a/b/c", "a/b/d") returns "a/b".
+func commonDirPrefix(a, b string) string {
+	aParts := splitPath(a)
+	bParts := splitPath(b)
+	n := min(len(aParts), len(bParts))
+	common := 0
+	for i := 0; i < n; i++ {
+		if aParts[i] != bParts[i] {
+			break
+		}
+		common = i + 1
+	}
+	if common == 0 {
+		return ""
+	}
+	return filepath.Join(aParts[:common]...)
+}
+
+// splitPath splits a filepath into its components using the OS separator.
+func splitPath(p string) []string {
+	return strings.Split(filepath.ToSlash(p), "/")
 }
 
 // Preview logs a summary of the planned file operations. When
