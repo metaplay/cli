@@ -59,9 +59,20 @@ metaplay test --name bar
 		t.Fatalf("expected 2 commands, got %d", len(output.Commands))
 	}
 
+	rootExported := output.Commands[0]
+	if len(rootExported.Flags) != 1 {
+		t.Fatalf("expected 1 root-owned flag, got %d", len(rootExported.Flags))
+	}
+	if rootExported.Flags[0].Name != "verbose" {
+		t.Fatalf("expected root flag 'verbose', got %q", rootExported.Flags[0].Name)
+	}
+	if rootExported.Flags[0].EnvVar != "METAPLAYCLI_VERBOSE" {
+		t.Fatalf("expected root env var extraction, got %q", rootExported.Flags[0].EnvVar)
+	}
+
 	exported := output.Commands[1]
 	if len(exported.Flags) != 1 {
-		t.Fatalf("expected 1 local flag, got %d", len(exported.Flags))
+		t.Fatalf("expected 1 child-owned flag, got %d", len(exported.Flags))
 	}
 	if exported.Flags[0].Name != "name" {
 		t.Fatalf("expected local flag 'name', got %q", exported.Flags[0].Name)

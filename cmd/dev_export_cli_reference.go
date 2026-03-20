@@ -136,7 +136,7 @@ func collectVisibleCommands(cmd *cobra.Command, path []string) []cliReferenceCom
 		Summary:        sanitizeText(cmd.Short),
 		Description:    sanitizeText(resolveCommandDescription(cmd)),
 		Examples:       parseExamples(cmd.Example),
-		Flags:          collectFlags(cmd.LocalFlags()),
+		Flags:          collectOwnedFlags(cmd),
 		InheritedFlags: collectFlags(cmd.InheritedFlags()),
 		Aliases:        slicesClone(cmd.Aliases),
 	}
@@ -163,6 +163,16 @@ func resolveCommandDescription(cmd *cobra.Command) string {
 		return cmd.Long
 	}
 	return cmd.Short
+}
+
+func collectOwnedFlags(cmd *cobra.Command) []cliReferenceFlag {
+	if cmd == nil {
+		return []cliReferenceFlag{}
+	}
+
+	// NonInheritedFlags includes flags declared on this command:
+	// local flags + persistent flags owned by this command.
+	return collectFlags(cmd.NonInheritedFlags())
 }
 
 func collectFlags(flagSet *pflag.FlagSet) []cliReferenceFlag {
