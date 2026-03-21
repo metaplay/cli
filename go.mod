@@ -30,7 +30,7 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/testcontainers/testcontainers-go v0.41.0
 	github.com/tidwall/sjson v1.2.5
-	github.com/zalando/go-keyring v0.2.6
+	github.com/zalando/go-keyring v0.2.7
 	golang.org/x/sys v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.19.4
@@ -41,7 +41,6 @@ require (
 )
 
 require (
-	al.essio.dev/pkg/shellescape v1.6.0 // indirect
 	code.gitea.io/sdk/gitea v0.22.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/42wim/httpsig v1.2.3 // indirect
@@ -112,7 +111,7 @@ require (
 	github.com/go-openapi/jsonreference v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.1 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
-	github.com/godbus/dbus/v5 v5.2.0 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
