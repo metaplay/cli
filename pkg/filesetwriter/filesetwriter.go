@@ -500,7 +500,7 @@ func commonDirPrefix(a, b string) string {
 	bParts := splitPath(b)
 	n := min(len(aParts), len(bParts))
 	common := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if aParts[i] != bParts[i] {
 			break
 		}
