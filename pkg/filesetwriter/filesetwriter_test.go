@@ -6,8 +6,10 @@ package filesetwriter
 
 import (
 	"archive/zip"
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -1011,6 +1013,222 @@ func TestUnchangedFileNotWritten(t *testing.T) {
 
 	if len(p.Written()) != 0 {
 		t.Fatalf("expected 0 written for unchanged file, got %d", len(p.Written()))
+	}
+}
+
+// --- ReadOnlyFiles tests ---
+
+func TestReadOnlyFilesReturnsCorrectPaths(t *testing.T) {
+	dir := t.TempDir()
+	roPath := filepath.Join(dir, "readonly.txt")
+	rwPath := filepath.Join(dir, "writable.txt")
+	os.WriteFile(roPath, []byte("old"), 0444)
+	os.WriteFile(rwPath, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.Add(roPath, []byte("new"), 0644)
+	p.Add(rwPath, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	roFiles := p.ReadOnlyFiles()
+	if len(roFiles) != 1 {
+		t.Fatalf("expected 1 read-only file, got %d", len(roFiles))
+	}
+	if roFiles[0] != roPath {
+		t.Fatalf("expected %s, got %s", roPath, roFiles[0])
+	}
+}
+
+func TestReadOnlyFilesExcludesSkippedAndUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	skipped := filepath.Join(dir, "skipped.txt")
+	unchanged := filepath.Join(dir, "unchanged.txt")
+	content := []byte("same")
+	os.WriteFile(skipped, []byte("old"), 0444)
+	os.WriteFile(unchanged, content, 0444)
+
+	p := NewPlan(false)
+	p.AddSkipExisting(skipped, []byte("new"), 0644)
+	p.Add(unchanged, content, 0644) // identical content → ActionUnchanged
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	roFiles := p.ReadOnlyFiles()
+	if len(roFiles) != 0 {
+		t.Fatalf("expected 0 read-only files for skipped/unchanged, got %d: %v", len(roFiles), roFiles)
+	}
+}
+
+func TestReadOnlyFilesEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "writable.txt")
+	os.WriteFile(path, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.Add(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(p.ReadOnlyFiles()) != 0 {
+		t.Fatal("expected no read-only files")
+	}
+}
+
+func TestReadOnlyFilesIncludesAlternatePath(t *testing.T) {
+	dir := t.TempDir()
+	primary := filepath.Join(dir, "primary.txt")
+	alternate := filepath.Join(dir, "alternate.txt")
+	os.WriteFile(primary, []byte("original"), 0644)
+	os.WriteFile(alternate, []byte("locked"), 0444)
+
+	p := NewPlan(false)
+	p.AddWithRename(primary, alternate, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	roFiles := p.ReadOnlyFiles()
+	if len(roFiles) != 1 {
+		t.Fatalf("expected 1 read-only file, got %d", len(roFiles))
+	}
+	if roFiles[0] != alternate {
+		t.Fatalf("expected alternate path %s, got %s", alternate, roFiles[0])
+	}
+}
+
+// --- WaitForWritable tests ---
+
+func TestWaitForWritableNoReadOnlyFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "file.txt")
+
+	p := NewPlan(false)
+	p.Add(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	// No read-only files → should return nil immediately.
+	if err := p.WaitForWritable(context.Background(), false); err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestWaitForWritableNonInteractiveErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readonly.txt")
+	os.WriteFile(path, []byte("old"), 0444)
+
+	p := NewPlan(false) // non-interactive
+	p.Add(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := p.WaitForWritable(context.Background(), false)
+	if err == nil {
+		t.Fatal("expected error for read-only files in non-interactive mode")
+	}
+	if !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("expected error to mention 'read-only', got: %s", err.Error())
+	}
+}
+
+func TestWaitForWritableContextCancelled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readonly.txt")
+	os.WriteFile(path, []byte("old"), 0444)
+
+	p := NewPlan(true) // interactive
+	p.Add(path, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancel context immediately so the wait loop exits.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := p.WaitForWritable(ctx, false)
+	if err == nil {
+		t.Fatal("expected error from cancelled context")
+	}
+	if !strings.Contains(err.Error(), "Aborted") {
+		t.Fatalf("expected 'Aborted' in error, got: %s", err.Error())
+	}
+}
+
+// --- previewLines / renderPreviewLine tests ---
+
+func TestPreviewLinesReadOnlyOverride(t *testing.T) {
+	dir := t.TempDir()
+	roPath := filepath.Join(dir, "readonly.txt")
+	rwPath := filepath.Join(dir, "writable.txt")
+	os.WriteFile(roPath, []byte("old"), 0444)
+	os.WriteFile(rwPath, []byte("old"), 0644)
+
+	p := NewPlan(false)
+	p.Add(roPath, []byte("new"), 0644)
+	p.Add(rwPath, []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without override: roPath should have [read-only] badge.
+	lines := p.previewLines(false, nil)
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], "read-only") {
+		t.Fatalf("expected read-only badge in line for %s, got: %s", roPath, lines[0])
+	}
+	if strings.Contains(lines[1], "read-only") {
+		t.Fatalf("unexpected read-only badge in line for %s", rwPath)
+	}
+
+	// With override clearing read-only: no badge.
+	linesOverride := p.previewLines(false, map[string]bool{})
+	if strings.Contains(linesOverride[0], "read-only") {
+		t.Fatalf("expected no read-only badge with empty override, got: %s", linesOverride[0])
+	}
+
+	// With override setting writable file as read-only.
+	linesOverride2 := p.previewLines(false, map[string]bool{rwPath: true})
+	if !strings.Contains(linesOverride2[1], "read-only") {
+		t.Fatalf("expected read-only badge on overridden file, got: %s", linesOverride2[1])
+	}
+}
+
+func TestPreviewLinesMatchesPreviewCount(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("old"), 0644)
+	}
+
+	p := NewPlan(false)
+	p.Add(filepath.Join(dir, "a.txt"), []byte("new"), 0644)
+	p.Add(filepath.Join(dir, "b.txt"), []byte("new"), 0644)
+	p.Add(filepath.Join(dir, "c.txt"), []byte("new"), 0644)
+
+	if err := p.Scan(); err != nil {
+		t.Fatal(err)
+	}
+
+	lines := p.previewLines(false, nil)
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 preview lines, got %d", len(lines))
 	}
 }
 

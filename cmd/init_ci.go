@@ -282,9 +282,10 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("Files to be modified:")
 	plan.Preview(false)
 
-	if plan.HasReadOnlyFiles() {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderWarning("Some files are read-only and cannot be written."))
+	// Wait for any read-only files to become writable (must be immediately
+	// after Preview so the cursor math for in-place redraw is correct).
+	if err := plan.WaitForWritable(ctx, false); err != nil {
+		return err
 	}
 
 	// If conflicts exist, resolve them via --on-conflict flag or interactive dialog.
@@ -330,6 +331,11 @@ func (o *initCIOpts) Run(cmd *cobra.Command) error {
 			log.Info().Msg("")
 			log.Info().Msg("Files to be modified:")
 			plan.Preview(false)
+
+			// Wait again — conflict resolution changed the file set.
+			if err := plan.WaitForWritable(ctx, false); err != nil {
+				return err
+			}
 		}
 	}
 
