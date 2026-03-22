@@ -11,6 +11,8 @@ endif
 all: build
 
 build:
+	go mod tidy
+	go fix ./...
 	go build -o dist/metaplay$(BIN_SUFFIX) .
 
 clean:

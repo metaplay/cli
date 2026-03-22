@@ -29,8 +29,9 @@ func init() {
 	o := initDashboardOpts{}
 
 	cmd := &cobra.Command{
-		Use:   "dashboard [flags]",
-		Short: "Initializes custom LiveOps Dashboard for the project",
+		Use:     "dashboard [flags]",
+		Aliases: []string{"dash"},
+		Short:   "Initializes custom LiveOps Dashboard for the project",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			Setup the development environment for a custom LiveOps Dashboard in your project.
@@ -88,6 +89,12 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Check if dashboard has already been initialized.
+	if project.UsesCustomDashboard() {
+		log.Info().Msg(styles.RenderSuccess("Custom dashboard is already initialized in this project. Nothing to do."))
+		return nil
+	}
+
 	// Check that required dashboard tools are installed and satisfy version requirements.
 	if err := checkDashboardToolVersions(project); err != nil {
 		return err
@@ -130,9 +137,9 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("Files to be modified:")
 	plan.Preview(true)
 
-	if plan.HasReadOnlyFiles() {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderWarning("Some files are read-only and may need 'p4 edit'."))
+	// Wait for any read-only files to become writable before writing.
+	if err := plan.WaitForWritable(cmd.Context(), true); err != nil {
+		return err
 	}
 
 	// Confirm before writing.
