@@ -441,3 +441,27 @@ func TestGenerateUnifiedDiff_ContentToEmpty(t *testing.T) {
 		t.Errorf("expected '-old content' line, got:\n%s", result)
 	}
 }
+
+func TestGenerateUnifiedDiff_CommonPrefixInBeforeAndAfter(t *testing.T) {
+	// Test a case where some CLI versions had a bug:
+	// when old and new line had a common prefix, that common prefix
+	// would be reported as being unmodified, as if it was on its own line.
+	// We want a line-level diff, we don't want to break the common prefix into its own line.
+
+	oldContent := "first_old\nunchanged\nsecond_old\n"
+	newContent := "first_new\nunchanged\nsecond_new\n"
+	result := generateUnifiedDiff("test.txt", []byte(oldContent), []byte(newContent), false, false)
+	expectedLines := []string{
+		"-first_old",
+		"+first_new",
+		"-second_old",
+		"+second_new",
+		" unchanged",
+	}
+
+	for _, expectedLine := range expectedLines {
+		if !containsString(result, expectedLine+"\n") {
+			t.Errorf("expected diff to contain line '%s', got:\n%s", expectedLine, result)
+		}
+	}
+}
