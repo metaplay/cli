@@ -441,3 +441,114 @@ func TestGenerateUnifiedDiff_ContentToEmpty(t *testing.T) {
 		t.Errorf("expected '-old content' line, got:\n%s", result)
 	}
 }
+
+func TestGenerateUnifiedDiff_NoNewlineAtEndOfFile(t *testing.T) {
+	// When the input (either "old" or "new", or both) does not end in a newline,
+	// the diff must contain the marker line "\ No newline at end of file" (without the quotes).
+	// This marker appears in the diff immediately after a line that corresponds
+	// to an input line that was missing a newline:
+	// 1. If the "old" input is missing newline AND the last (newlineless) line was removed,
+	//    then this marker appears just after the last deletion line in the diff.
+	// 2. If the "new" input is missing newline AND the last (newlineless) line was added,
+	//    then this marker appears just after the last addition line in the diff.
+	// 3. If both inputs are missing newline AND neither of the above applies
+	//    (i.e. the last (newlineless) line was unmodified),
+	//    then this marker appears just after the last context line in the diff.
+	// Note that the marker can appear twice, specifically in the case where
+	// both 1. and 2. apply, i.e. both "old" and "new" are missing newline
+	// and the last (newlineless) line was modified (old removed, new added).
+	// In this case the marker appears both after the last deletion line
+	// and after the last addition line.
+
+	// Note: for simplicity of testing, we're comparing the outputs against exact references.
+	// Technically this might be too strict, as generally there's no one single correct diff for given inputs.
+	// Adjust the tests if this becomes a problem.
+
+	tests := []struct {
+		name     string
+		old      string
+		new      string
+		expected string
+	}{
+		{
+			name: "missing newline in new",
+			old:  "hello\n",
+			new:  "hello modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"+hello modified\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in old",
+			old:  "hello",
+			new:  "hello modified\n",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"\\ No newline at end of file\n" +
+				"+hello modified\n",
+		},
+		{
+			name: "missing newline in both old and new",
+			old:  "hello",
+			new:  "hello modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"\\ No newline at end of file\n" +
+				"+hello modified\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in unmodified line",
+			old:  "hello\ncommon",
+			new:  "hello modified\ncommon",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,2 +1,2 @@\n" +
+				"-hello\n" +
+				"+hello modified\n" +
+				" common\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in both old and new; runs of multiple deleted/unmodified/added lines",
+			old:  "hello\nworld\ncommon\nmore common\ngreetings\nagain",
+			new:  "hello modified\nworld modified\ncommon\nmore common\ngreetings modified\nagain modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,6 +1,6 @@\n" +
+				"-hello\n" +
+				"-world\n" +
+				"+hello modified\n" +
+				"+world modified\n" +
+				" common\n" +
+				" more common\n" +
+				"-greetings\n" +
+				"-again\n" +
+				"\\ No newline at end of file\n" +
+				"+greetings modified\n" +
+				"+again modified\n" +
+				"\\ No newline at end of file\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := generateUnifiedDiff("test.txt", []byte(tc.old), []byte(tc.new), false, false)
+			if result != tc.expected {
+				t.Errorf("unexpected diff output\nexpected:\n%s\ngot:\n%s", tc.expected, result)
+			}
+		})
+	}
+}
