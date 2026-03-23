@@ -34,9 +34,9 @@ func TestParseHelmExtraArgs_SetTypeCoercion(t *testing.T) {
 func TestParseHelmExtraArgs_NestedKey(t *testing.T) {
 	result, err := ParseHelmExtraArgs([]string{"--set", "a.b.c=val"})
 	require.NoError(t, err)
-	a, ok := result["a"].(map[string]interface{})
+	a, ok := result["a"].(map[string]any)
 	require.True(t, ok)
-	b, ok := a["b"].(map[string]interface{})
+	b, ok := a["b"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "val", b["c"])
 }
@@ -50,7 +50,7 @@ func TestParseHelmExtraArgs_MultipleFlags(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "bar", result["foo"])
 	assert.Equal(t, int64(3), result["replicas"])
-	config, ok := result["config"].(map[string]interface{})
+	config, ok := result["config"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "true", config["infraMigration"])
 }
