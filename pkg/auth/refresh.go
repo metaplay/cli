@@ -58,6 +58,10 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 	// Resolve when access token expires.
 	tokenSet := sessionState.TokenSet
 	expiresAt, err := getAccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return nil, clierrors.Wrap(err, "Failed to parse access token expiration").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
+	}
 
 	// Compare expiration time with the current time
 	isExpired := time.Now().After(expiresAt)

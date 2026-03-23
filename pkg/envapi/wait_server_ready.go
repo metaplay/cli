@@ -699,18 +699,20 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			if err != nil {
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
-				defer resp.Body.Close()
 				switch {
 				case resp.StatusCode >= 200 && resp.StatusCode < 300:
 					// Accept 2xx (Success) status codes.
+					resp.Body.Close()
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				case resp.StatusCode >= 300 && resp.StatusCode < 400:
 					// Accept 3xx (Redirection) status codes.
+					resp.Body.Close()
 					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
 					return nil
 				}
 				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
+				resp.Body.Close()
 			}
 		}
 

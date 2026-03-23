@@ -40,17 +40,20 @@ func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig)
 		"Operation requires logging in to Metaplay cloud with your default browser.",
 		"Continue?",
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to show login confirmation dialog: %w", err)
+	}
 
 	// Handle the user's decision.
-	if choice {
-		// User wants to log in.
-		err = auth.LoginWithBrowser(ctx, authProvider)
-		if err != nil {
-			return nil, fmt.Errorf("failed to login: %v", err)
-		}
-	} else {
+	if !choice {
 		// User declined to log in.
 		return nil, fmt.Errorf("user cancelled the operation")
+	}
+
+	// User wants to log in.
+	err = auth.LoginWithBrowser(ctx, authProvider)
+	if err != nil {
+		return nil, fmt.Errorf("failed to login: %w", err)
 	}
 
 	// Load the newly established token set.

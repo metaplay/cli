@@ -60,7 +60,7 @@ func init() {
 	flags.BoolVar(&o.flagOverwrite, "overwrite", false, "Remove existing MetaplaySDK/ directory and replace with new contents")
 
 	// For internal use only
-	initCmd.Hidden = true
+	cmd.Hidden = true
 
 	initCmd.AddCommand(cmd)
 }

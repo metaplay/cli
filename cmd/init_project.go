@@ -359,11 +359,11 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg("")
 	log.Info().Msg("Files to be modified:")
-	plan.Preview()
+	plan.Preview(true)
 
-	if plan.HasReadOnlyFiles() {
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderWarning("Some files are read-only and may need 'p4 edit'."))
+	// Wait for any read-only files to become writable before writing.
+	if err := plan.WaitForWritable(cmd.Context(), true); err != nil {
+		return err
 	}
 
 	// Confirm before writing.

@@ -17,7 +17,11 @@
       "Bash(go list:*)",
       "Bash(go version:*)",
       "Bash(go fix:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(go get:*)",
+      "Bash(wc:*)",
+      "Bash(go doc:*)",
+      "Bash(gh search:*)"
     ]
   }
 }

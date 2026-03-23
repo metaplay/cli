@@ -326,8 +326,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				"name":      "all",
 				"singleton": true,
 				"requests": map[string]any{
-					"cpu":    "1500m",
-					"memory": "3000M",
+					"cpu":    "1000m",
+					"memory": "2000M",
 				},
 			},
 		}
@@ -548,6 +548,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		validateJsonSchema = true
 	}
 
+	// Parse extra Helm arguments (--set, --set-string).
+	cliSetValues, err := helmutil.ParseHelmExtraArgs(o.extraArgs)
+	if err != nil {
+		return err
+	}
+
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
@@ -560,6 +566,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			useHelmChartVersion,
 			valuesFiles,
 			helmDefaultValues,
+			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
 			validateJsonSchema)

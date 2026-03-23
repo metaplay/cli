@@ -38,7 +38,11 @@ func NewRetryClient() *resty.Client {
 			// \todo Refactor error logger to a common place available everywhere?
 			stderrLogger := zerolog.New(os.Stderr)
 			if err != nil {
-				stderrLogger.Warn().Msgf("Request to %s failed with error, retrying: %v", resp.Request.URL, err)
+				if resp != nil {
+					stderrLogger.Warn().Msgf("Request to %s failed with error, retrying: %v", resp.Request.URL, err)
+				} else {
+					stderrLogger.Warn().Msgf("Request failed with error, retrying: %v", err)
+				}
 			} else if resp != nil {
 				stderrLogger.Warn().Msgf("Request to %s failed with status %d, retrying...", resp.Request.URL, resp.StatusCode())
 			}

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -48,7 +49,7 @@ func Download(c *Client, url string, filePath string) (*resty.Response, error) {
 	response, err := c.Resty.R().SetOutput(filePath).Get(url)
 
 	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, filePath, err)
+		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
 	}
 
 	return response, nil
@@ -149,11 +150,23 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
 
-	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
-
 	// Handle request errors
 	if err != nil {
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
+	}
+
+	// Log the raw request with sensitive headers redacted.
+	if log.Debug().Enabled() {
+		rawReq := response.Request.RawRequest
+		sanitizedHeaders := make(map[string][]string, len(rawReq.Header))
+		for k, v := range rawReq.Header {
+			if strings.EqualFold(k, "Authorization") {
+				sanitizedHeaders[k] = []string{"REDACTED"}
+			} else {
+				sanitizedHeaders[k] = v
+			}
+		}
+		log.Debug().Msgf("Raw request: %s %s, Headers: %v", rawReq.Method, rawReq.URL, sanitizedHeaders)
 	}
 
 	// Debug log the raw response.

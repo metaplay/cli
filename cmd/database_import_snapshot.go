@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -222,7 +223,17 @@ func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("input_file", o.argInputFile).Msg("Starting database import process")
-	return o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards)
+	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards)
+	if err != nil {
+		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
+		if cmd.Context().Err() != nil {
+			return clierrors.Wrap(cmd.Context().Err(), "Database import cancelled").
+				WithSuggestion("Run the command again to retry the import")
+		}
+		return err
+	}
+
+	return nil
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards

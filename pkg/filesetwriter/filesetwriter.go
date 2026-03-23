@@ -6,6 +6,8 @@ package filesetwriter
 
 import (
 	"archive/zip"
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -47,6 +49,7 @@ const (
 	ActionSkip                        // File exists, will be skipped.
 	ActionRename                      // File exists, will be written to alternate path.
 	ActionUpdate                      // File exists, will be updated with explanation.
+	ActionUnchanged                   // File exists with identical content, no write needed.
 )
 
 // FileResult is the scan result for a single planned file.
@@ -143,6 +146,21 @@ func (p *Plan) AddZipExtraction(zipPath, prefix, destDir string) *Plan {
 	return p
 }
 
+// SetConflictPolicy changes the conflict policy on all planned files.
+// For Rename, AlternatePath is set to Path + renameSuffix.
+// Resets scan state so Scan() must be called again.
+func (p *Plan) SetConflictPolicy(policy ConflictPolicy, renameSuffix string) {
+	for i := range p.files {
+		p.files[i].OnConflict = policy
+		if policy == Rename {
+			p.files[i].AlternatePath = p.files[i].Path + renameSuffix
+		} else {
+			p.files[i].AlternatePath = ""
+		}
+	}
+	p.scanned = false
+}
+
 // Scan inspects the filesystem and resolves the action for each planned file.
 // For zip extractions, it counts the files to be extracted.
 func (p *Plan) Scan() error {
@@ -160,6 +178,10 @@ func (p *Plan) Scan() error {
 			// File does not exist: always create regardless of policy.
 			r.Action = ActionCreate
 			r.WritePath = f.Path
+		} else if contentEqual(f.Path, f.Content) {
+			// Existing file has identical content — no write needed.
+			r.Action = ActionUnchanged
+			r.WritePath = ""
 		} else {
 			switch f.OnConflict {
 			case Overwrite:
@@ -223,7 +245,7 @@ func (p *Plan) FilesToWrite() int {
 	}
 	count := 0
 	for _, r := range p.results {
-		if r.Action != ActionSkip {
+		if r.Action != ActionSkip && r.Action != ActionUnchanged {
 			count++
 		}
 	}
@@ -239,11 +261,105 @@ func (p *Plan) HasReadOnlyFiles() bool {
 		panic("filesetwriter: HasReadOnlyFiles() called before Scan()")
 	}
 	for _, r := range p.results {
-		if r.ReadOnly && r.Action != ActionSkip {
+		if r.ReadOnly && r.Action != ActionSkip && r.Action != ActionUnchanged {
 			return true
 		}
 	}
 	return false
+}
+
+// ReadOnlyFiles returns the write paths of all read-only targets that will
+// be written (excludes skipped and unchanged files).
+func (p *Plan) ReadOnlyFiles() []string {
+	if !p.scanned {
+		panic("filesetwriter: ReadOnlyFiles() called before Scan()")
+	}
+	var paths []string
+	for _, r := range p.results {
+		if r.ReadOnly && r.Action != ActionSkip && r.Action != ActionUnchanged {
+			paths = append(paths, r.WritePath)
+		}
+	}
+	return paths
+}
+
+// WaitForWritable checks whether any target files are read-only and, if so,
+// waits for them to become writable. In non-interactive mode it returns an
+// error immediately. In interactive mode it redraws the preview (originally
+// rendered by Preview) in place, updating [read-only] badges as files become
+// writable. collapseDirectories should match the value passed to Preview.
+func (p *Plan) WaitForWritable(ctx context.Context, collapseDirectories bool) error {
+	roFiles := p.ReadOnlyFiles()
+	if len(roFiles) == 0 {
+		return nil
+	}
+
+	if !p.interactive {
+		details := make([]string, 0, len(roFiles))
+		for _, f := range roFiles {
+			details = append(details, "  "+f)
+		}
+		return clierrors.New("Some target files are read-only").
+			WithSuggestion("Make the files writable before running this command (e.g., 'p4 edit' or 'chmod +w')").
+			WithDetails(details...)
+	}
+
+	// Build the preview lines once to get the count for cursor math.
+	previewLineCount := len(p.previewLines(collapseDirectories, nil))
+
+	// Print footer below the preview. We redraw the preview above it on each tick.
+	footer := []string{
+		"",
+		fmt.Sprintf("%s Make them writable (e.g., 'p4 edit') to continue.", styles.RenderWarning("Some files are read-only.")),
+		styles.RenderMuted("Press Ctrl+C to abort."),
+	}
+	for _, line := range footer {
+		log.Info().Msg(line)
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		// Check current read-only status of each file.
+		stillReadOnlySet := map[string]bool{}
+		for _, f := range roFiles {
+			info, err := os.Stat(f)
+			if err != nil {
+				continue // file gone — treat as writable
+			}
+			if isReadOnly(info) {
+				stillReadOnlySet[f] = true
+			}
+		}
+
+		// Move cursor up to the start of the preview and redraw it.
+		totalLines := previewLineCount + len(footer)
+		fmt.Fprintf(os.Stderr, "\033[%dA", totalLines)
+		lines := p.previewLines(collapseDirectories, stillReadOnlySet)
+		for _, line := range lines {
+			fmt.Fprintf(os.Stderr, "\033[2K%s\n", line)
+		}
+
+		if len(stillReadOnlySet) == 0 {
+			// All writable — clear the footer and return.
+			for range len(footer) {
+				fmt.Fprintf(os.Stderr, "\033[2K\n")
+			}
+			// Move back up past the blank lines we just wrote.
+			fmt.Fprintf(os.Stderr, "\033[%dA", len(footer))
+			return nil
+		}
+
+		// Move cursor back down past the footer (already printed, unchanged).
+		fmt.Fprintf(os.Stderr, "\033[%dB", len(footer))
+
+		select {
+		case <-ctx.Done():
+			return clierrors.New("Aborted while waiting for files to become writable")
+		case <-ticker.C:
+		}
+	}
 }
 
 // HasConflicts returns true if any result has an action that represents a
@@ -316,6 +432,23 @@ func buildPreviewEntries(results []FileResult) []previewEntry {
 		}
 	}
 
+	// Refine each group's display directory to the longest common directory
+	// prefix of its member files. This shows e.g. "Backend/Dashboard/" instead
+	// of "Backend/" when all files share a deeper common path.
+	groupLCP := map[string]string{}
+	for i, r := range results {
+		dir := fileCollapse[i]
+		if dir == "" {
+			continue
+		}
+		fileDir := filepath.Dir(r.WritePath)
+		if prev, ok := groupLCP[dir]; !ok {
+			groupLCP[dir] = fileDir
+		} else {
+			groupLCP[dir] = commonDirPrefix(prev, fileDir)
+		}
+	}
+
 	// Build entries in insertion order.
 	entries := []previewEntry{}
 	emitted := map[string]bool{}
@@ -323,9 +456,13 @@ func buildPreviewEntries(results []FileResult) []previewEntry {
 		if dir := fileCollapse[i]; dir != "" {
 			if !emitted[dir] {
 				emitted[dir] = true
+				displayDir := dir
+				if lcp, ok := groupLCP[dir]; ok && lcp != "" {
+					displayDir = lcp
+				}
 				entries = append(entries, previewEntry{
 					isGroup: true,
-					dir:     dir,
+					dir:     displayDir,
 					count:   groupCounts[dir],
 				})
 			}
@@ -356,61 +493,111 @@ func findCollapseDir(path string, tainted map[string]bool) string {
 	return best
 }
 
-// Preview logs a summary of the planned file operations, collapsing
-// directories that contain only new files into summary lines.
-func (p *Plan) Preview() {
+// commonDirPrefix returns the longest directory path that is a prefix of both
+// a and b. For example, commonDirPrefix("a/b/c", "a/b/d") returns "a/b".
+func commonDirPrefix(a, b string) string {
+	aParts := splitPath(a)
+	bParts := splitPath(b)
+	n := min(len(aParts), len(bParts))
+	common := 0
+	for i := range n {
+		if aParts[i] != bParts[i] {
+			break
+		}
+		common = i + 1
+	}
+	if common == 0 {
+		return ""
+	}
+	return filepath.Join(aParts[:common]...)
+}
+
+// splitPath splits a filepath into its components using the OS separator.
+func splitPath(p string) []string {
+	return strings.Split(filepath.ToSlash(p), "/")
+}
+
+// renderPreviewLine formats a single preview entry as a string. If
+// readOnlyOverride is non-nil, it is consulted instead of r.ReadOnly to
+// decide whether to show the [read-only] badge.
+func renderPreviewLine(e previewEntry, readOnlyOverride map[string]bool) string {
+	if e.isGroup {
+		displayDir := filepath.ToSlash(e.dir) + "/"
+		return fmt.Sprintf("  %s%s", styles.RenderTechnical(displayDir),
+			styles.RenderSuccess(fmt.Sprintf(" (%d new files)", e.count)))
+	}
+
+	r := e.result
+	badge := ""
+	switch r.Action {
+	case ActionCreate:
+		badge = styles.RenderSuccess(" (new)")
+	case ActionOverwrite:
+		badge = styles.RenderAttention(" (overwrite)")
+	case ActionSkip:
+		badge = styles.RenderMuted(" (skip, exists)")
+	case ActionRename:
+		badge = styles.RenderAttention(fmt.Sprintf(" (write as %s, original exists)", filepath.Base(r.WritePath)))
+	case ActionUpdate:
+		if r.File.Message != "" {
+			badge = styles.RenderSuccess(fmt.Sprintf(" (%s)", r.File.Message))
+		} else {
+			badge = styles.RenderSuccess(" (update)")
+		}
+	case ActionUnchanged:
+		badge = styles.RenderMuted(" (unchanged)")
+	}
+
+	isRO := r.ReadOnly
+	if readOnlyOverride != nil {
+		isRO = readOnlyOverride[r.WritePath]
+	}
+	readOnlyBadge := ""
+	if isRO && r.Action != ActionSkip {
+		readOnlyBadge = styles.RenderWarning(" [read-only]")
+	}
+
+	displayPath := r.WritePath
+	if r.Action == ActionSkip || r.Action == ActionUnchanged {
+		displayPath = r.File.Path
+	}
+	displayPath = filepath.ToSlash(displayPath)
+
+	return fmt.Sprintf("  %s%s%s", styles.RenderTechnical(displayPath), badge, readOnlyBadge)
+}
+
+// previewLines builds the full list of formatted preview strings.
+func (p *Plan) previewLines(collapseDirectories bool, readOnlyOverride map[string]bool) []string {
+	var entries []previewEntry
+	if collapseDirectories {
+		entries = buildPreviewEntries(p.results)
+	} else {
+		for _, r := range p.results {
+			entries = append(entries, previewEntry{result: r})
+		}
+	}
+
+	var lines []string
+	for _, ze := range p.zipExtractions {
+		displayDir := strings.TrimSuffix(ze.Prefix, "/") + "/"
+		lines = append(lines, fmt.Sprintf("  %s%s", styles.RenderTechnical(displayDir),
+			styles.RenderSuccess(fmt.Sprintf(" (%d new files)", ze.count))))
+	}
+	for _, e := range entries {
+		lines = append(lines, renderPreviewLine(e, readOnlyOverride))
+	}
+	return lines
+}
+
+// Preview logs a summary of the planned file operations. When
+// collapseDirectories is true, directories containing only new files are
+// collapsed into summary lines.
+func (p *Plan) Preview(collapseDirectories bool) {
 	if !p.scanned {
 		panic("filesetwriter: Preview() called before Scan()")
 	}
-
-	entries := buildPreviewEntries(p.results)
-
-	// Show zip extractions first.
-	for _, ze := range p.zipExtractions {
-		displayDir := strings.TrimSuffix(ze.Prefix, "/") + "/"
-		log.Info().Msgf("  %s%s", styles.RenderTechnical(displayDir),
-			styles.RenderSuccess(fmt.Sprintf(" (%d new files)", ze.count)))
-	}
-
-	for _, e := range entries {
-		if e.isGroup {
-			displayDir := filepath.ToSlash(e.dir) + "/"
-			log.Info().Msgf("  %s%s", styles.RenderTechnical(displayDir),
-				styles.RenderSuccess(fmt.Sprintf(" (%d new files)", e.count)))
-			continue
-		}
-
-		r := e.result
-		badge := ""
-		switch r.Action {
-		case ActionCreate:
-			badge = styles.RenderSuccess(" (new)")
-		case ActionOverwrite:
-			badge = styles.RenderAttention(" (overwrite)")
-		case ActionSkip:
-			badge = styles.RenderMuted(" (skip, exists)")
-		case ActionRename:
-			badge = styles.RenderAttention(fmt.Sprintf(" (write as %s, original exists)", filepath.Base(r.WritePath)))
-		case ActionUpdate:
-			if r.File.Message != "" {
-				badge = styles.RenderSuccess(fmt.Sprintf(" (%s)", r.File.Message))
-			} else {
-				badge = styles.RenderSuccess(" (update)")
-			}
-		}
-
-		readOnlyBadge := ""
-		if r.ReadOnly && r.Action != ActionSkip {
-			readOnlyBadge = styles.RenderWarning(" [read-only]")
-		}
-
-		displayPath := r.WritePath
-		if r.Action == ActionSkip {
-			displayPath = r.File.Path
-		}
-		displayPath = filepath.ToSlash(displayPath)
-
-		log.Info().Msgf("  %s%s%s", styles.RenderTechnical(displayPath), badge, readOnlyBadge)
+	for _, line := range p.previewLines(collapseDirectories, nil) {
+		log.Info().Msg(line)
 	}
 }
 
@@ -432,8 +619,7 @@ func (p *Plan) Execute() error {
 	}
 
 	for _, r := range p.results {
-		if r.Action == ActionSkip {
-			log.Info().Msgf("  %s", styles.RenderMuted(fmt.Sprintf("Skipped %s (already exists)", r.File.Path)))
+		if r.Action == ActionSkip || r.Action == ActionUnchanged {
 			continue
 		}
 
@@ -563,4 +749,14 @@ func (p *Plan) wrapWriteError(err error, message string) error {
 // permission bits.
 func isReadOnly(info os.FileInfo) bool {
 	return info.Mode().Perm()&0200 == 0
+}
+
+// contentEqual returns true if the file at path has exactly the content given.
+// Returns false on any read error.
+func contentEqual(path string, content []byte) bool {
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(existing, content)
 }

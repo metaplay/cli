@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,14 +14,13 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
-	"github.com/muesli/termenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -72,13 +72,6 @@ var rootCmd = &cobra.Command{
 			useColors = hasTerminal
 		}
 
-		// Configure lipgloss to use/not use colors.
-		if useColors {
-			lipgloss.SetColorProfile(termenv.TrueColor)
-		} else {
-			lipgloss.SetColorProfile(termenv.Ascii)
-		}
-
 		// Resolve whether using verbose mode
 		isVerbose := isTruthy(os.Getenv("METAPLAYCLI_VERBOSE")) || flagVerbose
 
@@ -86,21 +79,7 @@ var rootCmd = &cobra.Command{
 		initLogger(useColors, isVerbose)
 
 		// Check for common CI environment variables
-		isCI := os.Getenv("CI") != "" ||
-			os.Getenv("GITHUB_ACTIONS") != "" ||
-			os.Getenv("GITLAB_CI") != "" ||
-			os.Getenv("BITBUCKET_BUILD_NUMBER") != "" ||
-			os.Getenv("CIRCLECI") != "" ||
-			os.Getenv("TRAVIS") != "" ||
-			os.Getenv("APPVEYOR") != "" ||
-			os.Getenv("TEAMCITY_VERSION") != "" ||
-			os.Getenv("BUILDKITE") != "" ||
-			os.Getenv("HUDSON_URL") != "" ||
-			os.Getenv("JENKINS_URL") != "" ||
-			os.Getenv("BAMBOO_AGENT_HOME") != "" ||
-			os.Getenv("TFS_BUILD") != "" ||
-			os.Getenv("NETLIFY") != "" ||
-			os.Getenv("NOW_BUILDER") != ""
+		isCI := envutil.IsCI()
 
 		// Determine if the CLI is running in interactive mode:
 		// - Interactive mode requires a terminal
@@ -145,10 +124,11 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
+// ExecuteContext adds all child commands to the root command and sets flags appropriately.
+// It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
+func ExecuteContext(ctx context.Context) {
+	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		// Handle Cobra errors (unknown flags, missing arguments, etc.)
 		// Usage was already shown by Cobra, now show formatted error at the end
