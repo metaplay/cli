@@ -53,10 +53,8 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "database [ENVIRONMENT] [SHARD] [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"db"},
-		Short:   "[preview] Connect to a database shard for the specified environment",
+		Short:   "Connect to a database shard for the specified environment",
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Connect to a database shard for the specified environment using MariaDB CLI.
 
 			This command starts a temporary debug pod and runs an SQL client inside it, connecting

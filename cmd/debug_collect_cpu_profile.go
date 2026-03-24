@@ -41,11 +41,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "collect-cpu-profile [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"cpu-profile"},
-		Short:   "[preview] Collect a CPU profile from a running server pod",
+		Short:   "Collect a CPU profile from a running server pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Collect a CPU profile from a running .NET server pod using dotnet-trace.
 
 			This command will create a debug container, collect the CPU profile using dotnet-trace,

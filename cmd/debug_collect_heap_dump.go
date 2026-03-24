@@ -43,11 +43,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"heap-dump"},
-		Short:   "[preview] Collect a heap dump from a running server pod",
+		Short:   "Collect a heap dump from a running server pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
 			WARNING: This operation is very intrusive as it completely freezes the target process

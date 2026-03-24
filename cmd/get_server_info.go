@@ -65,8 +65,6 @@ func init() {
 		Short:   "Get information about the game server deployment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is currently in preview and may change in future releases.
-
 			This command shows details about the game server deployment running in the cloud,
 			including information about the Helm release and the deployed container image.
 
