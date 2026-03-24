@@ -9,10 +9,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/internal/syncutil"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -94,13 +93,6 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Log attempt
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderTitle("Docker Images"))
-	log.Info().Msg("")
-	log.Info().Msgf("Environment: %s", styles.RenderTechnical(envConfig.HumanID))
-	log.Info().Msg("")
-
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
@@ -116,58 +108,24 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Fetch images from ECR and their metadata.
-	var entries []imageListEntry
-	taskRunner := tui.NewTaskRunner()
-	taskRunner.AddTask("Fetch images from ECR repository", func(output *tui.TaskOutput) error {
-		// List images from ECR.
-		images, err := targetEnv.ListECRImages(envDetails, o.flagLimit)
-		if err != nil {
-			return err
-		}
-
-		// Sort by push date descending (newest first).
-		slices.SortFunc(images, func(a, b envapi.ECRImage) int {
-			return b.PushedAt.Compare(a.PushedAt)
-		})
-
-		// Apply limit after sorting.
-		if o.flagLimit > 0 && len(images) > o.flagLimit {
-			images = images[:o.flagLimit]
-		}
-
-		// Fetch metadata for each image concurrently (limited to 10 at a time).
-		entries = make([]imageListEntry, len(images))
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 10)
-		for i, img := range images {
-			entries[i] = imageListEntry{ECRImage: img}
-			// Use the first tag as the reference for metadata lookup.
-			if len(img.Tags) == 0 {
-				continue
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(idx int, tag string) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				imageRef := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, tag)
-				info, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, imageRef)
-				if err != nil {
-					log.Debug().Msgf("Failed to fetch metadata for %s: %v", imageRef, err)
-					return
-				}
-				entries[idx].SdkVersion = info.SdkVersion
-				entries[idx].CommitID = info.CommitID
-			}(i, img.Tags[0])
-		}
-		wg.Wait()
-
-		return nil
-	})
-	if err := taskRunner.Run(); err != nil {
+	// List images from ECR.
+	images, err := targetEnv.ListECRImages(envDetails, o.flagLimit)
+	if err != nil {
 		return err
 	}
+
+	// Sort by push date descending (newest first).
+	slices.SortFunc(images, func(a, b envapi.ECRImage) int {
+		return b.PushedAt.Compare(a.PushedAt)
+	})
+
+	// Apply limit after sorting.
+	if o.flagLimit > 0 && len(images) > o.flagLimit {
+		images = images[:o.flagLimit]
+	}
+
+	// Enrich images with metadata (SDK version, commit ID) from Docker labels.
+	entries := fetchImageMetadata(images, envDetails.Deployment.EcrRepo, dockerCredentials)
 
 	// Output in desired format.
 	if o.flagFormat == "json" {
@@ -177,6 +135,12 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 		}
 		log.Info().Msg(string(imagesJSON))
 	} else {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderTitle("Docker Images"))
+		log.Info().Msg("")
+		log.Info().Msgf("Environment: %s", styles.RenderTechnical(envConfig.HumanID))
+		log.Info().Msg("")
+
 		if len(entries) == 0 {
 			log.Info().Msg("No images found in the repository.")
 		} else {
@@ -227,6 +191,26 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+// fetchImageMetadata enriches ECR images with SDK version and commit ID from Docker image labels.
+// Metadata is fetched concurrently with up to 10 requests in flight.
+func fetchImageMetadata(images []envapi.ECRImage, ecrRepo string, creds *envapi.DockerCredentials) []imageListEntry {
+	return syncutil.ParallelMap(images, 10, func(img envapi.ECRImage) imageListEntry {
+		entry := imageListEntry{ECRImage: img}
+		if len(img.Tags) == 0 {
+			return entry
+		}
+		imageRef := fmt.Sprintf("%s:%s", ecrRepo, img.Tags[0])
+		info, err := envapi.FetchRemoteDockerImageMetadata(creds, imageRef)
+		if err != nil {
+			log.Debug().Msgf("Failed to fetch metadata for %s: %v", imageRef, err)
+			return entry
+		}
+		entry.SdkVersion = info.SdkVersion
+		entry.CommitID = info.CommitID
+		return entry
+	})
 }
 
 func formatImageSize(bytes int64) string {
