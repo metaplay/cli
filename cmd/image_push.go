@@ -125,7 +125,7 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// Extrat the tag from a full 'name:tag' docker image name.
+// Extract the tag from a full 'name:tag' docker image name.
 func extractDockerImageTag(imageName string) (string, error) {
 	// Check if the image name is empty
 	if imageName == "" {
@@ -184,7 +184,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 	}
 
 	// Encode with base64
-	authStr := string(base64.StdEncoding.EncodeToString(authConfigBytes))
+	authStr := base64.StdEncoding.EncodeToString(authConfigBytes)
 
 	pushResponseReader, err := cli.ImagePush(ctx, dstImageName, image.PushOptions{
 		RegistryAuth: authStr,
@@ -224,33 +224,49 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 		// Update the output with current progress information (only in interactive mode).
 		if tui.IsInteractiveMode() {
-			updateProgressOutput(output, dstImageName, progressIDs, progresses)
+			updateDockerProgressOutput(output, progressIDs, progresses)
 		}
 	}
 
 	return nil
 }
 
-// updateProgressOutput updates the task output with the current push progress information
-func updateProgressOutput(output *tui.TaskOutput, imageName string, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
-	// Start with the header line
+// updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.
+// Shared by both image push and image pull commands.
+func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
 	lines := []string{}
 
-	// Add progress for each layer
 	for _, id := range progressIDs {
-		// Skip empty progress entries
-		if progresses[id].Progress == nil && progresses[id].Status == "" {
+		progress, exists := progresses[id]
+		if !exists || (progress.Progress == nil && progress.Status == "") {
 			continue
 		}
 
-		// Format the progress line
-		progressLine := fmt.Sprintf("Layer %s: %s", id[:12], progresses[id].Status)
-		if progresses[id].Progress != nil {
-			progressLine += fmt.Sprintf(" %s", progresses[id].Progress.String())
+		// Shorten common verbose statuses
+		status := progress.Status
+		switch {
+		case strings.HasPrefix(status, "Pulling fs layer"):
+			status = "Pulling layer"
+		case strings.HasPrefix(status, "Waiting"):
+			status = "Waiting"
+		case strings.HasPrefix(status, "Downloading"):
+			status = "Downloading"
+		case strings.HasPrefix(status, "Verifying Checksum"):
+			status = "Verifying"
+		case strings.HasPrefix(status, "Download complete"):
+			status = "Downloaded"
+		case strings.HasPrefix(status, "Extracting"):
+			status = "Extracting"
+		case strings.HasPrefix(status, "Pull complete"):
+			status = "Complete"
 		}
-		lines = append(lines, progressLine)
+
+		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
+		if progress.Progress != nil {
+			progressLine += fmt.Sprintf(" %s", progress.Progress.String())
+		}
+		lines = append(lines, strings.TrimSpace(progressLine))
 	}
 
-	// Update all lines at once
 	output.SetFooterLines(lines)
 }

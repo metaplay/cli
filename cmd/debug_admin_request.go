@@ -44,11 +44,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "admin-request ENVIRONMENT METHOD PATH [flags]",
 		Aliases: []string{"admin"},
-		Short:   "[preview] Make HTTP requests to the game server admin API",
+		Short:   "Make HTTP requests to the game server admin API",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Make HTTP requests to the game server admin API.
 
 			This command allows you to interact with the game server's admin API endpoint using

@@ -48,10 +48,8 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "export-snapshot [ENVIRONMENT] [OUTPUT_FILE] [flags]",
-		Short: "[preview] Export database snapshot from an environment",
+		Short: "Export database snapshot from an environment",
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Export a database snapshot from the specified environment into a file.
 
 			DISCLAIMER: This operation is not a real backup and is intended for ad hoc database
