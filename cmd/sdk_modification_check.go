@@ -263,9 +263,6 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	// Convert back to lines
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
-	// Clean up
-	diffs = dmp.DiffCleanupSemantic(diffs)
-
 	// Write git-style header
 	buf.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", pathInPatch, pathInPatch))
 	if isNew {
