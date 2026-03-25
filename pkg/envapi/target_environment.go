@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -356,16 +357,14 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	return &awsCredentials, err
 }
 
-// Get Docker credentials for the environment's docker registry.
-func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecret) (*DockerCredentials, error) {
-	// Fetch AWS credentials from Metaplay cloud
+// newECRClient creates an authenticated ECR client for the environment.
+func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get AWS credentials: %v", err)
 	}
 
-	// Create AWS config with provided region and credentials
 	log.Debug().Msg("Create AWS config")
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(envDetails.Deployment.AwsRegion),
@@ -381,9 +380,16 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecr
 		return nil, err
 	}
 
-	// Create an ECR client
 	log.Debug().Msg("Create ECR client")
-	client := ecr.NewFromConfig(cfg)
+	return ecr.NewFromConfig(cfg), nil
+}
+
+// Get Docker credentials for the environment's docker registry.
+func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecret) (*DockerCredentials, error) {
+	client, err := target.newECRClient(envDetails)
+	if err != nil {
+		return nil, err
+	}
 
 	// Fetch the ECR docker authentication token
 	log.Debug().Msg("Fetch ECR login credentials from AWS")
@@ -420,4 +426,82 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecr
 		Password:    password,
 		RegistryURL: registryURL,
 	}, nil
+}
+
+// ECRImage represents a single image in the ECR repository.
+type ECRImage struct {
+	Tags      []string  `json:"tags"`
+	PushedAt  time.Time `json:"pushedAt"`
+	SizeBytes int64     `json:"sizeBytes"`
+	Digest    string    `json:"digest"`
+}
+
+// ListECRImages lists Docker images in the environment's ECR repository.
+// When maxResults > 0, stops fetching pages once at least that many tagged images
+// have been collected (the caller should trim if an exact limit is needed). When 0, fetches all.
+func (target *TargetEnvironment) ListECRImages(envDetails *DeploymentSecret, maxResults int) ([]ECRImage, error) {
+	client, err := target.newECRClient(envDetails)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract repository name from full URI (strip registry prefix).
+	// EcrRepo looks like "123456789.dkr.ecr.us-west-2.amazonaws.com/myrepo"
+	repoName := envDetails.Deployment.EcrRepo
+	if idx := strings.Index(repoName, "/"); idx != -1 {
+		repoName = repoName[idx+1:]
+	}
+
+	var images []ECRImage
+	var nextToken *string
+	for {
+		input := &ecr.DescribeImagesInput{
+			RepositoryName: &repoName,
+			NextToken:      nextToken,
+		}
+
+		output, err := client.DescribeImages(context.TODO(), input)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list images from ECR: %w", err)
+		}
+
+		for _, detail := range output.ImageDetails {
+			// Skip untagged images (old layers)
+			if len(detail.ImageTags) == 0 {
+				continue
+			}
+
+			var pushedAt time.Time
+			if detail.ImagePushedAt != nil {
+				pushedAt = *detail.ImagePushedAt
+			}
+			var sizeBytes int64
+			if detail.ImageSizeInBytes != nil {
+				sizeBytes = *detail.ImageSizeInBytes
+			}
+			digest := ""
+			if detail.ImageDigest != nil {
+				digest = *detail.ImageDigest
+			}
+
+			images = append(images, ECRImage{
+				Tags:      detail.ImageTags,
+				PushedAt:  pushedAt,
+				SizeBytes: sizeBytes,
+				Digest:    digest,
+			})
+		}
+
+		nextToken = output.NextToken
+		if nextToken == nil {
+			break
+		}
+
+		// Stop fetching if we have enough images
+		if maxResults > 0 && len(images) >= maxResults {
+			break
+		}
+	}
+
+	return images, nil
 }

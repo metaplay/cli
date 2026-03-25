@@ -50,10 +50,8 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "import-snapshot [ENVIRONMENT] [INPUT_FILE] [flags]",
-		Short: "[preview] Import database snapshot from a file",
+		Short: "Import database snapshot from a file",
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Import database snapshot from a file created by 'database export' into the target
 			environment.
 
