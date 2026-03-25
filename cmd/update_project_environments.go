@@ -106,8 +106,10 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	for _, config := range projectEnvClientConfigs {
 		if config.ClientConfig != nil {
 			log.Debug().Msgf("  %s %s: %+v", styles.RenderSuccess("✓"), styles.RenderTechnical(config.EnvironmentHumanID), config.ClientConfig)
-		} else {
+		} else if config.Error != nil {
 			log.Debug().Msgf("  %s %s: %s", styles.RenderError("✗"), styles.RenderTechnical(config.EnvironmentHumanID), *config.Error)
+		} else {
+			log.Warn().Msgf("  %s %s: no config or error returned (unexpected server response)", styles.RenderError("?"), styles.RenderTechnical(config.EnvironmentHumanID))
 		}
 	}
 
@@ -118,13 +120,17 @@ func (o *updateProjectEnvironmentsOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Update the environment configs JSON file.
-	err = o.updateEnvironmentConfigs(project, projectEnvClientConfigs)
+	updatedEnvConfigs, err := o.updateEnvironmentConfigs(project, projectEnvClientConfigs)
 	if err != nil {
 		return err
 	}
 
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
+	if updatedEnvConfigs {
+		log.Info().Msg(styles.RenderSuccess("✅ Successfully updated environments!"))
+	} else {
+		log.Info().Msg(styles.RenderSuccess("✅ Updated metaplay-project.yaml. Skipped EnvironmentConfigs.json (file not found)."))
+	}
 	return nil
 }
 
@@ -141,7 +147,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to parse %s: %w", projectConfigFilePath, err)
 	}
 
 	// Find the 'environments' node -- should be an array but can also be null
@@ -300,7 +306,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 // updateEnvironmentConfigs finds and updates the EnvironmentConfigs.json file with new client configs
 // fetched from the portal. Uses untyped JSON to preserve any userland extensions in the config entries.
-func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metaproj.MetaplayProject, clientConfigs []portalapi.EnvironmentClientConfigResponse) error {
+func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metaproj.MetaplayProject, clientConfigs []portalapi.EnvironmentClientConfigResponse) (bool, error) {
 	// Try to find EnvironmentConfigs.json in the expected Unity location
 	environmentConfigsPath := filepath.Join(project.GetUnityProjectDir(), "ProjectSettings", "Metaplay", "EnvironmentConfigs.json")
 
@@ -308,9 +314,9 @@ func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metapr
 	if _, err := os.Stat(environmentConfigsPath); os.IsNotExist(err) {
 		log.Warn().Msgf("EnvironmentConfigs.json not found at %s", environmentConfigsPath)
 		log.Warn().Msg("Skipping environment configs update. To enable this feature, ensure the file exists in your Unity project.")
-		return nil
+		return false, nil
 	} else if err != nil {
-		return clierrors.Wrap(err, "Unable to access EnvironmentConfigs.json")
+		return false, clierrors.Wrap(err, "Unable to access EnvironmentConfigs.json")
 	}
 
 	log.Info().Msg("")
@@ -319,18 +325,22 @@ func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metapr
 	// Read and parse existing EnvironmentConfigs.json as untyped JSON to preserve userland data.
 	existingBytes, err := os.ReadFile(environmentConfigsPath)
 	if err != nil {
-		return clierrors.Wrap(err, "Unable to read EnvironmentConfigs.json")
+		return false, clierrors.Wrap(err, "Unable to read EnvironmentConfigs.json")
 	}
 
 	var existingConfigs []map[string]any
 	if err := json.Unmarshal(existingBytes, &existingConfigs); err != nil {
-		return clierrors.Wrap(err, "Unable to parse EnvironmentConfigs.json")
+		return false, clierrors.Wrap(err, "Unable to parse EnvironmentConfigs.json")
 	}
 
 	// Process each portal client config response.
 	for _, response := range clientConfigs {
 		if response.ClientConfig == nil {
-			log.Warn().Msgf("  %s %s: %s", styles.RenderError("✗"), styles.RenderTechnical(response.EnvironmentHumanID), *response.Error)
+			if response.Error != nil {
+				log.Warn().Msgf("  %s %s: %s", styles.RenderError("✗"), styles.RenderTechnical(response.EnvironmentHumanID), *response.Error)
+			} else {
+				log.Warn().Msgf("  %s %s: no config or error returned (unexpected server response)", styles.RenderError("?"), styles.RenderTechnical(response.EnvironmentHumanID))
+			}
 			continue
 		}
 
@@ -357,17 +367,17 @@ func (o *updateProjectEnvironmentsOpts) updateEnvironmentConfigs(project *metapr
 	// Write updated configs back to disk with consistent formatting (indented, LF line endings).
 	outputBytes, err := json.MarshalIndent(existingConfigs, "", "  ")
 	if err != nil {
-		return clierrors.Wrap(err, "Unable to serialize updated environment configs")
+		return false, clierrors.Wrap(err, "Unable to serialize updated environment configs")
 	}
 	// Normalize line endings to LF and ensure trailing newline (matching C# serialization).
 	output := strings.ReplaceAll(string(outputBytes), "\r\n", "\n") + "\n"
 
 	if err := os.WriteFile(environmentConfigsPath, []byte(output), 0644); err != nil {
-		return clierrors.Wrap(err, "Unable to write EnvironmentConfigs.json")
+		return false, clierrors.Wrap(err, "Unable to write EnvironmentConfigs.json")
 	}
 
 	log.Info().Msgf("  %s Updated %s", styles.RenderSuccess("✓"), styles.RenderTechnical("EnvironmentConfigs.json"))
-	return nil
+	return true, nil
 }
 
 // transformPortalConfigToEnvironmentConfig converts the portal's EnvironmentClientConfig format
@@ -403,9 +413,14 @@ func transformPortalConfigToEnvironmentConfig(pc *portalapi.EnvironmentClientCon
 
 	// Build OAuth2 local callback URLs
 	localCallbackUrls := []any{}
-	if pc.OAuth2LocalCallback != "" {
-		localCallbackUrls = append(localCallbackUrls, pc.OAuth2LocalCallback)
+	if pc.OAuth2LocalCallback != nil && *pc.OAuth2LocalCallback != "" {
+		localCallbackUrls = append(localCallbackUrls, *pc.OAuth2LocalCallback)
 	}
+
+	// Dereference optional OAuth2 fields, defaulting to empty string if nil.
+	oauth2ClientID := derefString(pc.OAuth2ClientID)
+	oauth2ClientSecret := derefString(pc.OAuth2ClientSecret)
+	oauth2Audience := derefString(pc.OAuth2Audience)
 
 	return map[string]any{
 		"Version":     2,
@@ -431,11 +446,11 @@ func transformPortalConfigToEnvironmentConfig(pc *portalapi.EnvironmentClientCon
 			"AdminApiAuthenticationTokenProvider": authTokenProvider,
 			"AdminApiCredentialsPath":             "",
 			"AdminApiOAuth2Settings": map[string]any{
-				"ClientId":              pc.OAuth2ClientID,
-				"ClientSecret":          pc.OAuth2ClientSecret,
+				"ClientId":              oauth2ClientID,
+				"ClientSecret":          oauth2ClientSecret,
 				"AuthorizationEndpoint": pc.OAuth2AuthorizationEndpoint,
 				"TokenEndpoint":         pc.OAuth2TokenEndpoint,
-				"Audience":              pc.OAuth2Audience,
+				"Audience":              oauth2Audience,
 				"LocalCallbackUrls":     localCallbackUrls,
 				"UseStateParameter":     pc.OAuth2UseStateParameter,
 			},
@@ -465,6 +480,14 @@ func findExistingConfigIndex(configs []map[string]any, humanId string, serverHos
 	}
 
 	return -1
+}
+
+// derefString safely dereferences a *string, returning "" if nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // mergeEnvironmentConfig merges a new config entry into an existing one.

@@ -111,12 +111,12 @@ type EnvironmentClientConfig struct {
 	PublicWebApiUrl                 string `json:"PublicWebApiUrl"`
 	AdminApiBaseUrl                 string `json:"AdminApiBaseUrl"`
 	AdminApiUseOpenIdConnectIdToken bool   `json:"AdminApiUseOpenIdConnectIdToken"`
-	OAuth2ClientID                  string `json:"OAuth2ClientID"`
-	OAuth2ClientSecret              string `json:"OAuth2ClientSecret"`
-	OAuth2Audience                  string `json:"OAuth2Audience"`
-	OAuth2AuthorizationEndpoint     string `json:"OAuth2AuthorizationEndpoint"`
-	OAuth2TokenEndpoint             string `json:"OAuth2TokenEndpoint"`
-	OAuth2LocalCallback             string `json:"OAuth2LocalCallback"`
+	OAuth2ClientID                  *string `json:"OAuth2ClientID"`
+	OAuth2ClientSecret              *string `json:"OAuth2ClientSecret"`
+	OAuth2Audience                  *string `json:"OAuth2Audience"`
+	OAuth2AuthorizationEndpoint     string  `json:"OAuth2AuthorizationEndpoint"`
+	OAuth2TokenEndpoint             string  `json:"OAuth2TokenEndpoint"`
+	OAuth2LocalCallback             *string `json:"OAuth2LocalCallback"`
 	OAuth2UseStateParameter         bool   `json:"OAuth2UseStateParameter"`
 }
 
