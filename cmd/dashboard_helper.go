@@ -46,19 +46,16 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
 	}
 
-	// If installed major version is more recent than expected, warn.
-	installedMajorVersion := installedVersion.Segments()[0]
-	requiredMajorVersion := recommendedVersion.Segments()[0]
-	if installedMajorVersion > requiredMajorVersion {
-		log.Warn().Msgf("Detected Node.js version %s is more recent than expected v%d.x.y; downgrade if you encounter any problems", installedVersion, requiredMajorVersion)
-	}
-
 	// Print the info.
 	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", recommendedVersion))
+	installedMajorVersion := installedVersion.Segments()[0]
 	installedMinorVersion := installedVersion.Segments()[1]
+	requiredMajorVersion := recommendedVersion.Segments()[0]
 	requiredMinorVersion := recommendedVersion.Segments()[1]
-	if installedMinorVersion > requiredMinorVersion {
-		badge = badge + " " + styles.RenderWarning("[minor version is more recent; downgrade if you encounter any problems]")
+	if installedMajorVersion > requiredMajorVersion {
+		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%d.x.y; downgrade if you encounter any problems]", requiredMajorVersion))
+	} else if installedMinorVersion > requiredMinorVersion {
+		badge = badge + " " + styles.RenderWarning("[warning: minor version is more recent; downgrade if you encounter any problems]")
 	}
 
 	log.Info().Msgf("%s Node.js detected: %s %s", styles.RenderSuccess("✓"), styles.RenderTechnical(installedVersion.String()), badge)
