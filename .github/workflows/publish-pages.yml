@@ -28,6 +28,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Configure GitHub CLI
+        run: gh auth status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       # Copy the install.sh to be available publicly at https://metaplay.github.io/cli/install.sh.
       # GitHub Pages isn't throttled like the https://raw.githubusercontent.com/metaplay/cli/main/install.sh.
       - name: Prepare Pages output
@@ -36,6 +41,10 @@ jobs:
           mkdir site
           cp install.sh site/
           cp install.ps1 site/
+
+          # Write latest release version to site/latest-version.txt
+          # This allows installers to discover the latest version without hitting GitHub's rate-limited API.
+          gh release view --json tagName -q .tagName > site/latest-version.txt
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

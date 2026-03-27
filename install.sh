@@ -127,24 +127,33 @@ print_verbose "OS: $OS"
 print_verbose "Arch: $ARCH"
 print_verbose "Install dir: $INSTALL_DIR"
 
-# If no VERSION specified, discover latest via GitHub API
+# If no VERSION specified, discover latest via GitHub Pages (avoids rate limits)
 if [ -z "$VERSION" ]; then
   print_verbose "No version specified. Finding latest official release..."
-  # Determine the latest version from the non-rate-limited URL (instead of api.github.com which is throttled).
-  # It responds with a 302 redirect to the latest release, e.g., https://github.com/metaplay/cli/releases/tag/1.4.4,
-  # which we then parse the actual version number from.
-  latest_release_url="https://github.com/${REPO}/releases/latest"
+
+  # Try GitHub Pages first (no rate limiting)
   curl_exit=0
-  redirect_url=$(curl -sI --show-error --fail --retry 10 --retry-all-errors --retry-max-time 60 -o /dev/null -w '%{redirect_url}' "$latest_release_url") || curl_exit=$?
+  VERSION=$(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 "https://metaplay.github.io/cli/latest-version.txt") || curl_exit=$?
 
-  if [ $curl_exit -ne 0 ]; then
-    print_error "Failed to determine latest CLI version from $latest_release_url (curl exited with code $curl_exit)."
-    print_error "This is most likely a network issue. See curl output above for details."
-    exit 1
+  if [ $curl_exit -eq 0 ] && [ -n "$VERSION" ]; then
+    VERSION=$(printf '%s' "$VERSION" | tr -d '\n\r')
+    print_verbose "Detected latest version from GitHub Pages: $VERSION"
+  else
+    # Fallback: use GitHub redirect
+    print_verbose "GitHub Pages method failed, falling back to GitHub redirect..."
+    latest_release_url="https://github.com/${REPO}/releases/latest"
+    curl_exit=0
+    redirect_url=$(curl -sI --show-error --fail --retry 10 --retry-all-errors --retry-max-time 60 -o /dev/null -w '%{redirect_url}' "$latest_release_url") || curl_exit=$?
+
+    if [ $curl_exit -ne 0 ]; then
+      print_error "Failed to determine latest CLI version from $latest_release_url (curl exited with code $curl_exit)."
+      print_error "This is most likely a network issue. See curl output above for details."
+      exit 1
+    fi
+
+    VERSION="${redirect_url##*/}"
+    print_verbose "Detected latest official version: $VERSION"
   fi
-
-  VERSION="${redirect_url##*/}"
-  print_verbose "Detected latest official version: $VERSION"
 elif [ "$VERSION" = "latest-dev" ]; then
   print_verbose "Version specified as 'latest-dev'. Finding latest development release..."
   # Fetch all releases (newest first), get the tag_name of the very first one

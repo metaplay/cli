@@ -100,56 +100,68 @@ function Invoke-WithRetry {
     }
 }
 
-# If no version specified, discover latest via GitHub redirect
+# If no version specified, discover latest via GitHub Pages (avoids rate limits)
 if (-not $Version) {
     Print-Verbose 'No version specified. Finding latest official release...'
-    $latestUrl = "https://github.com/$Repo/releases/latest"
 
+    # Try GitHub Pages first (no rate limiting)
     try {
-        $redirectUrl = Invoke-WithRetry {
-            try {
-                $resp = Invoke-WebRequest -Uri $latestUrl -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
-                # PS7: no exception on redirect, check status
-                if ($resp.StatusCode -ge 300 -and $resp.StatusCode -lt 400) {
-                    $loc = $resp.Headers['Location']
-                    if ($loc -is [array]) { $loc = $loc[0] }
-                    return $loc
-                }
-                return $null
-            } catch {
-                # PS5 may throw on redirect; extract Location from the exception response
-                $exResp = $_.Exception.Response
-                if ($exResp) {
-                    $loc = $exResp.Headers['Location']
-                    if ($loc) { return $loc }
-                }
-                throw
-            }
-        }
-
-        if ($redirectUrl) {
-            $Version = ($redirectUrl -split '/')[-1]
-        }
+        $Version = (Invoke-WithRetry {
+            Invoke-RestMethod -Uri "https://metaplay.github.io/cli/latest-version.txt"
+        }).Trim()
+        Print-Verbose "Detected latest version from GitHub Pages: $Version"
     } catch {
-        Print-Verbose "Redirect method failed: $($_.Exception.Message)"
-    }
+        Print-Verbose "GitHub Pages method failed: $($_.Exception.Message)"
 
-    if (-not $Version) {
-        # Fallback: use the API
-        Print-Verbose 'Redirect method failed, falling back to GitHub API...'
+        # Fallback: use GitHub redirect
+        $latestUrl = "https://github.com/$Repo/releases/latest"
+
         try {
-            $releaseInfo = Invoke-WithRetry {
-                Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+            $redirectUrl = Invoke-WithRetry {
+                try {
+                    $resp = Invoke-WebRequest -Uri $latestUrl -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
+                    # PS7: no exception on redirect, check status
+                    if ($resp.StatusCode -ge 300 -and $resp.StatusCode -lt 400) {
+                        $loc = $resp.Headers['Location']
+                        if ($loc -is [array]) { $loc = $loc[0] }
+                        return $loc
+                    }
+                    return $null
+                } catch {
+                    # PS5 may throw on redirect; extract Location from the exception response
+                    $exResp = $_.Exception.Response
+                    if ($exResp) {
+                        $loc = $exResp.Headers['Location']
+                        if ($loc) { return $loc }
+                    }
+                    throw
+                }
             }
-            $Version = $releaseInfo.tag_name
-        } catch {
-            Print-Error "Failed to determine latest CLI version. Check your network connection."
-            Print-Error $_.Exception.Message
-            $script:InstallFailed = $true; return
-        }
-    }
 
-    Print-Verbose "Detected latest official version: $Version"
+            if ($redirectUrl) {
+                $Version = ($redirectUrl -split '/')[-1]
+            }
+        } catch {
+            Print-Verbose "Redirect method failed: $($_.Exception.Message)"
+        }
+
+        if (-not $Version) {
+            # Last resort: use the API
+            Print-Verbose 'Redirect method failed, falling back to GitHub API...'
+            try {
+                $releaseInfo = Invoke-WithRetry {
+                    Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
+                }
+                $Version = $releaseInfo.tag_name
+            } catch {
+                Print-Error "Failed to determine latest CLI version. Check your network connection."
+                Print-Error $_.Exception.Message
+                $script:InstallFailed = $true; return
+            }
+        }
+
+        Print-Verbose "Detected latest official version: $Version"
+    }
 } elseif ($Version -eq 'latest-dev') {
     Print-Verbose "Version specified as 'latest-dev'. Finding latest development release..."
     try {
