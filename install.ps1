@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Stop'
 
 # --- Adjustable variables ---
 $Repo = 'metaplay/cli'
-$BinaryName = 'metaplay'
+$BinaryName = 'metaplay.exe'
 $InstallDir = Join-Path (Join-Path $env:LOCALAPPDATA 'metaplay') 'bin'
 $DownloadBase = "https://github.com/$Repo/releases/download"
 # ----------------------------
@@ -81,122 +81,71 @@ switch ($env:PROCESSOR_ARCHITECTURE) {
 Print-Verbose "Arch: $Arch"
 Print-Verbose "Install dir: $InstallDir"
 
-# Helper to invoke web requests with retry logic
-function Invoke-WithRetry {
-    param(
-        [scriptblock]$Action,
-        [int]$MaxRetries = 10,
-        [int]$DelaySeconds = 2
-    )
-    for ($i = 0; $i -lt $MaxRetries; $i++) {
-        try {
-            return (& $Action)
-        } catch {
-            if ($i -eq $MaxRetries - 1) { throw }
-            Print-Verbose "Request failed, retrying in ${DelaySeconds}s... (attempt $($i+1)/$MaxRetries)"
-            Start-Sleep -Seconds $DelaySeconds
-            $DelaySeconds *= 2
-        }
-    }
-}
-
-# If no version specified, discover latest via GitHub redirect
-if (-not $Version) {
-    Print-Verbose 'No version specified. Finding latest official release...'
-    $latestUrl = "https://github.com/$Repo/releases/latest"
-
-    try {
-        $redirectUrl = Invoke-WithRetry {
-            try {
-                $resp = Invoke-WebRequest -Uri $latestUrl -MaximumRedirection 0 -ErrorAction SilentlyContinue -UseBasicParsing
-                # PS7: no exception on redirect, check status
-                if ($resp.StatusCode -ge 300 -and $resp.StatusCode -lt 400) {
-                    $loc = $resp.Headers['Location']
-                    if ($loc -is [array]) { $loc = $loc[0] }
-                    return $loc
-                }
-                return $null
-            } catch {
-                # PS5 may throw on redirect; extract Location from the exception response
-                $exResp = $_.Exception.Response
-                if ($exResp) {
-                    $loc = $exResp.Headers['Location']
-                    if ($loc) { return $loc }
-                }
-                throw
-            }
-        }
-
-        if ($redirectUrl) {
-            $Version = ($redirectUrl -split '/')[-1]
-        }
-    } catch {
-        Print-Verbose "Redirect method failed: $($_.Exception.Message)"
-    }
-
-    if (-not $Version) {
-        # Fallback: use the API
-        Print-Verbose 'Redirect method failed, falling back to GitHub API...'
-        try {
-            $releaseInfo = Invoke-WithRetry {
-                Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-            }
-            $Version = $releaseInfo.tag_name
-        } catch {
-            Print-Error "Failed to determine latest CLI version. Check your network connection."
-            Print-Error $_.Exception.Message
-            $script:InstallFailed = $true; return
-        }
-    }
-
-    Print-Verbose "Detected latest official version: $Version"
-} elseif ($Version -eq 'latest-dev') {
-    Print-Verbose "Version specified as 'latest-dev'. Finding latest development release..."
-    try {
-        $releases = Invoke-WithRetry {
-            Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases"
-        }
-        $Version = $releases[0].tag_name
-    } catch {
-        Print-Error "Failed to fetch releases to determine 'latest-dev' version."
-        Print-Error $_.Exception.Message
-        $script:InstallFailed = $true; return
-    }
-    Print-Verbose "Detected latest development version: $Version"
-}
-
-if (-not $Version) {
-    Print-Error 'Failed to determine CLI version to install. Please check your network connection.'
-    Print-Error 'If you are behind a proxy or offline, ensure you can access https://github.com.'
+# Ensure curl.exe is available (pre-installed on Windows 10+ and all GitHub Actions runners)
+if (-not (Get-Command 'curl.exe' -ErrorAction SilentlyContinue)) {
+    Print-Error "curl.exe is required but not found. It is included with Windows 10 and later."
     $script:InstallFailed = $true; return
 }
 
-# Construct download URL
-$ZipName = "MetaplayCLI_Windows_$Arch.zip"
-$DownloadUrl = "$DownloadBase/$Version/$ZipName"
+# Common curl flags, mirroring install.sh
+$CurlRetryFlags = @('--retry', '10', '--retry-all-errors', '--retry-max-time', '60')
 
-Print-Info "Installing '$BinaryName' v$Version for Windows/$Arch to $InstallDir..."
+$ZipName = "MetaplayCLI_Windows_$Arch.zip"
+
+# Resolve version and construct download URL
+if (-not $Version -or $Version -eq 'latest') {
+    # Use /releases/latest/download/ -- GitHub resolves the version via redirect.
+    # This avoids Invoke-WebRequest which can hang indefinitely on some Windows environments.
+    $DownloadUrl = "https://github.com/$Repo/releases/latest/download/$ZipName"
+    Print-Info "Installing latest '$BinaryName' for Windows/$Arch to $InstallDir..."
+} elseif ($Version -eq 'latest-dev') {
+    Print-Verbose "Version specified as 'latest-dev'. Finding latest development release..."
+    # Fetch all releases (newest first) and parse the tag_name of the first one.
+    # Note: Uses a rate-limited URL but since this is for internal use only, it's fine.
+    $releaseJson = curl.exe -sSf @CurlRetryFlags "https://api.github.com/repos/$Repo/releases"
+    if ($LASTEXITCODE -ne 0) {
+        Print-Error "Failed to fetch releases to determine 'latest-dev' version."
+        $script:InstallFailed = $true; return
+    }
+    $Version = ($releaseJson -join "`n" | ConvertFrom-Json)[0].tag_name
+    Print-Verbose "Detected latest development version: $Version"
+    $DownloadUrl = "$DownloadBase/$Version/$ZipName"
+    Print-Info "Installing '$BinaryName' v$Version for Windows/$Arch to $InstallDir..."
+} else {
+    $DownloadUrl = "$DownloadBase/$Version/$ZipName"
+    Print-Info "Installing '$BinaryName' v$Version for Windows/$Arch to $InstallDir..."
+}
+
 Print-Verbose "Download URL: $DownloadUrl"
 
 # Download, extract, and install (with guaranteed temp dir cleanup)
 $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "metaplay-install-$([System.Guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 $ZipPath = Join-Path $TmpDir $ZipName
-$DestBinary = Join-Path $InstallDir "$BinaryName.exe"
+$DestBinary = Join-Path $InstallDir "$BinaryName"
 
 try {
-    $prevProgressPref = $ProgressPreference
-    try {
-        $ProgressPreference = 'SilentlyContinue' # Speeds up Invoke-WebRequest significantly
-        Invoke-WithRetry {
-            Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
+    # If version was not specified, resolve it from the first redirect of /releases/latest/download/.
+    # GitHub redirects: /releases/latest/download/X.zip -> /releases/download/<version>/X.zip -> CDN
+    # A HEAD request to get just the first redirect is fast and mirrors what install.sh does with curl -sI.
+    if (-not $Version -or $Version -eq 'latest') {
+        $redirectUrl = curl.exe -fsI @CurlRetryFlags -o NUL -w '%{redirect_url}' $DownloadUrl
+        if ($LASTEXITCODE -ne 0) {
+            Print-Error "Failed to resolve latest version from $DownloadUrl"
+            $script:InstallFailed = $true; return
         }
-    } catch {
+        $Version = ($redirectUrl -split '/')[-2]
+        # Use the resolved URL for the actual download
+        $DownloadUrl = $redirectUrl
+        Print-Info "Resolved latest version: v$Version"
+    }
+
+    # Download using curl.exe (avoids Invoke-WebRequest which can hang on some Windows environments).
+    # -L follows redirects (from GitHub to CDN).
+    curl.exe -fsSL @CurlRetryFlags -o $ZipPath $DownloadUrl
+    if ($LASTEXITCODE -ne 0) {
         Print-Error "Failed to download from $DownloadUrl"
-        Print-Error $_.Exception.Message
         $script:InstallFailed = $true; return
-    } finally {
-        $ProgressPreference = $prevProgressPref
     }
 
     # Extract the binary
@@ -208,9 +157,9 @@ try {
         $script:InstallFailed = $true; return
     }
 
-    $ExtractedBinary = Join-Path $TmpDir "$BinaryName.exe"
+    $ExtractedBinary = Join-Path $TmpDir "$BinaryName"
     if (-not (Test-Path $ExtractedBinary)) {
-        Print-Error "Downloaded archive does not contain the expected binary '$BinaryName.exe'."
+        Print-Error "Downloaded archive does not contain the expected binary '$BinaryName'."
         $script:InstallFailed = $true; return
     }
 
@@ -246,7 +195,7 @@ if ($PathEntries | Where-Object { $_ -ieq $InstallDir }) {
 }
 
 # Verify installation
-if (Get-Command "$BinaryName.exe" -ErrorAction SilentlyContinue) {
+if (Get-Command "$BinaryName" -ErrorAction SilentlyContinue) {
     # Temporarily lower ErrorActionPreference: PS5 treats any stderr output from native
     # commands as a terminating error under 'Stop', even with 2>$null.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
