@@ -58,6 +58,7 @@ func (d compactListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 // Model for the compact selection list.
 type compactListModel struct {
 	title    string
+	subtitle string
 	model    list.Model
 	selected *compactListItem
 	quitting bool
@@ -103,6 +104,9 @@ func (m compactListModel) View() tea.View {
 	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
 
 	if !m.quitting {
+		if m.subtitle != "" {
+			content += "  " + styles.RenderMuted(m.subtitle) + "\n"
+		}
 		content += styles.ListStyle.Render(m.model.View())
 	}
 
@@ -204,6 +208,10 @@ func (m multiSelectModel) View() tea.View {
 }
 
 func chooseFromList(title string, items []list.Item) (int, error) {
+	return chooseFromListWithSubtitle(title, "", items)
+}
+
+func chooseFromListWithSubtitle(title string, subtitle string, items []list.Item) (int, error) {
 	// Initialize list with custom delegate
 	list := list.New(items, compactListDelegate{}, 0, min(2+len(items), 20))
 	list.SetShowTitle(false)
@@ -213,6 +221,7 @@ func chooseFromList(title string, items []list.Item) (int, error) {
 
 	// Create and run model
 	model := newCompactListModel(title, list)
+	model.subtitle = subtitle
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
 	if err != nil {
@@ -257,6 +266,36 @@ func ChooseFromListDialog[TItem any](title string, items []TItem, toItemFunc fun
 
 	// Let the user choose list items.
 	chosen, err := chooseFromList(title, listItems)
+	if err != nil {
+		return nil, err
+	}
+
+	return &items[chosen], nil
+}
+
+// ChooseFromListDialogWithHeader is like ChooseFromListDialog but displays a header row above the list items.
+func ChooseFromListDialogWithHeader[TItem any](title string, header string, items []TItem, toItemFunc func(item *TItem) (string, string)) (*TItem, error) {
+	if len(items) == 0 {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderTitle(title))
+		log.Info().Msg("")
+		return nil, fmt.Errorf("ChooseFromListDialogWithHeader(): an empty list was provided")
+	}
+
+	// Convert items to list items.
+	listItems := make([]list.Item, len(items))
+	for ndx := range items {
+		item := &items[ndx]
+		name, description := toItemFunc(item)
+		listItems[ndx] = compactListItem{
+			index:       ndx,
+			name:        name,
+			description: description,
+		}
+	}
+
+	// Let the user choose list items.
+	chosen, err := chooseFromListWithSubtitle(title, header, listItems)
 	if err != nil {
 		return nil, err
 	}

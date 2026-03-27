@@ -601,13 +601,63 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 			WithSuggestion("Build an image first with 'metaplay build image'")
 	}
 
+	// Precompute per-image columns and track max widths.
+	type imageColumns struct {
+		age, sdk, commit string
+	}
+	columns := make([]imageColumns, len(localImages))
+	maxTagLen := len("TAG")
+	maxAgeLen := len("AGE")
+	maxSdkLen := len("SDK")
+	maxCommitLen := len("COMMIT")
+	for i := range localImages {
+		img := &localImages[i]
+		col := imageColumns{age: humanize.Time(img.CreatedTime)}
+		if img.SdkVersion != "" {
+			col.sdk = img.SdkVersion
+		}
+		if img.CommitID != "" {
+			col.commit = img.CommitID
+			if len(col.commit) > 12 {
+				col.commit = col.commit[:12]
+			}
+		}
+		columns[i] = col
+		if len(img.RepoTag) > maxTagLen {
+			maxTagLen = len(img.RepoTag)
+		}
+		if len(col.age) > maxAgeLen {
+			maxAgeLen = len(col.age)
+		}
+		if len(col.sdk) > maxSdkLen {
+			maxSdkLen = len(col.sdk)
+		}
+		if len(col.commit) > maxCommitLen {
+			maxCommitLen = len(col.commit)
+		}
+	}
+
+	// Build a header row aligned with the list items.
+	// Note: the first gap is 1 space to match the single space between name and description in list items.
+	header := fmt.Sprintf("%-*s %-*s  %-*s  %-*s", maxTagLen, "TAG", maxAgeLen, "AGE", maxSdkLen, "SDK", maxCommitLen, "COMMIT")
+
 	// Let the user choose from the list of images.
-	selectedImage, err := tui.ChooseFromListDialog(
+	selectedImage, err := tui.ChooseFromListDialogWithHeader(
 		title,
+		header,
 		localImages,
 		func(img *envapi.MetaplayImageInfo) (string, string) {
-			description := humanize.Time(img.CreatedTime)
-			return img.RepoTag, description
+			i := -1
+			for j := range localImages {
+				if &localImages[j] == img {
+					i = j
+					break
+				}
+			}
+			col := columns[i]
+			name := fmt.Sprintf("%-*s", maxTagLen, img.RepoTag)
+			description := fmt.Sprintf("%-*s  %-*s  %-*s", maxAgeLen, col.age, maxSdkLen, col.sdk, maxCommitLen, col.commit)
+			return name, description
 		})
 	if err != nil {
 		return nil, err
