@@ -22,9 +22,12 @@ func main() {
 	defer stop()
 
 	// Notify the user that graceful shutdown is in progress after Ctrl+C.
-	context.AfterFunc(ctx, func() {
+	// The returned function unregisters the callback; we defer it so it runs
+	// before stop() (LIFO), preventing the message on normal exit.
+	cancelMsg := context.AfterFunc(ctx, func() {
 		fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up... (press Ctrl+C again to force quit)")
 	})
+	defer cancelMsg()
 
 	cmd.ExecuteContext(ctx)
 }
