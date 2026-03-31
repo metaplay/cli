@@ -7,6 +7,7 @@ package cmd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -439,5 +440,465 @@ func TestGenerateUnifiedDiff_ContentToEmpty(t *testing.T) {
 	// Should produce a valid diff
 	if !containsString(result, "-old content") {
 		t.Errorf("expected '-old content' line, got:\n%s", result)
+	}
+}
+
+func TestGenerateUnifiedDiff_NoNewlineAtEndOfFile(t *testing.T) {
+	// When the input (either "old" or "new", or both) does not end in a newline,
+	// the diff must contain the marker line "\ No newline at end of file" (without the quotes).
+	// This marker appears in the diff immediately after a line that corresponds
+	// to an input line that was missing a newline:
+	// 1. If the "old" input is missing newline AND the last (newlineless) line was removed,
+	//    then this marker appears just after the last deletion line in the diff.
+	// 2. If the "new" input is missing newline AND the last (newlineless) line was added,
+	//    then this marker appears just after the last addition line in the diff.
+	// 3. If both inputs are missing newline AND neither of the above applies
+	//    (i.e. the last (newlineless) line was unmodified),
+	//    then this marker appears just after the last context line in the diff.
+	// Note that the marker can appear twice, specifically in the case where
+	// both 1. and 2. apply, i.e. both "old" and "new" are missing newline
+	// and the last (newlineless) line was modified (old removed, new added).
+	// In this case the marker appears both after the last deletion line
+	// and after the last addition line.
+
+	// Note: for simplicity of testing, we're comparing the outputs against exact references.
+	// Technically this might be too strict, as generally there's no one single correct diff for given inputs.
+	// Adjust the tests if this becomes a problem.
+
+	tests := []struct {
+		name     string
+		old      string
+		new      string
+		expected string
+	}{
+		{
+			name: "missing newline in new",
+			old:  "hello\n",
+			new:  "hello modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"+hello modified\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in old",
+			old:  "hello",
+			new:  "hello modified\n",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"\\ No newline at end of file\n" +
+				"+hello modified\n",
+		},
+		{
+			name: "missing newline in both old and new",
+			old:  "hello",
+			new:  "hello modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,1 +1,1 @@\n" +
+				"-hello\n" +
+				"\\ No newline at end of file\n" +
+				"+hello modified\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in unmodified line",
+			old:  "hello\ncommon",
+			new:  "hello modified\ncommon",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,2 +1,2 @@\n" +
+				"-hello\n" +
+				"+hello modified\n" +
+				" common\n" +
+				"\\ No newline at end of file\n",
+		},
+		{
+			name: "missing newline in both old and new; runs of multiple deleted/unmodified/added lines",
+			old:  "hello\nworld\ncommon\nmore common\ngreetings\nagain",
+			new:  "hello modified\nworld modified\ncommon\nmore common\ngreetings modified\nagain modified",
+			expected: "diff --git a/test.txt b/test.txt\n" +
+				"--- a/test.txt\n" +
+				"+++ b/test.txt\n" +
+				"@@ -1,6 +1,6 @@\n" +
+				"-hello\n" +
+				"-world\n" +
+				"+hello modified\n" +
+				"+world modified\n" +
+				" common\n" +
+				" more common\n" +
+				"-greetings\n" +
+				"-again\n" +
+				"\\ No newline at end of file\n" +
+				"+greetings modified\n" +
+				"+again modified\n" +
+				"\\ No newline at end of file\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := generateUnifiedDiff("test.txt", []byte(tc.old), []byte(tc.new), false, false)
+			if result != tc.expected {
+				t.Errorf("unexpected diff output\nexpected:\n%s\ngot:\n%s", tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestGenerateUnifiedDiff_LineIntegrity verifies that the diff output preserves
+// line boundaries. The go-diff library's DiffCleanupSemantic can break line-level
+// diffs by extracting character-level common prefixes/suffixes as separate Equal
+// segments, splitting lines at arbitrary positions.
+func TestGenerateUnifiedDiff_LineIntegrity(t *testing.T) {
+	tests := []struct {
+		name        string
+		oldContent  string
+		newContent  string
+		wantLines   []string // lines that must appear in the diff output
+		rejectLines []string // lines that must NOT appear (broken line boundaries)
+	}{
+		{
+			name:       "common prefix between changed lines",
+			oldContent: "first_old\nunchanged\nsecond_old\n",
+			newContent: "first_new\nunchanged\nsecond_new\n",
+			wantLines: []string{
+				"-first_old\n",
+				"+first_new\n",
+				" unchanged\n",
+				"-second_old\n",
+				"+second_new\n",
+			},
+			rejectLines: []string{
+				" first_\n", // common prefix must not be split into its own line
+			},
+		},
+		{
+			name:       "common suffix between changed lines",
+			oldContent: "old_first\nunchanged\nold_second\n",
+			newContent: "new_first\nunchanged\nnew_second\n",
+			wantLines: []string{
+				"-old_first\n",
+				"+new_first\n",
+				" unchanged\n",
+				"-old_second\n",
+				"+new_second\n",
+			},
+			rejectLines: []string{
+				" _first\n",  // common suffix must not be split out
+				" _second\n", // common suffix must not be split out
+			},
+		},
+		{
+			name:       "common prefix and suffix on single changed line",
+			oldContent: "prefix_old_suffix\n",
+			newContent: "prefix_new_suffix\n",
+			wantLines: []string{
+				"-prefix_old_suffix\n",
+				"+prefix_new_suffix\n",
+			},
+			rejectLines: []string{
+				" prefix_\n", // character-level prefix must not be split out
+				" _suffix\n", // character-level suffix must not be split out
+			},
+		},
+		{
+			name:       "unchanged line not eliminated between changes",
+			oldContent: "aaa\nkeep\nbbb\n",
+			newContent: "xxx\nkeep\nyyy\n",
+			wantLines: []string{
+				"-aaa\n",
+				"+xxx\n",
+				" keep\n",
+				"-bbb\n",
+				"+yyy\n",
+			},
+			rejectLines: []string{
+				"-keep\n", // unchanged line must not become a deletion
+				"+keep\n", // unchanged line must not become an insertion
+			},
+		},
+		{
+			name:       "multiple unchanged lines preserved between changes",
+			oldContent: "old1\na\nb\nc\nold2\n",
+			newContent: "new1\na\nb\nc\nnew2\n",
+			wantLines: []string{
+				"-old1\n",
+				"+new1\n",
+				" a\n",
+				" b\n",
+				" c\n",
+				"-old2\n",
+				"+new2\n",
+			},
+		},
+		{
+			name:       "long common prefix does not break lines",
+			oldContent: "shared_long_prefix_old\n",
+			newContent: "shared_long_prefix_new\n",
+			wantLines: []string{
+				"-shared_long_prefix_old\n",
+				"+shared_long_prefix_new\n",
+			},
+			rejectLines: []string{
+				" shared_long_prefix_\n",
+			},
+		},
+		{
+			name:       "identical lines around multiple changes stay unchanged",
+			oldContent: "header\nold_a\nmiddle\nold_b\nfooter\n",
+			newContent: "header\nnew_a\nmiddle\nnew_b\nfooter\n",
+			wantLines: []string{
+				" header\n",
+				"-old_a\n",
+				"+new_a\n",
+				" middle\n",
+				"-old_b\n",
+				"+new_b\n",
+				" footer\n",
+			},
+			rejectLines: []string{
+				"-header\n",
+				"+header\n",
+				"-middle\n",
+				"+middle\n",
+				"-footer\n",
+				"+footer\n",
+			},
+		},
+		{
+			// When only one character differs in a line, the character-level common
+			// prefix and suffix are maximally long. DiffCleanupMerge extracts both,
+			// leaving just the single differing character as the edit — splitting the
+			// line into three fragments.
+			name:       "single character difference in line",
+			oldContent: "abcXdef\n",
+			newContent: "abcYdef\n",
+			wantLines: []string{
+				"-abcXdef\n",
+				"+abcYdef\n",
+			},
+			rejectLines: []string{
+				" abc\n",
+				" def\n",
+			},
+		},
+		{
+			// When changed lines share a suffix (e.g., "_shared"), DiffCleanupMerge
+			// extracts the character-level common suffix, creating a fragment that
+			// doesn't correspond to any real line.
+			name:       "common suffix crossing line boundary",
+			oldContent: "aaa_shared\nunchanged\nbbb_shared\n",
+			newContent: "xxx_shared\nunchanged\nyyy_shared\n",
+			wantLines: []string{
+				"-aaa_shared\n",
+				"+xxx_shared\n",
+				" unchanged\n",
+				"-bbb_shared\n",
+				"+yyy_shared\n",
+			},
+			rejectLines: []string{
+				" _shared\n", // suffix must not be extracted across line boundary
+			},
+		},
+		{
+			// Multiple small equalities can all be eliminated, creating one large
+			// concatenated block where character-level prefix/suffix extraction
+			// has more material to work with.
+			name:       "chain of small equalities between changes",
+			oldContent: "test_aaa\nx\ntest_bbb\ny\ntest_ccc\n",
+			newContent: "test_xxx\nx\ntest_yyy\ny\ntest_zzz\n",
+			wantLines: []string{
+				"-test_aaa\n",
+				"+test_xxx\n",
+				" x\n",
+				"-test_bbb\n",
+				"+test_yyy\n",
+				" y\n",
+				"-test_ccc\n",
+				"+test_zzz\n",
+			},
+			rejectLines: []string{
+				" test_\n", // common prefix must not be split out
+				"-x\n",     // unchanged line must not become a deletion
+				"+x\n",     // unchanged line must not become an insertion
+				"-y\n",
+				"+y\n",
+			},
+		},
+		{
+			// An equality exactly at the elimination threshold gets removed.
+			// The threshold is: len(equality) <= max(edits_before) AND
+			// len(equality) <= max(edits_after). With 9-char changes on each
+			// side, a 9-char equality (including \n) is exactly at the boundary.
+			name:       "equality at exact elimination threshold",
+			oldContent: "changed1\nthreshld\nchanged2\n",
+			newContent: "modified\nthreshld\nmodified\n",
+			wantLines: []string{
+				"-changed1\n",
+				"+modified\n",
+				" threshld\n",
+				"-changed2\n",
+			},
+			rejectLines: []string{
+				"-threshld\n",
+				"+threshld\n",
+			},
+		},
+		{
+			// Lines differing only in case share long character-level prefixes
+			// (since rune comparison is case-sensitive, the common prefix is up to
+			// the first case change). This tests that cleanup doesn't break "Import"
+			// into " " + "Import" when the prefix happens to be a space or similar.
+			name:       "case-only difference in lines",
+			oldContent: "ImportOld\nunchanged\nExportOld\n",
+			newContent: "ImportNew\nunchanged\nExportNew\n",
+			wantLines: []string{
+				"-ImportOld\n",
+				"+ImportNew\n",
+				" unchanged\n",
+				"-ExportOld\n",
+				"+ExportNew\n",
+			},
+			rejectLines: []string{
+				" Import\n",
+				" Export\n",
+			},
+		},
+		{
+			// When lines share both a common prefix AND suffix, DiffCleanupMerge
+			// can extract both ends, leaving just the differing middle as the edit.
+			// With multiple such lines merged, this produces multiple fragments.
+			name:       "prefix and suffix with eliminated equality between",
+			oldContent: "cfg_old_value\nok\ncfg_old_value\n",
+			newContent: "cfg_new_value\nok\ncfg_new_value\n",
+			wantLines: []string{
+				"-cfg_old_value\n",
+				"+cfg_new_value\n",
+				" ok\n",
+			},
+			rejectLines: []string{
+				" cfg_\n",
+				" _value\n",
+				"-ok\n",
+				"+ok\n",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := generateUnifiedDiff("test.txt", []byte(tc.oldContent), []byte(tc.newContent), false, false)
+
+			for _, want := range tc.wantLines {
+				if !containsString(result, want) {
+					t.Errorf("expected diff to contain %q, got:\n%s", want, result)
+				}
+			}
+
+			for _, reject := range tc.rejectLines {
+				if containsString(result, reject) {
+					t.Errorf("diff must not contain %q (broken line boundary), got:\n%s", reject, result)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateUnifiedDiff_HunkHeaders(t *testing.T) {
+	tests := []struct {
+		name       string
+		oldContent string
+		newContent string
+		wantHeader string
+	}{
+		{
+			name:       "single line replacement",
+			oldContent: "old\n",
+			newContent: "new\n",
+			wantHeader: "@@ -1,1 +1,1 @@",
+		},
+		{
+			name:       "change first of three lines",
+			oldContent: "old\nb\nc\n",
+			newContent: "new\nb\nc\n",
+			wantHeader: "@@ -1,3 +1,3 @@", // 1 changed + 2 context
+		},
+		{
+			name:       "insert line increases new count",
+			oldContent: "a\nb\n",
+			newContent: "a\nx\nb\n",
+			wantHeader: "@@ -1,2 +1,3 @@",
+		},
+		{
+			name:       "delete line decreases new count",
+			oldContent: "a\nx\nb\n",
+			newContent: "a\nb\n",
+			wantHeader: "@@ -1,3 +1,2 @@",
+		},
+		{
+			name:       "change in middle with context on both sides",
+			oldContent: "a\nb\nc\nold\ne\nf\ng\n",
+			newContent: "a\nb\nc\nnew\ne\nf\ng\n",
+			wantHeader: "@@ -1,7 +1,7 @@", // 3 context before + 1 change + 3 context after
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := generateUnifiedDiff("test.txt", []byte(tc.oldContent), []byte(tc.newContent), false, false)
+			if !containsString(result, tc.wantHeader) {
+				t.Errorf("expected hunk header %q, got:\n%s", tc.wantHeader, result)
+			}
+		})
+	}
+}
+
+func TestGenerateUnifiedDiff_MultipleHunks(t *testing.T) {
+	// Build input with changes at line 1 and line 15, separated by 13 unchanged lines.
+	// With 3 context lines: first hunk context ends at line 4, second starts at line 12.
+	// Gap of 7 unchanged lines > 2*3=6, so hunks must be separate.
+	var oldLines, newLines []string
+	oldLines = append(oldLines, "old_first")
+	newLines = append(newLines, "new_first")
+	for i := range 13 {
+		line := string(rune('a' + i))
+		oldLines = append(oldLines, line)
+		newLines = append(newLines, line)
+	}
+	oldLines = append(oldLines, "old_last")
+	newLines = append(newLines, "new_last")
+
+	oldContent := strings.Join(oldLines, "\n") + "\n"
+	newContent := strings.Join(newLines, "\n") + "\n"
+
+	result := generateUnifiedDiff("test.txt", []byte(oldContent), []byte(newContent), false, false)
+
+	// Each @@ header contains "@@" twice, so 2 hunks = 4 occurrences
+	hhCount := strings.Count(result, "@@")
+	if hhCount != 4 {
+		t.Errorf("expected 2 hunks (4 @@ markers), got %d in:\n%s", hhCount, result)
+	}
+
+	// Verify both changes appear
+	if !containsString(result, "-old_first\n") {
+		t.Errorf("missing -old_first in:\n%s", result)
+	}
+	if !containsString(result, "+new_first\n") {
+		t.Errorf("missing +new_first in:\n%s", result)
+	}
+	if !containsString(result, "-old_last\n") {
+		t.Errorf("missing -old_last in:\n%s", result)
+	}
+	if !containsString(result, "+new_last\n") {
+		t.Errorf("missing +new_last in:\n%s", result)
 	}
 }

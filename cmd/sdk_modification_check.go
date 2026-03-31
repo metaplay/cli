@@ -263,9 +263,6 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	// Convert back to lines
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
-	// Clean up
-	diffs = dmp.DiffCleanupSemantic(diffs)
-
 	// Write git-style header
 	buf.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", pathInPatch, pathInPatch))
 	if isNew {
@@ -315,19 +312,27 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 
 	// Convert diffs to line operations
 	type lineOp struct {
-		op   diffmatchpatch.Operation
-		line string
+		op               diffmatchpatch.Operation
+		line             string
+		isMissingNewline bool
 	}
 	var ops []lineOp
 
 	for _, d := range diffs {
 		lines := strings.Split(d.Text, "\n")
-		// Handle trailing newline - if text ends with \n, last element is empty
-		if len(lines) > 0 && lines[len(lines)-1] == "" {
+		// Handle trailing newline - if text ends with \n, last element is empty.
+		// Also, remember if the text did not end in newline: this will require
+		// outputting the "\ No newline at end of file" marker in the diff.
+		textEndsInNewline := len(lines) > 0 && lines[len(lines)-1] == ""
+		if textEndsInNewline {
 			lines = lines[:len(lines)-1]
 		}
-		for _, line := range lines {
-			ops = append(ops, lineOp{op: d.Type, line: line})
+		for lineNdx, line := range lines {
+			ops = append(ops, lineOp{
+				op:               d.Type,
+				line:             line,
+				isMissingNewline: !textEndsInNewline && lineNdx == len(lines)-1,
+			})
 		}
 	}
 
@@ -422,6 +427,9 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 			case diffmatchpatch.DiffInsert:
 				hunkLines = append(hunkLines, "+"+line)
 				newCount++
+			}
+			if op.isMissingNewline {
+				hunkLines = append(hunkLines, "\\ No newline at end of file")
 			}
 		}
 

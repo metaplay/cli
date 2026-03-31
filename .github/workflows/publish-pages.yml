@@ -8,6 +8,7 @@ on:
     # Run on changes to install.sh and publish-pages.yml. Keeps the install.sh public URL up-to-date.
     paths:
       - install.sh
+      - install.ps1
       - .github/workflows/publish-pages.yml
     # Trigger on version tags for official releases like '1.2.3' (but not for dev releases like '1.2.3-xyz').
     # Keeps the command reference up-to-date with latest official release.
@@ -31,12 +32,13 @@ jobs:
       # GitHub Pages isn't throttled like the https://raw.githubusercontent.com/metaplay/cli/main/install.sh.
       - name: Prepare Pages output
         run: |
-          # Copy install.sh into 'site/'
+          # Copy install.sh and install.ps1 into 'site/'
           mkdir site
           cp install.sh site/
+          cp install.ps1 site/
 
       - name: Configure Pages
-        uses: actions/configure-pages@v5
+        uses: actions/configure-pages@v6
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
@@ -45,7 +47,7 @@ jobs:
 
       - id: deployment
         name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
       - name: Show published URL
         run: echo "🎉 Site published at ${{ steps.deployment.outputs.page_url }}"
