@@ -19,7 +19,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
       - name: Run shellcheck
         run: shellcheck --severity=warning --exclude=SC2034 install.sh
 
@@ -33,7 +33,7 @@ jobs:
         shell: [bash, zsh, fish]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Install shell (Ubuntu)
         if: matrix.os == 'ubuntu-latest' && matrix.shell != 'bash'
@@ -125,7 +125,7 @@ jobs:
     name: "Fallback when SHELL is unset"
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Prepare environment
         run: |
