@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/metaplay/cli/internal/envutil"
@@ -127,28 +128,40 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	}
 
 	// GA builds: show update banner.
-	updateLine := fmt.Sprintf("Update available! %s → %s", AppVersion, latest.Version())
+	for _, line := range renderUpdateBanner(AppVersion, latest.Version()) {
+		stderrLogger.Info().Msg(line)
+	}
+}
+
+// renderUpdateBanner builds the bordered update notification box.
+// currentVersion and latestVersion are plain version strings (no ANSI).
+func renderUpdateBanner(currentVersion, latestVersion string) []string {
+	updateLine := fmt.Sprintf("Update available! %s → %s", currentVersion, latestVersion)
 	commandLine := "To update, run: metaplay update cli"
 
-	// Determine inner width based on the longest content line.
-	innerWidth := max(len(updateLine), len(commandLine)) + 4 // 2 chars padding on each side
+	// Inner width (in runes) = longest content line + 4 (2 chars padding each side).
+	updateWidth := utf8.RuneCountInString(updateLine)
+	commandWidth := utf8.RuneCountInString(commandLine)
+	innerWidth := max(updateWidth, commandWidth) + 4
 
-	pad := func(visibleLen int) string {
-		return strings.Repeat(" ", innerWidth-2-visibleLen)
+	pad := func(visibleWidth int) string {
+		return strings.Repeat(" ", innerWidth-2-visibleWidth)
 	}
 
-	stderrLogger.Info().Msgf("╭%s╮", strings.Repeat("─", innerWidth))
-	stderrLogger.Info().Msgf("│%s│", strings.Repeat(" ", innerWidth))
-	stderrLogger.Info().Msgf("│  %s %s → %s%s│",
-		"Update available!",
-		styles.RenderError(AppVersion),
-		styles.RenderSuccess(latest.Version()),
-		pad(len(updateLine)),
-	)
-	stderrLogger.Info().Msgf("│  %s%s│",
-		styles.RenderPrompt("To update, run: metaplay update cli"),
-		pad(len(commandLine)),
-	)
-	stderrLogger.Info().Msgf("│%s│", strings.Repeat(" ", innerWidth))
-	stderrLogger.Info().Msgf("╰%s╯", strings.Repeat("─", innerWidth))
+	return []string{
+		fmt.Sprintf("╭%s╮", strings.Repeat("─", innerWidth)),
+		fmt.Sprintf("│%s│", strings.Repeat(" ", innerWidth)),
+		fmt.Sprintf("│  %s %s → %s%s│",
+			"Update available!",
+			styles.RenderError(currentVersion),
+			styles.RenderSuccess(latestVersion),
+			pad(updateWidth),
+		),
+		fmt.Sprintf("│  %s%s│",
+			styles.RenderPrompt("To update, run: metaplay update cli"),
+			pad(commandWidth),
+		),
+		fmt.Sprintf("│%s│", strings.Repeat(" ", innerWidth)),
+		fmt.Sprintf("╰%s╯", strings.Repeat("─", innerWidth)),
+	}
 }
