@@ -29,9 +29,8 @@ func IsDevBuild() bool {
 	return AppVersion == devBuild
 }
 
-// IsPrerelease returns true if the current version should use the prerelease
-// update channel. This includes both prerelease builds (e.g. "0.1.3-dev.5")
-// and local development builds ("dev").
+// IsPrerelease returns true if the current version is a prerelease build
+// (e.g. "0.1.3-dev.5"), but not a local development build ("dev").
 func IsPrerelease() bool {
 	return strings.Contains(AppVersion, "-dev.")
 }
@@ -128,27 +127,28 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	}
 
 	// GA builds: show update banner.
-	topBorder := "╭──────────────────────────────────────────────────────────────────╮"
-	bottomBorder := "╰──────────────────────────────────────────────────────────────────╯"
-	emptyLine := "│                                                                  │"
+	updateLine := fmt.Sprintf("Update available! %s → %s", AppVersion, latest.Version())
+	commandLine := "To update, run: metaplay update cli"
 
-	padding := strings.Repeat(" ", 41-len(AppVersion)-len(latest.Version()))
-	updateText := fmt.Sprintf("│  %s %s → %s %s │",
+	// Determine inner width based on the longest content line.
+	innerWidth := max(len(updateLine), len(commandLine)) + 4 // 2 chars padding on each side
+
+	pad := func(visibleLen int) string {
+		return strings.Repeat(" ", innerWidth-2-visibleLen)
+	}
+
+	stderrLogger.Info().Msgf("╭%s╮", strings.Repeat("─", innerWidth))
+	stderrLogger.Info().Msgf("│%s│", strings.Repeat(" ", innerWidth))
+	stderrLogger.Info().Msgf("│  %s %s → %s%s│",
 		"Update available!",
 		styles.RenderError(AppVersion),
 		styles.RenderSuccess(latest.Version()),
-		padding,
+		pad(len(updateLine)),
 	)
-
-	commandText := fmt.Sprintf("│  To update, run: %s %s │",
-		styles.RenderPrompt("metaplay update cli"),
-		strings.Repeat(" ", 27),
+	stderrLogger.Info().Msgf("│  %s%s│",
+		styles.RenderPrompt("To update, run: metaplay update cli"),
+		pad(len(commandLine)),
 	)
-
-	stderrLogger.Info().Msg(topBorder)
-	stderrLogger.Info().Msg(emptyLine)
-	stderrLogger.Info().Msg(updateText)
-	stderrLogger.Info().Msg(commandText)
-	stderrLogger.Info().Msg(emptyLine)
-	stderrLogger.Info().Msg(bottomBorder)
+	stderrLogger.Info().Msgf("│%s│", strings.Repeat(" ", innerWidth))
+	stderrLogger.Info().Msgf("╰%s╯", strings.Repeat("─", innerWidth))
 }

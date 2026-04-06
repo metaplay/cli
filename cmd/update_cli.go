@@ -40,11 +40,11 @@ func (o *updateCliOpts) Prepare(cmd *cobra.Command, args []string) error {
 
 type selfupdateLogger struct{}
 
-func (l selfupdateLogger) Print(v ...interface{}) {
+func (l selfupdateLogger) Print(v ...any) {
 	log.Debug().Msgf("%v", v...)
 }
 
-func (l selfupdateLogger) Printf(format string, v ...interface{}) {
+func (l selfupdateLogger) Printf(format string, v ...any) {
 	log.Debug().Msgf(format, v...)
 }
 
