@@ -34,10 +34,22 @@ func (o *updateCliOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+type selfupdateLogger struct{}
+
+func (l selfupdateLogger) Print(v ...interface{}) {
+	log.Debug().Msgf("%v", v...)
+}
+
+func (l selfupdateLogger) Printf(format string, v ...interface{}) {
+	log.Debug().Msgf(format, v...)
+}
+
 func (o *updateCliOpts) Run(cmd *cobra.Command) error {
-	if version.IsDevBuild() {
-		return fmt.Errorf("the update command is disabled on development builds")
-	}
+	log.Info().Msg("")
+	log.Info().Msgf("Resolving the latest Metaplay CLI version...")
+
+	// Forward go-selfupdate outputs to console on debug level.
+	selfupdate.SetLogger(selfupdateLogger{})
 
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 	if err != nil {
@@ -56,9 +68,11 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to detect the latest Metaplay CLI version: %w", err)
 	}
 	if !found {
-		log.Info().Msgf("No newer Metaplay CLI version found")
+		log.Info().Msgf("Already on the latest Metaplay CLI version (%s)", version.AppVersion)
 		return nil
 	}
+
+	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest.Version()))
 
 	// Calling vendored implementation of `GetExecutablePath()` due to a bug in `selfupdate.GetExecutablePath()`
 	// that uses `filepath.EvalSymlinks()` known to be broken on Windows.
