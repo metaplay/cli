@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/creativeprojects/go-selfupdate"
+	"github.com/metaplay/cli/internal/envutil"
+	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -93,29 +95,51 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 		return
 	}
 
-	if found && latest.GreaterThan(AppVersion) {
-		topBorder := "╭──────────────────────────────────────────────────────────────────╮"
-		bottomBorder := "╰──────────────────────────────────────────────────────────────────╯"
-		emptyLine := "│                                                                  │"
+	if !found || !latest.GreaterThan(AppVersion) {
+		return
+	}
 
-		padding := strings.Repeat(" ", 41-len(AppVersion)-len(latest.Version()))
-		updateText := fmt.Sprintf("│  %s %s → %s %s │",
-			"Update available!",
+	// Auto-update prerelease/dev builds (except in CI).
+	if usePrerelease && !envutil.IsCI() {
+		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
 			styles.RenderError(AppVersion),
 			styles.RenderSuccess(latest.Version()),
-			padding,
 		)
-
-		commandText := fmt.Sprintf("│  To update, run: %s %s │",
-			styles.RenderPrompt("metaplay update cli"),
-			strings.Repeat(" ", 27),
-		)
-
-		stderrLogger.Info().Msg(topBorder)
-		stderrLogger.Info().Msg(emptyLine)
-		stderrLogger.Info().Msg(updateText)
-		stderrLogger.Info().Msg(commandText)
-		stderrLogger.Info().Msg(emptyLine)
-		stderrLogger.Info().Msg(bottomBorder)
+		exe, err := pathutil.GetExecutablePath()
+		if err != nil {
+			log.Debug().Msgf("Auto-update failed: could not determine executable path: %v", err)
+			return
+		}
+		if err := updater.UpdateTo(context.Background(), latest, exe); err != nil {
+			log.Debug().Msgf("Auto-update failed: %v", err)
+			return
+		}
+		stderrLogger.Info().Msgf(styles.RenderSuccess("Updated CLI to %s.") + " Note: this command is still running with the previous version.", latest.Version())
+		return
 	}
+
+	// GA builds: show update banner.
+	topBorder := "╭──────────────────────────────────────────────────────────────────╮"
+	bottomBorder := "╰──────────────────────────────────────────────────────────────────╯"
+	emptyLine := "│                                                                  │"
+
+	padding := strings.Repeat(" ", 41-len(AppVersion)-len(latest.Version()))
+	updateText := fmt.Sprintf("│  %s %s → %s %s │",
+		"Update available!",
+		styles.RenderError(AppVersion),
+		styles.RenderSuccess(latest.Version()),
+		padding,
+	)
+
+	commandText := fmt.Sprintf("│  To update, run: %s %s │",
+		styles.RenderPrompt("metaplay update cli"),
+		strings.Repeat(" ", 27),
+	)
+
+	stderrLogger.Info().Msg(topBorder)
+	stderrLogger.Info().Msg(emptyLine)
+	stderrLogger.Info().Msg(updateText)
+	stderrLogger.Info().Msg(commandText)
+	stderrLogger.Info().Msg(emptyLine)
+	stderrLogger.Info().Msg(bottomBorder)
 }
