@@ -62,6 +62,11 @@ func (s *PrereleaseOnlySource) DownloadReleaseAsset(ctx context.Context, rel *se
 }
 
 func CheckVersion(stderrLogger *zerolog.Logger) {
+	if IsDevBuild() {
+		log.Debug().Msgf("Skipping version check for development build (version is '%s')", AppVersion)
+		return
+	}
+
 	log.Debug().Msgf("Checking for new CLI version (current: v%s)", AppVersion)
 
 	// Check for new releases using go-selfupdate.
@@ -95,11 +100,15 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 		return
 	}
 
-	if !found || !latest.GreaterThan(AppVersion) {
+	if !found {
 		return
 	}
 
-	// Auto-update prerelease/dev builds (except in CI).
+	if !latest.GreaterThan(AppVersion) {
+		return
+	}
+
+	// Auto-update prerelease builds (except in CI).
 	if usePrerelease && !envutil.IsCI() {
 		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
 			styles.RenderError(AppVersion),
