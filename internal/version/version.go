@@ -80,7 +80,7 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	}
 
 	var source selfupdate.Source = ghSource
-	usePrerelease := IsPrerelease() || IsDevBuild()
+	usePrerelease := IsPrerelease()
 	if usePrerelease {
 		source = &PrereleaseOnlySource{Inner: source}
 	}
