@@ -52,7 +52,7 @@ func (o *versionOpts) Run(cmd *cobra.Command) error {
 		info := VersionInfo{
 			AppVersion: version.AppVersion,
 			GitCommit:  version.GitCommit,
-			Prerelease: version.IsDevBuild(),
+			Prerelease: version.IsPrerelease(),
 		}
 
 		// Marshal to JSON.

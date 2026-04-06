@@ -45,19 +45,28 @@ func (l selfupdateLogger) Printf(format string, v ...interface{}) {
 }
 
 func (o *updateCliOpts) Run(cmd *cobra.Command) error {
-	log.Info().Msg("")
-	log.Info().Msgf("Resolving the latest Metaplay CLI version...")
-
-	// Forward go-selfupdate outputs to console on debug level.
 	selfupdate.SetLogger(selfupdateLogger{})
+
+	prerelease := version.IsPrerelease() || version.IsDevBuild()
+	if prerelease {
+		log.Info().Msgf("Checking for the latest Metaplay CLI prerelease version...")
+	} else {
+		log.Info().Msgf("Checking for the latest Metaplay CLI version...")
+	}
 
 	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
 	if err != nil {
 		return fmt.Errorf("failed to initialize the Metaplay CLI updater source: %w", err)
 	}
 
+	var updateSource selfupdate.Source = source
+	if prerelease {
+		updateSource = &version.PrereleaseOnlySource{Inner: updateSource}
+	}
+
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source: source,
+		Source:     updateSource,
+		Prerelease: prerelease,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize the Metaplay CLI updater: %w", err)

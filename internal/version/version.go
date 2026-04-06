@@ -7,6 +7,7 @@ package version
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/creativeprojects/go-selfupdate"
@@ -26,17 +27,44 @@ func IsDevBuild() bool {
 	return AppVersion == devBuild
 }
 
-func CheckVersion(stderrLogger *zerolog.Logger) {
-	if IsDevBuild() {
-		log.Debug().Msgf("Bypassing self-updater version checks for development builds (version is '%s')", AppVersion)
-		return
-	}
+// IsPrerelease returns true if the current version should use the prerelease
+// update channel. This includes both prerelease builds (e.g. "0.1.3-dev.5")
+// and local development builds ("dev").
+func IsPrerelease() bool {
+	return strings.Contains(AppVersion, "-dev.")
+}
 
+// PrereleaseOnlySource wraps a Source and filters ListReleases to only return
+// prerelease releases. This ensures the updater stays on the prerelease channel
+// and won't "upgrade" to a GA release.
+type PrereleaseOnlySource struct {
+	Inner selfupdate.Source
+}
+
+func (s *PrereleaseOnlySource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	releases, err := s.Inner.ListReleases(ctx, repository)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]selfupdate.SourceRelease, 0, len(releases))
+	for _, r := range releases {
+		if r.GetPrerelease() {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *PrereleaseOnlySource) DownloadReleaseAsset(ctx context.Context, rel *selfupdate.Release, assetID int64) (io.ReadCloser, error) {
+	return s.Inner.DownloadReleaseAsset(ctx, rel, assetID)
+}
+
+func CheckVersion(stderrLogger *zerolog.Logger) {
 	log.Debug().Msgf("Checking for new CLI version (current: v%s)", AppVersion)
 
 	// Check for new releases using go-selfupdate.
 	// Errors are only logged, not fatal, in order to allow the command to run even if the version check fails.
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
+	ghSource, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
 		APIToken: "", // Public repo doesn't need auth
 	})
 	if err != nil {
@@ -44,8 +72,15 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 		return
 	}
 
+	var source selfupdate.Source = ghSource
+	usePrerelease := IsPrerelease() || IsDevBuild()
+	if usePrerelease {
+		source = &PrereleaseOnlySource{Inner: source}
+	}
+
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source: source,
+		Source:     source,
+		Prerelease: usePrerelease,
 	})
 	if err != nil {
 		log.Debug().Msg("Error: Failed to initialize the Metaplay CLI self-updater")
