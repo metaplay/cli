@@ -16,7 +16,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type updateCliOpts struct{}
+type updateCliOpts struct {
+	flagPrerelease bool
+}
 
 func init() {
 	o := updateCliOpts{}
@@ -26,6 +28,8 @@ func init() {
 		Short: "Update the Metaplay CLI to the latest version",
 		Run:   runCommand(&o),
 	}
+
+	cmd.Flags().BoolVar(&o.flagPrerelease, "prerelease", false, "Update to the latest prerelease version")
 
 	updateCmd.AddCommand(cmd)
 }
@@ -47,7 +51,7 @@ func (l selfupdateLogger) Printf(format string, v ...interface{}) {
 func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 	selfupdate.SetLogger(selfupdateLogger{})
 
-	prerelease := version.IsPrerelease() || version.IsDevBuild()
+	prerelease := o.flagPrerelease || version.IsPrerelease() || version.IsDevBuild()
 	if prerelease {
 		log.Info().Msgf("Checking for the latest Metaplay CLI prerelease version...")
 	} else {
