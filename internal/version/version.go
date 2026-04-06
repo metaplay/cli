@@ -7,9 +7,13 @@ package version
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/creativeprojects/go-selfupdate"
+	"github.com/metaplay/cli/internal/envutil"
+	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -26,9 +30,40 @@ func IsDevBuild() bool {
 	return AppVersion == devBuild
 }
 
+// IsPrerelease returns true if the current version is a prerelease build
+// (e.g. "0.1.3-dev.5"), but not a local development build ("dev").
+func IsPrerelease() bool {
+	return strings.Contains(AppVersion, "-dev.")
+}
+
+// PrereleaseOnlySource wraps a Source and filters ListReleases to only return
+// prerelease releases. This ensures the updater stays on the prerelease channel
+// and won't "upgrade" to a GA release.
+type PrereleaseOnlySource struct {
+	Inner selfupdate.Source
+}
+
+func (s *PrereleaseOnlySource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
+	releases, err := s.Inner.ListReleases(ctx, repository)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]selfupdate.SourceRelease, 0, len(releases))
+	for _, r := range releases {
+		if r.GetPrerelease() {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *PrereleaseOnlySource) DownloadReleaseAsset(ctx context.Context, rel *selfupdate.Release, assetID int64) (io.ReadCloser, error) {
+	return s.Inner.DownloadReleaseAsset(ctx, rel, assetID)
+}
+
 func CheckVersion(stderrLogger *zerolog.Logger) {
 	if IsDevBuild() {
-		log.Debug().Msgf("Bypassing self-updater version checks for development builds (version is '%s')", AppVersion)
+		log.Debug().Msgf("Skipping version check for development build (version is '%s')", AppVersion)
 		return
 	}
 
@@ -36,7 +71,7 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 
 	// Check for new releases using go-selfupdate.
 	// Errors are only logged, not fatal, in order to allow the command to run even if the version check fails.
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
+	ghSource, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
 		APIToken: "", // Public repo doesn't need auth
 	})
 	if err != nil {
@@ -44,8 +79,15 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 		return
 	}
 
+	var source selfupdate.Source = ghSource
+	usePrerelease := IsPrerelease()
+	if usePrerelease {
+		source = &PrereleaseOnlySource{Inner: source}
+	}
+
 	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source: source,
+		Source:     source,
+		Prerelease: usePrerelease,
 	})
 	if err != nil {
 		log.Debug().Msg("Error: Failed to initialize the Metaplay CLI self-updater")
@@ -58,29 +100,68 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 		return
 	}
 
-	if found && latest.GreaterThan(AppVersion) {
-		topBorder := "╭──────────────────────────────────────────────────────────────────╮"
-		bottomBorder := "╰──────────────────────────────────────────────────────────────────╯"
-		emptyLine := "│                                                                  │"
+	if !found {
+		return
+	}
 
-		padding := strings.Repeat(" ", 41-len(AppVersion)-len(latest.Version()))
-		updateText := fmt.Sprintf("│  %s %s → %s %s │",
-			"Update available!",
+	if !latest.GreaterThan(AppVersion) {
+		return
+	}
+
+	// Auto-update prerelease builds (except in CI).
+	if usePrerelease && !envutil.IsCI() {
+		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
 			styles.RenderError(AppVersion),
 			styles.RenderSuccess(latest.Version()),
-			padding,
 		)
+		exe, err := pathutil.GetExecutablePath()
+		if err != nil {
+			log.Debug().Msgf("Auto-update failed: could not determine executable path: %v", err)
+			return
+		}
+		if err := updater.UpdateTo(context.Background(), latest, exe); err != nil {
+			log.Debug().Msgf("Auto-update failed: %v", err)
+			return
+		}
+		stderrLogger.Info().Msgf(styles.RenderSuccess("Updated CLI to %s.") + " Note: this command is still running with the previous version.", latest.Version())
+		return
+	}
 
-		commandText := fmt.Sprintf("│  To update, run: %s %s │",
-			styles.RenderPrompt("metaplay update cli"),
-			strings.Repeat(" ", 27),
-		)
+	// GA builds: show update banner.
+	for _, line := range renderUpdateBanner(AppVersion, latest.Version()) {
+		stderrLogger.Info().Msg(line)
+	}
+}
 
-		stderrLogger.Info().Msg(topBorder)
-		stderrLogger.Info().Msg(emptyLine)
-		stderrLogger.Info().Msg(updateText)
-		stderrLogger.Info().Msg(commandText)
-		stderrLogger.Info().Msg(emptyLine)
-		stderrLogger.Info().Msg(bottomBorder)
+// renderUpdateBanner builds the bordered update notification box.
+// currentVersion and latestVersion are plain version strings (no ANSI).
+func renderUpdateBanner(currentVersion, latestVersion string) []string {
+	updateLine := fmt.Sprintf("Update available! %s → %s", currentVersion, latestVersion)
+	commandLine := "To update, run: metaplay update cli"
+
+	// Inner width (in runes) = longest content line + 4 (2 chars padding each side).
+	updateWidth := utf8.RuneCountInString(updateLine)
+	commandWidth := utf8.RuneCountInString(commandLine)
+	innerWidth := max(updateWidth, commandWidth) + 4
+
+	pad := func(visibleWidth int) string {
+		return strings.Repeat(" ", innerWidth-2-visibleWidth)
+	}
+
+	return []string{
+		fmt.Sprintf("╭%s╮", strings.Repeat("─", innerWidth)),
+		fmt.Sprintf("│%s│", strings.Repeat(" ", innerWidth)),
+		fmt.Sprintf("│  %s %s → %s%s│",
+			"Update available!",
+			styles.RenderError(currentVersion),
+			styles.RenderSuccess(latestVersion),
+			pad(updateWidth),
+		),
+		fmt.Sprintf("│  %s%s│",
+			styles.RenderPrompt("To update, run: metaplay update cli"),
+			pad(commandWidth),
+		),
+		fmt.Sprintf("│%s│", strings.Repeat(" ", innerWidth)),
+		fmt.Sprintf("╰%s╯", strings.Repeat("─", innerWidth)),
 	}
 }
