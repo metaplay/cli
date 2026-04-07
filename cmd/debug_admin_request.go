@@ -167,6 +167,8 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		// Detect if passed string is JSON, otherwise fallback to default resty behavior
 		if o.flagContentType == "" && IsJSON(o.flagBody) {
 			contentType = "application/json"
+		} else if o.flagContentType == "application/json" && !IsJSON(o.flagBody) {
+			log.Warn().Msg(styles.RenderWarning("⚠️ Content-Type is application/json but --body does not appear to be valid JSON"))
 		}
 	} else if o.flagFile != "" {
 		// Read content from file
