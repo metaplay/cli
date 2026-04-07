@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -187,12 +188,18 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 	} else {
 		// For complex types, get the body as JSON and unmarshal into TResult.
 		rawBody := response.Body()
-		err = json.Unmarshal(rawBody, &result)
-		if err != nil {
-			log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
-			return result, err
+		if len(rawBody) == 0 {
+			// Empty body is only valid when TResponse is any (interface{}); all other types require a response body.
+			if reflect.TypeOf((*TResponse)(nil)).Elem().Kind() != reflect.Interface {
+				return result, fmt.Errorf("server returned an empty response body where JSON was expected")
+			}
+		} else {
+			err = json.Unmarshal(rawBody, &result)
+			if err != nil {
+				log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
+				return result, err
+			}
 		}
-
 	}
 
 	return result, nil

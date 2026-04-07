@@ -251,6 +251,12 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("request failed: %v", requestErr)
 	}
 
+	// If no response body was returned, print something to acknowledge the result
+	if response == nil {
+		log.Info().Msg(styles.RenderSuccess("✅ Request successful!"))
+		return nil
+	}
+
 	// Format and display the response
 	log.Debug().Msg(styles.RenderSuccess("✅ Request successful!"))
 	log.Debug().Msg("")
