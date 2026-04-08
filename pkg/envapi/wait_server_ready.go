@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
@@ -353,7 +354,7 @@ func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
 // \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (bool, []string, error) {
+func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, output *tui.TaskOutput) (bool, []string, error) {
 	// Must have either old or new operator CR.
 	newCR := gameServer.GameServerNewCR
 	oldCR := gameServer.GameServerOldCR
@@ -408,19 +409,19 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 				if status.Phase == PhaseFailed {
 					podLogs, err := fetchPodLogs(ctx, kubeCli, podName, "shard-server")
 					if err != nil {
-						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
+						output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
 					} else {
-						// Format logs with each line prefixed by '> '
-						var sb strings.Builder
+						// Route pod logs through TaskOutput footer to avoid writing
+						// directly to stdout while Bubble Tea is managing the terminal.
+						// Footer lines are not subject to the log line cap.
+						logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
 						for line := range strings.SplitSeq(podLogs, "\n") {
-							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
+							logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
 						}
-						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
+						logLines = append(logLines, fmt.Sprintf("Pod %s failed: %s", podName, status.Message))
+						output.SetFooterLines(logLines)
 					}
-
-					// Log info about failure & return the error
-					log.Info().Msgf("Pod %s failed: %s", podName, status.Message)
-					return false, nil, fmt.Errorf("pod %s failed to deploy (see above for logs and details)", podName)
+					return false, nil, fmt.Errorf("pod %s failed to deploy", podName)
 				}
 			} else {
 				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
@@ -467,9 +468,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// Get status of the deployment.
 		// \todo handle edge clusters (for new CR only)
-		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer)
+		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer, output)
 		if err != nil {
-			return err
+			return clierrors.Wrap(err, "Game server failed to start").
+				WithSuggestion(fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID))
 		}
 
 		// Resolve status lines to show.
