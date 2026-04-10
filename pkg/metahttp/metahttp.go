@@ -27,6 +27,43 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
+// HTTPError is returned by Request (and its Get/Post/Put/Delete helpers) when
+// the server responds with a non-2xx status code. Callers can use errors.As to
+// detect HTTP errors and inspect the status code and parsed message for
+// discrimination and user-friendly messaging.
+type HTTPError struct {
+	StatusCode int    // HTTP status code returned by the server (e.g., 400, 404, 409, 500)
+	Method     string // HTTP method used for the request (e.g., "GET", "POST")
+	URL        string // Full request URL (base URL + path)
+	Body       []byte // Raw response body
+	Message    string // Parsed error message from the response body, or empty if none could be parsed
+}
+
+// Error implements the error interface.
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s %s failed with status %d: %s", e.Method, e.URL, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("%s %s failed with status %d", e.Method, e.URL, e.StatusCode)
+}
+
+// parseHTTPErrorMessage extracts a user-readable error message from an HTTP
+// error response body. Expects a JSON body of the form {"error": "..."} (the
+// StackAPI error shape); falls back to the raw body as a trimmed string when
+// JSON parsing fails or no "error" field is present.
+func parseHTTPErrorMessage(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != "" {
+		return parsed.Error
+	}
+	return strings.TrimSpace(string(body))
+}
+
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
 // All failed requests are automatically retried a few times to mitigate network errors.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
@@ -174,11 +211,17 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		// Print error details before return the error to keep the log more readable.
-		errorBody := string(response.Body())
+		// Print error details before returning the error to keep the log more readable.
+		errorBody := response.Body()
 		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
-		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, errorBody)
-		return result, fmt.Errorf("%s %s failed (see above for details)", method, requestURL)
+		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
+		return result, &HTTPError{
+			StatusCode: response.StatusCode(),
+			Method:     method,
+			URL:        requestURL,
+			Body:       errorBody,
+			Message:    parseHTTPErrorMessage(errorBody),
+		}
 	}
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext
