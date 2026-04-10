@@ -276,3 +276,124 @@ func printCapabilitiesUnsupported(envName string) {
 	)
 	log.Info().Msg("  This environment does not have a dedicated, managed database cluster.")
 }
+
+// waitForDatabaseOperation polls the given operation id until it reaches a
+// terminal state or the context is cancelled. The onStatusChange callback is
+// invoked each time the operation's Status field changes. HTTPError responses
+// are mapped to friendly CLI errors via mapDatabaseHTTPError.
+func waitForDatabaseOperation(
+	ctx context.Context,
+	target *envapi.TargetEnvironment,
+	operationID string,
+	onStatusChange func(*envapi.DatabaseOperation),
+) (*envapi.DatabaseOperation, error) {
+	var lastStatus string
+	pollInterval := databaseOperationPollInterval()
+	for {
+		op, err := target.GetDatabaseOperation(operationID)
+		if err != nil {
+			return nil, mapDatabaseHTTPError(err, "get operation")
+		}
+		if op.Status != lastStatus {
+			if onStatusChange != nil {
+				onStatusChange(op)
+			}
+			lastStatus = op.Status
+		}
+		if op.IsTerminal() {
+			return op, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, clierrors.Wrap(ctx.Err(), "Operation watch cancelled")
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// shardOperationResult captures the outcome of a mutating operation on a
+// single shard, returned from per-shard parallel fan-out helpers.
+type shardOperationResult struct {
+	ShardIndex int
+	Operation  *envapi.DatabaseOperation
+	Err        error
+}
+
+// runShardOperation initiates a mutating database operation (via the
+// provided initiate func) on one shard, logs the accepted operation id, and
+// unless noWait is true, polls the operation until it reaches a terminal
+// state. operationDescription is used in user-visible messages ("snapshot
+// create", "snapshot delete", "rollback database"). multiShard controls
+// whether per-shard log lines are prefixed with "[shard N]".
+func runShardOperation(
+	ctx context.Context,
+	target *envapi.TargetEnvironment,
+	shardIndex int,
+	operationDescription string,
+	initiate func() (*envapi.DatabaseOperation, error),
+	noWait bool,
+	multiShard bool,
+) shardOperationResult {
+	prefix := ""
+	if multiShard {
+		prefix = fmt.Sprintf("[shard %d] ", shardIndex)
+	}
+
+	op, err := initiate()
+	if err != nil {
+		return shardOperationResult{
+			ShardIndex: shardIndex,
+			Err:        mapDatabaseHTTPError(err, operationDescription),
+		}
+	}
+	log.Info().Msgf("%s%s %s accepted (op: %s)",
+		prefix,
+		styles.RenderSuccess("✓"),
+		operationDescription,
+		styles.RenderTechnical(op.OperationID))
+
+	if noWait || op.IsTerminal() {
+		return shardOperationResult{ShardIndex: shardIndex, Operation: op}
+	}
+
+	final, err := waitForDatabaseOperation(ctx, target, op.OperationID,
+		func(u *envapi.DatabaseOperation) {
+			log.Info().Msgf("%s  status: %s", prefix, renderOperationStatusStyled(u.Status))
+		})
+	if err != nil {
+		return shardOperationResult{ShardIndex: shardIndex, Operation: op, Err: err}
+	}
+
+	if final.Status == envapi.DatabaseOperationStatusFailed {
+		msg := "operation failed"
+		if final.Error != nil && *final.Error != "" {
+			msg = *final.Error
+		}
+		return shardOperationResult{
+			ShardIndex: shardIndex,
+			Operation:  final,
+			Err: clierrors.Newf("%s%s failed: %s",
+				prefix, operationDescription, msg),
+		}
+	}
+
+	log.Info().Msgf("%s%s %s completed", prefix, styles.RenderSuccess("✓"), operationDescription)
+	return shardOperationResult{ShardIndex: shardIndex, Operation: final}
+}
+
+// aggregateShardResults joins multiple per-shard results into a single error
+// summary. Returns nil if all shards succeeded, otherwise a CLIError listing
+// the failed shards. Intended for --all-shards fan-out commands.
+func aggregateShardResults(operationDescription string, results []shardOperationResult) error {
+	var failed []string
+	for _, r := range results {
+		if r.Err != nil {
+			failed = append(failed, fmt.Sprintf("shard %d: %s", r.ShardIndex, r.Err.Error()))
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	return clierrors.Newf("%s failed on %d of %d shards", operationDescription, len(failed), len(results)).
+		WithDetails(failed...)
+}
