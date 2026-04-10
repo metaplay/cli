@@ -28,10 +28,13 @@ type Client struct {
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
+// The authToken is the Bearer token used for requests — callers choose which token
+// is appropriate (e.g., the Metaplay Auth access token for Portal, or an environment-
+// scoped JWT for stack requests).
 // All failed requests are automatically retried a few times to mitigate network errors.
-func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
+func NewJSONClient(tokenSet *auth.TokenSet, baseURL string, authToken string) *Client {
 	restyClient := httputil.NewRetryClient().
-		SetAuthToken(tokenSet.AccessToken).
+		SetAuthToken(authToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").
 		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))

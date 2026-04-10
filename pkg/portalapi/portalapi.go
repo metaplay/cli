@@ -53,7 +53,7 @@ func CanonicalizeSdkVersions(versions []SdkVersionInfo) {
 // NewClient creates a new Portal API client with the given auth token set.
 func NewClient(tokenSet *auth.TokenSet) *Client {
 	return &Client{
-		httpClient: metahttp.NewJSONClient(tokenSet, common.PortalBaseURL),
+		httpClient: metahttp.NewJSONClient(tokenSet, common.PortalBaseURL, tokenSet.AccessToken),
 		baseURL:    common.PortalBaseURL,
 		tokenSet:   tokenSet,
 	}
@@ -398,6 +398,28 @@ func parseMinorPatch(s string) (minor, patch int) {
 		patch, _ = strconv.Atoi(patchStr)
 	}
 	return minor, patch
+}
+
+// ExchangeTokenForEnvironment exchanges the current Metaplay Auth access token
+// for a short-lived, environment-scoped JWT minted by Portal. The returned token
+// is safe to send to customer-controlled game server stacks.
+func (c *Client) ExchangeTokenForEnvironment(environmentHumanID string) (string, error) {
+	path := fmt.Sprintf("/api/v1/tokens/get-environment-access-token?environment_human_id=%s", environmentHumanID)
+	log.Debug().Msgf("Exchanging token for environment '%s' via %s%s", environmentHumanID, c.baseURL, path)
+
+	accessToken, err := metahttp.Get[string](c.httpClient, path)
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to exchange token for environment access").
+			WithSuggestion("Check your network connection and ensure you have access to this environment").
+			WithDetails(fmt.Sprintf("Environment: %s", environmentHumanID))
+	}
+
+	if accessToken == "" {
+		return "", clierrors.New("Portal returned an empty access token during token exchange").
+			WithSuggestion("This may be a temporary issue. Try again, or contact support if the problem persists")
+	}
+
+	return accessToken, nil
 }
 
 // DownloadLatestSdk downloads the latest SDK to the specified target directory.

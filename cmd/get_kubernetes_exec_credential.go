@@ -5,11 +5,13 @@
 package cmd
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -54,23 +56,30 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	//       and thus the `kubectl` operations using this invocation must be run in the project directory where the metaplay-project.yaml is available.
 	//       Fix this later by passing the auth provider info or the project config file location as an argument?
 	var tokenSet *auth.TokenSet
+	var authProvider string
 	if project != nil {
 		// If metaplay-project.yaml was found, resolve the environment from it.
-		_, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
+		var envConfig *metaproj.ProjectEnvironmentConfig
+		envConfig, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
 		if err != nil {
 			return err
 		}
+		authProvider = envConfig.AuthProvider
 	} else {
 		// If no metaplay-project.yaml was found, assume Metaplay Auth provider is being used.
 		tokenSet, err = tui.RequireLoggedIn(cmd.Context(), auth.NewMetaplayAuthProvider())
 		if err != nil {
 			return err
 		}
+		authProvider = "metaplay"
 	}
 
 	// \todo Fix stack domain hack
 	stackDomain := strings.Replace(strings.Replace(o.argStackAPIBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID)
+	targetEnv, err := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID, authProvider)
+	if err != nil {
+		return fmt.Errorf("failed to access target environment: %w", err)
+	}
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()
