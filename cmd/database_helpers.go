@@ -17,9 +17,57 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
+
+// resolveEnvironmentForDatabaseOps is the shared entry-point for every
+// 'metaplay database ...' command. It resolves the target environment from
+// the positional argument (via tryResolveProject + resolveEnvironment),
+// builds a TargetEnvironment, and probes the database capabilities endpoint
+// as a readiness check.
+//
+// The capabilities probe is the canonical "are database operations available
+// for this environment?" signal:
+//
+//   - On infrastructure stacks that predate the database operations API,
+//     the endpoint is not registered and the probe fails with a transport
+//     or HTTP error; we translate this into a clear "not available" error.
+//   - On stacks that support the API, the probe returns capabilities data
+//     that callers use for subsequent shard selection and per-shard logic.
+//
+// Treating any capabilities error as "not available" is intentional: it
+// avoids fragile inference about error-body shapes and gives consistent,
+// actionable feedback across every database subcommand. The underlying
+// error is attached via WithCause for troubleshooting.
+func resolveEnvironmentForDatabaseOps(
+	ctx context.Context,
+	argEnvironment string,
+) (*metaproj.ProjectEnvironmentConfig, *envapi.TargetEnvironment, *envapi.DatabaseCapabilitiesResponse, error) {
+	project, err := tryResolveProject()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	envConfig, tokenSet, err := resolveEnvironment(ctx, project, argEnvironment)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+
+	caps, err := targetEnv.GetDatabaseCapabilities()
+	if err != nil {
+		return nil, nil, nil, clierrors.New("Database operations are not available for this environment").
+			WithDetails(
+				"Could not reach the database capabilities endpoint on the environment's",
+				"infrastructure stack. This usually means the infrastructure stack is",
+				"running an older version that does not include these features.",
+			).
+			WithSuggestion("Contact Metaplay Support or your infrastructure administrator if you expect this environment to support database operations").
+			WithCause(err)
+	}
+	return envConfig, targetEnv, caps, nil
+}
 
 // Output format constants used by database commands that support --format.
 const (
@@ -66,11 +114,6 @@ func mapDatabaseHTTPError(err error, operationDescription string) error {
 	msg := httpErr.Message
 	switch httpErr.StatusCode {
 	case http.StatusBadRequest:
-		if strings.Contains(msg, "not supported") {
-			return clierrors.Newf("Database operations are not supported for this environment").
-				WithSuggestion("Run 'metaplay database info ENVIRONMENT' to see which operations are available").
-				WithCause(httpErr)
-		}
 		return clierrors.Newf("Invalid request while trying to %s: %s", operationDescription, msg).
 			WithCause(httpErr)
 	case http.StatusNotFound:
@@ -195,6 +238,48 @@ func resolveTargetShards(
 		return nil, err
 	}
 	return []int{picked.ShardIndex}, nil
+}
+
+// ensureShardsSupportCapability checks that every shard in targetIndices
+// reports the required capability as enabled in the capabilities response.
+// Returns nil if all selected shards are good, or a clean CLIError listing
+// the shards that do not support the operation otherwise. operationLabel is
+// the subject of the error message, e.g. "Snapshot creation", "Rollback".
+//
+// This is a local pre-flight check that avoids round-tripping an invalid
+// operation to the backend when the capabilities response already tells us
+// it would be rejected.
+func ensureShardsSupportCapability(
+	caps *envapi.DatabaseCapabilitiesResponse,
+	targetIndices []int,
+	check func(envapi.DatabaseShardCapabilities) bool,
+	operationLabel string,
+) error {
+	shardByIndex := make(map[int]envapi.DatabaseShardCapabilities, len(caps.Shards))
+	for _, s := range caps.Shards {
+		shardByIndex[s.ShardIndex] = s
+	}
+	var unsupported []string
+	for _, idx := range targetIndices {
+		shard, ok := shardByIndex[idx]
+		if !ok {
+			// Caller should have validated this via resolveTargetShards.
+			continue
+		}
+		if !check(shard) {
+			unsupported = append(unsupported, fmt.Sprintf("shard %d (%s)", idx, shard.ClusterID))
+		}
+	}
+	if len(unsupported) == 0 {
+		return nil
+	}
+	if len(targetIndices) == 1 {
+		return clierrors.Newf("%s is not supported on %s", operationLabel, unsupported[0]).
+			WithSuggestion("Run 'metaplay database info ENVIRONMENT' to see which operations are available on each shard")
+	}
+	return clierrors.Newf("%s is not supported on %d of %d target shards", operationLabel, len(unsupported), len(targetIndices)).
+		WithDetails(unsupported...).
+		WithSuggestion("Pick a different --shard, or run 'metaplay database info ENVIRONMENT' to see which operations are available")
 }
 
 // formatShardChoices renders the available shards as a detail string for a

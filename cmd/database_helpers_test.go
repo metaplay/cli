@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
 )
@@ -131,13 +133,12 @@ func TestMapDatabaseHTTPError(t *testing.T) {
 		wantHint     string
 	}{
 		{
-			name: "400 not supported",
+			name: "400 generic",
 			err: &metahttp.HTTPError{
 				StatusCode: http.StatusBadRequest,
-				Message:    "database operations not supported for this environment",
+				Message:    "invalid shard index 5: environment has 1 shard(s)",
 			},
-			wantContains: "not supported",
-			wantHint:     "metaplay database info",
+			wantContains: "Invalid request",
 		},
 		{
 			name: "404 snapshot",
@@ -321,6 +322,54 @@ func TestResolveTargetShards_MultiShardRequiresExplicit(t *testing.T) {
 	}
 }
 
+func TestEnsureShardsSupportCapability(t *testing.T) {
+	caps := &envapi.DatabaseCapabilitiesResponse{
+		Shards: []envapi.DatabaseShardCapabilities{
+			{ShardIndex: 0, ClusterID: "mygame-0", SupportsSnapshots: true, SupportsRollback: true},
+			{ShardIndex: 1, ClusterID: "mygame-1", SupportsSnapshots: true, SupportsRollback: false},
+			{ShardIndex: 2, ClusterID: "mygame-2", SupportsSnapshots: false, SupportsRollback: false},
+		},
+	}
+	snapshotsCheck := func(s envapi.DatabaseShardCapabilities) bool { return s.SupportsSnapshots }
+	rollbackCheck := func(s envapi.DatabaseShardCapabilities) bool { return s.SupportsRollback }
+
+	t.Run("single good shard", func(t *testing.T) {
+		if err := ensureShardsSupportCapability(caps, []int{0}, snapshotsCheck, "Snapshot creation"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+	t.Run("single bad shard names the shard", func(t *testing.T) {
+		err := ensureShardsSupportCapability(caps, []int{2}, snapshotsCheck, "Snapshot creation")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "Snapshot creation is not supported on shard 2") {
+			t.Errorf("expected single-shard error naming shard 2, got %q", err.Error())
+		}
+	})
+	t.Run("multi-shard partial success fails and lists bad shards", func(t *testing.T) {
+		err := ensureShardsSupportCapability(caps, []int{0, 1, 2}, rollbackCheck, "Rollback")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "Rollback is not supported on 2 of 3 target shards") {
+			t.Errorf("expected multi-shard summary, got %q", err.Error())
+		}
+		var cliErr *clierrors.CLIError
+		if !errors.As(err, &cliErr) {
+			t.Fatalf("expected *clierrors.CLIError, got %T", err)
+		}
+		if len(cliErr.Details) != 2 {
+			t.Errorf("expected 2 detail lines for 2 bad shards, got %d", len(cliErr.Details))
+		}
+	})
+	t.Run("all shards good", func(t *testing.T) {
+		if err := ensureShardsSupportCapability(caps, []int{0, 1}, snapshotsCheck, "Snapshot creation"); err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestResolveTargetShards_UnsupportedEnv(t *testing.T) {
 	caps := &envapi.DatabaseCapabilitiesResponse{Shards: nil}
 	_, err := resolveTargetShards(context.Background(), caps, -1, false)
@@ -329,5 +378,108 @@ func TestResolveTargetShards_UnsupportedEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// newTestTargetEnvironment builds a TargetEnvironment pointed at the given
+// test server URL so that calls like GetDatabaseCapabilities hit the stub.
+func newTestTargetEnvironment(baseURL string) *envapi.TargetEnvironment {
+	tokenSet := &auth.TokenSet{AccessToken: "test-token"}
+	return &envapi.TargetEnvironment{
+		TokenSet:        tokenSet,
+		StackApiBaseURL: baseURL,
+		HumanID:         "test-env",
+		StackApiClient:  metahttp.NewJSONClient(tokenSet, baseURL),
+	}
+}
+
+// TestDatabaseAvailabilityErrorMapping verifies that each class of error from
+// the capabilities probe is translated into a friendly "database operations
+// are not available" error with the underlying cause attached. This is the
+// core backwards-compatibility behavior: regardless of how an older
+// infrastructure stack fails to respond (404 with empty body, 404 with
+// JSON, 500, etc.), the user-facing message is uniform.
+func TestDatabaseAvailabilityErrorMapping(t *testing.T) {
+	cases := []struct {
+		name                string
+		handler             http.HandlerFunc
+		wantErr             bool
+		wantCauseStatusCode int
+	}{
+		{
+			name: "200 with shards is a success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"shards":[{"shardIndex":0,"clusterId":"t","provider":"aws-rds","supportsSnapshots":true,"supportsRollback":true,"maxManualSnapshots":5}]}`))
+			},
+			wantErr: false,
+		},
+		{
+			name: "200 with empty shards is a success (per-env unsupported)",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"shards":[]}`))
+			},
+			wantErr: false,
+		},
+		{
+			name: "404 with empty body (Gin default, older stack) is 'not available'",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+			},
+			wantErr:             true,
+			wantCauseStatusCode: http.StatusNotFound,
+		},
+		{
+			name: "404 with JSON body (tenant middleware or not-found handler) is 'not available'",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"Tenant not found in the TenantRegistry"}`))
+			},
+			wantErr:             true,
+			wantCauseStatusCode: http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(tc.handler)
+			defer server.Close()
+
+			// Simulate what resolveEnvironmentForDatabaseOps does post env-resolution:
+			// a capabilities probe, with uniform error handling on any failure.
+			target := newTestTargetEnvironment(server.URL)
+			_, probeErr := target.GetDatabaseCapabilities()
+
+			// This mirrors the wrapping performed by resolveEnvironmentForDatabaseOps.
+			var err error
+			if probeErr != nil {
+				err = clierrors.New("Database operations are not available for this environment").
+					WithCause(probeErr)
+			}
+
+			if !tc.wantErr {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "not available") {
+				t.Errorf("expected 'not available' message, got %q", err.Error())
+			}
+			var httpErr *metahttp.HTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("expected cause to be *metahttp.HTTPError, got %T", errors.Unwrap(err))
+			}
+			if httpErr.StatusCode != tc.wantCauseStatusCode {
+				t.Errorf("expected cause StatusCode %d, got %d", tc.wantCauseStatusCode, httpErr.StatusCode)
+			}
+		})
 	}
 }

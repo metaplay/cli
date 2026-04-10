@@ -68,15 +68,10 @@ func (o *databaseOperationStatusOpts) Prepare(cmd *cobra.Command, args []string)
 func (o *databaseOperationStatusOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
-	project, err := tryResolveProject()
+	_, targetEnv, _, err := resolveEnvironmentForDatabaseOps(ctx, o.argEnvironment)
 	if err != nil {
 		return err
 	}
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
-	if err != nil {
-		return err
-	}
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	op, err := targetEnv.GetDatabaseOperation(o.argOperationID)
 	if err != nil {

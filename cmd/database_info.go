@@ -86,25 +86,9 @@ func (o *databaseInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *databaseInfoOpts) Run(cmd *cobra.Command) error {
-	ctx := cmd.Context()
-
-	project, err := tryResolveProject()
+	envConfig, targetEnv, caps, err := resolveEnvironmentForDatabaseOps(cmd.Context(), o.argEnvironment)
 	if err != nil {
 		return err
-	}
-
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
-	if err != nil {
-		return err
-	}
-
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-
-	// Capabilities first — this is the "is this supported?" probe. It returns
-	// 200 + empty shards for unsupported environments.
-	caps, err := targetEnv.GetDatabaseCapabilities()
-	if err != nil {
-		return mapDatabaseHTTPError(err, "fetch database capabilities")
 	}
 
 	view := databaseInfoView{

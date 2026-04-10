@@ -101,24 +101,21 @@ func (o *databaseSnapshotCreateOpts) Prepare(cmd *cobra.Command, args []string) 
 func (o *databaseSnapshotCreateOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
-	project, err := tryResolveProject()
+	envConfig, targetEnv, caps, err := resolveEnvironmentForDatabaseOps(ctx, o.argEnvironment)
 	if err != nil {
 		return err
 	}
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
-	if err != nil {
-		return err
-	}
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Fetch capabilities so we can validate shard selection and report clear
-	// errors for unsupported environments before issuing any writes.
-	caps, err := targetEnv.GetDatabaseCapabilities()
-	if err != nil {
-		return mapDatabaseHTTPError(err, "fetch database capabilities")
-	}
 	shardIndices, err := resolveTargetShards(ctx, caps, o.flagShard, o.flagAllShards)
 	if err != nil {
+		return err
+	}
+	if err := ensureShardsSupportCapability(
+		caps,
+		shardIndices,
+		func(s envapi.DatabaseShardCapabilities) bool { return s.SupportsSnapshots },
+		"Snapshot creation",
+	); err != nil {
 		return err
 	}
 
@@ -206,4 +203,3 @@ func printCreateResultsJSON(results []shardOperationResult) error {
 	}
 	return nil
 }
-

@@ -111,11 +111,7 @@ func (o *databaseRollbackOpts) Prepare(cmd *cobra.Command, args []string) error 
 func (o *databaseRollbackOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
-	project, err := tryResolveProject()
-	if err != nil {
-		return err
-	}
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
+	envConfig, targetEnv, caps, err := resolveEnvironmentForDatabaseOps(ctx, o.argEnvironment)
 	if err != nil {
 		return err
 	}
@@ -125,14 +121,16 @@ func (o *databaseRollbackOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Pass --confirm-production to confirm rolling back a production environment")
 	}
 
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-
-	caps, err := targetEnv.GetDatabaseCapabilities()
-	if err != nil {
-		return mapDatabaseHTTPError(err, "fetch database capabilities")
-	}
 	shardIndices, err := resolveTargetShards(ctx, caps, o.flagShard, o.flagAllShards)
 	if err != nil {
+		return err
+	}
+	if err := ensureShardsSupportCapability(
+		caps,
+		shardIndices,
+		func(s envapi.DatabaseShardCapabilities) bool { return s.SupportsRollback },
+		"Rollback",
+	); err != nil {
 		return err
 	}
 

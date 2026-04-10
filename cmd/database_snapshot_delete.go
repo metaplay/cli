@@ -86,15 +86,10 @@ func (o *databaseSnapshotDeleteOpts) Prepare(cmd *cobra.Command, args []string) 
 func (o *databaseSnapshotDeleteOpts) Run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
-	project, err := tryResolveProject()
+	envConfig, targetEnv, _, err := resolveEnvironmentForDatabaseOps(ctx, o.argEnvironment)
 	if err != nil {
 		return err
 	}
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
-	if err != nil {
-		return err
-	}
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	snapshotID := o.argSnapshotID
 	if snapshotID == "" {

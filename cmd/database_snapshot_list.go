@@ -87,17 +87,10 @@ func (o *databaseSnapshotListOpts) Prepare(cmd *cobra.Command, args []string) er
 }
 
 func (o *databaseSnapshotListOpts) Run(cmd *cobra.Command) error {
-	ctx := cmd.Context()
-
-	project, err := tryResolveProject()
+	envConfig, targetEnv, _, err := resolveEnvironmentForDatabaseOps(cmd.Context(), o.argEnvironment)
 	if err != nil {
 		return err
 	}
-	envConfig, tokenSet, err := resolveEnvironment(ctx, project, o.argEnvironment)
-	if err != nil {
-		return err
-	}
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	resp, err := targetEnv.ListDatabaseSnapshots(envapi.ListDatabaseSnapshotsOptions{
 		Type:  o.flagType,
