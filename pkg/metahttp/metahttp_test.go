@@ -184,21 +184,27 @@ func TestHTTPError_Error(t *testing.T) {
 
 func TestParseHTTPErrorMessage(t *testing.T) {
 	tests := []struct {
-		name string
-		body []byte
-		want string
+		name           string
+		body           []byte
+		wantMsg        string
+		wantStructured bool
 	}{
-		{"empty", []byte(""), ""},
-		{"nil", nil, ""},
-		{"json with error field", []byte(`{"error":"bad thing"}`), "bad thing"},
-		{"json without error field", []byte(`{"foo":"bar"}`), `{"foo":"bar"}`},
-		{"non-json plain text", []byte("oops\n"), "oops"},
-		{"json with empty error", []byte(`{"error":""}`), `{"error":""}`},
+		{"empty", []byte(""), "", false},
+		{"nil", nil, "", false},
+		{"json with error field", []byte(`{"error":"bad thing"}`), "bad thing", true},
+		{"json without error field", []byte(`{"foo":"bar"}`), `{"foo":"bar"}`, false},
+		{"non-json plain text", []byte("oops\n"), "oops", false},
+		{"json with empty error", []byte(`{"error":""}`), `{"error":""}`, false},
+		{"html from proxy", []byte("<html><body>502 Bad Gateway</body></html>"), "<html><body>502 Bad Gateway</body></html>", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := parseHTTPErrorMessage(tc.body); got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
+			gotMsg, gotStructured := parseHTTPErrorMessage(tc.body)
+			if gotMsg != tc.wantMsg {
+				t.Errorf("msg: got %q, want %q", gotMsg, tc.wantMsg)
+			}
+			if gotStructured != tc.wantStructured {
+				t.Errorf("structured: got %v, want %v", gotStructured, tc.wantStructured)
 			}
 		})
 	}

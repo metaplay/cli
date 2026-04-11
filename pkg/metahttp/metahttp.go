@@ -48,20 +48,29 @@ func (e *HTTPError) Error() string {
 }
 
 // parseHTTPErrorMessage extracts a user-readable error message from an HTTP
-// error response body. Expects a JSON body of the form {"error": "..."} (the
-// StackAPI error shape); falls back to the raw body as a trimmed string when
-// JSON parsing fails or no "error" field is present.
-func parseHTTPErrorMessage(body []byte) string {
+// error response body. Returns the message plus a boolean indicating whether
+// the body parsed cleanly as the expected structured error shape
+// {"error": "..."} with a non-empty error field.
+//
+// Structured responses are produced by handlers that opt into the shared
+// error-response contract used by the Metaplay backend APIs. Opaque
+// responses (different JSON shape, plain text, HTML from a proxy, empty,
+// ...) fall back to the trimmed raw body so callers still have something
+// human-readable to display. The structured flag lets callers (in
+// particular metahttp.Request) decide whether the raw error body is
+// redundant with the typed error or whether it carries information the
+// user still needs to see in the default output.
+func parseHTTPErrorMessage(body []byte) (string, bool) {
 	if len(body) == 0 {
-		return ""
+		return "", false
 	}
 	var parsed struct {
 		Error string `json:"error"`
 	}
 	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != "" {
-		return parsed.Error
+		return parsed.Error, true
 	}
-	return strings.TrimSpace(string(body))
+	return strings.TrimSpace(string(body)), false
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
@@ -211,16 +220,30 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		// Print error details before returning the error to keep the log more readable.
 		errorBody := response.Body()
 		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
-		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
+		parsedMessage, structured := parseHTTPErrorMessage(errorBody)
+
+		// If the body parses as the expected {"error": "..."} JSON shape,
+		// the caller has everything it needs in the typed *HTTPError to
+		// produce a clean user-facing error, so emit the raw log only at
+		// Debug level to avoid doubling the output. Otherwise the body is
+		// opaque (unknown format, HTML intercepted by a proxy, legacy
+		// endpoints, ...) and the user's only reliable diagnostic signal
+		// is the raw log, so keep it at Error level.
+		rawLogLine := fmt.Sprintf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
+		if structured {
+			log.Debug().Msg(rawLogLine)
+		} else {
+			log.Error().Msg(rawLogLine)
+		}
+
 		return result, &HTTPError{
 			StatusCode: response.StatusCode(),
 			Method:     method,
 			URL:        requestURL,
 			Body:       errorBody,
-			Message:    parseHTTPErrorMessage(errorBody),
+			Message:    parsedMessage,
 		}
 	}
 
