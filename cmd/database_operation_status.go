@@ -115,9 +115,15 @@ func (o *databaseOperationStatusOpts) render(op *envapi.DatabaseOperation) error
 	log.Info().Msgf("  type:      %s", styles.RenderTechnical(op.Type))
 	log.Info().Msgf("  shard:     %s", styles.RenderTechnical(fmt.Sprintf("%d", op.ShardIndex)))
 	log.Info().Msgf("  status:    %s", renderOperationStatusStyled(op.Status))
-	log.Info().Msgf("  created:   %s  (%s ago)",
-		styles.RenderTechnical(formatDatabaseTime(op.CreatedAt)),
-		formatDatabaseAge(op.CreatedAt))
+	// CreatedAt may be zero for operation types where the backend has no
+	// stable source for it (e.g. snapshot-delete, where AWS retains no trace
+	// of the initiating request). Skip the line when unknown rather than
+	// printing a confusing "-  (- ago)" placeholder.
+	if !op.CreatedAt.IsZero() {
+		log.Info().Msgf("  created:   %s  (%s ago)",
+			styles.RenderTechnical(formatDatabaseTime(op.CreatedAt)),
+			formatDatabaseAge(op.CreatedAt))
+	}
 	if op.CompletedAt != nil {
 		log.Info().Msgf("  completed: %s", styles.RenderTechnical(formatDatabaseTime(*op.CompletedAt)))
 	}
