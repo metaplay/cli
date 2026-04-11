@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"time"
 
-	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -82,34 +81,29 @@ func (o *databaseOperationStatusOpts) Run(cmd *cobra.Command) error {
 		return o.render(op)
 	}
 
-	// --watch loop: poll until terminal, rendering each state change.
-	lastStatus := op.Status
+	// Render the initial snapshot, then delegate to the shared wait helper
+	// so the watch loop gets the same heartbeat cadence as create/delete/
+	// rollback and we only maintain one poll implementation.
 	if err := o.render(op); err != nil {
 		return err
 	}
-	ticker := time.NewTicker(databaseOperationPollInterval())
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return clierrors.Wrap(ctx.Err(), "Watch cancelled")
-		case <-ticker.C:
-			next, err := targetEnv.GetDatabaseOperation(o.argOperationID)
-			if err != nil {
-				return mapDatabaseHTTPError(err, "get operation")
+	final, err := waitForDatabaseOperation(ctx, targetEnv, op,
+		func(u *envapi.DatabaseOperation) {
+			log.Info().Msg("")
+			_ = o.render(u)
+		},
+		func(elapsed time.Duration, u *envapi.DatabaseOperation) {
+			msg := fmt.Sprintf("still %s (elapsed %s)", u.Status, formatElapsed(elapsed))
+			if u.Progress != nil {
+				msg = fmt.Sprintf("still %s (elapsed %s, %d%%)", u.Status, formatElapsed(elapsed), *u.Progress)
 			}
-			if next.Status != lastStatus {
-				log.Info().Msg("")
-				if err := o.render(next); err != nil {
-					return err
-				}
-				lastStatus = next.Status
-			}
-			if next.IsTerminal() {
-				return nil
-			}
-		}
+			log.Info().Msgf("  %s %s", styles.RenderMuted("…"), msg)
+		})
+	if err != nil {
+		return err
 	}
+	_ = final
+	return nil
 }
 
 func (o *databaseOperationStatusOpts) render(op *envapi.DatabaseOperation) error {

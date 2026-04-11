@@ -351,6 +351,32 @@ func databaseOperationPollInterval() time.Duration {
 	return 5 * time.Second
 }
 
+// databaseOperationHeartbeatInterval returns how often to emit a "still
+// running" heartbeat line while a long-running operation stays in the same
+// status. Long enough to avoid spam, short enough that the user is never
+// left wondering whether the CLI has hung.
+func databaseOperationHeartbeatInterval() time.Duration {
+	return 15 * time.Second
+}
+
+// formatElapsed renders a duration as a compact human string like "12s",
+// "1m30s" or "5m". Intended for progress heartbeats on long-running ops.
+func formatElapsed(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	m := int(d / time.Minute)
+	s := int((d % time.Minute) / time.Second)
+	if s == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dm%02ds", m, s)
+}
+
 // printCapabilitiesUnsupported logs a friendly message explaining that the
 // current environment does not support database operations.
 func printCapabilitiesUnsupported(envName string) {
@@ -362,36 +388,68 @@ func printCapabilitiesUnsupported(envName string) {
 	log.Info().Msg("  This environment does not have a dedicated, managed database cluster.")
 }
 
-// waitForDatabaseOperation polls the given operation id until it reaches a
-// terminal state or the context is cancelled. The onStatusChange callback is
-// invoked each time the operation's Status field changes. HTTPError responses
-// are mapped to friendly CLI errors via mapDatabaseHTTPError.
+// waitForDatabaseOperation polls the given operation until it reaches a
+// terminal state or the context is cancelled. The caller must provide the
+// already-known current state as initialOp — the helper waits one poll
+// interval before fetching again, so there is no redundant round-trip and
+// no duplicate output for callers that have already rendered initialOp.
+//
+// onStatusChange is invoked each time the operation's Status field changes
+// relative to the previous observation (starting from initialOp.Status).
+// onHeartbeat is invoked periodically while the status is stable, so the
+// user is never left wondering whether the CLI has hung on a long-running
+// op. HTTPError responses are mapped to friendly CLI errors via
+// mapDatabaseHTTPError.
 func waitForDatabaseOperation(
 	ctx context.Context,
 	target *envapi.TargetEnvironment,
-	operationID string,
+	initialOp *envapi.DatabaseOperation,
 	onStatusChange func(*envapi.DatabaseOperation),
+	onHeartbeat func(elapsed time.Duration, op *envapi.DatabaseOperation),
 ) (*envapi.DatabaseOperation, error) {
-	var lastStatus string
+	if initialOp.IsTerminal() {
+		return initialOp, nil
+	}
+	lastStatus := initialOp.Status
+	operationID := initialOp.OperationID
 	pollInterval := databaseOperationPollInterval()
+	heartbeatInterval := databaseOperationHeartbeatInterval()
+	startedAt := time.Now()
+	nextHeartbeat := startedAt.Add(heartbeatInterval)
 	for {
-		op, err := target.GetDatabaseOperation(operationID)
-		if err != nil {
-			return nil, mapDatabaseHTTPError(err, "get operation")
-		}
-		if op.Status != lastStatus {
-			if onStatusChange != nil {
-				onStatusChange(op)
-			}
-			lastStatus = op.Status
-		}
-		if op.IsTerminal() {
-			return op, nil
-		}
+		// Wait before polling — the caller already has a fresh snapshot
+		// in initialOp (or in the previous loop iteration's result).
 		select {
 		case <-ctx.Done():
 			return nil, clierrors.Wrap(ctx.Err(), "Operation watch cancelled")
 		case <-time.After(pollInterval):
+		}
+
+		op, err := target.GetDatabaseOperation(operationID)
+		if err != nil {
+			return nil, mapDatabaseHTTPError(err, "get operation")
+		}
+		statusChanged := op.Status != lastStatus
+		if statusChanged {
+			if onStatusChange != nil {
+				onStatusChange(op)
+			}
+			lastStatus = op.Status
+			// Reset the heartbeat clock so we do not double-log immediately
+			// after a status transition that already produced output.
+			nextHeartbeat = time.Now().Add(heartbeatInterval)
+		} else if !op.IsTerminal() && onHeartbeat != nil && time.Now().After(nextHeartbeat) {
+			onHeartbeat(time.Since(startedAt), op)
+			// Schedule the next heartbeat from the tick time rather than
+			// "now" so the cadence stays stable.
+			nextHeartbeat = nextHeartbeat.Add(heartbeatInterval)
+			// If we fell behind (e.g. a poll took a long time), catch up.
+			if nextHeartbeat.Before(time.Now()) {
+				nextHeartbeat = time.Now().Add(heartbeatInterval)
+			}
+		}
+		if op.IsTerminal() {
+			return op, nil
 		}
 	}
 }
@@ -441,9 +499,16 @@ func runShardOperation(
 		return shardOperationResult{ShardIndex: shardIndex, Operation: op}
 	}
 
-	final, err := waitForDatabaseOperation(ctx, target, op.OperationID,
+	final, err := waitForDatabaseOperation(ctx, target, op,
 		func(u *envapi.DatabaseOperation) {
 			log.Info().Msgf("%s  status: %s", prefix, renderOperationStatusStyled(u.Status))
+		},
+		func(elapsed time.Duration, u *envapi.DatabaseOperation) {
+			msg := fmt.Sprintf("still %s (elapsed %s)", u.Status, formatElapsed(elapsed))
+			if u.Progress != nil {
+				msg = fmt.Sprintf("still %s (elapsed %s, %d%%)", u.Status, formatElapsed(elapsed), *u.Progress)
+			}
+			log.Info().Msgf("%s  %s %s", prefix, styles.RenderMuted("…"), msg)
 		})
 	if err != nil {
 		return shardOperationResult{ShardIndex: shardIndex, Operation: op, Err: err}

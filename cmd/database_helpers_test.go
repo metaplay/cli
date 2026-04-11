@@ -100,6 +100,29 @@ func TestParseRollbackTargetTime_Invalid(t *testing.T) {
 	}
 }
 
+func TestFormatElapsed(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{-5 * time.Second, "0s"},
+		{1 * time.Second, "1s"},
+		{45 * time.Second, "45s"},
+		{60 * time.Second, "1m"},
+		{90 * time.Second, "1m30s"},
+		{2 * time.Minute, "2m"},
+		{2*time.Minute + 5*time.Second, "2m05s"},
+		{61 * time.Minute, "61m"},
+		{time.Hour + 30*time.Second, "60m30s"},
+	}
+	for _, tc := range cases {
+		if got := formatElapsed(tc.in); got != tc.want {
+			t.Errorf("formatElapsed(%v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestFormatDatabaseAge(t *testing.T) {
 	// This test is loose because formatDatabaseAge relies on time.Since(t),
 	// but we can check boundaries by passing times relative to now.
