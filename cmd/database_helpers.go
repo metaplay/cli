@@ -544,6 +544,13 @@ func aggregateShardResults(operationDescription string, results []shardOperation
 	if len(failed) == 0 {
 		return nil
 	}
+	// Single-shard commands: return the shard's error directly. Wrapping it
+	// as "failed on 1 of 1 shards" is awkward and duplicates information the
+	// user already sees in the nested error. The shard index is implicit
+	// because there is only one target.
+	if len(results) == 1 {
+		return results[0].Err
+	}
 	return clierrors.Newf("%s failed on %d of %d shards", operationDescription, len(failed), len(results)).
 		WithDetails(failed...)
 }
