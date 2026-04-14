@@ -29,10 +29,10 @@ func init() {
 	args.AddStringArgument(&o.argInputFile, "INPUT_FILE", "Input file path containing database archive (eg, 'database-archive.mdb').")
 
 	cmd := &cobra.Command{
-		Use:        "import-snapshot [ENVIRONMENT] [INPUT_FILE] [flags]",
-		Short:      "Import database archive from a file",
-		Deprecated: "use 'metaplay database import-archive' instead.",
-		Run:        runCommand(&o),
+		Use:    "import-snapshot [ENVIRONMENT] [INPUT_FILE] [flags]",
+		Short:  "Import database archive from a file",
+		Hidden: true,
+		Run:    runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with import")
@@ -54,6 +54,8 @@ func (o *databaseImportSnapshotOpts) Prepare(cmd *cobra.Command, args []string) 
 }
 
 func (o *databaseImportSnapshotOpts) Run(cmd *cobra.Command) error {
+	printDeprecationBanner("import-snapshot", "import-archive")
+
 	// Delegate to the new import-archive command implementation
 	archiveOpts := &databaseImportArchiveOpts{}
 	archiveOpts.argEnvironment = o.argEnvironment

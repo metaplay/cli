@@ -8,8 +8,10 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/metaplay/cli/pkg/styles"
 	"github.com/spf13/cobra"
 )
 
@@ -30,10 +32,10 @@ func init() {
 	args.AddStringArgumentOpt(&o.argOutputFile, "OUTPUT_FILE", "Output file path for the database archive.")
 
 	cmd := &cobra.Command{
-		Use:        "export-snapshot [ENVIRONMENT] [OUTPUT_FILE] [flags]",
-		Short:      "Export database archive from an environment",
-		Deprecated: "use 'metaplay database export-archive' instead.",
-		Run:        runCommand(&o),
+		Use:    "export-snapshot [ENVIRONMENT] [OUTPUT_FILE] [flags]",
+		Short:  "Export database archive from an environment",
+		Hidden: true,
+		Run:    runCommand(&o),
 	}
 
 	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with export even if a game server is deployed (DANGEROUS!)")
@@ -50,10 +52,22 @@ func (o *databaseExportSnapshotOpts) Prepare(cmd *cobra.Command, args []string) 
 }
 
 func (o *databaseExportSnapshotOpts) Run(cmd *cobra.Command) error {
+	printDeprecationBanner("export-snapshot", "export-archive")
+
 	// Delegate to the new export-archive command implementation
 	archiveOpts := &databaseExportArchiveOpts{}
 	archiveOpts.argEnvironment = o.argEnvironment
 	archiveOpts.argOutputFile = o.argOutputFile
 	archiveOpts.flagForce = o.flagForce
 	return archiveOpts.Run(cmd)
+}
+
+// printDeprecationBanner prints a colored deprecation warning banner to stderr.
+func printDeprecationBanner(oldCommand, newCommand string) {
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, styles.RenderWarning("  ============================================================"))
+	fmt.Fprintln(os.Stderr, styles.RenderWarning(fmt.Sprintf("  WARNING: 'metaplay database %s' is deprecated.", oldCommand)))
+	fmt.Fprintln(os.Stderr, styles.RenderWarning(fmt.Sprintf("  Use 'metaplay database %s' instead.", newCommand)))
+	fmt.Fprintln(os.Stderr, styles.RenderWarning("  ============================================================"))
+	fmt.Fprintln(os.Stderr, "")
 }
