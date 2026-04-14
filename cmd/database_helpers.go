@@ -326,10 +326,17 @@ func formatShardChoices(shards []envapi.DatabaseShardCapabilities) string {
 // string (e.g. "2s", "1m15s", "3h02m", "2d", "3w", "5mo", "1y"). Used by
 // `snapshot list` and `operation list` table columns.
 func formatDatabaseAge(t time.Time) string {
+	return formatDatabaseAgeAt(t, time.Now())
+}
+
+// formatDatabaseAgeAt renders the duration between t and now as a short human
+// string. Extracted from formatDatabaseAge so tests can inject a fixed
+// reference time.
+func formatDatabaseAgeAt(t time.Time, now time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
-	d := time.Since(t)
+	d := now.Sub(t)
 	if d < 0 {
 		d = 0
 	}

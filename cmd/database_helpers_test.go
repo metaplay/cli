@@ -123,27 +123,29 @@ func TestFormatElapsed(t *testing.T) {
 	}
 }
 
-func TestFormatDatabaseAge(t *testing.T) {
-	// This test is loose because formatDatabaseAge relies on time.Since(t),
-	// but we can check boundaries by passing times relative to now.
-	now := time.Now()
+func TestFormatDatabaseAgeAt(t *testing.T) {
+	now := time.Date(2026, 4, 14, 12, 0, 0, 0, time.UTC)
 	cases := []struct {
-		t      time.Time
-		substr string
+		t    time.Time
+		want string
 	}{
-		{now.Add(-10 * time.Second), "s"},
-		{now.Add(-5 * time.Minute), "m"},
-		{now.Add(-3 * time.Hour), "h"},
-		{now.Add(-2 * 24 * time.Hour), "d"},
-		{now.Add(-10 * 24 * time.Hour), "w"},
+		{now.Add(-10 * time.Second), "10s"},
+		{now.Add(-5 * time.Minute), "5m"},
+		{now.Add(-5*time.Minute - 30*time.Second), "5m30s"},
+		{now.Add(-3 * time.Hour), "3h"},
+		{now.Add(-3*time.Hour - 15*time.Minute), "3h15m"},
+		{now.Add(-2 * 24 * time.Hour), "2d"},
+		{now.Add(-10 * 24 * time.Hour), "1w"},
+		{now.Add(-45 * 24 * time.Hour), "1mo"},
+		{now.Add(-400 * 24 * time.Hour), "1y"},
 	}
 	for _, tc := range cases {
-		got := formatDatabaseAge(tc.t)
-		if !strings.Contains(got, tc.substr) {
-			t.Errorf("age for %v = %q, expected to contain %q", tc.t, got, tc.substr)
+		got := formatDatabaseAgeAt(tc.t, now)
+		if got != tc.want {
+			t.Errorf("formatAge(%v, now) = %q, want %q", tc.t, got, tc.want)
 		}
 	}
-	if got := formatDatabaseAge(time.Time{}); got != "-" {
+	if got := formatDatabaseAgeAt(time.Time{}, now); got != "-" {
 		t.Errorf("expected '-' for zero time, got %q", got)
 	}
 }

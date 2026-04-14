@@ -110,6 +110,10 @@ func (o *databaseSnapshotDeleteOpts) Run(cmd *cobra.Command) error {
 		return clierrors.Newf("Cannot delete snapshot '%s': only manual snapshots can be deleted (this is %q)", snap.Identifier, snap.Type).
 			WithSuggestion("Automated and backup-service snapshots are managed by the cloud provider")
 	}
+	if snap.Status != "available" {
+		return clierrors.Newf("Cannot delete snapshot '%s': snapshot is currently '%s'", snap.Identifier, snap.Status).
+			WithSuggestion("Wait for the snapshot to reach 'available' status before deleting")
+	}
 
 	if !o.flagYes {
 		// Interactive mode only (Prepare() enforces --yes in non-interactive).
