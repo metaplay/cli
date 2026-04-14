@@ -29,10 +29,10 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argOperationID, "OPERATION_ID", "Operation id returned by an earlier 'database snapshot create', 'database snapshot delete', or 'database rollback' command.")
+	args.AddStringArgument(&o.argOperationID, "OPERATION_ID", "Operation id returned by an earlier 'database create-snapshot', 'database delete-snapshot', or 'database rollback' command.")
 
 	cmd := &cobra.Command{
-		Use:   "status ENVIRONMENT OPERATION_ID [flags]",
+		Use:   "operation-status ENVIRONMENT OPERATION_ID [flags]",
 		Short: "Show the status of a database operation",
 		Long: renderLong(&o, `
 			Show the status of an async database operation (snapshot create, snapshot
@@ -46,10 +46,10 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Show a single status snapshot
-			metaplay database operation status nimbly snapshot-create:mygame-prod-0-manual-20260409-153042
+			metaplay database operation-status nimbly snapshot-create:mygame-prod-0-manual-20260409-153042
 
 			# Watch until the operation completes
-			metaplay database operation status nimbly snapshot-create:mygame-prod-0-manual-20260409-153042 --watch
+			metaplay database operation-status nimbly snapshot-create:mygame-prod-0-manual-20260409-153042 --watch
 		`),
 		Run: runCommand(&o),
 	}
@@ -57,7 +57,7 @@ func init() {
 	cmd.Flags().BoolVarP(&o.flagWatch, "watch", "w", false, "Poll until the operation reaches a terminal state")
 	cmd.Flags().StringVarP(&o.flagFormat, "format", "f", databaseFormatText, "Output format (text or json)")
 
-	databaseOperationCmd.AddCommand(cmd)
+	databaseCmd.AddCommand(cmd)
 }
 
 func (o *databaseOperationStatusOpts) Prepare(cmd *cobra.Command, args []string) error {

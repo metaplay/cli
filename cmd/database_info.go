@@ -61,7 +61,7 @@ func init() {
 
 			Environments without a dedicated managed database cluster are reported as
 			"not supported" — for those environments, the commands under
-			'metaplay database snapshot' and 'metaplay database rollback' are not
+			'metaplay database create-snapshot' and 'metaplay database rollback' are not
 			available.
 
 			{Arguments}

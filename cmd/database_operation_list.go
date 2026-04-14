@@ -28,14 +28,14 @@ func init() {
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
-		Use:     "list [ENVIRONMENT] [flags]",
-		Aliases: []string{"ls"},
+		Use:     "list-operations [ENVIRONMENT] [flags]",
+		Aliases: []string{"ls-operations"},
 		Short:   "List in-progress database operations for an environment",
 		Long: renderLong(&o, `
 			List in-progress database operations (snapshot creates, snapshot deletes,
 			and point-in-time rollbacks) for an environment. Completed or failed
-			operations are not returned — use 'metaplay database operation status' to
-			look up a specific operation by id, or 'metaplay database snapshot list'
+			operations are not returned — use 'metaplay database operation-status' to
+			look up a specific operation by id, or 'metaplay database list-snapshots'
 			to see finalized snapshots.
 
 			This command is useful for discovering operations after a previous CLI
@@ -45,17 +45,17 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Show in-progress operations
-			metaplay database operation list nimbly
+			metaplay database list-operations nimbly
 
 			# Emit JSON for scripting
-			metaplay database operation list nimbly --format=json
+			metaplay database list-operations nimbly --format=json
 		`),
 		Run: runCommand(&o),
 	}
 
 	cmd.Flags().StringVarP(&o.flagFormat, "format", "f", databaseFormatText, "Output format (text or json)")
 
-	databaseOperationCmd.AddCommand(cmd)
+	databaseCmd.AddCommand(cmd)
 }
 
 func (o *databaseOperationListOpts) Prepare(cmd *cobra.Command, args []string) error {

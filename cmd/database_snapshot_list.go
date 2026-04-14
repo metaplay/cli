@@ -32,8 +32,8 @@ func init() {
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
-		Use:     "list [ENVIRONMENT] [flags]",
-		Aliases: []string{"ls"},
+		Use:     "list-snapshots [ENVIRONMENT] [flags]",
+		Aliases: []string{"ls-snapshots"},
 		Short:   "List cloud-managed database snapshots for an environment",
 		Long: renderLong(&o, `
 			List the cloud-managed database snapshots available for an environment
@@ -47,13 +47,13 @@ func init() {
 		`),
 		Example: renderExample(`
 			# List all snapshots for 'nimbly'
-			metaplay database snapshot list nimbly
+			metaplay database list-snapshots nimbly
 
 			# Only show manual snapshots
-			metaplay database snapshot list nimbly --type=manual
+			metaplay database list-snapshots nimbly --type=manual
 
 			# Emit JSON for scripting
-			metaplay database snapshot list nimbly --format=json
+			metaplay database list-snapshots nimbly --format=json
 		`),
 		Run: runCommand(&o),
 	}
@@ -62,7 +62,7 @@ func init() {
 	cmd.Flags().IntVar(&o.flagLimit, "limit", 0, "Maximum snapshots per shard (0 = no limit)")
 	cmd.Flags().StringVarP(&o.flagFormat, "format", "f", databaseFormatText, "Output format (text or json)")
 
-	databaseSnapshotCmd.AddCommand(cmd)
+	databaseCmd.AddCommand(cmd)
 }
 
 func (o *databaseSnapshotListOpts) Prepare(cmd *cobra.Command, args []string) error {

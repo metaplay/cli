@@ -33,8 +33,8 @@ func init() {
 	args.AddStringArgumentOpt(&o.argSnapshotID, "SNAPSHOT_ID", "Identifier of the snapshot to delete. If omitted in interactive mode, the CLI shows a picker of the environment's manual snapshots.")
 
 	cmd := &cobra.Command{
-		Use:     "delete [ENVIRONMENT] [SNAPSHOT_ID] [flags]",
-		Aliases: []string{"rm"},
+		Use:     "delete-snapshot [ENVIRONMENT] [SNAPSHOT_ID] [flags]",
+		Aliases: []string{"rm-snapshot"},
 		Short:   "Delete a manual cloud-managed database snapshot",
 		Long: renderLong(&o, `
 			Delete a manual cloud-managed database snapshot by identifier. Only
@@ -52,13 +52,13 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Delete a specific snapshot by id
-			metaplay database snapshot delete nimbly mygame-prod-0-manual-20260409-153042
+			metaplay database delete-snapshot nimbly mygame-prod-0-manual-20260409-153042
 
 			# Delete with an interactive picker (interactive mode only)
-			metaplay database snapshot delete nimbly
+			metaplay database delete-snapshot nimbly
 
 			# Non-interactive delete, skipping the confirmation prompt
-			metaplay database snapshot delete nimbly mygame-prod-0-manual-20260409-153042 --yes
+			metaplay database delete-snapshot nimbly mygame-prod-0-manual-20260409-153042 --yes
 		`),
 		Run: runCommand(&o),
 	}
@@ -66,14 +66,14 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagNoWait, "no-wait", false, "Return immediately after the delete request is accepted, do not poll for completion")
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip the confirmation prompt (required in non-interactive mode)")
 
-	databaseSnapshotCmd.AddCommand(cmd)
+	databaseCmd.AddCommand(cmd)
 }
 
 func (o *databaseSnapshotDeleteOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if !tui.IsInteractiveMode() {
 		if o.argSnapshotID == "" {
 			return clierrors.NewUsageError("SNAPSHOT_ID is required in non-interactive mode").
-				WithSuggestion("Pass the snapshot identifier as a positional argument, e.g. 'metaplay database snapshot delete ENV SNAPSHOT_ID'")
+				WithSuggestion("Pass the snapshot identifier as a positional argument, e.g. 'metaplay database delete-snapshot ENV SNAPSHOT_ID'")
 		}
 		if !o.flagYes {
 			return clierrors.NewUsageError("Confirmation required for destructive operation").
@@ -162,7 +162,7 @@ func pickManualSnapshotInteractively(target *envapi.TargetEnvironment, envName s
 	}
 	if len(resp.Snapshots) == 0 {
 		return "", clierrors.Newf("No manual snapshots found for environment '%s'", envName).
-			WithSuggestion("Create one with 'metaplay database snapshot create ENVIRONMENT'")
+			WithSuggestion("Create one with 'metaplay database create-snapshot ENVIRONMENT'")
 	}
 	picked, err := tui.ChooseFromListDialog(
 		"Select a manual snapshot to delete",

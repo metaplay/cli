@@ -43,7 +43,7 @@ func init() {
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 
 	cmd := &cobra.Command{
-		Use:   "create [ENVIRONMENT] [flags]",
+		Use:   "create-snapshot [ENVIRONMENT] [flags]",
 		Short: "Create a manual cloud-managed database snapshot",
 		Long: renderLong(&o, `
 			Create a manual snapshot of the environment's cloud-managed database.
@@ -58,19 +58,19 @@ func init() {
 
 			If --name is omitted, a timestamped default name is generated. Both
 			--name and --description are recorded as tags on the resulting snapshot
-			and surfaced by 'metaplay database snapshot list'.
+			and surfaced by 'metaplay database list-snapshots'.
 
 			{Arguments}
 		`),
 		Example: renderExample(`
 			# Create a snapshot on the single shard of 'nimbly'
-			metaplay database snapshot create nimbly --name=pre-migration
+			metaplay database create-snapshot nimbly --name=pre-migration
 
 			# Fan out across all shards on a production env in parallel
-			metaplay database snapshot create my-game-prod --all-shards --name=pre-v2
+			metaplay database create-snapshot my-game-prod --all-shards --name=pre-v2
 
 			# Fire-and-forget (returns after the request is accepted)
-			metaplay database snapshot create nimbly --name=foo --no-wait
+			metaplay database create-snapshot nimbly --name=foo --no-wait
 		`),
 		Run: runCommand(&o),
 	}
@@ -82,7 +82,7 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagNoWait, "no-wait", false, "Return immediately after the request is accepted, do not poll for completion")
 	cmd.Flags().StringVarP(&o.flagFormat, "format", "f", databaseFormatText, "Output format (text or json)")
 
-	databaseSnapshotCmd.AddCommand(cmd)
+	databaseCmd.AddCommand(cmd)
 }
 
 func (o *databaseSnapshotCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
