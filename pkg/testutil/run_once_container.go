@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -13,7 +14,6 @@ import (
 	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
-	"net/netip"
 )
 
 // RunOnceContainerOptions configures a container that runs to completion.

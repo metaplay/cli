@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"net/url"
-	"slices"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,6 @@ import (
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"net/netip"
 )
 
 // GameServerOptions configures the server container and the poller behavior.
