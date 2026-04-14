@@ -227,17 +227,47 @@ func resolveTargetShards(
 			WithDetails(formatShardChoices(caps.Shards)).
 			WithSuggestion("Pass --shard=N to target a single shard, or --all-shards to target all of them")
 	}
+
+	// Build a picker with "All shards" at the top, followed by individual
+	// shard choices. shardIndex == -1 is the sentinel for "all".
+	type shardChoice struct {
+		label      string
+		subtitle   string
+		shardIndex int
+		all        bool
+	}
+	choices := make([]shardChoice, 0, len(caps.Shards)+1)
+	choices = append(choices, shardChoice{
+		label:    "All shards",
+		subtitle: fmt.Sprintf("target all %d shards in parallel", len(caps.Shards)),
+		all:      true,
+	})
+	for _, s := range caps.Shards {
+		choices = append(choices, shardChoice{
+			label:      fmt.Sprintf("Shard %d", s.ShardIndex),
+			subtitle:   s.ClusterID,
+			shardIndex: s.ShardIndex,
+		})
+	}
+
 	picked, err := tui.ChooseFromListDialog(
-		"Select target shard",
-		caps.Shards,
-		func(s *envapi.DatabaseShardCapabilities) (string, string) {
-			return fmt.Sprintf("Shard %d", s.ShardIndex), s.ClusterID
+		"Select target shard(s)",
+		choices,
+		func(c *shardChoice) (string, string) {
+			return c.label, c.subtitle
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	return []int{picked.ShardIndex}, nil
+	if picked.all {
+		indices := make([]int, len(caps.Shards))
+		for i, s := range caps.Shards {
+			indices[i] = s.ShardIndex
+		}
+		return indices, nil
+	}
+	return []int{picked.shardIndex}, nil
 }
 
 // ensureShardsSupportCapability checks that every shard in targetIndices

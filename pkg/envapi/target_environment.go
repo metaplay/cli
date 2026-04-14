@@ -64,7 +64,7 @@ func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) 
 	var stackApiBaseURL string
 	if common.StackApiBaseURLOverride != "" {
 		stackApiBaseURL = common.StackApiBaseURLOverride
-		log.Info().Msgf("Using StackAPI base URL override %s (set via METAPLAYCLI_STACKAPI_BASEURL)", stackApiBaseURL)
+		log.Debug().Msgf("Using StackAPI base URL override %s (set via METAPLAYCLI_STACKAPI_BASEURL)", stackApiBaseURL)
 	} else {
 		stackApiBaseURL = fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
 	}

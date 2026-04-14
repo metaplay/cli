@@ -98,10 +98,7 @@ func (o *databaseInfoOpts) Run(cmd *cobra.Command) error {
 	}
 
 	if len(caps.Shards) == 0 {
-		if err := o.render(view, envConfig.Name); err != nil {
-			return err
-		}
-		return nil
+		return o.render(view, envConfig.Name)
 	}
 
 	// For supported environments, fetch cluster info and merge by shard index.

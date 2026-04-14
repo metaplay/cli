@@ -6,8 +6,10 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -102,7 +104,13 @@ func (o *databaseOperationStatusOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	_ = final
+	if final.Status == envapi.DatabaseOperationStatusFailed {
+		msg := "operation failed"
+		if final.Error != nil && *final.Error != "" {
+			msg = *final.Error
+		}
+		return clierrors.Newf("Operation %s failed: %s", final.OperationID, msg)
+	}
 	return nil
 }
 
@@ -135,8 +143,13 @@ func (o *databaseOperationStatusOpts) render(op *envapi.DatabaseOperation) error
 	}
 	if len(op.Metadata) > 0 {
 		log.Info().Msgf("  metadata:")
-		for k, v := range op.Metadata {
-			log.Info().Msgf("    %s: %v", styles.RenderTechnical(k), v)
+		keys := make([]string, 0, len(op.Metadata))
+		for k := range op.Metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			log.Info().Msgf("    %s: %v", styles.RenderTechnical(k), op.Metadata[k])
 		}
 	}
 	return nil

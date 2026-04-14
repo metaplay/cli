@@ -147,7 +147,7 @@ func (o *databaseSnapshotCreateOpts) Run(cmd *cobra.Command) error {
 	})
 
 	if o.flagFormat == databaseFormatJSON {
-		return printCreateResultsJSON(results)
+		return printShardResultsJSON(results)
 	}
 
 	if err := aggregateShardResults("snapshot create", results); err != nil {
@@ -157,13 +157,12 @@ func (o *databaseSnapshotCreateOpts) Run(cmd *cobra.Command) error {
 }
 
 // resolveSnapshotName returns the user-provided --name, or a generated
-// default name of the form "cli-YYYYMMDD-HHMMSS" (per-shard suffix added if
-// multi-shard so each shard's snapshot has a distinct tag value).
+// default name of the form "cli-YYYYMMDD-HHMMSS-shardN".
 func (o *databaseSnapshotCreateOpts) resolveSnapshotName(shardIndex int, now time.Time) string {
 	if o.flagName != "" {
 		return o.flagName
 	}
-	return fmt.Sprintf("cli-%s", now.Format("20060102-150405"))
+	return fmt.Sprintf("cli-%s-shard%d", now.Format("20060102-150405"), shardIndex)
 }
 
 // formatShardList renders a compact human-readable list of shard indices.
@@ -178,7 +177,7 @@ func formatShardList(indices []int) string {
 // printCreateResultsJSON emits the per-shard results as a JSON array. Shards
 // with errors report their error message string; shards that succeeded report
 // the final DatabaseOperation.
-func printCreateResultsJSON(results []shardOperationResult) error {
+func printShardResultsJSON(results []shardOperationResult) error {
 	type shardJSON struct {
 		ShardIndex int                       `json:"shardIndex"`
 		Error      string                    `json:"error,omitempty"`

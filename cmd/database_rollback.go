@@ -182,7 +182,7 @@ func (o *databaseRollbackOpts) Run(cmd *cobra.Command) error {
 	})
 
 	if o.flagFormat == databaseFormatJSON {
-		return printCreateResultsJSON(results)
+		return printShardResultsJSON(results)
 	}
 
 	return aggregateShardResults("rollback", results)
