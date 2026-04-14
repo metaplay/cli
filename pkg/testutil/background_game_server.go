@@ -13,11 +13,12 @@ import (
 	"sync"
 	"time"
 
-	dockercontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	dockercontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"net/netip"
 )
 
 // GameServerOptions configures the server container and the poller behavior.
@@ -118,10 +119,10 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 // Start launches the server container, waits for readiness, and starts metrics collection.
 func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	// Build port bindings: bind each exposed container port to 127.0.0.1 with a random host port.
-	portBindings := nat.PortMap{}
+	portBindings := network.PortMap{}
 	for _, p := range s.opts.ExposedPorts {
-		port := nat.Port(p)
-		portBindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}}
+		port := network.MustParsePort(p)
+		portBindings[port] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}
 	}
 
 	// Build container request
@@ -132,7 +133,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		Env:          s.opts.Env,
 		Cmd:          s.opts.Cmd,
 		WaitingFor: wait.ForHTTP("/isReady").
-			WithPort(nat.Port(s.opts.SystemPort)).
+			WithPort(s.opts.SystemPort).
 			WithStatusCodeMatcher(func(code int) bool { return code == 200 }).
 			WithStartupTimeout(2 * time.Minute),
 	}
@@ -140,7 +141,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	// Bind ports on 127.0.0.1 with random host ports via HostConfigModifier
 	req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
 		if hc.PortBindings == nil {
-			hc.PortBindings = nat.PortMap{}
+			hc.PortBindings = network.PortMap{}
 		}
 		maps.Copy(hc.PortBindings, portBindings)
 	}
@@ -203,7 +204,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		_ = s.TerminateSilently(ctx)
 		return fmt.Errorf("get host: %w", err)
 	}
-	mapped, err := s.container.MappedPort(ctx, nat.Port(s.opts.SystemPort))
+	mapped, err := s.container.MappedPort(ctx, s.opts.SystemPort)
 	if err != nil {
 		_ = s.TerminateSilently(ctx)
 		if portMap, perr := s.container.Ports(ctx); perr == nil {

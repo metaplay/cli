@@ -12,7 +12,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.57.0
 	github.com/creativeprojects/go-selfupdate v1.5.2
 	github.com/docker/docker v28.5.2+incompatible
-	github.com/docker/go-connections v0.6.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/go-resty/resty/v2 v2.17.2
 	github.com/goccy/go-yaml v1.19.2
@@ -21,6 +20,7 @@ require (
 	github.com/hashicorp/go-version v1.9.0
 	github.com/jwalton/go-supportscolor v1.2.0
 	github.com/mattn/go-isatty v0.0.21
+	github.com/moby/moby/api v1.54.1
 	github.com/moby/term v0.5.2
 	github.com/monochromegane/go-gitignore v0.0.0-20200626010858-205db1a8cc00
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
@@ -92,6 +92,7 @@ require (
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/cli v29.4.0+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
+	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
@@ -146,7 +147,6 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.2.0 // indirect
-	github.com/moby/moby/api v1.54.1 // indirect
 	github.com/moby/moby/client v0.4.0 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/spdystream v0.5.0 // indirect
