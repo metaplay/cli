@@ -27,6 +27,52 @@ type Client struct {
 	Resty    *resty.Client  // Resty client with authorization header configured.
 }
 
+// HTTPError is returned by Request (and its Get/Post/Put/Delete helpers) when
+// the server responds with a non-2xx status code. Callers can use errors.As to
+// detect HTTP errors and inspect the status code and parsed message for
+// discrimination and user-friendly messaging.
+type HTTPError struct {
+	StatusCode int    // HTTP status code returned by the server (e.g., 400, 404, 409, 500)
+	Method     string // HTTP method used for the request (e.g., "GET", "POST")
+	URL        string // Full request URL (base URL + path)
+	Body       []byte // Raw response body
+	Message    string // Parsed error message from the response body, or empty if none could be parsed
+}
+
+// Error implements the error interface.
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s %s failed with status %d: %s", e.Method, e.URL, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("%s %s failed with status %d", e.Method, e.URL, e.StatusCode)
+}
+
+// parseHTTPErrorMessage extracts a user-readable error message from an HTTP
+// error response body. Returns the message plus a boolean indicating whether
+// the body parsed cleanly as the expected structured error shape
+// {"error": "..."} with a non-empty error field.
+//
+// Structured responses are produced by handlers that opt into the shared
+// error-response contract used by the Metaplay backend APIs. Opaque
+// responses (different JSON shape, plain text, HTML from a proxy, empty,
+// ...) fall back to the trimmed raw body so callers still have something
+// human-readable to display. The structured flag lets callers (in
+// particular metahttp.Request) decide whether the raw error body is
+// redundant with the typed error or whether it carries information the
+// user still needs to see in the default output.
+func parseHTTPErrorMessage(body []byte) (string, bool) {
+	if len(body) == 0 {
+		return "", false
+	}
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != "" {
+		return parsed.Error, true
+	}
+	return strings.TrimSpace(string(body)), false
+}
+
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
 // All failed requests are automatically retried a few times to mitigate network errors.
 func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
@@ -174,11 +220,31 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		// Print error details before return the error to keep the log more readable.
-		errorBody := string(response.Body())
+		errorBody := response.Body()
 		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
-		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, errorBody)
-		return result, fmt.Errorf("%s %s failed (see above for details)", method, requestURL)
+		parsedMessage, structured := parseHTTPErrorMessage(errorBody)
+
+		// If the body parses as the expected {"error": "..."} JSON shape,
+		// the caller has everything it needs in the typed *HTTPError to
+		// produce a clean user-facing error, so emit the raw log only at
+		// Debug level to avoid doubling the output. Otherwise the body is
+		// opaque (unknown format, HTML intercepted by a proxy, legacy
+		// endpoints, ...) and the user's only reliable diagnostic signal
+		// is the raw log, so keep it at Error level.
+		rawLogLine := fmt.Sprintf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
+		if structured {
+			log.Debug().Msg(rawLogLine)
+		} else {
+			log.Error().Msg(rawLogLine)
+		}
+
+		return result, &HTTPError{
+			StatusCode: response.StatusCode(),
+			Method:     method,
+			URL:        requestURL,
+			Body:       errorBody,
+			Message:    parsedMessage,
+		}
 	}
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext
