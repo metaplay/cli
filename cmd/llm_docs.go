@@ -88,11 +88,24 @@ func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 	if target == "" {
 		target = defaultLLMDocsTarget
 	}
-	useInsecure := shouldUseInsecureLLMDocsTarget(target)
+	insecureForced := isTruthy(os.Getenv("METAPLAYCLI_LLM_DOCS_INSECURE"))
+	useInsecure := insecureForced || isLoopbackTarget(target)
+
+	// Never send the bearer token when the user has explicitly forced
+	// insecure transport: the target may be non-loopback, which would leak
+	// the token in cleartext. Loopback auto-insecure keeps the token so
+	// local dev workflows can still exercise authenticated paths.
+	token := meta.AccessToken
+	if insecureForced {
+		token = ""
+		if meta.AccessToken != "" {
+			stderrLogger.Info().Msg(styles.RenderMuted("llm-docs: auth token withheld (METAPLAYCLI_LLM_DOCS_INSECURE is set)"))
+		}
+	}
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithUserAgent(fmt.Sprintf("MetaplayCLI/%s", version.AppVersion)),
-		grpc.WithPerRPCCredentials(bearerCredentials{token: meta.AccessToken, requireTLS: !useInsecure}),
+		grpc.WithPerRPCCredentials(bearerCredentials{token: token, requireTLS: !useInsecure}),
 	}
 	if useInsecure {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -118,11 +131,7 @@ func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 	return client, nil
 }
 
-func shouldUseInsecureLLMDocsTarget(target string) bool {
-	if isTruthy(os.Getenv("METAPLAYCLI_LLM_DOCS_INSECURE")) {
-		return true
-	}
-
+func isLoopbackTarget(target string) bool {
 	host := target
 	if parsedHost, _, err := net.SplitHostPort(target); err == nil {
 		host = parsedHost
