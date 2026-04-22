@@ -7,6 +7,7 @@ package cmd
 import (
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,8 @@ type llmDocsSearchOpts struct {
 
 	argQuery     string
 	flagKeywords string
+
+	keywords []string
 }
 
 func init() {
@@ -54,18 +57,19 @@ func init() {
 }
 
 func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
+	for k := range strings.SplitSeq(o.flagKeywords, ",") {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			o.keywords = append(o.keywords, k)
+		}
+	}
+	if len(o.keywords) == 0 {
+		return clierrors.NewUsageError("--keywords must contain at least one non-empty keyword")
+	}
 	return nil
 }
 
 func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
-	var keywords []string
-	for k := range strings.SplitSeq(o.flagKeywords, ",") {
-		k = strings.TrimSpace(k)
-		if k != "" {
-			keywords = append(keywords, k)
-		}
-	}
-
 	meta := buildLLMDocsMetadata()
 	client, err := newLLMDocsClient(meta)
 	if err != nil {
@@ -76,7 +80,7 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 	resp, err := client.Search(cmd.Context(), &llmdocsclient.SearchRequest{
 		Metadata: buildRequestMetadata(meta),
 		Query:    o.argQuery,
-		Keywords: keywords,
+		Keywords: o.keywords,
 	})
 	if err != nil {
 		return wrapLLMDocsError(err, "search documentation")

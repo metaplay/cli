@@ -112,7 +112,7 @@ func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 
 	client, err := llmdocsclient.Dial(target, dialOpts...)
 	if err != nil {
-		return nil, clierrors.Wrapf(err, "Failed to connect to llm-docs (%s)", target).
+		return nil, clierrors.Wrapf(err, "Failed to prepare llm-docs client for %s", target).
 			WithSuggestion("Set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target; loopback targets use plaintext automatically")
 	}
 	return client, nil
