@@ -7,7 +7,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -115,11 +114,13 @@ func (o *debugCollectCPUProfileOpts) Prepare(cmd *cobra.Command, args []string) 
 
 	log.Debug().Msgf("Using duration: %d seconds (will be formatted as TimeSpan)", o.flagDuration)
 
-	// Define extension mapping based on format
+	// Define extension mapping based on format.
+	// These match the extensions that dotnet-trace produces for the converted
+	// output files (NetTrace/Speedscope/Chromium).
 	extensionMapping := map[string]string{
 		"NetTrace":   "nettrace",
 		"Speedscope": "speedscope.json",
-		"Chromium":   "trace.json",
+		"Chromium":   "chromium.json",
 	}
 
 	// Set default output path if not specified
@@ -213,15 +214,34 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 
 // Helper function to collect and retrieve CPU profile using task runner
 func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) error {
+	// dotnet-trace always writes the raw nettrace capture to the path given via -o.
+	// For Speedscope/Chromium formats, it additionally writes the converted file at
+	// a sibling path produced by Path.ChangeExtension(-o, "speedscope.json"|"chromium.json"),
+	// which replaces everything after the final dot. To get a predictable converted
+	// path, we pass -o with a ".nettrace" extension so the converted file lands at
+	// "<base>.speedscope.json" or "<base>.chromium.json".
+	remoteDir := "/tmp"
+	remoteNettraceName := fmt.Sprintf("profile-%s.nettrace", time.Now().Format("20060102-150405"))
+	remoteNettracePath := remoteDir + "/" + remoteNettraceName
+
+	var remoteDownloadName string
+	switch o.flagFormat {
+	case "NetTrace":
+		remoteDownloadName = remoteNettraceName
+	case "Speedscope":
+		remoteDownloadName = strings.TrimSuffix(remoteNettraceName, ".nettrace") + ".speedscope.json"
+	case "Chromium":
+		remoteDownloadName = strings.TrimSuffix(remoteNettraceName, ".nettrace") + ".chromium.json"
+	default:
+		return fmt.Errorf("unexpected format: %s", o.flagFormat)
+	}
+
 	// Collect CPU profile
-	var remoteFileName string
 	runner.AddTask("Collect CPU profile", func(output *tui.TaskOutput) error {
-		// Construct the command to collect the CPU profile.
 		// Format the duration as a TimeSpan (00:00:30 for 30 seconds)
 		durationFormatted := fmt.Sprintf("00:%02d:%02d", o.flagDuration/60, o.flagDuration%60)
-		remoteFileName = filepath.Base(o.flagOutputPath)
-		collectCmd := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o /tmp/%s",
-			processInfo.Pid, o.flagFormat, durationFormatted, remoteFileName)
+		collectCmd := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o %s",
+			processInfo.Pid, o.flagFormat, durationFormatted, remoteNettracePath)
 
 		// Add extra arguments if provided
 		if len(o.extrArgs) > 0 {
@@ -242,18 +262,24 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		return nil
 	})
 
-	// Copy CPU profile to local machine & remove remote file (even if copy failed)
+	// Copy CPU profile to local machine & remove remote files (even if copy failed)
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
-		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, "/tmp", remoteFileName, o.flagOutputPath, 3)
+		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
 
-		// Remove the remote file, regardless of whether copy was successful
-		log.Debug().Msgf("Remove CPU profile file /tmp/%s from debug container...", remoteFileName)
-		_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-			fmt.Sprintf("rm /tmp/%s", remoteFileName),
-		)
-		if removeErr != nil {
-			// Don't fail the task for cleanup errors, just log a warning
-			log.Warn().Msgf("Failed to remove CPU profile from debug container: %v", removeErr)
+		// Remove both the nettrace capture and (if different) the converted file.
+		filesToRemove := []string{remoteNettracePath}
+		if remoteDownloadName != remoteNettraceName {
+			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
+		}
+		for _, f := range filesToRemove {
+			log.Debug().Msgf("Remove CPU profile file %s from debug container...", f)
+			_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+				fmt.Sprintf("rm -f %s", f),
+			)
+			if removeErr != nil {
+				// Don't fail the task for cleanup errors, just log a warning
+				log.Warn().Msgf("Failed to remove %s from debug container: %v", f, removeErr)
+			}
 		}
 
 		if copyErr != nil {
