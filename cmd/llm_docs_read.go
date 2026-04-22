@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -57,7 +56,8 @@ func (o *llmDocsReadOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
-	client, err := newLLMDocsClient(cmd.Context())
+	meta := buildLLMDocsMetadata()
+	client, err := newLLMDocsClient(meta)
 	if err != nil {
 		return err
 	}
@@ -66,13 +66,13 @@ func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
 	resp, err := client.ReadFile(
 		cmd.Context(),
 		&llmdocsclient.ReadFileRequest{
-			Metadata: buildRequestMetadata(),
+			Metadata: buildRequestMetadata(meta),
 			Path:     o.argPath,
 		},
 	)
 	if err != nil {
 		return wrapLLMDocsError(err, "read file")
 	}
-	log.Info().Msg(resp.Content)
+	printLLMDocsContent(resp.Content)
 	return nil
 }

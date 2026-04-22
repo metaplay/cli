@@ -5,20 +5,21 @@
 package cmd
 
 import (
+	"strings"
+
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
-type llmDocsQueryOpts struct {
+type llmDocsSearchOpts struct {
 	UsePositionalArgs
 
 	argQuery     string
-	flagKeywords []string
+	flagKeywords string
 }
 
 func init() {
-	o := llmDocsQueryOpts{}
+	o := llmDocsSearchOpts{}
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argQuery, "QUERY", "Original free-form user query.")
@@ -37,39 +38,49 @@ func init() {
 		`),
 		Run: runCommand(&o),
 		Example: renderExample(`
-			# Submit a query with pre-extracted keywords (comma-separated).
-			metaplay llm-docs search "How do I implement guilds?" --keywords guilds,implementation
+			# Use several keywords (synonyms and related terms) for better retrieval.
+			# Quote the whole --keywords value if any keyword contains spaces.
+			metaplay llm-docs search "How do I implement guilds?" --keywords "guilds,guild actor,members,social,multiplayer"
 
-			# Query with no keywords.
-			metaplay llm-docs search "What is the recommended .NET version?"
+			metaplay llm-docs search "Recommended .NET version?" --keywords dotnet,runtime,version,SDK,LTS
 		`),
 	}
 
 	llmDocsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringSliceVarP(&o.flagKeywords, "keywords", "k", nil, "Pre-extracted keyword for the query (repeatable, also accepts comma-separated values)")
+	flags.StringVarP(&o.flagKeywords, "keywords", "k", "", "Comma-separated list of pre-extracted keywords for the query")
+	_ = cmd.MarkFlagRequired("keywords")
 }
 
-func (o *llmDocsQueryOpts) Prepare(cmd *cobra.Command, args []string) error {
+func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func (o *llmDocsQueryOpts) Run(cmd *cobra.Command) error {
-	client, err := newLLMDocsClient(cmd.Context())
+func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
+	var keywords []string
+	for k := range strings.SplitSeq(o.flagKeywords, ",") {
+		k = strings.TrimSpace(k)
+		if k != "" {
+			keywords = append(keywords, k)
+		}
+	}
+
+	meta := buildLLMDocsMetadata()
+	client, err := newLLMDocsClient(meta)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Search(cmd.Context(), &llmdocsclient.SearchRequest{
-		Metadata: buildRequestMetadata(),
+		Metadata: buildRequestMetadata(meta),
 		Query:    o.argQuery,
-		Keywords: o.flagKeywords,
+		Keywords: keywords,
 	})
 	if err != nil {
 		return wrapLLMDocsError(err, "search documentation")
 	}
-	log.Info().Msg(resp.Content)
+	printLLMDocsContent(resp.Content)
 	return nil
 }

@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -39,7 +38,8 @@ func (o *llmDocsInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
-	client, err := newLLMDocsClient(cmd.Context())
+	meta := buildLLMDocsMetadata()
+	client, err := newLLMDocsClient(meta)
 	if err != nil {
 		return err
 	}
@@ -47,11 +47,11 @@ func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
 
 	resp, err := client.GetInfo(
 		cmd.Context(),
-		&llmdocsclient.GetInfoRequest{Metadata: buildRequestMetadata()},
+		&llmdocsclient.GetInfoRequest{Metadata: buildRequestMetadata(meta)},
 	)
 	if err != nil {
 		return wrapLLMDocsError(err, "read deployment info")
 	}
-	log.Info().Msg(resp.DeploymentInfoJson)
+	printLLMDocsContent(resp.DeploymentInfoJson)
 	return nil
 }

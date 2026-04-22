@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -96,14 +95,15 @@ func (o *llmDocsRipgrepOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsRipgrepOpts) Run(cmd *cobra.Command) error {
-	client, err := newLLMDocsClient(cmd.Context())
+	meta := buildLLMDocsMetadata()
+	client, err := newLLMDocsClient(meta)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Ripgrep(cmd.Context(), &llmdocsclient.RipgrepRequest{
-		Metadata:      buildRequestMetadata(),
+		Metadata:      buildRequestMetadata(meta),
 		Pattern:       o.argPattern,
 		Fixed:         o.flagFixed,
 		IgnoreCase:    o.flagIgnoreCase,
@@ -121,6 +121,6 @@ func (o *llmDocsRipgrepOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return wrapLLMDocsError(err, "search documentation")
 	}
-	log.Info().Msg(resp.Output)
+	printLLMDocsContent(resp.Output)
 	return nil
 }

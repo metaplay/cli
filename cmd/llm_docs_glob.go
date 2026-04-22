@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
 
@@ -63,20 +62,21 @@ func (o *llmDocsGlobOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsGlobOpts) Run(cmd *cobra.Command) error {
-	client, err := newLLMDocsClient(cmd.Context())
+	meta := buildLLMDocsMetadata()
+	client, err := newLLMDocsClient(meta)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Find(cmd.Context(), &llmdocsclient.FindRequest{
-		Metadata: buildRequestMetadata(),
+		Metadata: buildRequestMetadata(meta),
 		Pattern:  o.argPattern,
 		Path:     o.flagPath,
 	})
 	if err != nil {
 		return wrapLLMDocsError(err, "find files")
 	}
-	log.Info().Msg(resp.RenderedOutput)
+	printLLMDocsContent(resp.RenderedOutput)
 	return nil
 }

@@ -49,6 +49,7 @@ type llmDocsMetadata struct {
 
 // buildLLMDocsMetadata gathers best-effort metadata to attach to llm-docs
 // requests. None of these are required; missing values are simply omitted.
+// Callers should resolve this once per command and thread it through.
 func buildLLMDocsMetadata() llmDocsMetadata {
 	meta := llmDocsMetadata{}
 
@@ -81,7 +82,7 @@ func buildLLMDocsMetadata() llmDocsMetadata {
 	return meta
 }
 
-func newLLMDocsClient(ctx context.Context) (*llmdocsclient.Client, error) {
+func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
 	isOverrideTarget := target != ""
 	if target == "" {
@@ -91,7 +92,7 @@ func newLLMDocsClient(ctx context.Context) (*llmdocsclient.Client, error) {
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithUserAgent(fmt.Sprintf("MetaplayCLI/%s", version.AppVersion)),
-		grpc.WithPerRPCCredentials(bearerCredentials{requireTLS: !useInsecure}),
+		grpc.WithPerRPCCredentials(bearerCredentials{token: meta.AccessToken, requireTLS: !useInsecure}),
 	}
 	if useInsecure {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -109,7 +110,7 @@ func newLLMDocsClient(ctx context.Context) (*llmdocsclient.Client, error) {
 		stderrLogger.Info().Msgf(styles.RenderMuted("llm-docs target: %s (%s)"), target, transportMode)
 	}
 
-	client, err := llmdocsclient.DialContext(ctx, target, dialOpts...)
+	client, err := llmdocsclient.Dial(target, dialOpts...)
 	if err != nil {
 		return nil, clierrors.Wrapf(err, "Failed to connect to llm-docs (%s)", target).
 			WithSuggestion("Set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target; loopback targets use plaintext automatically")
@@ -136,11 +137,13 @@ func shouldUseInsecureLLMDocsTarget(target string) bool {
 }
 
 // buildRequestMetadata returns the RequestMetadata message that should be
-// attached to every llm-docs RPC body. All caller attribution (user email,
-// project, SDK version) goes here; nothing app-level rides in gRPC headers.
-func buildRequestMetadata() *llmdocsclient.RequestMetadata {
-	meta := buildLLMDocsMetadata()
+// attached to every llm-docs RPC body. All caller attribution (user, project,
+// SDK version) goes here; only the bearer token rides in gRPC headers.
+func buildRequestMetadata(meta llmDocsMetadata) *llmdocsclient.RequestMetadata {
 	rm := &llmdocsclient.RequestMetadata{}
+	if meta.UserID != "" {
+		rm.UserId = &meta.UserID
+	}
 	if meta.UserEmail != "" {
 		rm.UserEmail = &meta.UserEmail
 	}
@@ -153,20 +156,18 @@ func buildRequestMetadata() *llmdocsclient.RequestMetadata {
 	return rm
 }
 
-// bearerCredentials implements grpc.PerRPCCredentials to attach the bearer
-// token from the persisted Metaplay session to every outgoing RPC. The token
-// is fetched lazily per call so a refreshed session is picked up without
-// redialing.
+// bearerCredentials attaches a captured bearer token to every outgoing RPC.
+// The token is resolved once per command and captured at dial time.
 type bearerCredentials struct {
+	token      string
 	requireTLS bool
 }
 
 func (c bearerCredentials) GetRequestMetadata(ctx context.Context, _ ...string) (map[string]string, error) {
-	meta := buildLLMDocsMetadata()
-	if meta.AccessToken == "" {
+	if c.token == "" {
 		return nil, nil
 	}
-	return map[string]string{"authorization": "Bearer " + meta.AccessToken}, nil
+	return map[string]string{"authorization": "Bearer " + c.token}, nil
 }
 
 func (c bearerCredentials) RequireTransportSecurity() bool {
@@ -194,8 +195,21 @@ func wrapLLMDocsError(err error, action string) error {
 	case codes.FailedPrecondition:
 		return clierrors.Newf("llm-docs could not %s", action).
 			WithDetails(st.Message())
+	case codes.Unavailable:
+		return clierrors.Wrapf(err, "llm-docs service is unavailable while trying to %s", action).
+			WithSuggestion("Check your network connection, or set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target")
 	default:
 		return clierrors.Wrapf(err, "Failed to %s via llm-docs", action)
+	}
+}
+
+// printLLMDocsContent writes server-provided content directly to stdout,
+// bypassing the logger so --verbose does not prefix it with timestamps or
+// log levels. Ensures a single trailing newline for consistency.
+func printLLMDocsContent(content string) {
+	fmt.Print(content)
+	if !strings.HasSuffix(content, "\n") {
+		fmt.Println()
 	}
 }
 
