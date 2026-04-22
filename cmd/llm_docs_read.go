@@ -24,8 +24,10 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "read PATH",
-		Short: "Read a single file from the llm-docs payload (machine use only)",
+		Short: "[preview] Read a single file from the llm-docs payload (machine use only)",
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			Read a single file from the llm-docs payload and print its raw
 			contents. Intended for machine consumption (e.g. AI coding agents);
 			the output format is not stable for human-driven workflows.

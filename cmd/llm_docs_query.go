@@ -24,10 +24,11 @@ func init() {
 	args.AddStringArgument(&o.argQuery, "QUERY", "Original free-form user query.")
 
 	cmd := &cobra.Command{
-		Use:     "search QUERY [flags]",
-		Aliases: []string{"query"},
-		Short:   "Submit an end-user search and fetch relevant documentation (machine use only)",
+		Use:   "search QUERY [flags]",
+		Short: "[preview] Submit an end-user search and fetch relevant documentation (machine use only)",
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			Submit an end-user search, plus pre-extracted keywords, to the
 			llm-docs service and print the response.
 

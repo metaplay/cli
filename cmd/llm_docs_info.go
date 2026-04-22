@@ -17,8 +17,10 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "info",
-		Short: "Show deployment info for the llm-docs service (machine use only)",
+		Short: "[preview] Show deployment info for the llm-docs service (machine use only)",
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			Show the deployment info JSON for the llm-docs service. Intended for
 			machine consumption (e.g. AI coding agents); the output format is
 			not stable for human-driven workflows.

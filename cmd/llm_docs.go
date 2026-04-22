@@ -31,7 +31,7 @@ const defaultLLMDocsTarget = "llm-docs.platform.metaplay.dev:443"
 
 var llmDocsCmd = &cobra.Command{
 	Use:   "llm-docs",
-	Short: "Query the Metaplay LLM-friendly documentation service (machine use only)",
+	Short: "[preview] Query the Metaplay LLM-friendly documentation service (machine use only)",
 }
 
 func init() {

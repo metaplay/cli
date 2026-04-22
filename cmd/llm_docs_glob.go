@@ -25,8 +25,10 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "glob PATTERN [flags]",
-		Short: "List files in the llm-docs payload matching a glob pattern (machine use only)",
+		Short: "[preview] List files in the llm-docs payload matching a glob pattern (machine use only)",
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			List files in the llm-docs payload matching a glob pattern, one per
 			line. Intended for machine consumption (e.g. AI coding agents); the
 			output format is not stable for human-driven workflows.
