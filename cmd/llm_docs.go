@@ -27,7 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-const defaultLLMDocsTarget = "llm-docs.platform.metaplay.dev:443"
+const defaultLLMDocsTarget = "llm-docs-grpc.platform.metaplay.dev:443"
 
 var llmDocsCmd = &cobra.Command{
 	Use:   "llm-docs",
@@ -39,28 +39,24 @@ func init() {
 	rootCmd.AddCommand(llmDocsCmd)
 }
 
-type llmDocsMetadata struct {
-	AccessToken string
-	UserID      string
-	UserEmail   string
-	SdkVersion  string
-	ProjectID   string
-}
-
-// buildLLMDocsMetadata gathers best-effort metadata to attach to llm-docs
-// requests. None of these are required; missing values are simply omitted.
-// Callers should resolve this once per command and thread it through.
-func buildLLMDocsMetadata() llmDocsMetadata {
-	meta := llmDocsMetadata{}
+// newLLMDocsClient resolves the caller's session and project once, dials the
+// llm-docs gRPC service with the bearer token attached to the transport, and
+// returns the RequestMetadata to include in every RPC body. All metadata is
+// best-effort; missing values are simply omitted. Caller must Close the client.
+func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, error) {
+	reqMeta := &llmdocsclient.RequestMetadata{}
 
 	// Project metadata from metaplay-project.yaml (if any).
 	project, err := tryResolveProject()
 	if err != nil {
 		log.Debug().Msgf("llm-docs: skipping project metadata, project failed to load: %v", err)
 	} else if project != nil {
-		meta.ProjectID = project.Config.ProjectHumanID
+		if id := project.Config.ProjectHumanID; id != "" {
+			reqMeta.ProjectId = &id
+		}
 		if project.VersionMetadata.SdkVersion != nil {
-			meta.SdkVersion = project.VersionMetadata.SdkVersion.String()
+			v := project.VersionMetadata.SdkVersion.String()
+			reqMeta.SdkVersion = &v
 		}
 	}
 
@@ -68,21 +64,21 @@ func buildLLMDocsMetadata() llmDocsMetadata {
 	// We deliberately use LoadSessionState (not LoadAndRefreshTokenSet) here:
 	// a failed refresh would delete the session, and a best-effort metadata
 	// read must never have that side effect.
+	var accessToken string
 	authProvider := auth.NewMetaplayAuthProvider()
-	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())
-	if err != nil {
+	if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to load session: %v", err)
-		return meta
+	} else if sessionState != nil {
+		accessToken = sessionState.TokenSet.AccessToken
+		sub, email := userIdentityFromTokens(sessionState.TokenSet)
+		if sub != "" {
+			reqMeta.UserId = &sub
+		}
+		if email != "" {
+			reqMeta.UserEmail = &email
+		}
 	}
-	if sessionState == nil {
-		return meta
-	}
-	meta.AccessToken = sessionState.TokenSet.AccessToken
-	meta.UserID, meta.UserEmail = userIdentityFromTokens(sessionState.TokenSet)
-	return meta
-}
 
-func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
 	isOverrideTarget := target != ""
 	if target == "" {
@@ -95,17 +91,16 @@ func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 	// insecure transport: the target may be non-loopback, which would leak
 	// the token in cleartext. Loopback auto-insecure keeps the token so
 	// local dev workflows can still exercise authenticated paths.
-	token := meta.AccessToken
 	if insecureForced {
-		token = ""
-		if meta.AccessToken != "" {
+		if accessToken != "" {
 			stderrLogger.Info().Msg(styles.RenderMuted("llm-docs: auth token withheld (METAPLAYCLI_LLM_DOCS_INSECURE is set)"))
 		}
+		accessToken = ""
 	}
 
 	dialOpts := []grpc.DialOption{
 		grpc.WithUserAgent(fmt.Sprintf("MetaplayCLI/%s", version.AppVersion)),
-		grpc.WithPerRPCCredentials(bearerCredentials{token: token, requireTLS: !useInsecure}),
+		grpc.WithPerRPCCredentials(bearerCredentials{token: accessToken, requireTLS: !useInsecure}),
 	}
 	if useInsecure {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -125,10 +120,10 @@ func newLLMDocsClient(meta llmDocsMetadata) (*llmdocsclient.Client, error) {
 
 	client, err := llmdocsclient.Dial(target, dialOpts...)
 	if err != nil {
-		return nil, clierrors.Wrapf(err, "Failed to prepare llm-docs client for %s", target).
+		return nil, nil, clierrors.Wrapf(err, "Failed to prepare llm-docs client for %s", target).
 			WithSuggestion("Set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target; loopback targets use plaintext automatically")
 	}
-	return client, nil
+	return client, reqMeta, nil
 }
 
 func isLoopbackTarget(target string) bool {
@@ -143,26 +138,6 @@ func isLoopbackTarget(target string) bool {
 
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
-}
-
-// buildRequestMetadata returns the RequestMetadata message that should be
-// attached to every llm-docs RPC body. All caller attribution (user, project,
-// SDK version) goes here; only the bearer token rides in gRPC headers.
-func buildRequestMetadata(meta llmDocsMetadata) *llmdocsclient.RequestMetadata {
-	rm := &llmdocsclient.RequestMetadata{}
-	if meta.UserID != "" {
-		rm.UserId = &meta.UserID
-	}
-	if meta.UserEmail != "" {
-		rm.UserEmail = &meta.UserEmail
-	}
-	if meta.ProjectID != "" {
-		rm.ProjectId = &meta.ProjectID
-	}
-	if meta.SdkVersion != "" {
-		rm.SdkVersion = &meta.SdkVersion
-	}
-	return rm
 }
 
 // bearerCredentials attaches a captured bearer token to every outgoing RPC.

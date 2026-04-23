@@ -28,7 +28,7 @@ func init() {
 	args.AddStringArgument(&o.argQuery, "QUERY", "Original free-form user query.")
 
 	cmd := &cobra.Command{
-		Use:   "search QUERY [flags]",
+		Use:   "search QUERY --keywords KEYWORDS",
 		Short: "[preview] Submit an end-user search and fetch relevant documentation (machine use only)",
 		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change!
@@ -41,7 +41,6 @@ func init() {
 		`),
 		Run: runCommand(&o),
 		Example: renderExample(`
-			# Use several keywords (synonyms and related terms) for better retrieval.
 			# Quote the whole --keywords value if any keyword contains spaces.
 			metaplay llm-docs search "How do I implement guilds?" --keywords "guilds,guild actor,members,social,multiplayer"
 
@@ -70,15 +69,14 @@ func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
-	meta := buildLLMDocsMetadata()
-	client, err := newLLMDocsClient(meta)
+	client, reqMeta, err := newLLMDocsClient()
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Search(cmd.Context(), &llmdocsclient.SearchRequest{
-		Metadata: buildRequestMetadata(meta),
+		Metadata: reqMeta,
 		Query:    o.argQuery,
 		Keywords: o.keywords,
 	})

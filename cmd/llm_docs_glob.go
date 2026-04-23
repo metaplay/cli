@@ -62,15 +62,14 @@ func (o *llmDocsGlobOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsGlobOpts) Run(cmd *cobra.Command) error {
-	meta := buildLLMDocsMetadata()
-	client, err := newLLMDocsClient(meta)
+	client, reqMeta, err := newLLMDocsClient()
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Find(cmd.Context(), &llmdocsclient.FindRequest{
-		Metadata: buildRequestMetadata(meta),
+		Metadata: reqMeta,
 		Pattern:  o.argPattern,
 		Path:     o.flagPath,
 	})

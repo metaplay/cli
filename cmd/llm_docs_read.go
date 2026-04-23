@@ -36,12 +36,11 @@ func init() {
 			# Show the root catalog.
 			metaplay llm-docs read index.md
 
-			# Read a docs page (the .md extension is auto-appended on the
-			# server when no extension is given).
+			# Read a docs page (.md is auto-appended server-side when no extension is given).
 			metaplay llm-docs read docs/cloud-deployments/getting-started
 
-			# Read SDK source.
-			metaplay llm-docs read MetaplaySDK/Backend/Server/Player/PlayerActorBase.cs
+			# Read a file from a sample project.
+			metaplay llm-docs read samples/HelloWorld/Assets/SharedCode/Player/PlayerModel.cs
 
 			# Read the SDK version metadata.
 			metaplay llm-docs read MetaplaySDK/version.yaml
@@ -56,8 +55,7 @@ func (o *llmDocsReadOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
-	meta := buildLLMDocsMetadata()
-	client, err := newLLMDocsClient(meta)
+	client, reqMeta, err := newLLMDocsClient()
 	if err != nil {
 		return err
 	}
@@ -66,7 +64,7 @@ func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
 	resp, err := client.ReadFile(
 		cmd.Context(),
 		&llmdocsclient.ReadFileRequest{
-			Metadata: buildRequestMetadata(meta),
+			Metadata: reqMeta,
 			Path:     o.argPath,
 		},
 	)

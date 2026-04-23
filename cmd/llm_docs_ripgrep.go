@@ -95,15 +95,14 @@ func (o *llmDocsRipgrepOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsRipgrepOpts) Run(cmd *cobra.Command) error {
-	meta := buildLLMDocsMetadata()
-	client, err := newLLMDocsClient(meta)
+	client, reqMeta, err := newLLMDocsClient()
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
 	resp, err := client.Ripgrep(cmd.Context(), &llmdocsclient.RipgrepRequest{
-		Metadata:      buildRequestMetadata(meta),
+		Metadata:      reqMeta,
 		Pattern:       o.argPattern,
 		Fixed:         o.flagFixed,
 		IgnoreCase:    o.flagIgnoreCase,

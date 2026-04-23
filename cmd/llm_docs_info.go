@@ -38,8 +38,7 @@ func (o *llmDocsInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
-	meta := buildLLMDocsMetadata()
-	client, err := newLLMDocsClient(meta)
+	client, reqMeta, err := newLLMDocsClient()
 	if err != nil {
 		return err
 	}
@@ -47,7 +46,7 @@ func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
 
 	resp, err := client.GetInfo(
 		cmd.Context(),
-		&llmdocsclient.GetInfoRequest{Metadata: buildRequestMetadata(meta)},
+		&llmdocsclient.GetInfoRequest{Metadata: reqMeta},
 	)
 	if err != nil {
 		return wrapLLMDocsError(err, "read deployment info")
