@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -155,17 +154,9 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-
-	// Get environment details for admin API hostname
-	envDetails, err := targetEnv.GetDetails()
-	if err != nil {
-		return err
-	}
-
-	// Create a client for the game server admin API
-	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
+	// Admin hostname follows the infra-modules convention: <humanID>-admin.<stackDomain>.
+	// Avoids a privileged StackAPI /v0/deployments call just to learn the public hostname.
+	adminAPIBaseURL := fmt.Sprintf("https://%s-admin.%s", envConfig.HumanID, envConfig.StackDomain)
 	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
 
 	// Prepare request body if needed
