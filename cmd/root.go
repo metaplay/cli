@@ -483,7 +483,7 @@ func renderLong(opts CommandOptions, str string) string {
 	}
 
 	// Highlight important keywords
-	for _, keyword := range []string{"Note:", "Warning:", "Important:"} {
+	for _, keyword := range []string{"Note:", "Warning:", "Important:", "PREVIEW:"} {
 		str = strings.ReplaceAll(str, keyword, styles.RenderAttention(keyword))
 	}
 

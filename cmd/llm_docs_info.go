@@ -1,0 +1,57 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package cmd
+
+import (
+	"context"
+
+	"github.com/metaplay/cli/pkg/llmdocsclient"
+	"github.com/spf13/cobra"
+)
+
+type llmDocsInfoOpts struct{}
+
+func init() {
+	o := llmDocsInfoOpts{}
+
+	cmd := &cobra.Command{
+		Use:   "info",
+		Short: "[preview] Show deployment info for the llm-docs service (machine use only)",
+		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
+			Show the deployment info JSON for the llm-docs service. Intended for
+			machine consumption (e.g. AI coding agents); the output format is
+			not stable for human-driven workflows.
+		`),
+		Run: runCommand(&o),
+		Example: renderExample(`
+			metaplay llm-docs info
+		`),
+	}
+
+	llmDocsCmd.AddCommand(cmd)
+}
+
+func (o *llmDocsInfoOpts) Prepare(cmd *cobra.Command, args []string) error {
+	return nil
+}
+
+func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
+	client, reqMeta, err := newLLMDocsClient()
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
+	defer cancel()
+	resp, err := client.GetInfo(ctx, &llmdocsclient.GetInfoRequest{Metadata: reqMeta})
+	if err != nil {
+		return wrapLLMDocsError(err, "read deployment info")
+	}
+	printLLMDocsContent(resp.DeploymentInfoJson)
+	return nil
+}

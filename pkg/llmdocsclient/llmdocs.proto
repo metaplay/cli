@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package llmdocs.v1;
+
+option go_package = "github.com/metaplay/llm-docs/llmdocsclient";
+
+// This is the protobuf contract for the llm-docs gRPC API.
+//
+// Versioning: the proto package is `llmdocs.v1` and the fully-qualified gRPC
+// service is `llmdocs.v1.DocsService`. Future breaking changes introduce a new
+// versioned package (e.g. `llmdocs.v2`) side by side rather than modifying v1.
+service DocsService {
+  rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
+  rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
+  rpc GetReadme(GetReadmeRequest) returns (GetReadmeResponse);
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  rpc Find(FindRequest) returns (FindResponse);
+  rpc Ripgrep(RipgrepRequest) returns (RipgrepResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
+
+// RequestMetadata carries caller context attached to every request. All fields
+// are optional today; future revisions may require some of them.
+message RequestMetadata {
+  // Stable identifier for the caller (e.g. Developer Portal user UUID). Prefer
+  // this over user_email for attribution when available.
+  optional string user_id = 1;
+  optional string user_email = 2;
+  optional string project_id = 3;
+  // Full semver of the Metaplay SDK the caller is running (e.g. "32.0.0-rc.1").
+  optional string sdk_version = 4;
+}
+
+message Capability {
+  string name = 1;
+  string grpc_method = 2;
+  string http_route = 3;
+  string mcp_tool = 4;
+  string description = 5;
+}
+
+message GetCapabilitiesRequest {
+  RequestMetadata metadata = 1;
+}
+
+message GetCapabilitiesResponse {
+  string service_name = 1;
+  string service_version = 2;
+  repeated Capability capabilities = 3;
+}
+
+message GetInfoRequest {
+  RequestMetadata metadata = 1;
+}
+
+message GetInfoResponse {
+  string deployment_info_json = 1;
+}
+
+message GetReadmeRequest {
+  RequestMetadata metadata = 1;
+}
+
+message GetReadmeResponse {
+  string path = 1;
+  string content = 2;
+}
+
+message ReadFileRequest {
+  RequestMetadata metadata = 1;
+  string path = 2;
+}
+
+message ReadFileResponse {
+  string path = 1;
+  string content = 2;
+}
+
+message FindRequest {
+  RequestMetadata metadata = 1;
+  string pattern = 2;
+  string path = 3;
+}
+
+message FindResponse {
+  repeated string paths = 1;
+  string rendered_output = 2;
+  bool no_results = 3;
+}
+
+message RipgrepRequest {
+  RequestMetadata metadata = 1;
+  string pattern = 2;
+  bool fixed = 3;
+  bool ignore_case = 4;
+  bool line_numbers = 5;
+  int32 context = 6;
+  int32 context_after = 7;
+  int32 context_before = 8;
+  bool files_only = 9;
+  bool count_only = 10;
+  bool multiline = 11;
+  repeated string file_types = 12;
+  repeated string globs = 13;
+  string path = 14;
+}
+
+message RipgrepResponse {
+  string output = 1;
+  bool no_results = 2;
+}
+
+message SearchRequest {
+  RequestMetadata metadata = 1;
+  string query = 2;
+  repeated string keywords = 3;
+}
+
+message SearchResponse {
+  string path = 1;
+  string content = 2;
+}
