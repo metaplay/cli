@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
 )
@@ -68,7 +70,9 @@ func (o *llmDocsGlobOpts) Run(cmd *cobra.Command) error {
 	}
 	defer client.Close()
 
-	resp, err := client.Find(cmd.Context(), &llmdocsclient.FindRequest{
+	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
+	defer cancel()
+	resp, err := client.Find(ctx, &llmdocsclient.FindRequest{
 		Metadata: reqMeta,
 		Pattern:  o.argPattern,
 		Path:     o.flagPath,

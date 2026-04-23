@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
 )
@@ -101,7 +103,9 @@ func (o *llmDocsRipgrepOpts) Run(cmd *cobra.Command) error {
 	}
 	defer client.Close()
 
-	resp, err := client.Ripgrep(cmd.Context(), &llmdocsclient.RipgrepRequest{
+	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
+	defer cancel()
+	resp, err := client.Ripgrep(ctx, &llmdocsclient.RipgrepRequest{
 		Metadata:      reqMeta,
 		Pattern:       o.argPattern,
 		Fixed:         o.flagFixed,

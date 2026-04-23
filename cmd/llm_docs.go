@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -28,6 +29,15 @@ import (
 )
 
 const defaultLLMDocsTarget = "llm-docs-grpc.platform.metaplay.dev:443"
+
+// Per-RPC deadlines. These bound the total time spent on a single call
+// (including TLS handshake) so a hung server cannot wedge the CLI. Search
+// gets a longer budget because hybrid BM25 + embedding retrieval is the
+// slowest endpoint on the server.
+const (
+	llmDocsDefaultTimeout = 30 * time.Second
+	llmDocsSearchTimeout  = 60 * time.Second
+)
 
 var llmDocsCmd = &cobra.Command{
 	Use:   "llm-docs",
@@ -172,6 +182,14 @@ func wrapLLMDocsError(err error, action string) error {
 	case codes.InvalidArgument:
 		return clierrors.Newf("Invalid llm-docs request while trying to %s", action).
 			WithDetails(st.Message())
+	case codes.Unauthenticated:
+		return clierrors.Newf("llm-docs authentication failed while trying to %s", action).
+			WithDetails(st.Message()).
+			WithSuggestion("Run 'metaplay auth login' to sign in")
+	case codes.PermissionDenied:
+		return clierrors.Newf("Your account is not permitted to %s via llm-docs", action).
+			WithDetails(st.Message()).
+			WithSuggestion("Contact your Metaplay project administrator to request access")
 	case codes.NotFound:
 		return clierrors.Newf("llm-docs returned not found while trying to %s", action).
 			WithDetails(st.Message()).
@@ -179,6 +197,9 @@ func wrapLLMDocsError(err error, action string) error {
 	case codes.FailedPrecondition:
 		return clierrors.Newf("llm-docs could not %s", action).
 			WithDetails(st.Message())
+	case codes.DeadlineExceeded:
+		return clierrors.Wrapf(err, "llm-docs request timed out while trying to %s", action).
+			WithSuggestion("Retry the command; if this persists, the service may be overloaded")
 	case codes.Unavailable:
 		return clierrors.Wrapf(err, "llm-docs service is unavailable while trying to %s", action).
 			WithSuggestion("Check your network connection, or set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target")

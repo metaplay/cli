@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"context"
+
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
 )
@@ -44,10 +46,9 @@ func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
 	}
 	defer client.Close()
 
-	resp, err := client.GetInfo(
-		cmd.Context(),
-		&llmdocsclient.GetInfoRequest{Metadata: reqMeta},
-	)
+	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
+	defer cancel()
+	resp, err := client.GetInfo(ctx, &llmdocsclient.GetInfoRequest{Metadata: reqMeta})
 	if err != nil {
 		return wrapLLMDocsError(err, "read deployment info")
 	}

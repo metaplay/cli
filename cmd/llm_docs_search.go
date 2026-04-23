@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -75,7 +76,9 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 	}
 	defer client.Close()
 
-	resp, err := client.Search(cmd.Context(), &llmdocsclient.SearchRequest{
+	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsSearchTimeout)
+	defer cancel()
+	resp, err := client.Search(ctx, &llmdocsclient.SearchRequest{
 		Metadata: reqMeta,
 		Query:    o.argQuery,
 		Keywords: o.keywords,
