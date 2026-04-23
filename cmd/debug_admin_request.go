@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
@@ -104,6 +105,17 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 
 	if !validMethods[o.argMethod] {
 		return fmt.Errorf("invalid HTTP method: %s. Must be one of: GET, POST, DELETE, PUT", o.argMethod)
+	}
+
+	// Detect MSYS/Git-Bash path mangling: when a bash arg starts with '/', MSYS
+	// rewrites it to a Windows path like "C:/Program Files/Git/api/hello". No
+	// legitimate admin API path starts with a drive letter, so this is unambiguous.
+	if len(o.argPath) >= 3 && o.argPath[1] == ':' &&
+		(o.argPath[2] == '/' || o.argPath[2] == '\\') &&
+		((o.argPath[0] >= 'A' && o.argPath[0] <= 'Z') || (o.argPath[0] >= 'a' && o.argPath[0] <= 'z')) {
+		return clierrors.NewUsageErrorf("PATH argument looks like it was rewritten by MSYS/Git-Bash: %q", o.argPath).
+			WithSuggestion(fmt.Sprintf("Drop the leading slash — the CLI adds it automatically. For example:\n  metaplay debug admin-request %s %s api/<your-path>", o.argEnvironment, o.argMethod)).
+			WithDetails("MSYS/Git-Bash rewrites bash args starting with '/' into Windows paths. You can also prefix the invocation with MSYS_NO_PATHCONV=1 to disable this conversion.")
 	}
 
 	// Ensure path starts with a slash
