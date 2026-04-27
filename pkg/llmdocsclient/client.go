@@ -10,9 +10,9 @@ type Client struct {
 	DocsServiceClient
 }
 
-// Dial creates a llm-docs gRPC client for the given target. The connection
-// is established lazily on the first RPC.
-func Dial(target string, opts ...grpc.DialOption) (*Client, error) {
+// NewClient creates a llm-docs gRPC client for the given target. No I/O is
+// performed; the underlying ClientConn connects lazily on the first RPC.
+func NewClient(target string, opts ...grpc.DialOption) (*Client, error) {
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, err

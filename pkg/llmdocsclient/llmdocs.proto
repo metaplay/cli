@@ -12,7 +12,6 @@ option go_package = "github.com/metaplay/llm-docs/llmdocsclient";
 service DocsService {
   rpc GetCapabilities(GetCapabilitiesRequest) returns (GetCapabilitiesResponse);
   rpc GetInfo(GetInfoRequest) returns (GetInfoResponse);
-  rpc GetReadme(GetReadmeRequest) returns (GetReadmeResponse);
   rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
   rpc Find(FindRequest) returns (FindResponse);
   rpc Ripgrep(RipgrepRequest) returns (RipgrepResponse);
@@ -57,18 +56,16 @@ message GetInfoResponse {
   string deployment_info_json = 1;
 }
 
-message GetReadmeRequest {
-  RequestMetadata metadata = 1;
-}
-
-message GetReadmeResponse {
-  string path = 1;
-  string content = 2;
-}
-
 message ReadFileRequest {
   RequestMetadata metadata = 1;
   string path = 2;
+  // 1-indexed line to start reading from. Defaults to line 1 if unset.
+  optional int32 offset = 3;
+  // Maximum number of lines to return from `offset`. Defaults to 2000 if
+  // unset. When the returned content does not reach end of file it ends
+  // with a footer telling the caller which lines were returned and what
+  // offset to use to continue.
+  optional int32 limit = 4;
 }
 
 message ReadFileResponse {
@@ -83,7 +80,6 @@ message FindRequest {
 }
 
 message FindResponse {
-  repeated string paths = 1;
   string rendered_output = 2;
   bool no_results = 3;
 }
@@ -117,6 +113,7 @@ message SearchRequest {
 }
 
 message SearchResponse {
-  string path = 1;
+  reserved 1; // was `path`
+  reserved "path";
   string content = 2;
 }
