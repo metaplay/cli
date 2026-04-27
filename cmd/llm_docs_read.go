@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
 )
@@ -14,7 +15,9 @@ import (
 type llmDocsReadOpts struct {
 	UsePositionalArgs
 
-	argPath string
+	argPath    string
+	flagOffset int
+	flagLimit  int
 }
 
 func init() {
@@ -46,13 +49,26 @@ func init() {
 
 			# Read the SDK version metadata.
 			metaplay llm-docs read MetaplaySDK/version.yaml
+
+			# Read 100 lines starting at line 500 of a large file.
+			metaplay llm-docs read MetaplaySDK/Backend/Cloud/Foo.cs --offset 500 --limit 100
 		`),
 	}
 
 	llmDocsCmd.AddCommand(cmd)
+
+	flags := cmd.Flags()
+	flags.IntVar(&o.flagOffset, "offset", 0, "1-indexed line to start reading from (default: 1)")
+	flags.IntVar(&o.flagLimit, "limit", 0, "Maximum number of lines to return (default: server default)")
 }
 
 func (o *llmDocsReadOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if cmd.Flags().Changed("offset") && o.flagOffset < 1 {
+		return clierrors.NewUsageError("--offset must be >= 1 (lines are 1-indexed)")
+	}
+	if cmd.Flags().Changed("limit") && o.flagLimit < 1 {
+		return clierrors.NewUsageError("--limit must be >= 1")
+	}
 	return nil
 }
 
@@ -65,10 +81,19 @@ func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
 	defer cancel()
-	resp, err := client.ReadFile(ctx, &llmdocsclient.ReadFileRequest{
+	req := &llmdocsclient.ReadFileRequest{
 		Metadata: reqMeta,
 		Path:     o.argPath,
-	})
+	}
+	if cmd.Flags().Changed("offset") {
+		offset := int32(o.flagOffset)
+		req.Offset = &offset
+	}
+	if cmd.Flags().Changed("limit") {
+		limit := int32(o.flagLimit)
+		req.Limit = &limit
+	}
+	resp, err := client.ReadFile(ctx, req)
 	if err != nil {
 		return wrapLLMDocsError(err, "read file")
 	}
