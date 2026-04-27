@@ -50,16 +50,16 @@ func init() {
 			# Read the SDK version metadata.
 			metaplay llm-docs read MetaplaySDK/version.yaml
 
-			# Read 100 lines starting at line 500 of a large file.
-			metaplay llm-docs read MetaplaySDK/Backend/Cloud/Foo.cs --offset 500 --limit 100
+			# Read a 100-line slice starting at line 500 (paged read).
+			metaplay llm-docs read samples/HelloWorld/Assets/SharedCode/Player/PlayerModel.cs --offset 500 --limit 100
 		`),
 	}
 
 	llmDocsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.IntVar(&o.flagOffset, "offset", 0, "1-indexed line to start reading from (default: 1)")
-	flags.IntVar(&o.flagLimit, "limit", 0, "Maximum number of lines to return (default: server default)")
+	flags.IntVar(&o.flagOffset, "offset", 0, "1-indexed line to start reading from (defaults to line 1)")
+	flags.IntVar(&o.flagLimit, "limit", 0, "Maximum number of lines to return (defaults to the server-side default)")
 }
 
 func (o *llmDocsReadOpts) Prepare(cmd *cobra.Command, args []string) error {
