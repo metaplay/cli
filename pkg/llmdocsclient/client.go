@@ -1,8 +1,6 @@
 package llmdocsclient
 
 import (
-	"context"
-
 	"google.golang.org/grpc"
 )
 
@@ -12,9 +10,10 @@ type Client struct {
 	DocsServiceClient
 }
 
-// DialContext dials a llm-docs gRPC endpoint and returns a typed client.
-func DialContext(ctx context.Context, target string, opts ...grpc.DialOption) (*Client, error) {
-	conn, err := grpc.DialContext(ctx, target, opts...)
+// NewClient creates a llm-docs gRPC client for the given target. No I/O is
+// performed; the underlying ClientConn connects lazily on the first RPC.
+func NewClient(target string, opts ...grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, err
 	}
