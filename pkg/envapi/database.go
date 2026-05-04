@@ -153,7 +153,7 @@ type ListDatabaseSnapshotsOptions struct {
 // database operations API. An environment without dedicated database support returns
 // an empty Shards slice (no error).
 func (target *TargetEnvironment) GetDatabaseCapabilities() (*DatabaseCapabilitiesResponse, error) {
-	path := fmt.Sprintf("/v0/databases/%s/capabilities", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/capabilities", target.HumanID)
 	resp, err := metahttp.Get[DatabaseCapabilitiesResponse](target.StackApiClient, path)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func (target *TargetEnvironment) GetDatabaseCapabilities() (*DatabaseCapabilitie
 // GetDatabaseInfo returns per-shard cluster metadata for the environment.
 // Returns an HTTP 400 for environments without database operations support.
 func (target *TargetEnvironment) GetDatabaseInfo() (*DatabaseInfoResponse, error) {
-	path := fmt.Sprintf("/v0/databases/%s/info", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/info", target.HumanID)
 	resp, err := metahttp.Get[DatabaseInfoResponse](target.StackApiClient, path)
 	if err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ func (target *TargetEnvironment) GetDatabaseInfo() (*DatabaseInfoResponse, error
 // Supports optional type filter ("manual", "automated", "backup") and per-shard
 // limit. Returns an empty list for unsupported environments (no error).
 func (target *TargetEnvironment) ListDatabaseSnapshots(opts ListDatabaseSnapshotsOptions) (*DatabaseSnapshotsResponse, error) {
-	path := fmt.Sprintf("/v0/databases/%s/snapshots", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/snapshots", target.HumanID)
 	query := url.Values{}
 	if opts.Type != "" {
 		query.Set("type", opts.Type)
@@ -198,7 +198,7 @@ func (target *TargetEnvironment) ListDatabaseSnapshots(opts ListDatabaseSnapshot
 // backend searches all shards so the caller does not need to know which shard
 // owns the snapshot. Returns HTTP 404 if not found.
 func (target *TargetEnvironment) GetDatabaseSnapshot(snapshotID string) (*DatabaseSnapshot, error) {
-	path := fmt.Sprintf("/v0/databases/%s/snapshots/%s", target.HumanID, url.PathEscape(snapshotID))
+	path := fmt.Sprintf("/tenant/v1/%s/databases/snapshots/%s", target.HumanID, url.PathEscape(snapshotID))
 	resp, err := metahttp.Get[DatabaseSnapshot](target.StackApiClient, path)
 	if err != nil {
 		return nil, err
@@ -210,7 +210,7 @@ func (target *TargetEnvironment) GetDatabaseSnapshot(snapshotID string) (*Databa
 // specified shard. Returns the initial operation with status "in-progress";
 // poll GetDatabaseOperation to track completion.
 func (target *TargetEnvironment) CreateDatabaseSnapshot(req *CreateDatabaseSnapshotRequest) (*DatabaseOperation, error) {
-	path := fmt.Sprintf("/v0/databases/%s/snapshots", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/snapshots", target.HumanID)
 	resp, err := metahttp.PostJSON[DatabaseOperation](target.StackApiClient, path, req)
 	if err != nil {
 		return nil, err
@@ -223,7 +223,7 @@ func (target *TargetEnvironment) CreateDatabaseSnapshot(req *CreateDatabaseSnaps
 // operation; poll GetDatabaseOperation to track completion (the operation
 // resolves to "completed" once the snapshot is no longer visible).
 func (target *TargetEnvironment) DeleteDatabaseSnapshot(snapshotID string) (*DatabaseOperation, error) {
-	path := fmt.Sprintf("/v0/databases/%s/snapshots/%s", target.HumanID, url.PathEscape(snapshotID))
+	path := fmt.Sprintf("/tenant/v1/%s/databases/snapshots/%s", target.HumanID, url.PathEscape(snapshotID))
 	resp, err := metahttp.Delete[DatabaseOperation](target.StackApiClient, path, nil, "")
 	if err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func (target *TargetEnvironment) DeleteDatabaseSnapshot(snapshotID string) (*Dat
 // Backtrack for AWS RDS). TargetTime must be within the shard's rollback
 // window as reported by GetDatabaseCapabilities.
 func (target *TargetEnvironment) RollbackDatabase(req *RollbackDatabaseRequest) (*DatabaseOperation, error) {
-	path := fmt.Sprintf("/v0/databases/%s/rollback", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/rollback", target.HumanID)
 	resp, err := metahttp.PostJSON[DatabaseOperation](target.StackApiClient, path, req)
 	if err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func (target *TargetEnvironment) RollbackDatabase(req *RollbackDatabaseRequest) 
 // Completed operations are not listed — use GetDatabaseOperation to look up a
 // specific operation by ID. Useful for discovering operations after CLI disconnect.
 func (target *TargetEnvironment) ListDatabaseOperations() (*DatabaseOperationsResponse, error) {
-	path := fmt.Sprintf("/v0/databases/%s/operations", target.HumanID)
+	path := fmt.Sprintf("/tenant/v1/%s/databases/operations", target.HumanID)
 	resp, err := metahttp.Get[DatabaseOperationsResponse](target.StackApiClient, path)
 	if err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func (target *TargetEnvironment) ListDatabaseOperations() (*DatabaseOperationsRe
 // GetDatabaseOperation polls the status of a single async operation by ID.
 // Returns HTTP 404 if the operation does not exist.
 func (target *TargetEnvironment) GetDatabaseOperation(operationID string) (*DatabaseOperation, error) {
-	path := fmt.Sprintf("/v0/databases/%s/operations/%s", target.HumanID, url.PathEscape(operationID))
+	path := fmt.Sprintf("/tenant/v1/%s/databases/operations/%s", target.HumanID, url.PathEscape(operationID))
 	resp, err := metahttp.Get[DatabaseOperation](target.StackApiClient, path)
 	if err != nil {
 		return nil, err

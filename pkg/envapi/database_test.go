@@ -87,7 +87,7 @@ func TestGetDatabaseCapabilities_Success(t *testing.T) {
 	if h.method != http.MethodGet {
 		t.Errorf("expected GET, got %s", h.method)
 	}
-	if h.path != "/v0/databases/test-env/capabilities" {
+	if h.path != "/tenant/v1/test-env/databases/capabilities" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 	if len(caps.Shards) != 1 {
@@ -138,7 +138,7 @@ func TestGetDatabaseInfo_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if h.path != "/v0/databases/test-env/info" {
+	if h.path != "/tenant/v1/test-env/databases/info" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 	if len(info.Shards) != 1 || info.Shards[0].Engine != "aurora-mysql" {
@@ -250,7 +250,7 @@ func TestGetDatabaseSnapshot_NotFound(t *testing.T) {
 	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusNotFound {
 		t.Fatalf("expected 404 HTTPError, got %v", err)
 	}
-	if h.path != "/v0/databases/test-env/snapshots/foo" {
+	if h.path != "/tenant/v1/test-env/databases/snapshots/foo" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 }
@@ -311,7 +311,7 @@ func TestCreateDatabaseSnapshot_SendsBody(t *testing.T) {
 	if h.method != http.MethodPost {
 		t.Errorf("expected POST, got %s", h.method)
 	}
-	if h.path != "/v0/databases/test-env/snapshots" {
+	if h.path != "/tenant/v1/test-env/databases/snapshots" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 
@@ -374,7 +374,7 @@ func TestDeleteDatabaseSnapshot_Success(t *testing.T) {
 	if h.method != http.MethodDelete {
 		t.Errorf("expected DELETE, got %s", h.method)
 	}
-	if h.path != "/v0/databases/test-env/snapshots/mygame-prod-0-manual-20260409-153042" {
+	if h.path != "/tenant/v1/test-env/databases/snapshots/mygame-prod-0-manual-20260409-153042" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 	if len(h.body) != 0 {
@@ -408,7 +408,7 @@ func TestRollbackDatabase_SendsBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if h.path != "/v0/databases/test-env/rollback" {
+	if h.path != "/tenant/v1/test-env/databases/rollback" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 	var sent RollbackDatabaseRequest
@@ -460,7 +460,7 @@ func TestListDatabaseOperations_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if h.path != "/v0/databases/test-env/operations" {
+	if h.path != "/tenant/v1/test-env/databases/operations" {
 		t.Errorf("unexpected path: %s", h.path)
 	}
 	if len(resp.Operations) != 1 {
