@@ -30,8 +30,10 @@ const (
 )
 
 // DefaultAgentDirID is the dir picked when no --target flag is given and no
-// existing on-disk directory is detected.
-const DefaultAgentDirID = AgentDirClaudeID
+// existing on-disk directory is detected. Standard is the safer default
+// because it covers more agent harnesses (Cursor, Codex, Copilot, Windsurf,
+// ...) than the Claude-Code-specific dir.
+const DefaultAgentDirID = AgentDirStandardID
 
 // AgentDirs enumerates the supported install targets.
 var AgentDirs = []AgentDir{

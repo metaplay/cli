@@ -236,8 +236,8 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 		return nil
 	}
 
-	// Interactive multi-select. Order is fixed (standard first), and
-	// directories that already exist are pre-checked.
+	// Interactive multi-select. Order is fixed (standard first). Existing
+	// dirs are pre-checked; if neither exists, the default (standard) is.
 	items := orderedTargetItems()
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Install target(s)",
@@ -250,6 +250,9 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 			return it.DisplayName, hint
 		},
 		func(it *skillspkg.AgentDir) bool {
+			if len(detected) == 0 {
+				return it.ID == skillspkg.DefaultAgentDirID
+			}
 			return containsStr(detected, it.ID)
 		},
 	)

@@ -218,7 +218,7 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 	}
 
 	// Interactive multi-select. Standard always first; existing dirs
-	// pre-checked.
+	// pre-checked. If neither exists, default to standard.
 	items := orderedTargetItems()
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Remove target(s)",
@@ -231,6 +231,9 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 			return it.DisplayName, hint
 		},
 		func(it *skillspkg.AgentDir) bool {
+			if len(detected) == 0 {
+				return it.ID == skillspkg.DefaultAgentDirID
+			}
 			return containsStr(detected, it.ID)
 		},
 	)

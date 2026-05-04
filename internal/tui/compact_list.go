@@ -174,8 +174,9 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
-		case " ":
-			// Toggle selection of the current item
+		case "space":
+			// Toggle selection of the current item. (bubbletea v2 reports
+			// space as "space" rather than " ".)
 			if item, ok := m.model.SelectedItem().(compactListItem); ok {
 				if m.checked[item.index] {
 					delete(m.checked, item.index)
