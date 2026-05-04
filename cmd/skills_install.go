@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,18 +45,25 @@ func init() {
 			wrappers. User-authored skill files (those without
 			'managed-by: metaplay-cli') are never touched.
 
-			Two target directories are supported:
+			Project scope offers two targets:
 
 			  - 'standard' (.agents/skills) — read by Cursor, Codex, GitHub
 			    Copilot / VS Code, Windsurf, Gemini CLI, OpenCode, Cline,
-			    Amp, Warp, Antigravity, and others that follow the open
-			    Agent Skills convention.
+			    Amp, Warp, and others that follow the open Agent Skills
+			    convention.
 			  - 'claude' (.claude/skills) — read by Claude Code.
 
-			Note: For tools that read from neither (e.g. JetBrains Junie,
-			Continue, Pi, Roo Code), copy or symlink the installed dir into
-			the tool's expected location manually. We don't manage symlinks
-			here because they're not portable across operating systems.
+			User scope offers per-harness home directories, mirroring the
+			vercel-labs/skills convention: claude, cursor, copilot, codex,
+			windsurf, gemini, junie, continue, cline, warp, goose, amp,
+			opencode, augment, roo. Each writes under its tool's canonical
+			user-home path (e.g. ~/.cursor/skills, ~/.junie/skills).
+
+			Project-scope note: for tools that read from neither
+			.agents/skills nor .claude/skills (e.g. JetBrains Junie,
+			Continue, Roo Code), either copy/symlink the installed dir
+			into the tool's expected location, or run the user-scope
+			install and tick the tool directly.
 
 			In interactive mode, you'll be prompted first for the install
 			scope (project or user) and then for the target dir(s); the
@@ -68,11 +76,11 @@ func init() {
 			# Install for Claude Code in the current project.
 			metaplay skills install --scope project --target claude
 
-			# Install both standard and Claude Code dirs.
+			# Install both standard and Claude Code dirs at project scope.
 			metaplay skills install --target standard --target claude
 
-			# Install user-scope wrappers under your home directory.
-			metaplay skills install --scope user
+			# User-scope install for two specific tools.
+			metaplay skills install --scope user --target cursor --target junie
 
 			# Force-overwrite even wrappers stamped with a newer version.
 			metaplay skills install --force
@@ -81,7 +89,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagScope, "scope", "", "'project' (under metaplay-project.yaml) or 'user' (under your home directory). Defaults to interactive prompt or 'project'.")
-	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir: 'standard' (.agents/skills) and/or 'claude' (.claude/skills). Repeatable. Defaults to interactive prompt or detection.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: 'standard' (.agents/skills), 'claude'. User scope: claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
 	flags.BoolVar(&o.flagForce, "force", false, "Overwrite even when the on-disk wrapper has a newer version stamp")
 
 	skillsCmd.AddCommand(cmd)
@@ -124,6 +132,9 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 	if err := o.resolveTargets(rootDir); err != nil {
+		return err
+	}
+	if err := validateTargetsForScope(o.resolvedTargets, o.resolvedScope); err != nil {
 		return err
 	}
 
@@ -223,7 +234,7 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 
 	if !tui.IsInteractiveMode() {
 		// Non-interactive: install into every detected dir, or fall back to
-		// the default (Claude Code) if neither exists.
+		// the scope-applicable default if none exist.
 		if len(detected) > 0 {
 			for _, id := range detected {
 				if t := skillspkg.LookupAgentDir(id); t != nil {
@@ -232,14 +243,15 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 			}
 			return nil
 		}
-		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
+		d := skillspkg.LookupAgentDir(defaultTargetForScope(o.resolvedScope))
 		o.resolvedTargets = append(o.resolvedTargets, *d)
 		return nil
 	}
 
-	// Interactive multi-select. Order is fixed (standard first). Existing
-	// dirs are pre-checked; if neither exists, the default (standard) is.
-	items := orderedTargetItems()
+	// Interactive multi-select. Order is fixed by the registry. Existing
+	// dirs are pre-checked; if none exist, the scope-applicable default is.
+	items := skillspkg.AgentDirsForScope(o.resolvedScope)
+	defaultID := defaultTargetForScope(o.resolvedScope)
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Install target(s)",
 		items,
@@ -252,7 +264,7 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 		},
 		func(it *skillspkg.AgentDir) bool {
 			if len(detected) == 0 {
-				return it.ID == skillspkg.DefaultAgentDirID
+				return it.ID == defaultID
 			}
 			return containsStr(detected, it.ID)
 		},
@@ -263,6 +275,16 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 	o.resolvedTargets = append(o.resolvedTargets, selected...)
 	logSelectedTargets(o.resolvedTargets)
 	return nil
+}
+
+// defaultTargetForScope returns the target ID to pre-check when no existing
+// dirs are detected. At project scope this is "standard"; at user scope it's
+// "claude" (since "standard" doesn't apply at user scope).
+func defaultTargetForScope(scope skillspkg.Scope) string {
+	if scope == skillspkg.ScopeUser {
+		return skillspkg.AgentDirClaudeID
+	}
+	return skillspkg.DefaultAgentDirID
 }
 
 // logSelectedTargets prints a one-line confirmation of which target dirs
@@ -278,12 +300,29 @@ func logSelectedTargets(targets []skillspkg.AgentDir) {
 	log.Info().Msg("")
 }
 
-// orderedTargetItems returns the supported AgentDirs in the canonical
-// display order (standard first, then claude).
-func orderedTargetItems() []skillspkg.AgentDir {
-	standard := skillspkg.LookupAgentDir(skillspkg.AgentDirStandardID)
-	claude := skillspkg.LookupAgentDir(skillspkg.AgentDirClaudeID)
-	return []skillspkg.AgentDir{*standard, *claude}
+// validateTargetsForScope ensures every chosen target has a non-empty
+// directory at the active scope. Caller is expected to have already
+// resolved both the scope and the targets.
+func validateTargetsForScope(targets []skillspkg.AgentDir, scope skillspkg.Scope) error {
+	scopeName := "project"
+	if scope == skillspkg.ScopeUser {
+		scopeName = "user"
+	}
+	valid := skillspkg.AgentDirIDsForScope(scope)
+	for _, t := range targets {
+		var rel string
+		switch scope {
+		case skillspkg.ScopeProject:
+			rel = t.ProjectDir
+		case skillspkg.ScopeUser:
+			rel = t.UserDir
+		}
+		if rel == "" {
+			return clierrors.NewUsageErrorf("Target %q has no %s directory", t.ID, scopeName).
+				WithDetails(fmt.Sprintf("Valid %s targets: %s", scopeName, strings.Join(valid, ", ")))
+		}
+	}
+	return nil
 }
 
 // detectExistingTargets returns the IDs of AgentDirs whose scope-relative
@@ -348,14 +387,20 @@ func (o *skillsInstallOpts) reportActions(actions []skillspkg.InstallAction) {
 	log.Info().Msgf("%s %d written, %d unchanged, %d skipped", styles.RenderMuted("Summary:"), written, unchanged, skipped)
 }
 
-// printManualCopyNote reminds users of tools that read from neither
-// .agents/skills nor .claude/skills that they can pick up the installed
-// content by copying or symlinking the directory themselves.
+// printManualCopyNote reminds project-scope users that tools which read
+// from neither .agents/skills nor .claude/skills can pick up the installed
+// content by copying or symlinking the directory themselves. At user scope
+// every supported tool has its own target entry, so the note is omitted.
 func (o *skillsInstallOpts) printManualCopyNote() {
+	if o.resolvedScope != skillspkg.ScopeProject {
+		return
+	}
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderMuted(
 		"Note: AI tools that read from neither .agents/skills nor .claude/skills " +
-			"(e.g. JetBrains Junie, Pi, Continue, Roo Code) can pick up these skills " +
-			"by copying or symlinking the installed dir into the tool's own location.",
+			"(e.g. JetBrains Junie, Continue, Roo Code) can pick up these skills " +
+			"at project scope by copying or symlinking the installed dir into the " +
+			"tool's own location. At user scope, run 'metaplay skills install --scope user' " +
+			"and pick the tool directly.",
 	))
 }

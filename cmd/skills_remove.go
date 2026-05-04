@@ -74,7 +74,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagScope, "scope", "", "'project' (under metaplay-project.yaml) or 'user' (under your home directory). Defaults to interactive prompt or 'project'.")
-	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir: 'standard' (.agents/skills) and/or 'claude' (.claude/skills). Repeatable. Defaults to interactive prompt or detection.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: 'standard' (.agents/skills), 'claude'. User scope: claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
 
 	skillsCmd.AddCommand(cmd)
 }
@@ -113,6 +113,9 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 	if err := o.resolveTargets(rootDir); err != nil {
+		return err
+	}
+	if err := validateTargetsForScope(o.resolvedTargets, o.resolvedScope); err != nil {
 		return err
 	}
 
@@ -202,9 +205,9 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 	detected := detectExistingTargets(rootDir, o.resolvedScope)
 
 	if !tui.IsInteractiveMode() {
-		// Non-interactive: target every detected dir; fall back to default
-		// (Claude Code) if none exists. Removing from a non-existent dir is
-		// a cheap no-op so this is safe.
+		// Non-interactive: target every detected dir; fall back to the
+		// scope-applicable default if none exists. Removing from a
+		// non-existent dir is a cheap no-op so this is safe.
 		if len(detected) > 0 {
 			for _, id := range detected {
 				if t := skillspkg.LookupAgentDir(id); t != nil {
@@ -213,14 +216,15 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 			}
 			return nil
 		}
-		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
+		d := skillspkg.LookupAgentDir(defaultTargetForScope(o.resolvedScope))
 		o.resolvedTargets = append(o.resolvedTargets, *d)
 		return nil
 	}
 
-	// Interactive multi-select. Standard always first; existing dirs
-	// pre-checked. If neither exists, default to standard.
-	items := orderedTargetItems()
+	// Interactive multi-select. Order from the scope-filtered registry.
+	// Existing dirs pre-checked; if none exist, the scope-applicable default.
+	items := skillspkg.AgentDirsForScope(o.resolvedScope)
+	defaultID := defaultTargetForScope(o.resolvedScope)
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Remove target(s)",
 		items,
@@ -233,7 +237,7 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 		},
 		func(it *skillspkg.AgentDir) bool {
 			if len(detected) == 0 {
-				return it.ID == skillspkg.DefaultAgentDirID
+				return it.ID == defaultID
 			}
 			return containsStr(detected, it.ID)
 		},
