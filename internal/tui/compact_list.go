@@ -305,13 +305,25 @@ func ChooseFromListDialogWithHeader[TItem any](title string, header string, item
 
 // ChooseMultipleFromListDialog shows a dialog to select multiple items from a list using checkboxes.
 // The toItemFunc() is used to convert the items into a (name, description) tuple for display.
-// Returns the selected items (or error). Returns an error if no items are selected.
+// All items are pre-selected by default. Returns the selected items (or error if none chosen).
 func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItemFunc func(item *TItem) (string, string)) ([]TItem, error) {
+	return ChooseMultipleFromListDialogWithDefaults(title, items, toItemFunc, func(*TItem) bool { return true })
+}
+
+// ChooseMultipleFromListDialogWithDefaults is like ChooseMultipleFromListDialog
+// but lets the caller specify which items start checked via the
+// defaultChecked predicate, invoked once per item before showing the dialog.
+func ChooseMultipleFromListDialogWithDefaults[TItem any](
+	title string,
+	items []TItem,
+	toItemFunc func(item *TItem) (string, string),
+	defaultChecked func(item *TItem) bool,
+) ([]TItem, error) {
 	if len(items) == 0 {
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderTitle(title))
 		log.Info().Msg("")
-		return nil, fmt.Errorf("ChooseMultipleFromListDialog(): an empty list was provided")
+		return nil, fmt.Errorf("ChooseMultipleFromListDialogWithDefaults(): an empty list was provided")
 	}
 
 	// Convert items to list items.
@@ -326,10 +338,12 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 		}
 	}
 
-	// Initialize list with multi-select delegate, all items pre-selected
+	// Initialise the checked map per the predicate.
 	checked := make(map[int]bool, len(items))
 	for ndx := range items {
-		checked[ndx] = true
+		if defaultChecked(&items[ndx]) {
+			checked[ndx] = true
+		}
 	}
 	delegate := &multiSelectDelegate{checked: checked}
 	l := list.New(listItems, delegate, 0, min(2+len(listItems), 20))
@@ -338,7 +352,7 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 
-	// Create and run model
+	// Create and run model.
 	model := newMultiSelectModel(title, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
@@ -354,7 +368,7 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 		return nil, fmt.Errorf("selection canceled")
 	}
 
-	// Collect selected items in order
+	// Collect selected items in order.
 	var selected []TItem
 	for ndx := range items {
 		if finalM.checked[ndx] {

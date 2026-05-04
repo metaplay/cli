@@ -236,51 +236,36 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 		return nil
 	}
 
-	type targetOpt struct {
-		ids   []string
-		label string
-		hint  string
-	}
-	standard := skillspkg.LookupAgentDir(skillspkg.AgentDirStandardID)
-	claude := skillspkg.LookupAgentDir(skillspkg.AgentDirClaudeID)
-	standardItem := targetOpt{ids: []string{standard.ID}, label: standard.DisplayName}
-	claudeItem := targetOpt{ids: []string{claude.ID}, label: claude.DisplayName}
-	bothItem := targetOpt{ids: []string{standard.ID, claude.ID}, label: "Both"}
-
-	if containsStr(detected, standard.ID) {
-		standardItem.hint = "(detected)"
-	}
-	if containsStr(detected, claude.ID) {
-		claudeItem.hint = "(detected)"
-	}
-	if len(detected) == 2 {
-		bothItem.hint = "(both detected)"
-	}
-
-	// Order so the recommended default is first.
-	var items []targetOpt
-	switch {
-	case len(detected) == 2:
-		items = []targetOpt{bothItem, claudeItem, standardItem}
-	case len(detected) == 1 && detected[0] == standard.ID:
-		items = []targetOpt{standardItem, claudeItem, bothItem}
-	default:
-		// Either Claude detected, or none — default to Claude.
-		items = []targetOpt{claudeItem, standardItem, bothItem}
-	}
-
-	chosen, err := tui.ChooseFromListDialog("Install target", items, func(it *targetOpt) (string, string) {
-		return it.label, it.hint
-	})
+	// Interactive multi-select. Order is fixed (standard first), and
+	// directories that already exist are pre-checked.
+	items := orderedTargetItems()
+	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
+		"Install target(s)",
+		items,
+		func(it *skillspkg.AgentDir) (string, string) {
+			hint := ""
+			if containsStr(detected, it.ID) {
+				hint = "(detected)"
+			}
+			return it.DisplayName, hint
+		},
+		func(it *skillspkg.AgentDir) bool {
+			return containsStr(detected, it.ID)
+		},
+	)
 	if err != nil {
 		return clierrors.Wrap(err, "Target selection cancelled")
 	}
-	for _, id := range chosen.ids {
-		if t := skillspkg.LookupAgentDir(id); t != nil {
-			o.resolvedTargets = append(o.resolvedTargets, *t)
-		}
-	}
+	o.resolvedTargets = append(o.resolvedTargets, selected...)
 	return nil
+}
+
+// orderedTargetItems returns the supported AgentDirs in the canonical
+// display order (standard first, then claude).
+func orderedTargetItems() []skillspkg.AgentDir {
+	standard := skillspkg.LookupAgentDir(skillspkg.AgentDirStandardID)
+	claude := skillspkg.LookupAgentDir(skillspkg.AgentDirClaudeID)
+	return []skillspkg.AgentDir{*standard, *claude}
 }
 
 // detectExistingTargets returns the IDs of AgentDirs whose scope-relative
