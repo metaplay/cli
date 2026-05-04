@@ -73,7 +73,7 @@ func init() {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagScope, "scope", "", "'project' (under metaplay-project.yaml) or 'user' (under your home directory). Defaults to interactive prompt or 'project'.")
+	flags.StringVar(&o.flagScope, "scope", "", "'project' (current directory; or --project path) or 'user' (your home directory). Defaults to interactive prompt or 'project'.")
 	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: 'standard' (.agents/skills), 'claude'. User scope: claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
 
 	skillsCmd.AddCommand(cmd)
@@ -152,14 +152,19 @@ func (o *skillsRemoveOpts) resolveScope() error {
 		o.resolvedScope = skillspkg.ScopeProject
 		return nil
 	}
+	cwd, _ := os.Getwd()
+	if flagProjectConfigPath != "" {
+		cwd = flagProjectConfigPath
+	}
+	home, _ := os.UserHomeDir()
 	type scopeOpt struct {
 		id    string
 		label string
 		hint  string
 	}
 	items := []scopeOpt{
-		{id: "project", label: "Project", hint: "Under metaplay-project.yaml"},
-		{id: "user", label: "User", hint: "Under your home directory"},
+		{id: "project", label: "Project (current directory)", hint: cwd},
+		{id: "user", label: "User (home directory)", hint: home},
 	}
 	chosen, err := tui.ChooseFromListDialog("Remove scope", items, func(it *scopeOpt) (string, string) {
 		return it.label, it.hint
@@ -172,22 +177,23 @@ func (o *skillsRemoveOpts) resolveScope() error {
 	} else {
 		o.resolvedScope = skillspkg.ScopeProject
 	}
-	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), chosen.label)
+	log.Info().Msgf(" %s %s — %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
 	return nil
 }
 
 func (o *skillsRemoveOpts) resolveRootDir() (string, error) {
 	switch o.resolvedScope {
 	case skillspkg.ScopeProject:
-		project, err := tryResolveProject()
+		// Project scope = current working directory; -p/--project overrides.
+		// See cmd/skills_install.go for rationale.
+		if flagProjectConfigPath != "" {
+			return flagProjectConfigPath, nil
+		}
+		cwd, err := os.Getwd()
 		if err != nil {
-			return "", err
+			return "", clierrors.Wrap(err, "Could not determine current working directory")
 		}
-		if project == nil {
-			return "", clierrors.New("No metaplay-project.yaml found").
-				WithSuggestion("Run from a Metaplay project directory, or use --scope user")
-		}
-		return project.RelativeDir, nil
+		return cwd, nil
 	case skillspkg.ScopeUser:
 		home, err := os.UserHomeDir()
 		if err != nil {
