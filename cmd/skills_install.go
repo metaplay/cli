@@ -267,13 +267,15 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 
 // logSelectedTargets prints a one-line confirmation of which target dirs
 // the user picked, so the multi-select dialog's chosen values aren't lost
-// when the dialog body collapses after quitting.
+// when the dialog body collapses after quitting. The trailing blank line
+// separates the echo from the install/remove output that follows.
 func logSelectedTargets(targets []skillspkg.AgentDir) {
 	names := make([]string, 0, len(targets))
 	for _, t := range targets {
 		names = append(names, t.DisplayName)
 	}
 	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), strings.Join(names, ", "))
+	log.Info().Msg("")
 }
 
 // orderedTargetItems returns the supported AgentDirs in the canonical
