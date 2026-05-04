@@ -30,102 +30,103 @@ const (
 	StatusRemoveSkippedError
 )
 
-// RemoveAction records what happened to one (skill, agent) target path.
+// RemoveAction records what happened to one (skill, target) pair.
 type RemoveAction struct {
-	SkillID string
-	AgentID string
-	Path    string
-	Status  RemoveStatus
-	Reason  string
+	SkillID  string
+	TargetID string
+	Path     string
+	Status   RemoveStatus
+	Reason   string
 }
 
 // RemoveOptions describes one removal pass.
 type RemoveOptions struct {
-	// Agents lists the AgentHosts to consider. Same dedupe rules as Install.
-	Agents []AgentHost
+	// Targets lists the AgentDir rows to consider. Two targets that resolve
+	// to the same base directory are deduped so the dir is scanned once.
+	Targets []AgentDir
 	// RootDir is the absolute base directory; the project root for
 	// ScopeProject, the user home for ScopeUser.
 	RootDir string
 	// Scope selects ProjectDir vs UserDir.
 	Scope Scope
 	// SkillIDs optionally restricts the removal to specific skill names.
-	// When empty, every managed-by wrapper found under the agent dir is
+	// When empty, every managed-by wrapper found under the target dir is
 	// removed (covering orphans from skills no longer in the embedded set).
 	SkillIDs []string
 }
 
 // Remove deletes wrappers carrying the managed-by:metaplay-cli stamp under
-// each (agent, scope) directory. User-authored skill files are never
+// each (target, scope) directory. User-authored skill files are never
 // touched. After removing a SKILL.md, the parent skill directory is also
 // removed if empty.
 func Remove(opts RemoveOptions) ([]RemoveAction, error) {
 	if opts.RootDir == "" {
 		return nil, errors.New("RootDir is required")
 	}
-	if len(opts.Agents) == 0 {
-		return nil, errors.New("no agents specified")
+	if len(opts.Targets) == 0 {
+		return nil, errors.New("no targets specified")
 	}
 
-	// Group agents by base directory before touching the filesystem so two
-	// agents that share a path scan it once and the report attributes the
-	// removal to the first agent, with the rest marked as shared.
+	// Group targets by base directory before touching the filesystem so two
+	// targets that share a path scan it once and the report attributes the
+	// removal to the first target, with the rest marked as shared.
 	type group struct {
-		baseDir string
-		agents  []string
+		baseDir  string
+		targets  []string
 	}
 	var groups []group
 	groupIdx := map[string]int{}
 	var actions []RemoveAction
 
-	for _, agent := range opts.Agents {
-		dir := optsScopeDir(opts.Scope, agent)
+	for _, target := range opts.Targets {
+		dir := optsScopeDir(opts.Scope, target)
 		if dir == "" {
 			actions = append(actions, RemoveAction{
-				AgentID: agent.ID,
-				Status:  StatusRemoveSkippedError,
-				Reason:  fmt.Sprintf("agent %q has no %s directory", agent.ID, opts.Scope),
+				TargetID: target.ID,
+				Status:   StatusRemoveSkippedError,
+				Reason:   fmt.Sprintf("target %q has no %s directory", target.ID, opts.Scope),
 			})
 			continue
 		}
 		baseDir := filepath.Join(opts.RootDir, dir)
 		if idx, ok := groupIdx[baseDir]; ok {
-			groups[idx].agents = append(groups[idx].agents, agent.ID)
+			groups[idx].targets = append(groups[idx].targets, target.ID)
 			continue
 		}
 		groupIdx[baseDir] = len(groups)
-		groups = append(groups, group{baseDir: baseDir, agents: []string{agent.ID}})
+		groups = append(groups, group{baseDir: baseDir, targets: []string{target.ID}})
 	}
 
 	for _, g := range groups {
 		candidates, err := candidateSkillDirs(g.baseDir, opts.SkillIDs)
 		if err != nil {
 			actions = append(actions, RemoveAction{
-				AgentID: g.agents[0],
-				Path:    g.baseDir,
-				Status:  StatusRemoveSkippedError,
-				Reason:  err.Error(),
+				TargetID: g.targets[0],
+				Path:     g.baseDir,
+				Status:   StatusRemoveSkippedError,
+				Reason:   err.Error(),
 			})
 			continue
 		}
-		primary := g.agents[0]
+		primary := g.targets[0]
 		for _, skillID := range candidates {
 			skillPath := filepath.Join(g.baseDir, skillID, "SKILL.md")
 			actions = append(actions, removeOne(skillID, primary, skillPath))
-			for _, agentID := range g.agents[1:] {
+			for _, targetID := range g.targets[1:] {
 				actions = append(actions, RemoveAction{
-					SkillID: skillID,
-					AgentID: agentID,
-					Path:    skillPath,
-					Status:  StatusRemoveSkippedNotFound,
-					Reason:  fmt.Sprintf("shared with agent %q", primary),
+					SkillID:  skillID,
+					TargetID: targetID,
+					Path:     skillPath,
+					Status:   StatusRemoveSkippedNotFound,
+					Reason:   fmt.Sprintf("shared with target %q", primary),
 				})
 			}
 		}
 	}
 
 	sort.Slice(actions, func(i, j int) bool {
-		if actions[i].AgentID != actions[j].AgentID {
-			return actions[i].AgentID < actions[j].AgentID
+		if actions[i].TargetID != actions[j].TargetID {
+			return actions[i].TargetID < actions[j].TargetID
 		}
 		return actions[i].SkillID < actions[j].SkillID
 	})
@@ -134,12 +135,12 @@ func Remove(opts RemoveOptions) ([]RemoveAction, error) {
 
 // optsScopeDir is shared with InstallOptions through a free function so we
 // can keep that method on InstallOptions and avoid coupling these two types.
-func optsScopeDir(scope Scope, a AgentHost) string {
+func optsScopeDir(scope Scope, t AgentDir) string {
 	switch scope {
 	case ScopeProject:
-		return a.ProjectDir
+		return t.ProjectDir
 	case ScopeUser:
-		return a.UserDir
+		return t.UserDir
 	}
 	return ""
 }
@@ -174,11 +175,11 @@ func candidateSkillDirs(baseDir string, filter []string) ([]string, error) {
 	return ids, nil
 }
 
-func removeOne(skillID, agentID, skillPath string) RemoveAction {
+func removeOne(skillID, targetID, skillPath string) RemoveAction {
 	act := RemoveAction{
-		SkillID: skillID,
-		AgentID: agentID,
-		Path:    skillPath,
+		SkillID:  skillID,
+		TargetID: targetID,
+		Path:     skillPath,
 	}
 	raw, err := os.ReadFile(skillPath)
 	if errors.Is(err, fs.ErrNotExist) {

@@ -28,12 +28,21 @@ func mkSkill(t *testing.T, id string) *Skill {
 	}
 }
 
-func claudeAgent() AgentHost {
-	return AgentHost{
-		ID:          "claude-code",
+func claudeTarget() AgentDir {
+	return AgentDir{
+		ID:          AgentDirClaudeID,
 		DisplayName: "Claude Code",
 		ProjectDir:  ".claude/skills",
 		UserDir:     ".claude/skills",
+	}
+}
+
+func standardTarget() AgentDir {
+	return AgentDir{
+		ID:          AgentDirStandardID,
+		DisplayName: "Standard",
+		ProjectDir:  ".agents/skills",
+		UserDir:     ".agents/skills",
 	}
 }
 
@@ -42,7 +51,7 @@ func TestInstall_FreshWrite(t *testing.T) {
 	skill := mkSkill(t, "skill-a")
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "1.0.0",
@@ -82,7 +91,7 @@ func TestInstall_SkipsNewerOnDisk(t *testing.T) {
 	}
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "1.0.0",
@@ -108,7 +117,7 @@ func TestInstall_OverwritesOlderOnDisk(t *testing.T) {
 	_ = os.WriteFile(target, preexisting, 0o644)
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "1.0.0",
@@ -134,7 +143,7 @@ func TestInstall_PreservesUserAuthored(t *testing.T) {
 	_ = os.WriteFile(target, userFile, 0o644)
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "1.0.0",
@@ -160,7 +169,7 @@ func TestInstall_ForceBypassesGate(t *testing.T) {
 	_ = os.WriteFile(target, preexisting, 0o644)
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "1.0.0",
@@ -183,7 +192,7 @@ func TestInstall_DevModeBypassesGate(t *testing.T) {
 	_ = os.WriteFile(target, preexisting, 0o644)
 	res, err := Install(InstallOptions{
 		Skills:  []*Skill{skill},
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 		Version: "dev",
@@ -203,7 +212,7 @@ func TestInstall_UnchangedWhenIdentical(t *testing.T) {
 
 	// First write.
 	_, err := Install(InstallOptions{
-		Skills: []*Skill{skill}, Agents: []AgentHost{claudeAgent()},
+		Skills: []*Skill{skill}, Targets: []AgentDir{claudeTarget()},
 		RootDir: root, Scope: ScopeProject, Version: "1.0.0",
 	})
 	if err != nil {
@@ -211,7 +220,7 @@ func TestInstall_UnchangedWhenIdentical(t *testing.T) {
 	}
 	// Second write — should be no-op.
 	res, _ := Install(InstallOptions{
-		Skills: []*Skill{skill}, Agents: []AgentHost{claudeAgent()},
+		Skills: []*Skill{skill}, Targets: []AgentDir{claudeTarget()},
 		RootDir: root, Scope: ScopeProject, Version: "1.0.0",
 	})
 	if res[0].Status != StatusUnchanged {
@@ -219,13 +228,15 @@ func TestInstall_UnchangedWhenIdentical(t *testing.T) {
 	}
 }
 
-func TestInstall_DedupesSharedAgentDirs(t *testing.T) {
+func TestInstall_DedupesSharedDirs(t *testing.T) {
+	// Two AgentDir entries that resolve to the same path should write once
+	// and report the second as shared.
 	root := t.TempDir()
 	skill := mkSkill(t, "skill-a")
-	cursor := AgentHost{ID: "cursor", ProjectDir: ".agents/skills", UserDir: ".cursor/skills"}
-	codex := AgentHost{ID: "codex", ProjectDir: ".agents/skills", UserDir: ".codex/skills"}
+	a := AgentDir{ID: "a", ProjectDir: ".shared/skills", UserDir: ".shared/skills"}
+	b := AgentDir{ID: "b", ProjectDir: ".shared/skills", UserDir: ".other/skills"}
 	res, err := Install(InstallOptions{
-		Skills: []*Skill{skill}, Agents: []AgentHost{cursor, codex},
+		Skills: []*Skill{skill}, Targets: []AgentDir{a, b},
 		RootDir: root, Scope: ScopeProject, Version: "1.0.0",
 	})
 	if err != nil {
@@ -246,11 +257,12 @@ func TestInstall_DedupesSharedAgentDirs(t *testing.T) {
 }
 
 func TestInstall_ScopeUserUsesUserDir(t *testing.T) {
+	// AgentDir with distinct ProjectDir vs UserDir — verify user scope picks UserDir.
 	root := t.TempDir()
 	skill := mkSkill(t, "skill-a")
-	cursor := AgentHost{ID: "cursor", ProjectDir: ".agents/skills", UserDir: ".cursor/skills"}
+	target := AgentDir{ID: "x", ProjectDir: ".agents/skills", UserDir: ".elsewhere/skills"}
 	res, err := Install(InstallOptions{
-		Skills: []*Skill{skill}, Agents: []AgentHost{cursor},
+		Skills: []*Skill{skill}, Targets: []AgentDir{target},
 		RootDir: root, Scope: ScopeUser, Version: "1.0.0",
 	})
 	if err != nil {
@@ -259,7 +271,7 @@ func TestInstall_ScopeUserUsesUserDir(t *testing.T) {
 	if res[0].Status != StatusWritten {
 		t.Fatalf("status = %v", res[0].Status)
 	}
-	expected := filepath.Join(root, ".cursor/skills/skill-a/SKILL.md")
+	expected := filepath.Join(root, ".elsewhere/skills/skill-a/SKILL.md")
 	if _, err := os.Stat(expected); err != nil {
 		t.Errorf("expected file %s: %v", expected, err)
 	}

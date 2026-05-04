@@ -6,10 +6,12 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	skillspkg "github.com/metaplay/cli/internal/skills"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -17,13 +19,12 @@ import (
 )
 
 type skillsInstallOpts struct {
-	flagScope     string
-	flagAgents    []string
-	flagAllAgents bool
-	flagForce     bool
+	flagScope   string
+	flagTargets []string
+	flagForce   bool
 
-	resolvedScope skillspkg.Scope
-	resolvedAgents []skillspkg.AgentHost
+	resolvedScope   skillspkg.Scope
+	resolvedTargets []skillspkg.AgentDir
 }
 
 func init() {
@@ -43,23 +44,35 @@ func init() {
 			wrappers. User-authored skill files (those without
 			'managed-by: metaplay-cli') are never touched.
 
-			Default scope is 'project' (write under the current
-			metaplay-project.yaml). Default agent is 'claude-code'. Pass
-			--agent <id> (repeatable) to target specific tools, or
-			--all-agents to install for every known AI coding tool.
+			Two target directories are supported:
+
+			  - 'standard' (.agents/skills) — read by Cursor, Codex, GitHub
+			    Copilot / VS Code, Windsurf, Gemini CLI, OpenCode, Cline,
+			    Amp, Warp, Antigravity, and others that follow the open
+			    Agent Skills convention.
+			  - 'claude' (.claude/skills) — read by Claude Code.
+
+			Note: For tools that read from neither (e.g. JetBrains Junie,
+			Continue, Pi, Roo Code), copy or symlink the installed dir into
+			the tool's expected location manually. We don't manage symlinks
+			here because they're not portable across operating systems.
+
+			In interactive mode, you'll be prompted first for the install
+			scope (project or user) and then for the target dir(s); the
+			default selection is based on which directories already exist.
 		`),
 		Example: renderExample(`
-			# Install for Claude Code in the current project (default).
+			# Interactive prompts for scope and target.
 			metaplay skills install
 
-			# Install for Cursor as well.
-			metaplay skills install --agent claude-code --agent cursor
+			# Install for Claude Code in the current project.
+			metaplay skills install --scope project --target claude
+
+			# Install both standard and Claude Code dirs.
+			metaplay skills install --target standard --target claude
 
 			# Install user-scope wrappers under your home directory.
 			metaplay skills install --scope user
-
-			# Install for every known AI coding tool.
-			metaplay skills install --all-agents
 
 			# Force-overwrite even wrappers stamped with a newer version.
 			metaplay skills install --force
@@ -67,52 +80,50 @@ func init() {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagScope, "scope", "project", "'project' (under metaplay-project.yaml) or 'user' (under your home directory)")
-	flags.StringSliceVar(&o.flagAgents, "agent", []string{skillspkg.DefaultAgentID}, "Target AI tool ID (repeatable). See 'metaplay skills install --help' for the full list.")
-	flags.BoolVar(&o.flagAllAgents, "all-agents", false, "Install for every AI tool the CLI knows about")
+	flags.StringVar(&o.flagScope, "scope", "", "'project' (under metaplay-project.yaml) or 'user' (under your home directory). Defaults to interactive prompt or 'project'.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir: 'standard' (.agents/skills) and/or 'claude' (.claude/skills). Repeatable. Defaults to interactive prompt or detection.")
 	flags.BoolVar(&o.flagForce, "force", false, "Overwrite even when the on-disk wrapper has a newer version stamp")
 
 	skillsCmd.AddCommand(cmd)
 }
 
 func (o *skillsInstallOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Validate --scope if explicitly given. Empty means "ask interactively
+	// or fall back to project", resolved later in Run().
 	switch o.flagScope {
-	case "project":
-		o.resolvedScope = skillspkg.ScopeProject
-	case "user":
-		o.resolvedScope = skillspkg.ScopeUser
+	case "", "project", "user":
+		// OK
 	default:
 		return clierrors.NewUsageErrorf("Invalid --scope %q", o.flagScope).
 			WithSuggestion("Use --scope project or --scope user")
 	}
 
-	if o.flagAllAgents {
-		o.resolvedAgents = append([]skillspkg.AgentHost(nil), skillspkg.AgentHosts...)
-	} else {
-		seen := map[string]bool{}
-		for _, id := range o.flagAgents {
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			a := skillspkg.LookupAgent(id)
-			if a == nil {
-				return clierrors.NewUsageErrorf("Unknown --agent %q", id).
-					WithDetails("Known agents: " + strings.Join(skillspkg.AgentIDs(), ", "))
-			}
-			o.resolvedAgents = append(o.resolvedAgents, *a)
+	// Validate --target IDs if explicitly given.
+	seen := map[string]bool{}
+	for _, id := range o.flagTargets {
+		if seen[id] {
+			continue
 		}
-	}
-	if len(o.resolvedAgents) == 0 {
-		return clierrors.NewUsageError("At least one --agent is required").
-			WithSuggestion("Specify --agent <id>, or --all-agents")
+		seen[id] = true
+		t := skillspkg.LookupAgentDir(id)
+		if t == nil {
+			return clierrors.NewUsageErrorf("Unknown --target %q", id).
+				WithDetails("Known targets: " + strings.Join(skillspkg.AgentDirIDs(), ", "))
+		}
+		o.resolvedTargets = append(o.resolvedTargets, *t)
 	}
 	return nil
 }
 
 func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
+	if err := o.resolveScope(); err != nil {
+		return err
+	}
 	rootDir, err := o.resolveRootDir()
 	if err != nil {
+		return err
+	}
+	if err := o.resolveTargets(rootDir); err != nil {
 		return err
 	}
 
@@ -128,7 +139,7 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 
 	actions, err := skillspkg.Install(skillspkg.InstallOptions{
 		Skills:  skills,
-		Agents:  o.resolvedAgents,
+		Targets: o.resolvedTargets,
 		RootDir: rootDir,
 		Scope:   o.resolvedScope,
 		Version: version.AppVersion,
@@ -140,6 +151,44 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 	}
 
 	o.reportActions(actions)
+	o.printManualCopyNote()
+	return nil
+}
+
+func (o *skillsInstallOpts) resolveScope() error {
+	if o.flagScope != "" {
+		switch o.flagScope {
+		case "project":
+			o.resolvedScope = skillspkg.ScopeProject
+		case "user":
+			o.resolvedScope = skillspkg.ScopeUser
+		}
+		return nil
+	}
+	if !tui.IsInteractiveMode() {
+		o.resolvedScope = skillspkg.ScopeProject
+		return nil
+	}
+	type scopeOpt struct {
+		id    string
+		label string
+		hint  string
+	}
+	items := []scopeOpt{
+		{id: "project", label: "Project", hint: "Under metaplay-project.yaml"},
+		{id: "user", label: "User", hint: "Under your home directory"},
+	}
+	chosen, err := tui.ChooseFromListDialog("Install scope", items, func(it *scopeOpt) (string, string) {
+		return it.label, it.hint
+	})
+	if err != nil {
+		return clierrors.Wrap(err, "Scope selection cancelled")
+	}
+	if chosen.id == "user" {
+		o.resolvedScope = skillspkg.ScopeUser
+	} else {
+		o.resolvedScope = skillspkg.ScopeProject
+	}
 	return nil
 }
 
@@ -163,6 +212,107 @@ func (o *skillsInstallOpts) resolveRootDir() (string, error) {
 		return home, nil
 	}
 	return "", clierrors.New("Unknown scope")
+}
+
+func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
+	if len(o.resolvedTargets) > 0 {
+		return nil // explicitly set via --target
+	}
+	detected := detectExistingTargets(rootDir, o.resolvedScope)
+
+	if !tui.IsInteractiveMode() {
+		// Non-interactive: install into every detected dir, or fall back to
+		// the default (Claude Code) if neither exists.
+		if len(detected) > 0 {
+			for _, id := range detected {
+				if t := skillspkg.LookupAgentDir(id); t != nil {
+					o.resolvedTargets = append(o.resolvedTargets, *t)
+				}
+			}
+			return nil
+		}
+		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
+		o.resolvedTargets = append(o.resolvedTargets, *d)
+		return nil
+	}
+
+	type targetOpt struct {
+		ids   []string
+		label string
+		hint  string
+	}
+	standard := skillspkg.LookupAgentDir(skillspkg.AgentDirStandardID)
+	claude := skillspkg.LookupAgentDir(skillspkg.AgentDirClaudeID)
+	standardItem := targetOpt{ids: []string{standard.ID}, label: standard.DisplayName}
+	claudeItem := targetOpt{ids: []string{claude.ID}, label: claude.DisplayName}
+	bothItem := targetOpt{ids: []string{standard.ID, claude.ID}, label: "Both"}
+
+	if containsStr(detected, standard.ID) {
+		standardItem.hint = "(detected)"
+	}
+	if containsStr(detected, claude.ID) {
+		claudeItem.hint = "(detected)"
+	}
+	if len(detected) == 2 {
+		bothItem.hint = "(both detected)"
+	}
+
+	// Order so the recommended default is first.
+	var items []targetOpt
+	switch {
+	case len(detected) == 2:
+		items = []targetOpt{bothItem, claudeItem, standardItem}
+	case len(detected) == 1 && detected[0] == standard.ID:
+		items = []targetOpt{standardItem, claudeItem, bothItem}
+	default:
+		// Either Claude detected, or none — default to Claude.
+		items = []targetOpt{claudeItem, standardItem, bothItem}
+	}
+
+	chosen, err := tui.ChooseFromListDialog("Install target", items, func(it *targetOpt) (string, string) {
+		return it.label, it.hint
+	})
+	if err != nil {
+		return clierrors.Wrap(err, "Target selection cancelled")
+	}
+	for _, id := range chosen.ids {
+		if t := skillspkg.LookupAgentDir(id); t != nil {
+			o.resolvedTargets = append(o.resolvedTargets, *t)
+		}
+	}
+	return nil
+}
+
+// detectExistingTargets returns the IDs of AgentDirs whose scope-relative
+// directory already exists at rootDir.
+func detectExistingTargets(rootDir string, scope skillspkg.Scope) []string {
+	var ids []string
+	for _, t := range skillspkg.AgentDirs {
+		var rel string
+		switch scope {
+		case skillspkg.ScopeProject:
+			rel = t.ProjectDir
+		case skillspkg.ScopeUser:
+			rel = t.UserDir
+		}
+		if rel == "" {
+			continue
+		}
+		path := filepath.Join(rootDir, rel)
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			ids = append(ids, t.ID)
+		}
+	}
+	return ids
+}
+
+func containsStr(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *skillsInstallOpts) reportActions(actions []skillspkg.InstallAction) {
@@ -193,4 +343,16 @@ func (o *skillsInstallOpts) reportActions(actions []skillspkg.InstallAction) {
 		log.Info().Msg(line)
 	}
 	log.Info().Msgf("%s %d written, %d unchanged, %d skipped", styles.RenderMuted("Summary:"), written, unchanged, skipped)
+}
+
+// printManualCopyNote reminds users of tools that read from neither
+// .agents/skills nor .claude/skills that they can pick up the installed
+// content by copying or symlinking the directory themselves.
+func (o *skillsInstallOpts) printManualCopyNote() {
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderMuted(
+		"Note: AI tools that read from neither .agents/skills nor .claude/skills " +
+			"(e.g. JetBrains Junie, Pi, Continue, Roo Code) can pick up these skills " +
+			"by copying or symlinking the installed dir into the tool's own location.",
+	))
 }

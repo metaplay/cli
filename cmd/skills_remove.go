@@ -10,6 +10,7 @@ import (
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	skillspkg "github.com/metaplay/cli/internal/skills"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -20,12 +21,11 @@ type skillsRemoveOpts struct {
 
 	argSkill string
 
-	flagScope     string
-	flagAgents    []string
-	flagAllAgents bool
+	flagScope   string
+	flagTargets []string
 
-	resolvedScope  skillspkg.Scope
-	resolvedAgents []skillspkg.AgentHost
+	resolvedScope   skillspkg.Scope
+	resolvedTargets []skillspkg.AgentDir
 }
 
 func init() {
@@ -48,21 +48,24 @@ func init() {
 			directory are always preserved. After deleting a SKILL.md, the
 			parent skill directory is removed if it is empty.
 
-			Default scope is 'project' and default agent is 'claude-code'.
 			With no SKILL argument, every metaplay-cli wrapper found under
-			the chosen agent dirs is cleaned up — useful for clearing out
+			the chosen target dirs is cleaned up — useful for clearing out
 			orphan wrappers from skills that have been removed from the
 			canonical set.
+
+			In interactive mode, you'll be prompted for the scope (project
+			or user) and the target dir(s); the default selection is based
+			on which directories already exist.
 		`),
 		Example: renderExample(`
-			# Remove all metaplay-cli wrappers from the current project (Claude Code).
+			# Remove all metaplay-cli wrappers from the current project (interactive prompts).
 			metaplay skills remove
 
 			# Remove just one skill.
 			metaplay skills remove metaplay-develop
 
-			# Remove from every known AI tool's project dirs.
-			metaplay skills remove --all-agents
+			# Remove from both standard and Claude Code dirs.
+			metaplay skills remove --target standard --target claude
 
 			# Remove user-scope wrappers under your home directory.
 			metaplay skills remove --scope user
@@ -70,51 +73,46 @@ func init() {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagScope, "scope", "project", "'project' (under metaplay-project.yaml) or 'user' (under your home directory)")
-	flags.StringSliceVar(&o.flagAgents, "agent", []string{skillspkg.DefaultAgentID}, "Target AI tool ID (repeatable)")
-	flags.BoolVar(&o.flagAllAgents, "all-agents", false, "Remove for every AI tool the CLI knows about")
+	flags.StringVar(&o.flagScope, "scope", "", "'project' (under metaplay-project.yaml) or 'user' (under your home directory). Defaults to interactive prompt or 'project'.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir: 'standard' (.agents/skills) and/or 'claude' (.claude/skills). Repeatable. Defaults to interactive prompt or detection.")
 
 	skillsCmd.AddCommand(cmd)
 }
 
 func (o *skillsRemoveOpts) Prepare(cmd *cobra.Command, args []string) error {
 	switch o.flagScope {
-	case "project":
-		o.resolvedScope = skillspkg.ScopeProject
-	case "user":
-		o.resolvedScope = skillspkg.ScopeUser
+	case "", "project", "user":
+		// OK
 	default:
 		return clierrors.NewUsageErrorf("Invalid --scope %q", o.flagScope).
 			WithSuggestion("Use --scope project or --scope user")
 	}
 
-	if o.flagAllAgents {
-		o.resolvedAgents = append([]skillspkg.AgentHost(nil), skillspkg.AgentHosts...)
-	} else {
-		seen := map[string]bool{}
-		for _, id := range o.flagAgents {
-			if seen[id] {
-				continue
-			}
-			seen[id] = true
-			a := skillspkg.LookupAgent(id)
-			if a == nil {
-				return clierrors.NewUsageErrorf("Unknown --agent %q", id).
-					WithDetails("Known agents: " + strings.Join(skillspkg.AgentIDs(), ", "))
-			}
-			o.resolvedAgents = append(o.resolvedAgents, *a)
+	seen := map[string]bool{}
+	for _, id := range o.flagTargets {
+		if seen[id] {
+			continue
 		}
-	}
-	if len(o.resolvedAgents) == 0 {
-		return clierrors.NewUsageError("At least one --agent is required").
-			WithSuggestion("Specify --agent <id>, or --all-agents")
+		seen[id] = true
+		t := skillspkg.LookupAgentDir(id)
+		if t == nil {
+			return clierrors.NewUsageErrorf("Unknown --target %q", id).
+				WithDetails("Known targets: " + strings.Join(skillspkg.AgentDirIDs(), ", "))
+		}
+		o.resolvedTargets = append(o.resolvedTargets, *t)
 	}
 	return nil
 }
 
 func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
+	if err := o.resolveScope(); err != nil {
+		return err
+	}
 	rootDir, err := o.resolveRootDir()
 	if err != nil {
+		return err
+	}
+	if err := o.resolveTargets(rootDir); err != nil {
 		return err
 	}
 
@@ -124,7 +122,7 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 	}
 
 	actions, err := skillspkg.Remove(skillspkg.RemoveOptions{
-		Agents:   o.resolvedAgents,
+		Targets:  o.resolvedTargets,
 		RootDir:  rootDir,
 		Scope:    o.resolvedScope,
 		SkillIDs: skillIDs,
@@ -134,6 +132,43 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 	}
 
 	o.reportRemoveActions(actions)
+	return nil
+}
+
+func (o *skillsRemoveOpts) resolveScope() error {
+	if o.flagScope != "" {
+		switch o.flagScope {
+		case "project":
+			o.resolvedScope = skillspkg.ScopeProject
+		case "user":
+			o.resolvedScope = skillspkg.ScopeUser
+		}
+		return nil
+	}
+	if !tui.IsInteractiveMode() {
+		o.resolvedScope = skillspkg.ScopeProject
+		return nil
+	}
+	type scopeOpt struct {
+		id    string
+		label string
+		hint  string
+	}
+	items := []scopeOpt{
+		{id: "project", label: "Project", hint: "Under metaplay-project.yaml"},
+		{id: "user", label: "User", hint: "Under your home directory"},
+	}
+	chosen, err := tui.ChooseFromListDialog("Remove scope", items, func(it *scopeOpt) (string, string) {
+		return it.label, it.hint
+	})
+	if err != nil {
+		return clierrors.Wrap(err, "Scope selection cancelled")
+	}
+	if chosen.id == "user" {
+		o.resolvedScope = skillspkg.ScopeUser
+	} else {
+		o.resolvedScope = skillspkg.ScopeProject
+	}
 	return nil
 }
 
@@ -157,6 +192,74 @@ func (o *skillsRemoveOpts) resolveRootDir() (string, error) {
 		return home, nil
 	}
 	return "", clierrors.New("Unknown scope")
+}
+
+func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
+	if len(o.resolvedTargets) > 0 {
+		return nil
+	}
+	detected := detectExistingTargets(rootDir, o.resolvedScope)
+
+	if !tui.IsInteractiveMode() {
+		// Non-interactive: target every detected dir; fall back to default
+		// (Claude Code) if none exists. Removing from a non-existent dir is
+		// a cheap no-op so this is safe.
+		if len(detected) > 0 {
+			for _, id := range detected {
+				if t := skillspkg.LookupAgentDir(id); t != nil {
+					o.resolvedTargets = append(o.resolvedTargets, *t)
+				}
+			}
+			return nil
+		}
+		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
+		o.resolvedTargets = append(o.resolvedTargets, *d)
+		return nil
+	}
+
+	type targetOpt struct {
+		ids   []string
+		label string
+		hint  string
+	}
+	standard := skillspkg.LookupAgentDir(skillspkg.AgentDirStandardID)
+	claude := skillspkg.LookupAgentDir(skillspkg.AgentDirClaudeID)
+	standardItem := targetOpt{ids: []string{standard.ID}, label: standard.DisplayName}
+	claudeItem := targetOpt{ids: []string{claude.ID}, label: claude.DisplayName}
+	bothItem := targetOpt{ids: []string{standard.ID, claude.ID}, label: "Both"}
+
+	if containsStr(detected, standard.ID) {
+		standardItem.hint = "(detected)"
+	}
+	if containsStr(detected, claude.ID) {
+		claudeItem.hint = "(detected)"
+	}
+	if len(detected) == 2 {
+		bothItem.hint = "(both detected)"
+	}
+
+	var items []targetOpt
+	switch {
+	case len(detected) == 2:
+		items = []targetOpt{bothItem, claudeItem, standardItem}
+	case len(detected) == 1 && detected[0] == standard.ID:
+		items = []targetOpt{standardItem, claudeItem, bothItem}
+	default:
+		items = []targetOpt{claudeItem, standardItem, bothItem}
+	}
+
+	chosen, err := tui.ChooseFromListDialog("Remove target", items, func(it *targetOpt) (string, string) {
+		return it.label, it.hint
+	})
+	if err != nil {
+		return clierrors.Wrap(err, "Target selection cancelled")
+	}
+	for _, id := range chosen.ids {
+		if t := skillspkg.LookupAgentDir(id); t != nil {
+			o.resolvedTargets = append(o.resolvedTargets, *t)
+		}
+	}
+	return nil
 }
 
 func (o *skillsRemoveOpts) reportRemoveActions(actions []skillspkg.RemoveAction) {

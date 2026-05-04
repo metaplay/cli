@@ -32,7 +32,7 @@ func TestRemove_DeletesManagedWrapper(t *testing.T) {
 	path := writeWrapper(t, root, ".claude/skills", "skill-a", managedWrapper("skill-a", "1.0.0"))
 
 	res, err := Remove(RemoveOptions{
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 	})
@@ -53,7 +53,7 @@ func TestRemove_PreservesUserAuthored(t *testing.T) {
 	path := writeWrapper(t, root, ".claude/skills", "skill-a", user)
 
 	res, err := Remove(RemoveOptions{
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 	})
@@ -71,7 +71,7 @@ func TestRemove_PreservesUserAuthored(t *testing.T) {
 func TestRemove_AbsentSkill(t *testing.T) {
 	root := t.TempDir()
 	res, err := Remove(RemoveOptions{
-		Agents:   []AgentHost{claudeAgent()},
+		Targets:  []AgentDir{claudeTarget()},
 		RootDir:  root,
 		Scope:    ScopeProject,
 		SkillIDs: []string{"missing-skill"},
@@ -90,7 +90,7 @@ func TestRemove_FilterByID(t *testing.T) {
 	pathB := writeWrapper(t, root, ".claude/skills", "skill-b", managedWrapper("skill-b", "1.0.0"))
 
 	res, err := Remove(RemoveOptions{
-		Agents:   []AgentHost{claudeAgent()},
+		Targets:  []AgentDir{claudeTarget()},
 		RootDir:  root,
 		Scope:    ScopeProject,
 		SkillIDs: []string{"skill-a"},
@@ -118,7 +118,7 @@ func TestRemove_RemovesEmptyParentDir(t *testing.T) {
 	skillDir := filepath.Dir(path)
 
 	if _, err := Remove(RemoveOptions{
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 	}); err != nil {
@@ -144,7 +144,7 @@ func TestRemove_KeepsParentIfNonEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := Remove(RemoveOptions{
-		Agents: []AgentHost{claudeAgent()}, RootDir: root, Scope: ScopeProject,
+		Targets: []AgentDir{claudeTarget()}, RootDir: root, Scope: ScopeProject,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ func TestRemove_DiscoversOrphanWhenNoFilter(t *testing.T) {
 	writeWrapper(t, root, ".claude/skills", "old-skill", managedWrapper("old-skill", "1.0.0"))
 
 	res, err := Remove(RemoveOptions{
-		Agents:  []AgentHost{claudeAgent()},
+		Targets: []AgentDir{claudeTarget()},
 		RootDir: root,
 		Scope:   ScopeProject,
 	})
@@ -175,14 +175,14 @@ func TestRemove_DiscoversOrphanWhenNoFilter(t *testing.T) {
 	}
 }
 
-func TestRemove_DedupesSharedAgentDirs(t *testing.T) {
+func TestRemove_DedupesSharedDirs(t *testing.T) {
 	root := t.TempDir()
-	cursor := AgentHost{ID: "cursor", ProjectDir: ".agents/skills"}
-	codex := AgentHost{ID: "codex", ProjectDir: ".agents/skills"}
-	writeWrapper(t, root, ".agents/skills", "skill-a", managedWrapper("skill-a", "1.0.0"))
+	a := AgentDir{ID: "a", ProjectDir: ".shared/skills"}
+	b := AgentDir{ID: "b", ProjectDir: ".shared/skills"}
+	writeWrapper(t, root, ".shared/skills", "skill-a", managedWrapper("skill-a", "1.0.0"))
 
 	res, err := Remove(RemoveOptions{
-		Agents: []AgentHost{cursor, codex}, RootDir: root, Scope: ScopeProject,
+		Targets: []AgentDir{a, b}, RootDir: root, Scope: ScopeProject,
 	})
 	if err != nil {
 		t.Fatal(err)

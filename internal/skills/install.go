@@ -14,13 +14,13 @@ import (
 	"sort"
 )
 
-// Scope selects which AgentHost directory to install into.
+// Scope selects which AgentDir directory to install into.
 type Scope int
 
 const (
-	// ScopeProject targets the project's working directory (AgentHost.ProjectDir).
+	// ScopeProject targets the project's working directory (AgentDir.ProjectDir).
 	ScopeProject Scope = iota
-	// ScopeUser targets the user's home directory (AgentHost.UserDir).
+	// ScopeUser targets the user's home directory (AgentDir.UserDir).
 	ScopeUser
 )
 
@@ -62,10 +62,10 @@ const (
 	StatusSkippedError
 )
 
-// InstallAction records what happened to one (skill, agent) target path.
+// InstallAction records what happened to one (skill, target) pair.
 type InstallAction struct {
 	SkillID  string
-	AgentID  string
+	TargetID string
 	Path     string
 	Status   InstallStatus
 	Reason   string // free text, populated for any Skipped status
@@ -76,13 +76,12 @@ type InstallAction struct {
 type InstallOptions struct {
 	// Skills is the canonical embedded set, e.g. from LoadAll(OpenFS()).
 	Skills []*Skill
-	// Agents lists the AgentHost rows to install for. Duplicates and same-
-	// path agents are deduped automatically.
-	Agents []AgentHost
+	// Targets lists the AgentDir rows to install into.
+	Targets []AgentDir
 	// RootDir is the absolute base directory to install into; for
 	// ScopeProject this is the project root, for ScopeUser the user home.
 	RootDir string
-	// Scope selects ProjectDir vs UserDir on each AgentHost.
+	// Scope selects ProjectDir vs UserDir on each AgentDir.
 	Scope Scope
 	// Version is the value to stamp into the wrapper's
 	// `metaplay-cli-version` field. Should be the current CLI's
@@ -96,7 +95,7 @@ type InstallOptions struct {
 	DevMode bool
 }
 
-// Install writes each (skill × agent) wrapper, gated by version stamps.
+// Install writes each (skill × target) wrapper, gated by version stamps.
 // Returns one InstallAction per unique target path and a non-nil error only
 // for catastrophic failures (e.g. could not write at all). Per-target
 // problems are reflected in the returned actions.
@@ -110,24 +109,23 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 	if len(opts.Skills) == 0 {
 		return nil, errors.New("no skills to install")
 	}
-	if len(opts.Agents) == 0 {
-		return nil, errors.New("no agents specified")
+	if len(opts.Targets) == 0 {
+		return nil, errors.New("no targets specified")
 	}
 
-	// Dedupe (skill, target-path) tuples. Multiple AgentHosts can share
-	// the same directory (e.g. several point at .agents/skills); writing
-	// the same content twice is wasteful and produces noisy output.
+	// Dedupe (skill, target-path) tuples. Two AgentDirs that share a path
+	// (not the case for the bundled set, but defensive) only get written once.
 	type key struct{ skill, path string }
-	seen := map[key]string{} // first AgentID claimed for this target
+	seen := map[key]string{} // first TargetID claimed for this path
 	var actions []InstallAction
 
-	for _, agent := range opts.Agents {
-		dir := opts.scopeDir(agent)
+	for _, target := range opts.Targets {
+		dir := opts.scopeDir(target)
 		if dir == "" {
 			actions = append(actions, InstallAction{
-				AgentID: agent.ID,
-				Status:  StatusSkippedError,
-				Reason:  fmt.Sprintf("agent %q has no %s directory", agent.ID, opts.Scope),
+				TargetID: target.ID,
+				Status:   StatusSkippedError,
+				Reason:   fmt.Sprintf("target %q has no %s directory", target.ID, opts.Scope),
 			})
 			continue
 		}
@@ -136,44 +134,44 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 			k := key{skill: skill.ID, path: targetPath}
 			if claimedBy, ok := seen[k]; ok {
 				actions = append(actions, InstallAction{
-					SkillID: skill.ID,
-					AgentID: agent.ID,
-					Path:    targetPath,
-					Status:  StatusUnchanged,
-					Reason:  fmt.Sprintf("shared with agent %q", claimedBy),
+					SkillID:  skill.ID,
+					TargetID: target.ID,
+					Path:     targetPath,
+					Status:   StatusUnchanged,
+					Reason:   fmt.Sprintf("shared with target %q", claimedBy),
 				})
 				continue
 			}
-			seen[k] = agent.ID
-			act := installOne(skill, agent.ID, targetPath, opts)
+			seen[k] = target.ID
+			act := installOne(skill, target.ID, targetPath, opts)
 			actions = append(actions, act)
 		}
 	}
 
 	sort.Slice(actions, func(i, j int) bool {
-		if actions[i].AgentID != actions[j].AgentID {
-			return actions[i].AgentID < actions[j].AgentID
+		if actions[i].TargetID != actions[j].TargetID {
+			return actions[i].TargetID < actions[j].TargetID
 		}
 		return actions[i].SkillID < actions[j].SkillID
 	})
 	return actions, nil
 }
 
-func (o InstallOptions) scopeDir(a AgentHost) string {
+func (o InstallOptions) scopeDir(t AgentDir) string {
 	switch o.Scope {
 	case ScopeProject:
-		return a.ProjectDir
+		return t.ProjectDir
 	case ScopeUser:
-		return a.UserDir
+		return t.UserDir
 	}
 	return ""
 }
 
-func installOne(skill *Skill, agentID, targetPath string, opts InstallOptions) InstallAction {
+func installOne(skill *Skill, targetID, targetPath string, opts InstallOptions) InstallAction {
 	act := InstallAction{
-		SkillID: skill.ID,
-		AgentID: agentID,
-		Path:    targetPath,
+		SkillID:  skill.ID,
+		TargetID: targetID,
+		Path:     targetPath,
 	}
 	wrapper, err := renderWrapper(skill, opts.Version)
 	if err != nil {
