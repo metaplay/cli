@@ -39,6 +39,7 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 		t.Fatal("metaplay-develop not found")
 	}
 	wantPages := map[string]bool{
+		"overview":       true,
 		"review-actions": true,
 		"review-configs": true,
 		"review-models":  true,
@@ -56,16 +57,18 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 	if devops == nil {
 		t.Fatal("metaplay-devops not found")
 	}
-	if _, ok := devops.SubPages["incident-analysis"]; !ok {
-		t.Errorf("missing incident-analysis sub-page")
+	for _, page := range []string{"main", "incident-analysis"} {
+		if _, ok := devops.SubPages[page]; !ok {
+			t.Errorf("metaplay-devops missing sub-page %q", page)
+		}
 	}
 
 	docs := FindByID(skills, "metaplay-docs")
 	if docs == nil {
 		t.Fatal("metaplay-docs not found")
 	}
-	if len(docs.SubPages) != 0 {
-		t.Errorf("metaplay-docs should have no sub-pages, got %v", docs.SubPages)
+	if _, ok := docs.SubPages["main"]; !ok {
+		t.Errorf("metaplay-docs missing sub-page \"main\"")
 	}
 }
 
@@ -104,6 +107,20 @@ func TestResolve_UnknownSubPage(t *testing.T) {
 	_, err := Resolve(skills, "metaplay-develop/nonexistent")
 	if !errors.Is(err, ErrSubPageNotFound) {
 		t.Errorf("expected ErrSubPageNotFound, got %v", err)
+	}
+}
+
+func TestEmbeddedSkills_DescriptionUnderLimit(t *testing.T) {
+	skills, err := LoadAll(OpenFS())
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	for _, s := range skills {
+		desc := s.Frontmatter.Description()
+		if len(desc) > MaxDescriptionLength {
+			t.Errorf("skill %q: description is %d chars, exceeds %d-char limit (Codex CLI rejects, Claude Code warns)",
+				s.ID, len(desc), MaxDescriptionLength)
+		}
 	}
 }
 

@@ -192,6 +192,14 @@ func (f *Frontmatter) Name() string { return f.GetString("name") }
 // Description returns the `description` field, or "" if absent.
 func (f *Frontmatter) Description() string { return f.GetString("description") }
 
+// MaxDescriptionLength is the longest a SKILL.md frontmatter description
+// may be before downstream AI-coding tools refuse to load the skill. The
+// OpenAI Codex CLI rejects skills whose description exceeds 1024 chars;
+// Claude Code emits a warning and silently skips loading. We hold to this
+// limit at test time so embedded skills stay loadable across every host
+// in the registry.
+const MaxDescriptionLength = 1024
+
 // Hidden returns the `hidden` boolean, false if absent.
 func (f *Frontmatter) Hidden() bool { return f.GetBool("hidden") }
 
