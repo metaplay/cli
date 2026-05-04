@@ -189,6 +189,7 @@ func (o *skillsInstallOpts) resolveScope() error {
 	} else {
 		o.resolvedScope = skillspkg.ScopeProject
 	}
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), chosen.label)
 	return nil
 }
 
@@ -260,7 +261,19 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 		return clierrors.Wrap(err, "Target selection cancelled")
 	}
 	o.resolvedTargets = append(o.resolvedTargets, selected...)
+	logSelectedTargets(o.resolvedTargets)
 	return nil
+}
+
+// logSelectedTargets prints a one-line confirmation of which target dirs
+// the user picked, so the multi-select dialog's chosen values aren't lost
+// when the dialog body collapses after quitting.
+func logSelectedTargets(targets []skillspkg.AgentDir) {
+	names := make([]string, 0, len(targets))
+	for _, t := range targets {
+		names = append(names, t.DisplayName)
+	}
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), strings.Join(names, ", "))
 }
 
 // orderedTargetItems returns the supported AgentDirs in the canonical

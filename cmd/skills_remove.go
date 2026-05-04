@@ -169,6 +169,7 @@ func (o *skillsRemoveOpts) resolveScope() error {
 	} else {
 		o.resolvedScope = skillspkg.ScopeProject
 	}
+	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), chosen.label)
 	return nil
 }
 
@@ -241,6 +242,7 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 		return clierrors.Wrap(err, "Target selection cancelled")
 	}
 	o.resolvedTargets = append(o.resolvedTargets, selected...)
+	logSelectedTargets(o.resolvedTargets)
 	return nil
 }
 
