@@ -74,7 +74,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagScope, "scope", "", "'project' (current directory; or --project path) or 'user' (your home directory). Defaults to interactive prompt or 'project'.")
-	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: 'standard' (.agents/skills), 'claude'. User scope: claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: standard, claude. User scope: standard, claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
 
 	skillsCmd.AddCommand(cmd)
 }
@@ -212,8 +212,8 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 
 	if !tui.IsInteractiveMode() {
 		// Non-interactive: target every detected dir; fall back to the
-		// scope-applicable default if none exists. Removing from a
-		// non-existent dir is a cheap no-op so this is safe.
+		// default (standard) if none exists. Removing from a non-existent
+		// dir is a cheap no-op so this is safe.
 		if len(detected) > 0 {
 			for _, id := range detected {
 				if t := skillspkg.LookupAgentDir(id); t != nil {
@@ -222,28 +222,23 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 			}
 			return nil
 		}
-		d := skillspkg.LookupAgentDir(defaultTargetForScope(o.resolvedScope))
+		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
 		o.resolvedTargets = append(o.resolvedTargets, *d)
 		return nil
 	}
 
 	// Interactive multi-select. Order from the scope-filtered registry.
-	// Existing dirs pre-checked; if none exist, the scope-applicable default.
+	// Existing dirs pre-checked; if none exist, the default (standard).
 	items := skillspkg.AgentDirsForScope(o.resolvedScope)
-	defaultID := defaultTargetForScope(o.resolvedScope)
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Remove target(s)",
 		items,
 		func(it *skillspkg.AgentDir) (string, string) {
-			hint := ""
-			if containsStr(detected, it.ID) {
-				hint = "(detected)"
-			}
-			return it.DisplayName, hint
+			return it.DisplayName, targetItemDescription(it, o.resolvedScope, detected)
 		},
 		func(it *skillspkg.AgentDir) bool {
 			if len(detected) == 0 {
-				return it.ID == defaultID
+				return it.ID == skillspkg.DefaultAgentDirID
 			}
 			return containsStr(detected, it.ID)
 		},

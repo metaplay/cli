@@ -50,19 +50,22 @@ func init() {
 			wrappers. User-authored skill files (those without
 			'managed-by: metaplay-cli') are never touched.
 
-			Project scope offers two targets:
+			Targets:
 
-			  - 'standard' (.agents/skills) — read by Cursor, Codex, GitHub
-			    Copilot / VS Code, Windsurf, Gemini CLI, OpenCode, Cline,
-			    Amp, Warp, and others that follow the open Agent Skills
-			    convention.
+			  - 'standard' (.agents/skills) — the cross-agent shared dir.
+			    At project scope, read by Cursor, Codex, GitHub Copilot /
+			    VS Code, Windsurf, Gemini CLI, OpenCode, Cline, Amp, Warp,
+			    and others that follow the open Agent Skills convention.
+			    At user scope, ~/.agents/skills is read by Codex, Cursor,
+			    Copilot, Windsurf, Gemini, Cline, and Warp.
 			  - 'claude' (.claude/skills) — read by Claude Code.
 
-			User scope offers per-harness home directories, mirroring the
-			vercel-labs/skills convention: claude, cursor, copilot, codex,
-			windsurf, gemini, junie, continue, cline, warp, goose, amp,
-			opencode, augment, roo. Each writes under its tool's canonical
-			user-home path (e.g. ~/.cursor/skills, ~/.junie/skills).
+			User scope additionally offers per-harness home directories
+			mirroring the vercel-labs/skills convention: cursor, copilot,
+			codex, windsurf, gemini, junie, continue, cline, warp, goose,
+			amp, opencode, augment, roo. Pick these for tools that don't
+			read ~/.agents/skills (e.g. Junie, Continue, Roo) or when you
+			only want to install for one specific tool.
 
 			Project-scope note: for tools that read from neither
 			.agents/skills nor .claude/skills (e.g. JetBrains Junie,
@@ -94,7 +97,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagScope, "scope", "", "'project' (current directory; or --project path) or 'user' (your home directory). Defaults to interactive prompt or 'project'.")
-	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: 'standard' (.agents/skills), 'claude'. User scope: claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
+	flags.StringSliceVar(&o.flagTargets, "target", nil, "Target dir(s). Repeatable. Project scope: standard, claude. User scope: standard, claude, cursor, copilot, codex, windsurf, gemini, junie, continue, cline, warp, goose, amp, opencode, augment, roo. Defaults to interactive prompt or detection.")
 	flags.BoolVar(&o.flagForce, "force", false, "Overwrite even when the on-disk wrapper has a newer version stamp")
 
 	skillsCmd.AddCommand(cmd)
@@ -248,7 +251,7 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 
 	if !tui.IsInteractiveMode() {
 		// Non-interactive: install into every detected dir, or fall back to
-		// the scope-applicable default if none exist.
+		// the default (standard) if none exist.
 		if len(detected) > 0 {
 			for _, id := range detected {
 				if t := skillspkg.LookupAgentDir(id); t != nil {
@@ -257,28 +260,23 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 			}
 			return nil
 		}
-		d := skillspkg.LookupAgentDir(defaultTargetForScope(o.resolvedScope))
+		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
 		o.resolvedTargets = append(o.resolvedTargets, *d)
 		return nil
 	}
 
 	// Interactive multi-select. Order is fixed by the registry. Existing
-	// dirs are pre-checked; if none exist, the scope-applicable default is.
+	// dirs are pre-checked; if none exist, the default (standard) is.
 	items := skillspkg.AgentDirsForScope(o.resolvedScope)
-	defaultID := defaultTargetForScope(o.resolvedScope)
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Install target(s)",
 		items,
 		func(it *skillspkg.AgentDir) (string, string) {
-			hint := ""
-			if containsStr(detected, it.ID) {
-				hint = "(detected)"
-			}
-			return it.DisplayName, hint
+			return it.DisplayName, targetItemDescription(it, o.resolvedScope, detected)
 		},
 		func(it *skillspkg.AgentDir) bool {
 			if len(detected) == 0 {
-				return it.ID == defaultID
+				return it.ID == skillspkg.DefaultAgentDirID
 			}
 			return containsStr(detected, it.ID)
 		},
@@ -291,14 +289,27 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 	return nil
 }
 
-// defaultTargetForScope returns the target ID to pre-check when no existing
-// dirs are detected. At project scope this is "standard"; at user scope it's
-// "claude" (since "standard" doesn't apply at user scope).
-func defaultTargetForScope(scope skillspkg.Scope) string {
+// targetItemDescription is the muted right-hand text shown next to each
+// AgentDir in the multi-select. Format: "<scope-relative-path>[ — <hint>][ (detected)]".
+// The "Standard" entry gets a parenthetical listing the harnesses that read
+// its dir, so users see what one box-tick covers.
+func targetItemDescription(t *skillspkg.AgentDir, scope skillspkg.Scope, detected []string) string {
+	rel := t.ProjectDir
 	if scope == skillspkg.ScopeUser {
-		return skillspkg.AgentDirClaudeID
+		rel = t.UserDir
 	}
-	return skillspkg.DefaultAgentDirID
+	desc := rel
+	if t.ID == skillspkg.AgentDirStandardID {
+		if scope == skillspkg.ScopeUser {
+			desc += " — also Codex, Cursor, Copilot, Windsurf, Gemini"
+		} else {
+			desc += " — also Cursor, Codex, Copilot, Windsurf, Gemini, OpenCode, Cline, Amp, Warp"
+		}
+	}
+	if containsStr(detected, t.ID) {
+		desc += " (detected)"
+	}
+	return desc
 }
 
 // logSelectedTargets prints a one-line confirmation of which target dirs
@@ -340,9 +351,13 @@ func validateTargetsForScope(targets []skillspkg.AgentDir, scope skillspkg.Scope
 }
 
 // detectExistingTargets returns the IDs of AgentDirs whose scope-relative
-// directory already exists at rootDir.
+// directory already exists at rootDir. Multiple targets that share a path
+// (e.g. standard, cline, warp at user scope all map to .agents/skills) are
+// collapsed to the FIRST entry that points at that path — the others stay
+// unselected so the multi-select doesn't duplicate-check redundant items.
 func detectExistingTargets(rootDir string, scope skillspkg.Scope) []string {
 	var ids []string
+	seen := map[string]bool{}
 	for _, t := range skillspkg.AgentDirs {
 		var rel string
 		switch scope {
@@ -351,12 +366,13 @@ func detectExistingTargets(rootDir string, scope skillspkg.Scope) []string {
 		case skillspkg.ScopeUser:
 			rel = t.UserDir
 		}
-		if rel == "" {
+		if rel == "" || seen[rel] {
 			continue
 		}
 		path := filepath.Join(rootDir, rel)
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			ids = append(ids, t.ID)
+			seen[rel] = true
 		}
 	}
 	return ids

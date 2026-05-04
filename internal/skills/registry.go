@@ -47,13 +47,15 @@ const DefaultAgentDirID = AgentDirStandardID
 // — the canonical npx-skills tool — keep in periodic sync as new tools are
 // added there. We curate a subset of the most-used 15.
 var AgentDirs = []AgentDir{
-	// Project-scope cross-agent target (no user-scope equivalent — at user
-	// scope vercel-labs uses per-harness paths, which we follow).
+	// Cross-agent shared dir. At project scope every agent except Claude Code
+	// reads from .agents/skills. At user scope ~/.agents/skills is read by
+	// Codex, Cursor, Copilot, Windsurf, Gemini, Cline, and Warp — installing
+	// here covers all of them in one go (rather than ticking each).
 	{
 		ID:          AgentDirStandardID,
-		DisplayName: "Standard (.agents/skills)",
+		DisplayName: "Standard",
 		ProjectDir:  ".agents/skills",
-		UserDir:     "",
+		UserDir:     ".agents/skills",
 	},
 	// Claude Code — both scopes.
 	{
