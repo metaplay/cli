@@ -171,7 +171,8 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 
 	o.reportActions(actions)
 	if o.resolvedScope == skillspkg.ScopeProject {
-		log.Info().Msg(styles.RenderMuted("Commit these files to share the skill wrappers with your team."))
+		log.Info().Msg("")
+		log.Info().Msgf("%s", styles.RenderPrompt("You should commit the modified files to your version control."))
 	}
 	return nil
 }

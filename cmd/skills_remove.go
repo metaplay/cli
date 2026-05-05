@@ -136,7 +136,8 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 
 	o.reportRemoveActions(actions)
 	if o.resolvedScope == skillspkg.ScopeProject {
-		log.Info().Msg(styles.RenderMuted("Commit these changes to share with your team."))
+		log.Info().Msg("")
+		log.Info().Msgf("%s", styles.RenderPrompt("You should commit the modified files to your version control."))
 	}
 	return nil
 }
