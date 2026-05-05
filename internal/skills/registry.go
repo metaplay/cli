@@ -193,3 +193,65 @@ func AgentDirsForScope(scope Scope) []AgentDir {
 	}
 	return out
 }
+
+// AgentDirGroup is the display-oriented view of one install path: the
+// canonical AgentDir for that path plus every tool that reads it. Multiple
+// AgentDirs that point at the same path (e.g. Cline and Warp both share
+// .agents/skills with Standard at user scope) collapse into one group so
+// the multi-select dialog shows one row per unique path.
+type AgentDirGroup struct {
+	// Rep is the canonical AgentDir (first registry entry to claim the path).
+	// Selecting a group installs to Rep's path; behavior is identical to
+	// selecting any duplicate, so we pick a single representative.
+	Rep AgentDir
+	// Path is Rep's scope-relative directory.
+	Path string
+	// Tools are the short names of every harness that reads Path, in
+	// registry order. For Standard, additional names that do NOT have
+	// their own AgentDir entry are listed here too.
+	Tools []string
+}
+
+// standardCoveredTools returns the short names of harnesses that read
+// .agents/skills at the given scope but don't have their own AgentDir
+// entry. Combined with any duplicate AgentDirs (Cline, Warp) during
+// grouping, this yields the full list shown next to the Standard row.
+func standardCoveredTools(scope Scope) []string {
+	if scope == ScopeUser {
+		return []string{"Codex", "Cursor", "Copilot", "Windsurf", "Gemini"}
+	}
+	return []string{"Cursor", "Codex", "Copilot", "Windsurf", "Gemini", "OpenCode", "Amp"}
+}
+
+// GroupAgentDirsForScope is AgentDirsForScope deduplicated by path. The
+// resulting groups, in registry order, are what the multi-select dialog
+// renders — one row per unique install path.
+func GroupAgentDirsForScope(scope Scope) []AgentDirGroup {
+	var groups []AgentDirGroup
+	pathToIdx := map[string]int{}
+	for _, a := range AgentDirs {
+		var path string
+		switch scope {
+		case ScopeProject:
+			path = a.ProjectDir
+		case ScopeUser:
+			path = a.UserDir
+		}
+		if path == "" {
+			continue
+		}
+		if idx, ok := pathToIdx[path]; ok {
+			groups[idx].Tools = append(groups[idx].Tools, a.DisplayName)
+			continue
+		}
+		var tools []string
+		if a.ID == AgentDirStandardID {
+			tools = standardCoveredTools(scope)
+		} else {
+			tools = []string{a.DisplayName}
+		}
+		pathToIdx[path] = len(groups)
+		groups = append(groups, AgentDirGroup{Rep: a, Path: path, Tools: tools})
+	}
+	return groups
+}

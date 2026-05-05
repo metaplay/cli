@@ -7,6 +7,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -145,6 +146,7 @@ func (d multiSelectDelegate) Render(w io.Writer, m list.Model, index int, listIt
 // multiSelectModel for the multi-select list.
 type multiSelectModel struct {
 	title    string
+	footer   string
 	model    list.Model
 	checked  map[int]bool
 	done     bool
@@ -152,9 +154,10 @@ type multiSelectModel struct {
 	err      error
 }
 
-func newMultiSelectModel(title string, model list.Model, checked map[int]bool) multiSelectModel {
+func newMultiSelectModel(title string, footer string, model list.Model, checked map[int]bool) multiSelectModel {
 	return multiSelectModel{
 		title:   title,
+		footer:  footer,
 		model:   model,
 		checked: checked,
 	}
@@ -202,6 +205,13 @@ func (m multiSelectModel) View() tea.View {
 
 	if !m.quitting {
 		content += styles.ListStyle.Render(m.model.View())
+		if m.footer != "" {
+			// The list output trails with whitespace and no final newline,
+			// so trim and control spacing explicitly: one blank line above
+			// the footer, footer line itself, then the help line.
+			content = strings.TrimRight(content, " \t\n") + "\n\n"
+			content += styles.RenderMuted("  "+m.footer) + "\n"
+		}
 		content += styles.RenderMuted("  space to toggle, enter to confirm")
 	}
 
@@ -308,14 +318,17 @@ func ChooseFromListDialogWithHeader[TItem any](title string, header string, item
 // The toItemFunc() is used to convert the items into a (name, description) tuple for display.
 // All items are pre-selected by default. Returns the selected items (or error if none chosen).
 func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItemFunc func(item *TItem) (string, string)) ([]TItem, error) {
-	return ChooseMultipleFromListDialogWithDefaults(title, items, toItemFunc, func(*TItem) bool { return true })
+	return ChooseMultipleFromListDialogWithDefaults(title, "", items, toItemFunc, func(*TItem) bool { return true })
 }
 
 // ChooseMultipleFromListDialogWithDefaults is like ChooseMultipleFromListDialog
 // but lets the caller specify which items start checked via the
 // defaultChecked predicate, invoked once per item before showing the dialog.
+// An optional footer is rendered (muted) below the list, above the
+// "space to toggle, enter to confirm" help line. Pass "" to omit it.
 func ChooseMultipleFromListDialogWithDefaults[TItem any](
 	title string,
+	footer string,
 	items []TItem,
 	toItemFunc func(item *TItem) (string, string),
 	defaultChecked func(item *TItem) bool,
@@ -354,7 +367,7 @@ func ChooseMultipleFromListDialogWithDefaults[TItem any](
 	l.SetShowHelp(false)
 
 	// Create and run model.
-	model := newMultiSelectModel(title, l, checked)
+	model := newMultiSelectModel(title, footer, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
 	if err != nil {

@@ -52,23 +52,23 @@ func init() {
 
 			Targets:
 
-			  - 'standard' (.agents/skills) — the cross-agent shared dir.
+			  - 'standard' (.agents/skills/) — the cross-agent shared dir.
 			    At project scope, read by Cursor, Codex, GitHub Copilot /
 			    VS Code, Windsurf, Gemini CLI, OpenCode, Cline, Amp, Warp,
 			    and others that follow the open Agent Skills convention.
-			    At user scope, ~/.agents/skills is read by Codex, Cursor,
+			    At user scope, ~/.agents/skills/ is read by Codex, Cursor,
 			    Copilot, Windsurf, Gemini, Cline, and Warp.
-			  - 'claude' (.claude/skills) — read by Claude Code.
+			  - 'claude' (.claude/skills/) — read by Claude Code.
 
 			User scope additionally offers per-harness home directories
 			mirroring the vercel-labs/skills convention: cursor, copilot,
 			codex, windsurf, gemini, junie, continue, cline, warp, goose,
 			amp, opencode, augment, roo. Pick these for tools that don't
-			read ~/.agents/skills (e.g. Junie, Continue, Roo) or when you
+			read ~/.agents/skills/ (e.g. Junie, Continue, Roo) or when you
 			only want to install for one specific tool.
 
 			Project-scope note: for tools that read from neither
-			.agents/skills nor .claude/skills (e.g. JetBrains Junie,
+			.agents/skills/ nor .claude/skills/ (e.g. JetBrains Junie,
 			Continue, Roo Code), either copy/symlink the installed dir
 			into the tool's expected location, or run the user-scope
 			install and tick the tool directly.
@@ -170,7 +170,6 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 	}
 
 	o.reportActions(actions)
-	o.printManualCopyNote()
 	return nil
 }
 
@@ -199,8 +198,8 @@ func (o *skillsInstallOpts) resolveScope() error {
 		hint  string
 	}
 	items := []scopeOpt{
-		{id: "project", label: "Project (current directory)", hint: cwd},
-		{id: "user", label: "User (home directory)", hint: home},
+		{id: "project", label: "Project", hint: "— " + cwd},
+		{id: "user", label: "User", hint: "— " + home},
 	}
 	chosen, err := tui.ChooseFromListDialog("Install scope", items, func(it *scopeOpt) (string, string) {
 		return it.label, it.hint
@@ -213,7 +212,7 @@ func (o *skillsInstallOpts) resolveScope() error {
 	} else {
 		o.resolvedScope = skillspkg.ScopeProject
 	}
-	log.Info().Msgf(" %s %s — %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
+	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
 	return nil
 }
 
@@ -265,51 +264,51 @@ func (o *skillsInstallOpts) resolveTargets(rootDir string) error {
 		return nil
 	}
 
-	// Interactive multi-select. Order is fixed by the registry. Existing
-	// dirs are pre-checked; if none exist, the default (standard) is.
-	items := skillspkg.AgentDirsForScope(o.resolvedScope)
+	// Interactive multi-select. One row per unique path (so .agents/skills/
+	// isn't shown three times for Standard/Cline/Warp). Existing dirs are
+	// pre-checked; if none exist, the default (standard) is.
+	groups := skillspkg.GroupAgentDirsForScope(o.resolvedScope)
+	footer := ""
+	if o.resolvedScope == skillspkg.ScopeProject {
+		footer = "Other tools can pick these up by copying or symlinking " +
+			"the installed dir into their own location."
+	}
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Install target(s)",
-		items,
-		func(it *skillspkg.AgentDir) (string, string) {
-			return it.DisplayName, targetItemDescription(it, o.resolvedScope, detected)
+		footer,
+		groups,
+		func(g *skillspkg.AgentDirGroup) (string, string) {
+			return targetItemName(g), targetItemHint(g)
 		},
-		func(it *skillspkg.AgentDir) bool {
+		func(g *skillspkg.AgentDirGroup) bool {
 			if len(detected) == 0 {
-				return it.ID == skillspkg.DefaultAgentDirID
+				return g.Rep.ID == skillspkg.DefaultAgentDirID
 			}
-			return containsStr(detected, it.ID)
+			return containsStr(detected, g.Rep.ID)
 		},
 	)
 	if err != nil {
 		return clierrors.Wrap(err, "Target selection cancelled")
 	}
-	o.resolvedTargets = append(o.resolvedTargets, selected...)
+	for _, g := range selected {
+		o.resolvedTargets = append(o.resolvedTargets, g.Rep)
+	}
 	logSelectedTargets(o.resolvedTargets)
 	return nil
 }
 
-// targetItemDescription is the muted right-hand text shown next to each
-// AgentDir in the multi-select. Format: "<scope-relative-path>[ — <hint>][ (detected)]".
-// The "Standard" entry gets a parenthetical listing the harnesses that read
-// its dir, so users see what one box-tick covers.
-func targetItemDescription(t *skillspkg.AgentDir, scope skillspkg.Scope, detected []string) string {
-	rel := t.ProjectDir
-	if scope == skillspkg.ScopeUser {
-		rel = t.UserDir
-	}
-	desc := rel
-	if t.ID == skillspkg.AgentDirStandardID {
-		if scope == skillspkg.ScopeUser {
-			desc += " — also Codex, Cursor, Copilot, Windsurf, Gemini"
-		} else {
-			desc += " — also Cursor, Codex, Copilot, Windsurf, Gemini, OpenCode, Cline, Amp, Warp"
-		}
-	}
-	if containsStr(detected, t.ID) {
-		desc += " (detected)"
-	}
-	return desc
+// targetItemName is the un-muted left-hand text for each group in the
+// multi-select: the scope-relative path. The path is the primary
+// identifier since it's what gets written to disk.
+func targetItemName(g *skillspkg.AgentDirGroup) string {
+	return g.Path + "/"
+}
+
+// targetItemHint is the muted right-hand text for each group: "— <tool
+// list>", listing every harness that reads the path. "(detected)" is
+// omitted since the pre-checked checkbox already conveys it.
+func targetItemHint(g *skillspkg.AgentDirGroup) string {
+	return "— " + strings.Join(g.Tools, ", ")
 }
 
 // logSelectedTargets prints a one-line confirmation of which target dirs
@@ -417,20 +416,3 @@ func (o *skillsInstallOpts) reportActions(actions []skillspkg.InstallAction) {
 	log.Info().Msgf("%s %d written, %d unchanged, %d skipped", styles.RenderMuted("Summary:"), written, unchanged, skipped)
 }
 
-// printManualCopyNote reminds project-scope users that tools which read
-// from neither .agents/skills nor .claude/skills can pick up the installed
-// content by copying or symlinking the directory themselves. At user scope
-// every supported tool has its own target entry, so the note is omitted.
-func (o *skillsInstallOpts) printManualCopyNote() {
-	if o.resolvedScope != skillspkg.ScopeProject {
-		return
-	}
-	log.Info().Msg("")
-	log.Info().Msg(styles.RenderMuted(
-		"Note: AI tools that read from neither .agents/skills nor .claude/skills " +
-			"(e.g. JetBrains Junie, Continue, Roo Code) can pick up these skills " +
-			"at project scope by copying or symlinking the installed dir into the " +
-			"tool's own location. At user scope, run 'metaplay skills install --scope user' " +
-			"and pick the tool directly.",
-	))
-}

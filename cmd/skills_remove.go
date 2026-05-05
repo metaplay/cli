@@ -163,8 +163,8 @@ func (o *skillsRemoveOpts) resolveScope() error {
 		hint  string
 	}
 	items := []scopeOpt{
-		{id: "project", label: "Project (current directory)", hint: cwd},
-		{id: "user", label: "User (home directory)", hint: home},
+		{id: "project", label: "Project", hint: "— " + cwd},
+		{id: "user", label: "User", hint: "— " + home},
 	}
 	chosen, err := tui.ChooseFromListDialog("Remove scope", items, func(it *scopeOpt) (string, string) {
 		return it.label, it.hint
@@ -177,7 +177,7 @@ func (o *skillsRemoveOpts) resolveScope() error {
 	} else {
 		o.resolvedScope = skillspkg.ScopeProject
 	}
-	log.Info().Msgf(" %s %s — %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
+	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
 	return nil
 }
 
@@ -227,26 +227,29 @@ func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
 		return nil
 	}
 
-	// Interactive multi-select. Order from the scope-filtered registry.
-	// Existing dirs pre-checked; if none exist, the default (standard).
-	items := skillspkg.AgentDirsForScope(o.resolvedScope)
+	// Interactive multi-select. One row per unique path. Existing dirs
+	// pre-checked; if none exist, the default (standard).
+	groups := skillspkg.GroupAgentDirsForScope(o.resolvedScope)
 	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
 		"Remove target(s)",
-		items,
-		func(it *skillspkg.AgentDir) (string, string) {
-			return it.DisplayName, targetItemDescription(it, o.resolvedScope, detected)
+		"",
+		groups,
+		func(g *skillspkg.AgentDirGroup) (string, string) {
+			return targetItemName(g), targetItemHint(g)
 		},
-		func(it *skillspkg.AgentDir) bool {
+		func(g *skillspkg.AgentDirGroup) bool {
 			if len(detected) == 0 {
-				return it.ID == skillspkg.DefaultAgentDirID
+				return g.Rep.ID == skillspkg.DefaultAgentDirID
 			}
-			return containsStr(detected, it.ID)
+			return containsStr(detected, g.Rep.ID)
 		},
 	)
 	if err != nil {
 		return clierrors.Wrap(err, "Target selection cancelled")
 	}
-	o.resolvedTargets = append(o.resolvedTargets, selected...)
+	for _, g := range selected {
+		o.resolvedTargets = append(o.resolvedTargets, g.Rep)
+	}
 	logSelectedTargets(o.resolvedTargets)
 	return nil
 }
