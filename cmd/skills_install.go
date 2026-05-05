@@ -170,6 +170,9 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 	}
 
 	o.reportActions(actions)
+	if o.resolvedScope == skillspkg.ScopeProject {
+		log.Info().Msg(styles.RenderMuted("Commit these files to share the skill wrappers with your team."))
+	}
 	return nil
 }
 
