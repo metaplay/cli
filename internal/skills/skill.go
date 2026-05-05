@@ -134,8 +134,10 @@ var ErrSkillNotFound = errors.New("skill not found")
 var ErrSubPageNotFound = errors.New("sub-page not found")
 
 // Resolve looks up content by an address of the form `<skill>` or
-// `<skill>/<page>`. The first form returns the raw SKILL.md; the second
-// returns a sub-page's bytes.
+// `<skill>/<page>`. The first form returns the skill's main payload —
+// `main.md` if present, else SKILL.md as a fallback. The second form
+// returns a sub-page's bytes; the special page name `SKILL.md` returns
+// the raw wrapper file (intended for internal/debug use, not advertised).
 func Resolve(skills []*Skill, address string) ([]byte, error) {
 	skillID, page, hasPage := strings.Cut(address, "/")
 	if skillID == "" {
@@ -146,10 +148,16 @@ func Resolve(skills []*Skill, address string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s", ErrSkillNotFound, skillID)
 	}
 	if !hasPage {
+		if main, ok := skill.SubPages["main"]; ok {
+			return main, nil
+		}
 		return skill.RawSKILL, nil
 	}
 	if page == "" {
 		return nil, fmt.Errorf("empty page name in address %q", address)
+	}
+	if page == "SKILL.md" {
+		return skill.RawSKILL, nil
 	}
 	contents, ok := skill.SubPages[page]
 	if !ok {

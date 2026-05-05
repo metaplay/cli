@@ -39,7 +39,7 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 		t.Fatal("metaplay-develop not found")
 	}
 	wantPages := map[string]bool{
-		"overview":       true,
+		"main":           true,
 		"review-actions": true,
 		"review-configs": true,
 		"review-models":  true,

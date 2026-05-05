@@ -5,8 +5,8 @@ description: Answer questions about the Metaplay SDK, game server, LiveOps Dashb
 
 # Metaplay docs
 
-This is a thin wrapper. The full guide — `metaplay llm-docs` command surface (search / read / ripgrep / glob), payload layout, workflow, and worked examples — is served by the Metaplay CLI. Load it before answering Metaplay SDK / dashboard / cloud-deployment questions:
+Load the skill payload:
 
 ```bash
-metaplay skills get metaplay-docs/main
+metaplay skills get metaplay-docs
 ```

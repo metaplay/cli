@@ -5,14 +5,8 @@ description: Diagnose and respond to Metaplay game server issues in cloud enviro
 
 # Metaplay devops
 
-This is a thin wrapper. The operational playbook is served by the Metaplay CLI — load it before acting on any production environment:
+Load the skill payload:
 
 ```bash
-metaplay skills get metaplay-devops/main
-```
-
-For per-player crash, desync, or network incident reports (admin-API URLs, "what are the latest incidents?" workflow), load:
-
-```bash
-metaplay skills get metaplay-devops/incident-analysis
+metaplay skills get metaplay-devops
 ```
