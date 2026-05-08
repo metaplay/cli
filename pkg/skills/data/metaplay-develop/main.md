@@ -1,6 +1,6 @@
 # Metaplay develop
 
-Authoring patterns and review rules for three Metaplay code areas. Content lives in sub-pages served by the `metaplay` CLI — load only what you need.
+Authoring patterns and review rules for Metaplay game code, plus per-player incident triage. Content lives in sub-pages served by the `metaplay` CLI — load only what you need.
 
 ## Which sub-page to load
 
@@ -11,13 +11,13 @@ Authoring patterns and review rules for three Metaplay code areas. Content lives
 | `PlayerModelBase`, `GuildModelBase`, `*ModelBase`, `GameTick`, `GameFastForwardTime`, sub-models | `metaplay skills get metaplay-develop/review-models` |
 | Player crash, desync, or network incident pasted from the admin dashboard ("the latest incidents", an incident report URL, `ChecksumMismatch`, `UnhandledException` traces from a live env) | `metaplay skills get metaplay-develop/incident-analysis` |
 
-Each sub-page has: design patterns for authoring, discovery patterns for grepping existing code, the full rule checklist with codes (e.g. `S1`, `D2`, `GT3`), and area-specific pitfalls. Load more than one sub-page if your work crosses areas — e.g. an action that mutates a sub-model, or a config item referenced by model logic.
+Each `review-*` sub-page has: design patterns for authoring, discovery patterns for grepping existing code, the full rule checklist with codes (e.g. `S1`, `D2`, `GT3`), and area-specific pitfalls. Load more than one if your work crosses areas — e.g. an action that mutates a sub-model, or a config item referenced by model logic. The `incident-analysis` sub-page is a different shape: a diagnostic playbook for tracing a specific player report back to the offending code.
 
 ## Two modes
 
 The rules are the same whether you're writing fresh code or reviewing existing code.
 
-**Authoring** — when writing or editing a file in one of the three areas (or running `/metaplay:implement`), load the matching sub-page *before* you generate code. Apply the design patterns during planning and the rule checklist as you write. Catching violations at the point of writing is cheaper than fixing them after the fact.
+**Authoring** — when writing or editing a file in the action/config/model areas, load the matching review sub-page *before* you generate code. Apply the design patterns during planning and the rule checklist as you write. Catching violations at the point of writing is cheaper than fixing them after the fact.
 
 **Reviewing** — when the user asks to review, audit, or check action/config/model code, run the full workflow:
 
