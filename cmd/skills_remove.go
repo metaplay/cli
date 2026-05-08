@@ -9,8 +9,7 @@ import (
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-	skillspkg "github.com/metaplay/cli/internal/skills"
-	"github.com/metaplay/cli/internal/tui"
+	skillspkg "github.com/metaplay/cli/pkg/skills"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -23,9 +22,6 @@ type skillsRemoveOpts struct {
 
 	flagScope   string
 	flagTargets []string
-
-	resolvedScope   skillspkg.Scope
-	resolvedTargets []skillspkg.AgentDir
 }
 
 func init() {
@@ -88,35 +84,23 @@ func (o *skillsRemoveOpts) Prepare(cmd *cobra.Command, args []string) error {
 			WithSuggestion("Use --scope project or --scope user")
 	}
 
-	seen := map[string]bool{}
 	for _, id := range o.flagTargets {
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		t := skillspkg.LookupAgentDir(id)
-		if t == nil {
+		if skillspkg.LookupAgentDir(id) == nil {
 			return clierrors.NewUsageErrorf("Unknown --target %q", id).
 				WithDetails("Known targets: " + strings.Join(skillspkg.AgentDirIDs(), ", "))
 		}
-		o.resolvedTargets = append(o.resolvedTargets, *t)
 	}
 	return nil
 }
 
 func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
-	if err := o.resolveScope(); err != nil {
-		return err
-	}
-	rootDir, err := o.resolveRootDir()
+	projectDir, err := projectDirOrCwd()
 	if err != nil {
 		return err
 	}
-	if err := o.resolveTargets(rootDir); err != nil {
-		return err
-	}
-	if err := validateTargetsForScope(o.resolvedTargets, o.resolvedScope); err != nil {
-		return err
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return clierrors.Wrap(err, "Could not determine user home directory")
 	}
 
 	var skillIDs []string
@@ -124,141 +108,27 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 		skillIDs = []string{o.argSkill}
 	}
 
-	actions, err := skillspkg.Remove(skillspkg.RemoveOptions{
-		Targets:  o.resolvedTargets,
-		RootDir:  rootDir,
-		Scope:    o.resolvedScope,
-		SkillIDs: skillIDs,
+	result, err := skillspkg.RunRemove(skillspkg.RemoveRequest{
+		Scope:      flagScopeToScope(o.flagScope),
+		ProjectDir: projectDir,
+		UserDir:    homeDir,
+		TargetIDs:  o.flagTargets,
+		SkillIDs:   skillIDs,
+		Prompter:   newSkillsPrompter("Remove scope", "Remove target(s)", ""),
 	})
 	if err != nil {
 		return clierrors.Wrap(err, "Remove failed")
 	}
 
-	o.reportRemoveActions(actions)
-	if o.resolvedScope == skillspkg.ScopeProject {
+	reportRemoveActions(result.Actions)
+	if result.Scope == skillspkg.ScopeProject {
 		log.Info().Msg("")
 		log.Info().Msgf("%s", styles.RenderPrompt("You should commit the modified files to your version control."))
 	}
 	return nil
 }
 
-func (o *skillsRemoveOpts) resolveScope() error {
-	if o.flagScope != "" {
-		switch o.flagScope {
-		case "project":
-			o.resolvedScope = skillspkg.ScopeProject
-		case "user":
-			o.resolvedScope = skillspkg.ScopeUser
-		}
-		return nil
-	}
-	if !tui.IsInteractiveMode() {
-		o.resolvedScope = skillspkg.ScopeProject
-		return nil
-	}
-	cwd, _ := os.Getwd()
-	if flagProjectConfigPath != "" {
-		cwd = flagProjectConfigPath
-	}
-	home, _ := os.UserHomeDir()
-	type scopeOpt struct {
-		id    string
-		label string
-		hint  string
-	}
-	items := []scopeOpt{
-		{id: "project", label: "Project", hint: "— " + cwd},
-		{id: "user", label: "User", hint: "— " + home},
-	}
-	chosen, err := tui.ChooseFromListDialog("Remove scope", items, func(it *scopeOpt) (string, string) {
-		return it.label, it.hint
-	})
-	if err != nil {
-		return clierrors.Wrap(err, "Scope selection cancelled")
-	}
-	if chosen.id == "user" {
-		o.resolvedScope = skillspkg.ScopeUser
-	} else {
-		o.resolvedScope = skillspkg.ScopeProject
-	}
-	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
-	return nil
-}
-
-func (o *skillsRemoveOpts) resolveRootDir() (string, error) {
-	switch o.resolvedScope {
-	case skillspkg.ScopeProject:
-		// Project scope = current working directory; -p/--project overrides.
-		// See cmd/skills_install.go for rationale.
-		if flagProjectConfigPath != "" {
-			return flagProjectConfigPath, nil
-		}
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", clierrors.Wrap(err, "Could not determine current working directory")
-		}
-		return cwd, nil
-	case skillspkg.ScopeUser:
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", clierrors.Wrap(err, "Could not determine user home directory")
-		}
-		return home, nil
-	}
-	return "", clierrors.New("Unknown scope")
-}
-
-func (o *skillsRemoveOpts) resolveTargets(rootDir string) error {
-	if len(o.resolvedTargets) > 0 {
-		return nil
-	}
-	detected := detectExistingTargets(rootDir, o.resolvedScope)
-
-	if !tui.IsInteractiveMode() {
-		// Non-interactive: target every detected dir; fall back to the
-		// default (standard) if none exists. Removing from a non-existent
-		// dir is a cheap no-op so this is safe.
-		if len(detected) > 0 {
-			for _, id := range detected {
-				if t := skillspkg.LookupAgentDir(id); t != nil {
-					o.resolvedTargets = append(o.resolvedTargets, *t)
-				}
-			}
-			return nil
-		}
-		d := skillspkg.LookupAgentDir(skillspkg.DefaultAgentDirID)
-		o.resolvedTargets = append(o.resolvedTargets, *d)
-		return nil
-	}
-
-	// Interactive multi-select. One row per unique path. Existing dirs
-	// pre-checked; if none exist, the default (standard).
-	groups := skillspkg.GroupAgentDirsForScope(o.resolvedScope)
-	selected, err := tui.ChooseMultipleFromListDialogWithDefaults(
-		"Remove target(s)",
-		"",
-		groups,
-		func(g *skillspkg.AgentDirGroup) (string, string) {
-			return targetItemName(g), targetItemHint(g)
-		},
-		func(g *skillspkg.AgentDirGroup) bool {
-			if len(detected) == 0 {
-				return g.Rep.ID == skillspkg.DefaultAgentDirID
-			}
-			return containsStr(detected, g.Rep.ID)
-		},
-	)
-	if err != nil {
-		return clierrors.Wrap(err, "Target selection cancelled")
-	}
-	for _, g := range selected {
-		o.resolvedTargets = append(o.resolvedTargets, g.Rep)
-	}
-	logSelectedTargets(o.resolvedTargets)
-	return nil
-}
-
-func (o *skillsRemoveOpts) reportRemoveActions(actions []skillspkg.RemoveAction) {
+func reportRemoveActions(actions []skillspkg.RemoveAction) {
 	var removed, skipped, errs int
 	for _, a := range actions {
 		var line string

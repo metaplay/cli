@@ -74,7 +74,7 @@ type InstallAction struct {
 
 // InstallOptions describes a single install pass.
 type InstallOptions struct {
-	// Skills is the canonical embedded set, e.g. from LoadAll(OpenFS()).
+	// Skills is the canonical embedded set, e.g. from LoadAll(EmbeddedFS()).
 	Skills []*Skill
 	// Targets lists the AgentDir rows to install into.
 	Targets []AgentDir

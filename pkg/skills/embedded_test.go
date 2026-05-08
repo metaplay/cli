@@ -7,34 +7,38 @@ package skills
 import (
 	"errors"
 	"testing"
-	"testing/fstest"
 )
 
-func TestLoadAll_LoadsEmbeddedSkills(t *testing.T) {
-	skills, err := LoadAll(OpenFS())
+// These tests verify that the skill payload bundled with this package
+// loads cleanly and meets the constraints AI coding harnesses impose
+// (e.g. description length). The engine itself is tested separately against
+// synthetic fstest.MapFS data in skill_test.go.
+
+func TestEmbedded_LoadsBundledSkills(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if len(skills) != 3 {
-		t.Fatalf("expected 3 skills, got %d", len(skills))
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 skills, got %d", len(loaded))
 	}
 	wantIDs := []string{"metaplay-develop", "metaplay-devops", "metaplay-docs"}
 	for i, want := range wantIDs {
-		if skills[i].ID != want {
-			t.Errorf("skill[%d].ID = %q, want %q", i, skills[i].ID, want)
+		if loaded[i].ID != want {
+			t.Errorf("skill[%d].ID = %q, want %q", i, loaded[i].ID, want)
 		}
-		if skills[i].Frontmatter.Name() != want {
-			t.Errorf("skill[%d].Frontmatter.Name() = %q, want %q", i, skills[i].Frontmatter.Name(), want)
+		if loaded[i].Frontmatter.Name() != want {
+			t.Errorf("skill[%d].Frontmatter.Name() = %q, want %q", i, loaded[i].Frontmatter.Name(), want)
 		}
 	}
 }
 
-func TestLoadAll_SubPagesLoaded(t *testing.T) {
-	skills, err := LoadAll(OpenFS())
+func TestEmbedded_SubPagesLoaded(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	develop := FindByID(skills, "metaplay-develop")
+	develop := FindByID(loaded, "metaplay-develop")
 	if develop == nil {
 		t.Fatal("metaplay-develop not found")
 	}
@@ -53,7 +57,7 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 		t.Errorf("sub-page count = %d, want %d (%v)", len(develop.SubPages), len(wantPages), develop.SubPages)
 	}
 
-	devops := FindByID(skills, "metaplay-devops")
+	devops := FindByID(loaded, "metaplay-devops")
 	if devops == nil {
 		t.Fatal("metaplay-devops not found")
 	}
@@ -63,7 +67,7 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 		}
 	}
 
-	docs := FindByID(skills, "metaplay-docs")
+	docs := FindByID(loaded, "metaplay-docs")
 	if docs == nil {
 		t.Fatal("metaplay-docs not found")
 	}
@@ -72,9 +76,9 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 	}
 }
 
-func TestResolve_SkillRoot(t *testing.T) {
-	skills, _ := LoadAll(OpenFS())
-	got, err := Resolve(skills, "metaplay-docs")
+func TestEmbedded_ResolveSkillRoot(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	got, err := Resolve(loaded, "metaplay-docs")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -83,9 +87,9 @@ func TestResolve_SkillRoot(t *testing.T) {
 	}
 }
 
-func TestResolve_SubPage(t *testing.T) {
-	skills, _ := LoadAll(OpenFS())
-	got, err := Resolve(skills, "metaplay-develop/review-models")
+func TestEmbedded_ResolveSubPage(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	got, err := Resolve(loaded, "metaplay-develop/review-models")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -94,44 +98,32 @@ func TestResolve_SubPage(t *testing.T) {
 	}
 }
 
-func TestResolve_UnknownSkill(t *testing.T) {
-	skills, _ := LoadAll(OpenFS())
-	_, err := Resolve(skills, "nonexistent")
+func TestEmbedded_ResolveUnknownSkill(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	_, err := Resolve(loaded, "nonexistent")
 	if !errors.Is(err, ErrSkillNotFound) {
 		t.Errorf("expected ErrSkillNotFound, got %v", err)
 	}
 }
 
-func TestResolve_UnknownSubPage(t *testing.T) {
-	skills, _ := LoadAll(OpenFS())
-	_, err := Resolve(skills, "metaplay-develop/nonexistent")
+func TestEmbedded_ResolveUnknownSubPage(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	_, err := Resolve(loaded, "metaplay-develop/nonexistent")
 	if !errors.Is(err, ErrSubPageNotFound) {
 		t.Errorf("expected ErrSubPageNotFound, got %v", err)
 	}
 }
 
-func TestEmbeddedSkills_DescriptionUnderLimit(t *testing.T) {
-	skills, err := LoadAll(OpenFS())
+func TestEmbedded_DescriptionUnderLimit(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	for _, s := range skills {
+	for _, s := range loaded {
 		desc := s.Frontmatter.Description()
 		if len(desc) > MaxDescriptionLength {
 			t.Errorf("skill %q: description is %d chars, exceeds %d-char limit (Codex CLI rejects, Claude Code warns)",
 				s.ID, len(desc), MaxDescriptionLength)
 		}
-	}
-}
-
-func TestLoadAll_RejectsNameMismatch(t *testing.T) {
-	mock := fstest.MapFS{
-		"badskill/SKILL.md": &fstest.MapFile{
-			Data: []byte("---\nname: not-the-dir\ndescription: x\n---\nbody\n"),
-		},
-	}
-	_, err := LoadAll(mock)
-	if err == nil {
-		t.Errorf("expected error on name mismatch")
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-	skillspkg "github.com/metaplay/cli/internal/skills"
+	skillspkg "github.com/metaplay/cli/pkg/skills"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -43,7 +43,7 @@ func (o *skillsListOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *skillsListOpts) Run(cmd *cobra.Command) error {
-	skills, err := skillspkg.LoadAll(skillspkg.OpenFS())
+	skills, err := skillspkg.LoadAll(skillspkg.EmbeddedFS())
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to load embedded skills")
 	}

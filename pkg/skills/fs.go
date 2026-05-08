@@ -14,21 +14,23 @@ import (
 	"github.com/metaplay/cli/internal/version"
 )
 
-// embeddedData carries the canonical skill payload built into the CLI binary.
+// embeddedData carries the canonical skill payload built into the binary.
 // Release builds always read through this filesystem.
 //
 //go:embed all:data
 var embeddedData embed.FS
 
-// OpenFS returns the filesystem rooted at the skills data directory.
+// EmbeddedFS returns the filesystem rooted at the bundled skill data
+// directory. Pass the result to LoadAll to obtain the canonical Skill list
+// shipped with this package.
 //
 // In dev builds (go run, unstamped go build) we prefer reading directly from
-// internal/skills/data on disk so authors can iterate on skill content without
-// rebuilding the CLI. The disk path is derived from runtime.Caller, which
+// pkg/skills/data on disk so authors can iterate on skill content without
+// rebuilding the binary. The disk path is derived from runtime.Caller, which
 // holds the source path of this file as long as the binary was not built with
 // -trimpath. If the disk lookup fails for any reason we fall back to the
 // embedded copy, which always works.
-func OpenFS() fs.FS {
+func EmbeddedFS() fs.FS {
 	if version.IsDevBuild() {
 		if disk, ok := devDataDir(); ok {
 			return os.DirFS(disk)
@@ -43,8 +45,8 @@ func OpenFS() fs.FS {
 	return sub
 }
 
-// devDataDir returns the on-disk path to internal/skills/data when the binary
-// is run from the source tree, plus an existence flag.
+// devDataDir returns the on-disk path to pkg/skills/data when the binary is
+// run from the source tree, plus an existence flag.
 func devDataDir() (string, bool) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {

@@ -49,7 +49,8 @@ func (s *Skill) SubPageNames() []string {
 // must contain a SKILL.md, and any other `.md` files in that directory are
 // loaded as sub-pages.
 //
-// rootFS is typically the result of OpenFS().
+// rootFS is the skill payload root — pass EmbeddedFS() to load the bundle
+// shipped with this package, or any fs.FS for tests/custom payloads.
 func LoadAll(rootFS fs.FS) ([]*Skill, error) {
 	entries, err := fs.ReadDir(rootFS, ".")
 	if err != nil {
