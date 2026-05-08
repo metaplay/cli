@@ -9,7 +9,10 @@ import (
 	"os"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/ansi"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -80,11 +83,11 @@ func printSkillContent(content []byte) {
 // command never breaks.
 func renderMarkdownForTerminal(content []byte) (string, bool) {
 	width := 100
-	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 && w < width {
 		width = w
 	}
 	r, err := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStyles(skillsStyleConfig()),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -95,4 +98,20 @@ func renderMarkdownForTerminal(content []byte) (string, bool) {
 		return "", false
 	}
 	return out, true
+}
+
+// skillsStyleConfig picks glamour's dark or light style the same way
+// WithAutoStyle does, then blanks the inline-code Prefix/Suffix so spans
+// like `file:line` don't render with visible padding around them. The
+// returned value is a copy; the package-global style is not mutated.
+func skillsStyleConfig() ansi.StyleConfig {
+	var s ansi.StyleConfig
+	if termenv.HasDarkBackground() {
+		s = styles.DarkStyleConfig
+	} else {
+		s = styles.LightStyleConfig
+	}
+	s.Code.Prefix = ""
+	s.Code.Suffix = ""
+	return s
 }
