@@ -33,6 +33,9 @@ var skillsCmd = &cobra.Command{
 		# List the skills shipped with this CLI.
 		metaplay skills list
 
+		# Print agent-facing guidance for trying skills without installing.
+		metaplay skills try
+
 		# Print a skill's main markdown.
 		metaplay skills get metaplay-develop
 
