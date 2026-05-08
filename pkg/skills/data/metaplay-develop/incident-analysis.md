@@ -1,10 +1,8 @@
 # Player incident report analysis
 
-Diagnose an individual player's crash, desync, or network incident from a Metaplay game environment's admin API. Use when the user pastes a dashboard incident URL, asks about "the latest incidents" or "recent incidents", or wants a specific player incident report triaged. For broader production symptoms (pods down, CPU spike, login drop) run the scenario playbooks in `metaplay skills get metaplay-devops` instead — those target the cluster, not one player.
+Diagnose an individual player's crash, desync, or network incident from a Metaplay game environment's admin API. Use when the user pastes a dashboard incident URL, asks about "the latest incidents" or "recent incidents", or wants a specific player incident report triaged. The goal is almost always to find and fix the bug in game code that produced the incident — load `metaplay skills get metaplay-develop` for the rules that apply to the fix.
 
 ## Environment selection
-
-Same rule as every other `metaplay debug` command (see `metaplay skills get metaplay-devops`):
 
 - Read `metaplay-project.yaml` for configured environments.
 - If the user pasted a dashboard URL like `https://<env-id>-admin.p1.metaplay.io/players/Player:X/incidentReports/Y`, match the hostname prefix against `metaplay-project.yaml` to recover the env name.

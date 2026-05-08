@@ -22,7 +22,7 @@ func TestEmbedded_LoadsBundledSkills(t *testing.T) {
 	if len(loaded) != 3 {
 		t.Fatalf("expected 3 skills, got %d", len(loaded))
 	}
-	wantIDs := []string{"metaplay-develop", "metaplay-devops", "metaplay-docs"}
+	wantIDs := []string{"metaplay-develop", "metaplay-docs", "metaplay-troubleshoot"}
 	for i, want := range wantIDs {
 		if loaded[i].ID != want {
 			t.Errorf("skill[%d].ID = %q, want %q", i, loaded[i].ID, want)
@@ -43,10 +43,11 @@ func TestEmbedded_SubPagesLoaded(t *testing.T) {
 		t.Fatal("metaplay-develop not found")
 	}
 	wantPages := map[string]bool{
-		"main":           true,
-		"review-actions": true,
-		"review-configs": true,
-		"review-models":  true,
+		"main":              true,
+		"review-actions":    true,
+		"review-configs":    true,
+		"review-models":     true,
+		"incident-analysis": true,
 	}
 	for page := range wantPages {
 		if _, ok := develop.SubPages[page]; !ok {
@@ -55,16 +56,6 @@ func TestEmbedded_SubPagesLoaded(t *testing.T) {
 	}
 	if len(develop.SubPages) != len(wantPages) {
 		t.Errorf("sub-page count = %d, want %d (%v)", len(develop.SubPages), len(wantPages), develop.SubPages)
-	}
-
-	devops := FindByID(loaded, "metaplay-devops")
-	if devops == nil {
-		t.Fatal("metaplay-devops not found")
-	}
-	for _, page := range []string{"main", "incident-analysis"} {
-		if _, ok := devops.SubPages[page]; !ok {
-			t.Errorf("metaplay-devops missing sub-page %q", page)
-		}
 	}
 
 	docs := FindByID(loaded, "metaplay-docs")

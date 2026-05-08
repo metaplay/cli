@@ -44,8 +44,8 @@ func ExampleRunInstall() {
 	}
 	// Unordered output:
 	// wrote metaplay-develop
-	// wrote metaplay-devops
 	// wrote metaplay-docs
+	// wrote metaplay-troubleshoot
 }
 
 // ExampleResolve shows how to fetch a skill or sub-page by address.

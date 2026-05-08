@@ -9,6 +9,7 @@ Authoring patterns and review rules for three Metaplay code areas. Content lives
 | `PlayerAction`, `GuildAction`, `[ModelAction(...)]`, listeners, `Execute` methods, `MetaActionResult` | `metaplay skills get metaplay-develop/review-actions` |
 | `GameConfigLibrary`, `GameConfigKeyValue`, `[GameConfigEntry]`, `IGameConfigData`, `MetaRef<>` | `metaplay skills get metaplay-develop/review-configs` |
 | `PlayerModelBase`, `GuildModelBase`, `*ModelBase`, `GameTick`, `GameFastForwardTime`, sub-models | `metaplay skills get metaplay-develop/review-models` |
+| Player crash, desync, or network incident pasted from the admin dashboard ("the latest incidents", an incident report URL, `ChecksumMismatch`, `UnhandledException` traces from a live env) | `metaplay skills get metaplay-develop/incident-analysis` |
 
 Each sub-page has: design patterns for authoring, discovery patterns for grepping existing code, the full rule checklist with codes (e.g. `S1`, `D2`, `GT3`), and area-specific pitfalls. Load more than one sub-page if your work crosses areas — e.g. an action that mutates a sub-model, or a config item referenced by model logic.
 
@@ -38,5 +39,4 @@ If no issues are found, report a clean result.
 ## When NOT to use this skill
 
 - Non-Metaplay C# code — use standard practice.
-- Build failures, server crashes, or deployment problems — use `metaplay-devops`.
 - SDK API or "how do I..." questions — use `metaplay-docs`.
