@@ -42,20 +42,20 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 	if develop == nil {
 		t.Fatal("metaplay-develop not found")
 	}
-	wantPages := map[string]bool{
+	wantSubSkills := map[string]bool{
 		"main":              true,
 		"review-actions":    true,
 		"review-configs":    true,
 		"review-models":     true,
 		"incident-analysis": true,
 	}
-	for page := range wantPages {
-		if _, ok := develop.SubSkills[page]; !ok {
-			t.Errorf("missing sub-skill %q", page)
+	for subSkillID := range wantSubSkills {
+		if _, ok := develop.SubSkills[subSkillID]; !ok {
+			t.Errorf("missing sub-skill %q", subSkillID)
 		}
 	}
-	if len(develop.SubSkills) != len(wantPages) {
-		t.Errorf("sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantPages), develop.SubSkills)
+	if len(develop.SubSkills) != len(wantSubSkills) {
+		t.Errorf("sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantSubSkills), develop.SubSkills)
 	}
 
 	docs := FindByID(loaded, "metaplay-docs")
@@ -116,14 +116,14 @@ func TestEmbedded_DescriptionUnderLimit(t *testing.T) {
 			t.Errorf("skill %q: description is %d chars, exceeds %d-char limit (Codex CLI rejects, Claude Code warns)",
 				s.ID, len(desc), MaxDescriptionLength)
 		}
-		for page, sub := range s.SubSkills {
-			if page == "main" {
+		for subSkillID, sub := range s.SubSkills {
+			if subSkillID == "main" {
 				continue
 			}
 			d := sub.Frontmatter.Description()
 			if len(d) > MaxDescriptionLength {
 				t.Errorf("sub-skill %s/%s: description is %d chars, exceeds %d-char limit (matters if ever promoted to a standalone skill)",
-					s.ID, page, len(d), MaxDescriptionLength)
+					s.ID, subSkillID, len(d), MaxDescriptionLength)
 			}
 		}
 	}

@@ -64,14 +64,14 @@ func TestLoadAll_SubSkillsLoaded(t *testing.T) {
 	if alpha == nil {
 		t.Fatal("alpha not found")
 	}
-	wantPages := map[string]bool{"main": true, "extra": true}
-	for page := range wantPages {
-		if _, ok := alpha.SubSkills[page]; !ok {
-			t.Errorf("missing sub-skill %q", page)
+	wantSubSkills := map[string]bool{"main": true, "extra": true}
+	for subSkillID := range wantSubSkills {
+		if _, ok := alpha.SubSkills[subSkillID]; !ok {
+			t.Errorf("missing sub-skill %q", subSkillID)
 		}
 	}
-	if len(alpha.SubSkills) != len(wantPages) {
-		t.Errorf("sub-skill count = %d, want %d (%v)", len(alpha.SubSkills), len(wantPages), alpha.SubSkills)
+	if len(alpha.SubSkills) != len(wantSubSkills) {
+		t.Errorf("sub-skill count = %d, want %d (%v)", len(alpha.SubSkills), len(wantSubSkills), alpha.SubSkills)
 	}
 
 	gamma := FindByID(loaded, "gamma")

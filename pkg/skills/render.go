@@ -19,8 +19,9 @@ const subSkillsMarker = "{{subskills}}"
 // RenderRootPage substitutes the {{subskills}} marker in a root page's content
 // with an auto-generated sub-skills section. The expansion includes the
 // `## Sub-skills` heading and a bullet list — one bullet per sub-skill, with
-// the full `metaplay skills get <skill>/<page>` address and the sub-skill's
-// frontmatter description. The pseudo-page `main` is excluded.
+// the full `metaplay skills get <skill>/<sub-skill>` address and the
+// sub-skill's frontmatter description. The `main` entry (the root body
+// itself) is excluded.
 //
 // If the skill has no listable sub-skills, the marker (and the line it sits
 // on) is removed entirely so the root page does not emit an empty heading.

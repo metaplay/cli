@@ -126,7 +126,7 @@ func loadSkill(rootFS fs.FS, id string) (*Skill, error) {
 		if name == "SKILL.md" || !strings.HasSuffix(name, ".md") {
 			continue
 		}
-		page := strings.TrimSuffix(name, ".md")
+		subSkillID := strings.TrimSuffix(name, ".md")
 		raw, err := fs.ReadFile(rootFS, path.Join(id, name))
 		if err != nil {
 			return nil, fmt.Errorf("read sub-skill %s/%s: %w", id, name, err)
@@ -147,16 +147,16 @@ func loadSkill(rootFS fs.FS, id string) (*Skill, error) {
 		// All other sub-skills are listed by description, and their `name`
 		// must equal the standalone-skill identifier (`<parent>-<sub>`)
 		// they would adopt if ever promoted to a top-level skill.
-		if page != "main" {
+		if subSkillID != "main" {
 			if sub.Frontmatter.Description() == "" {
 				return nil, fmt.Errorf("sub-skill %s/%s: must have YAML frontmatter with a description field", id, name)
 			}
-			expectedName := id + "-" + page
+			expectedName := id + "-" + subSkillID
 			if sub.Frontmatter.Name() != expectedName {
 				return nil, fmt.Errorf("sub-skill %s/%s: frontmatter name %q must equal %q", id, name, sub.Frontmatter.Name(), expectedName)
 			}
 		}
-		skill.SubSkills[page] = sub
+		skill.SubSkills[subSkillID] = sub
 	}
 
 	return skill, nil
@@ -186,7 +186,7 @@ var ErrSubSkillNotFound = errors.New("sub-skill not found")
 // returns a sub-skill's bytes; the special name `SKILL.md` returns
 // the raw wrapper file (intended for internal/debug use, not advertised).
 func Resolve(skills []*Skill, address string) ([]byte, error) {
-	skillID, page, hasPage := strings.Cut(address, "/")
+	skillID, subSkillID, hasSubSkill := strings.Cut(address, "/")
 	if skillID == "" {
 		return nil, fmt.Errorf("empty skill address")
 	}
@@ -194,21 +194,21 @@ func Resolve(skills []*Skill, address string) ([]byte, error) {
 	if skill == nil {
 		return nil, fmt.Errorf("%w: %s", ErrSkillNotFound, skillID)
 	}
-	if !hasPage {
+	if !hasSubSkill {
 		if main, ok := skill.SubSkills["main"]; ok {
 			return main.Raw, nil
 		}
 		return skill.RawSKILL, nil
 	}
-	if page == "" {
-		return nil, fmt.Errorf("empty page name in address %q", address)
+	if subSkillID == "" {
+		return nil, fmt.Errorf("empty sub-skill name in address %q", address)
 	}
-	if page == "SKILL.md" {
+	if subSkillID == "SKILL.md" {
 		return skill.RawSKILL, nil
 	}
-	sub, ok := skill.SubSkills[page]
+	sub, ok := skill.SubSkills[subSkillID]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s/%s", ErrSubSkillNotFound, skillID, page)
+		return nil, fmt.Errorf("%w: %s/%s", ErrSubSkillNotFound, skillID, subSkillID)
 	}
 	return sub.Raw, nil
 }
