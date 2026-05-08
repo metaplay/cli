@@ -14,8 +14,10 @@ import (
 // behaviour lives in skills_list.go, skills_get.go, skills_install.go.
 var skillsCmd = &cobra.Command{
 	Use:   "skills",
-	Short: "Inspect and install Metaplay agent skills",
+	Short: "[preview] Inspect and install Metaplay agent skills",
 	Long: renderLong(nil, `
+		PREVIEW: The 'skills' command family is in preview and subject to change!
+
 		Manage the Metaplay agent skills bundled with this CLI.
 
 		Skills are markdown documents (with YAML frontmatter) that AI coding

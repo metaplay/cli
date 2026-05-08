@@ -24,9 +24,11 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "list [flags]",
-		Short: "List the Metaplay skills bundled with this CLI",
+		Short: "[preview] List the Metaplay skills bundled with this CLI",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			List every skill embedded in the CLI binary. Each skill's name and
 			description come from its SKILL.md frontmatter.
 

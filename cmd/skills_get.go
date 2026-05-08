@@ -27,9 +27,11 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "get NAME",
-		Short: "Print an embedded Metaplay skill or sub-page to stdout",
+		Short: "[preview] Print an embedded Metaplay skill or sub-page to stdout",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			Print the embedded skill content addressed by NAME.
 
 			{Arguments}

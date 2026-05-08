@@ -27,9 +27,11 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "install [flags]",
-		Short: "Install Metaplay skill wrappers into your project (or user home)",
+		Short: "[preview] Install Metaplay skill wrappers into your project (or user home)",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
+			PREVIEW: This command is in preview and subject to change!
+
 			Install thin wrapper SKILL.md files for the embedded skills.
 
 			Project scope writes under the current directory. We do NOT
