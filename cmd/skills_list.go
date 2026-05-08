@@ -32,8 +32,11 @@ func init() {
 			List every skill embedded in the CLI binary. Each skill's name and
 			description come from its SKILL.md frontmatter.
 
-			By default sub-pages are shown after their parent skill (DFS order).
-			Pass --full=false to list only the top-level skills.
+			By default sub-pages are shown after their parent skill in DFS
+			order, with their full '<skill>/<page>' address (the same form
+			'metaplay skills get' accepts) and the lead paragraph of the
+			sub-page as its description. Pass --full=false to list only the
+			top-level skills.
 		`),
 	}
 
@@ -60,19 +63,46 @@ func (o *skillsListOpts) Run(cmd *cobra.Command) error {
 
 	for _, s := range skills {
 		fmt.Println()
-		fmt.Printf("%s\n", styles.RenderSuccess(s.ID))
-		fmt.Printf("  %s\n", strings.ReplaceAll(s.Frontmatter.Description(), "\n", " "))
+		desc := strings.ReplaceAll(s.Frontmatter.Description(), "\n", " ")
+		fmt.Printf("%s: %s\n", styles.RenderSuccess(s.ID), desc)
 		if !o.flagFull {
 			continue
 		}
-		pages := s.SubPageNames()
-		if len(pages) == 0 {
-			continue
-		}
-		fmt.Printf("  %s\n", styles.RenderMuted("sub-pages:"))
-		for _, p := range pages {
-			fmt.Printf("    %s\n", p)
+		for _, p := range s.SubPageNames() {
+			subDesc := subPageDescription(s.SubPages[p])
+			if subDesc == "" {
+				subDesc = styles.RenderMuted("(no description)")
+			}
+			fmt.Printf("  %s: %s\n", styles.RenderSuccess(s.ID+"/"+p), subDesc)
 		}
 	}
 	return nil
+}
+
+// subPageDescription extracts the lead paragraph from a markdown sub-page,
+// skipping leading blank lines and a single H1 title. Returns "" if the page
+// has no body paragraph before the next blank line. Multi-line paragraphs
+// are flattened to one space-separated line for tabular display.
+func subPageDescription(content []byte) string {
+	lines := strings.Split(string(content), "\n")
+	i := 0
+	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+		i++
+	}
+	if i < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i]), "# ") {
+		i++
+	}
+	for i < len(lines) && strings.TrimSpace(lines[i]) == "" {
+		i++
+	}
+	var paragraph []string
+	for i < len(lines) {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			break
+		}
+		paragraph = append(paragraph, line)
+		i++
+	}
+	return strings.Join(paragraph, " ")
 }
