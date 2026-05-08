@@ -6,8 +6,12 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
+	"github.com/charmbracelet/glamour"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // skillsCmd is the parent for `metaplay skills ...` subcommands. The actual
@@ -52,12 +56,43 @@ func init() {
 	rootCmd.AddCommand(skillsCmd)
 }
 
-// printSkillContent writes raw skill content directly to stdout, bypassing
-// the logger so --verbose does not prefix it with timestamps and so
-// pipelines see the exact bytes. Ensures a single trailing newline.
+// printSkillContent writes skill content to stdout. In interactive terminals
+// it pretty-prints the markdown via glamour for readability; everywhere else
+// (pipes, redirects, CI, --verbose) it writes the exact bytes so AI agents
+// and shell pipelines see the raw markdown. Ensures a single trailing newline
+// in the raw path; glamour produces its own trailing whitespace.
 func printSkillContent(content []byte) {
+	if tui.IsInteractiveMode() {
+		if rendered, ok := renderMarkdownForTerminal(content); ok {
+			fmt.Print(rendered)
+			return
+		}
+	}
 	fmt.Print(string(content))
 	if len(content) == 0 || content[len(content)-1] != '\n' {
 		fmt.Println()
 	}
+}
+
+// renderMarkdownForTerminal renders markdown to ANSI using glamour, sized to
+// the current stdout terminal width. Returns the rendered string and true on
+// success; on any error the caller should fall back to raw output so the
+// command never breaks.
+func renderMarkdownForTerminal(content []byte) (string, bool) {
+	width := 100
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		width = w
+	}
+	r, err := glamour.NewTermRenderer(
+		glamour.WithAutoStyle(),
+		glamour.WithWordWrap(width),
+	)
+	if err != nil {
+		return "", false
+	}
+	out, err := r.Render(string(content))
+	if err != nil {
+		return "", false
+	}
+	return out, true
 }
