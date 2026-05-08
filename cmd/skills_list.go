@@ -32,16 +32,16 @@ func init() {
 			List every skill embedded in the CLI binary. Each skill's name and
 			description come from its SKILL.md frontmatter.
 
-			By default sub-skills are shown after their parent skill in DFS
-			order, with their full '<skill>/<sub-skill>' address (the same form
+			By default only top-level skills are listed. Pass --full to also
+			list each skill's sub-skills after their parent in DFS order, with
+			their full '<skill>/<sub-skill>' address (the same form
 			'metaplay skills get' accepts) and the description from the
-			sub-skill's own frontmatter. Pass --full=false to list only the
-			top-level skills.
+			sub-skill's own frontmatter.
 		`),
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagFull, "full", true, "Also list each skill's sub-skills")
+	flags.BoolVar(&o.flagFull, "full", false, "Also list each skill's sub-skills")
 
 	skillsCmd.AddCommand(cmd)
 }
