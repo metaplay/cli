@@ -33,7 +33,7 @@ func TestEmbedded_LoadsBundledSkills(t *testing.T) {
 	}
 }
 
-func TestEmbedded_SubPagesLoaded(t *testing.T) {
+func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 	loaded, err := LoadAll(EmbeddedFS())
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
@@ -50,20 +50,20 @@ func TestEmbedded_SubPagesLoaded(t *testing.T) {
 		"incident-analysis": true,
 	}
 	for page := range wantPages {
-		if _, ok := develop.SubPages[page]; !ok {
-			t.Errorf("missing sub-page %q", page)
+		if _, ok := develop.SubSkills[page]; !ok {
+			t.Errorf("missing sub-skill %q", page)
 		}
 	}
-	if len(develop.SubPages) != len(wantPages) {
-		t.Errorf("sub-page count = %d, want %d (%v)", len(develop.SubPages), len(wantPages), develop.SubPages)
+	if len(develop.SubSkills) != len(wantPages) {
+		t.Errorf("sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantPages), develop.SubSkills)
 	}
 
 	docs := FindByID(loaded, "metaplay-docs")
 	if docs == nil {
 		t.Fatal("metaplay-docs not found")
 	}
-	if _, ok := docs.SubPages["main"]; !ok {
-		t.Errorf("metaplay-docs missing sub-page \"main\"")
+	if _, ok := docs.SubSkills["main"]; !ok {
+		t.Errorf("metaplay-docs missing sub-skill \"main\"")
 	}
 }
 
@@ -78,7 +78,7 @@ func TestEmbedded_ResolveSkillRoot(t *testing.T) {
 	}
 }
 
-func TestEmbedded_ResolveSubPage(t *testing.T) {
+func TestEmbedded_ResolveSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(EmbeddedFS())
 	got, err := Resolve(loaded, "metaplay-develop/review-models")
 	if err != nil {
@@ -97,11 +97,11 @@ func TestEmbedded_ResolveUnknownSkill(t *testing.T) {
 	}
 }
 
-func TestEmbedded_ResolveUnknownSubPage(t *testing.T) {
+func TestEmbedded_ResolveUnknownSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(EmbeddedFS())
 	_, err := Resolve(loaded, "metaplay-develop/nonexistent")
-	if !errors.Is(err, ErrSubPageNotFound) {
-		t.Errorf("expected ErrSubPageNotFound, got %v", err)
+	if !errors.Is(err, ErrSubSkillNotFound) {
+		t.Errorf("expected ErrSubSkillNotFound, got %v", err)
 	}
 }
 
@@ -115,6 +115,16 @@ func TestEmbedded_DescriptionUnderLimit(t *testing.T) {
 		if len(desc) > MaxDescriptionLength {
 			t.Errorf("skill %q: description is %d chars, exceeds %d-char limit (Codex CLI rejects, Claude Code warns)",
 				s.ID, len(desc), MaxDescriptionLength)
+		}
+		for page, sub := range s.SubSkills {
+			if page == "main" {
+				continue
+			}
+			d := sub.Frontmatter.Description()
+			if len(d) > MaxDescriptionLength {
+				t.Errorf("sub-skill %s/%s: description is %d chars, exceeds %d-char limit (matters if ever promoted to a standalone skill)",
+					s.ID, page, len(d), MaxDescriptionLength)
+			}
 		}
 	}
 }

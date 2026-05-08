@@ -22,7 +22,7 @@
 //
 // The wrapper body is a tiny pointer (e.g. "metaplay skills get <name>") —
 // the canonical content stays embedded in the binary and is fetched on
-// demand. This keeps user-repo diffs small and lets sub-pages update
+// demand. This keeps user-repo diffs small and lets sub-skills update
 // when the binary updates without any extra sync step.
 //
 // # Bundled skills

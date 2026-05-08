@@ -22,7 +22,7 @@ func fakeSkillFS() fstest.MapFS {
 			Data: []byte("alpha main page\n"),
 		},
 		"alpha/extra.md": &fstest.MapFile{
-			Data: []byte("alpha extra page\n"),
+			Data: []byte("---\nname: alpha-extra\ndescription: Alpha extra sub-skill description.\n---\nalpha extra page\n"),
 		},
 		"beta/SKILL.md": &fstest.MapFile{
 			Data: []byte("---\nname: beta\ndescription: Beta skill description.\n---\nbody\n"),
@@ -55,7 +55,7 @@ func TestLoadAll_LoadsAllSkills(t *testing.T) {
 	}
 }
 
-func TestLoadAll_SubPagesLoaded(t *testing.T) {
+func TestLoadAll_SubSkillsLoaded(t *testing.T) {
 	loaded, err := LoadAll(fakeSkillFS())
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
@@ -66,20 +66,20 @@ func TestLoadAll_SubPagesLoaded(t *testing.T) {
 	}
 	wantPages := map[string]bool{"main": true, "extra": true}
 	for page := range wantPages {
-		if _, ok := alpha.SubPages[page]; !ok {
-			t.Errorf("missing sub-page %q", page)
+		if _, ok := alpha.SubSkills[page]; !ok {
+			t.Errorf("missing sub-skill %q", page)
 		}
 	}
-	if len(alpha.SubPages) != len(wantPages) {
-		t.Errorf("sub-page count = %d, want %d (%v)", len(alpha.SubPages), len(wantPages), alpha.SubPages)
+	if len(alpha.SubSkills) != len(wantPages) {
+		t.Errorf("sub-skill count = %d, want %d (%v)", len(alpha.SubSkills), len(wantPages), alpha.SubSkills)
 	}
 
 	gamma := FindByID(loaded, "gamma")
 	if gamma == nil {
 		t.Fatal("gamma not found")
 	}
-	if len(gamma.SubPages) != 0 {
-		t.Errorf("gamma should have no sub-pages, got %v", gamma.SubPages)
+	if len(gamma.SubSkills) != 0 {
+		t.Errorf("gamma should have no sub-skills, got %v", gamma.SubSkills)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestResolve_SkillRoot(t *testing.T) {
 	}
 }
 
-func TestResolve_SubPage(t *testing.T) {
+func TestResolve_SubSkill(t *testing.T) {
 	loaded, _ := LoadAll(fakeSkillFS())
 	got, err := Resolve(loaded, "alpha/extra")
 	if err != nil {
@@ -113,11 +113,11 @@ func TestResolve_UnknownSkill(t *testing.T) {
 	}
 }
 
-func TestResolve_UnknownSubPage(t *testing.T) {
+func TestResolve_UnknownSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(fakeSkillFS())
 	_, err := Resolve(loaded, "alpha/nonexistent")
-	if !errors.Is(err, ErrSubPageNotFound) {
-		t.Errorf("expected ErrSubPageNotFound, got %v", err)
+	if !errors.Is(err, ErrSubSkillNotFound) {
+		t.Errorf("expected ErrSubSkillNotFound, got %v", err)
 	}
 }
 
@@ -130,5 +130,47 @@ func TestLoadAll_RejectsNameMismatch(t *testing.T) {
 	_, err := LoadAll(mock)
 	if err == nil {
 		t.Errorf("expected error on name mismatch")
+	}
+}
+
+func TestLoadAll_RejectsSKILLWithoutName(t *testing.T) {
+	mock := fstest.MapFS{
+		"nameless/SKILL.md": &fstest.MapFile{
+			Data: []byte("---\ndescription: missing the name field.\n---\nbody\n"),
+		},
+	}
+	_, err := LoadAll(mock)
+	if err == nil {
+		t.Errorf("expected error when SKILL.md has no name field")
+	}
+}
+
+func TestLoadAll_RejectsSubSkillWithoutName(t *testing.T) {
+	mock := fstest.MapFS{
+		"alpha/SKILL.md": &fstest.MapFile{
+			Data: []byte("---\nname: alpha\ndescription: Alpha skill description.\n---\nbody\n"),
+		},
+		"alpha/extra.md": &fstest.MapFile{
+			Data: []byte("---\ndescription: Sub-skill with description but no name.\n---\nbody\n"),
+		},
+	}
+	_, err := LoadAll(mock)
+	if err == nil {
+		t.Errorf("expected error when sub-skill frontmatter has no name field")
+	}
+}
+
+func TestLoadAll_RejectsSubSkillWithWrongName(t *testing.T) {
+	mock := fstest.MapFS{
+		"alpha/SKILL.md": &fstest.MapFile{
+			Data: []byte("---\nname: alpha\ndescription: Alpha skill description.\n---\nbody\n"),
+		},
+		"alpha/extra.md": &fstest.MapFile{
+			Data: []byte("---\nname: not-alpha-extra\ndescription: Sub-skill with mismatched name.\n---\nbody\n"),
+		},
+	}
+	_, err := LoadAll(mock)
+	if err == nil {
+		t.Errorf("expected error when sub-skill name does not equal <parent>-<id>")
 	}
 }

@@ -23,11 +23,11 @@ func init() {
 	o := skillsGetOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-page address (e.g., 'metaplay-develop' or 'metaplay-develop/review-models').")
+	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-skill address (e.g., 'metaplay-develop' or 'metaplay-develop/review-models').")
 
 	cmd := &cobra.Command{
 		Use:   "get NAME",
-		Short: "[preview] Print an embedded Metaplay skill or sub-page to stdout",
+		Short: "[preview] Print an embedded Metaplay skill or sub-skill to stdout",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			PREVIEW: This command is in preview and subject to change!
@@ -37,7 +37,7 @@ func init() {
 			{Arguments}
 
 			NAME is either a skill name (returns its SKILL.md) or
-			'<skill>/<page>' (returns a sub-page).
+			'<skill>/<sub-skill>' (returns a sub-skill).
 
 			Output goes to stdout with a single trailing newline so it can
 			be piped or captured by an AI agent.
@@ -46,7 +46,7 @@ func init() {
 			# Print the metaplay-develop SKILL.md.
 			metaplay skills get metaplay-develop
 
-			# Print the review-models sub-page.
+			# Print the review-models sub-skill.
 			metaplay skills get metaplay-develop/review-models
 		`),
 	}
@@ -75,11 +75,19 @@ func (o *skillsGetOpts) Run(cmd *cobra.Command) error {
 			return clierrors.Wrap(err, "Unknown skill").
 				WithDetails("Available skills: " + strings.Join(ids, ", ")).
 				WithSuggestion("Run 'metaplay skills list' to see all skills")
-		case errors.Is(err, skillspkg.ErrSubPageNotFound):
-			return clierrors.Wrap(err, "Unknown sub-page").
-				WithSuggestion("Run 'metaplay skills list --full' to see available sub-pages")
+		case errors.Is(err, skillspkg.ErrSubSkillNotFound):
+			return clierrors.Wrap(err, "Unknown sub-skill").
+				WithSuggestion("Run 'metaplay skills list --full' to see available sub-skills")
 		default:
 			return clierrors.Wrap(err, "Failed to resolve skill address")
+		}
+	}
+
+	// Root address: substitute the {{subskills}} marker (if present) with an
+	// auto-rendered sub-skills section. Sub-skill reads pass through verbatim.
+	if !strings.Contains(o.argName, "/") {
+		if skill := skillspkg.FindByID(skills, o.argName); skill != nil {
+			content = skillspkg.RenderRootPage(skill, content)
 		}
 	}
 

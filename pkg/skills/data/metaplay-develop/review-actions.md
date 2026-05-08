@@ -1,6 +1,9 @@
-# Actions
+---
+name: metaplay-develop-review-actions
+description: Authoring patterns and review rules for all entity action types — `PlayerAction`, `GuildAction`, and custom multiplayer entity actions. Covers transactional design, security (development-only actions, server authority), commit discipline, immutability, determinism, and the full rule checklist (S1–S4, etc.) for the actions area. Load alongside the parent `metaplay-develop` page for the shared workflow and severity convention.
+---
 
-Authoring patterns and review rules for all entity action types — `PlayerAction`, `GuildAction`, and custom multiplayer entity actions. See `metaplay skills get metaplay-develop` for the shared workflow and severity convention.
+# Actions
 
 ## Design patterns
 

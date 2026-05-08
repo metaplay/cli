@@ -1,6 +1,9 @@
-# GameConfigs
+---
+name: metaplay-develop-review-configs
+description: Authoring patterns and review rules for GameConfig classes — `GameConfigLibrary`, `GameConfigKeyValue` (global configs), config item classes, and cross-library references (`MetaRef<>`). Covers data source choices (C# code vs CSV vs Google Sheets), key types, build-time validation, and the full rule checklist for the configs area. Load alongside the parent `metaplay-develop` page for the shared workflow and severity convention.
+---
 
-Authoring patterns and review rules for GameConfig classes — `GameConfigLibrary`, `GameConfigKeyValue` (global configs), config item classes, and cross-library references. See `metaplay skills get metaplay-develop` for the shared workflow and severity convention.
+# GameConfigs
 
 ## Design patterns
 

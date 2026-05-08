@@ -24,7 +24,7 @@ func mkSkill(t *testing.T, id string) *Skill {
 		Frontmatter: fm,
 		Body:        body,
 		RawSKILL:    raw,
-		SubPages:    map[string][]byte{},
+		SubSkills:    map[string]*SubSkill{},
 	}
 }
 

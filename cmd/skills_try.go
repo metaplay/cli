@@ -67,7 +67,7 @@ func (o *skillsTryOpts) Run(cmd *cobra.Command) error {
 	fmt.Println()
 	fmt.Println("  metaplay skills get <skill>")
 	fmt.Println()
-	fmt.Println("If the main page references sub-pages relevant to the task, load those too:")
+	fmt.Println("If the main page references sub-skills relevant to the task, load those too:")
 	fmt.Println()
 	fmt.Println("  metaplay skills get <skill>/<page>")
 	fmt.Println()
@@ -80,6 +80,6 @@ func (o *skillsTryOpts) Run(cmd *cobra.Command) error {
 	}
 
 	fmt.Println()
-	fmt.Println("Match the current task to a skill description above, load the main page, then load any sub-pages it references that apply before doing the work.")
+	fmt.Println("Match the current task to a skill description above, load the main page, then load any sub-skills it references that apply before doing the work.")
 	return nil
 }

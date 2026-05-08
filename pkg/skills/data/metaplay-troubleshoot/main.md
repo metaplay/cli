@@ -2,6 +2,8 @@
 
 Diagnostic playbooks for Metaplay tooling and SDK problems.
 
+{{subskills}}
+
 ## Where else to look
 
 - **General "how do I X in Metaplay" questions** (SDK, dashboard, cloud deployments, samples): `metaplay skills get metaplay-docs`.

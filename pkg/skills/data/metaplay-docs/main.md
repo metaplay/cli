@@ -4,6 +4,8 @@ The `metaplay` CLI exposes a remote documentation service designed for AI coding
 
 All commands live under `metaplay llm-docs` and print plain text to stdout.
 
+{{subskills}}
+
 | Command | Use it to... |
 |---|---|
 | `search QUERY --keywords k1,k2,...` | Submit a natural-language question plus pre-extracted keywords and get back a catalog of relevant entry points to follow up on. |

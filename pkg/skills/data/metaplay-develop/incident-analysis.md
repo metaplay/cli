@@ -1,6 +1,9 @@
-# Player incident report analysis
+---
+name: metaplay-develop-incident-analysis
+description: Diagnose an individual player's crash, desync, or network incident from a Metaplay game environment's admin API. Use when the user pastes a dashboard incident URL, asks about "the latest incidents" or "recent incidents", or wants a specific player incident report triaged. The goal is almost always to find and fix the bug in game code that produced the incident — load alongside the parent `metaplay-develop` page for the rules that apply to the fix.
+---
 
-Diagnose an individual player's crash, desync, or network incident from a Metaplay game environment's admin API. Use when the user pastes a dashboard incident URL, asks about "the latest incidents" or "recent incidents", or wants a specific player incident report triaged. The goal is almost always to find and fix the bug in game code that produced the incident — load `metaplay skills get metaplay-develop` for the rules that apply to the fix.
+# Player incident report analysis
 
 ## Environment selection
 

@@ -48,7 +48,7 @@ func ExampleRunInstall() {
 	// wrote metaplay-troubleshoot
 }
 
-// ExampleResolve shows how to fetch a skill or sub-page by address.
+// ExampleResolve shows how to fetch a skill or sub-skill by address.
 func ExampleResolve() {
 	loaded, _ := skills.LoadAll(skills.EmbeddedFS())
 
@@ -59,13 +59,13 @@ func ExampleResolve() {
 	}
 	fmt.Printf("wrapper present: %v\n", len(wrapper) > 0)
 
-	subPage, err := skills.Resolve(loaded, "metaplay-develop/review-models")
+	subSkill, err := skills.Resolve(loaded, "metaplay-develop/review-models")
 	if err != nil {
-		fmt.Println("sub-page:", err)
+		fmt.Println("sub-skill:", err)
 		return
 	}
-	fmt.Printf("sub-page present: %v\n", len(subPage) > 0)
+	fmt.Printf("sub-skill present: %v\n", len(subSkill) > 0)
 	// Output:
 	// wrapper present: true
-	// sub-page present: true
+	// sub-skill present: true
 }

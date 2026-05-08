@@ -1,6 +1,9 @@
-# Models
+---
+name: metaplay-develop-review-models
+description: Authoring patterns and review rules for entity model types — `PlayerModel` (most common), `GuildModel`, and custom multiplayer entity models — with focus on state design, deterministic types, GameTick performance, fast-forward correctness, and sub-models. Covers the full rule checklist (MS1–MS3, etc.) for the models area. Load alongside the parent `metaplay-develop` page for the shared workflow and severity convention.
+---
 
-Authoring patterns and review rules for all entity model types — `PlayerModel` (most common), `GuildModel`, and custom multiplayer entity models — with focus on state design, GameTick performance, and fast-forward correctness. See `metaplay skills get metaplay-develop` for the shared workflow and severity convention.
+# Models
 
 ## Design patterns
 

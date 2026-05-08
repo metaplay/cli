@@ -26,8 +26,8 @@ var skillsCmd = &cobra.Command{
 		files are written into your project (or user home) when you run
 		'metaplay skills install'.
 
-		Sub-pages of a skill are not written to disk — they stay in the CLI
-		and are fetched on demand via 'metaplay skills get <skill>/<page>'.
+		Sub-skills of a skill are not written to disk — they stay in the CLI
+		and are fetched on demand via 'metaplay skills get <skill>/<sub-skill>'.
 	`),
 	Example: renderExample(`
 		# List the skills shipped with this CLI.
@@ -39,7 +39,7 @@ var skillsCmd = &cobra.Command{
 		# Print a skill's main markdown.
 		metaplay skills get metaplay-develop
 
-		# Print a skill sub-page.
+		# Print a sub-skill.
 		metaplay skills get metaplay-develop/review-models
 
 		# Install the wrappers into the current project for Claude Code.
