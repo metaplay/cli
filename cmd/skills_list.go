@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	skillspkg "github.com/metaplay/cli/pkg/skills"
@@ -27,13 +28,15 @@ func init() {
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			List every skill embedded in the CLI binary. Each skill's name and
-			description come from its SKILL.md frontmatter. Use --full to also
-			print the sub-pages addressable via 'metaplay skills get <skill>/<page>'.
+			description come from its SKILL.md frontmatter.
+
+			By default sub-pages are shown after their parent skill (DFS order).
+			Pass --full=false to list only the top-level skills.
 		`),
 	}
 
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagFull, "full", false, "Also list each skill's sub-pages")
+	flags.BoolVar(&o.flagFull, "full", true, "Also list each skill's sub-pages")
 
 	skillsCmd.AddCommand(cmd)
 }
@@ -53,22 +56,20 @@ func (o *skillsListOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	for i, s := range skills {
-		if i > 0 {
-			fmt.Println()
-		}
+	for _, s := range skills {
+		fmt.Println()
 		fmt.Printf("%s\n", styles.RenderSuccess(s.ID))
-		fmt.Printf("  %s\n", truncateForList(s.Frontmatter.Description(), 200))
-		if o.flagFull {
-			pages := s.SubPageNames()
-			if len(pages) == 0 {
-				fmt.Printf("  %s\n", styles.RenderMuted("(no sub-pages)"))
-			} else {
-				fmt.Printf("  %s\n", styles.RenderMuted("sub-pages:"))
-				for _, p := range pages {
-					fmt.Printf("    %s\n", p)
-				}
-			}
+		fmt.Printf("  %s\n", strings.ReplaceAll(s.Frontmatter.Description(), "\n", " "))
+		if !o.flagFull {
+			continue
+		}
+		pages := s.SubPageNames()
+		if len(pages) == 0 {
+			continue
+		}
+		fmt.Printf("  %s\n", styles.RenderMuted("sub-pages:"))
+		for _, p := range pages {
+			fmt.Printf("    %s\n", p)
 		}
 	}
 	return nil

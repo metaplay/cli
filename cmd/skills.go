@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -56,13 +55,4 @@ func printSkillContent(content []byte) {
 	if len(content) == 0 || content[len(content)-1] != '\n' {
 		fmt.Println()
 	}
-}
-
-// truncateForList shortens a string for tabular display.
-func truncateForList(s string, n int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= n {
-		return s
-	}
-	return s[:n-1] + "…"
 }
