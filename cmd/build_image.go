@@ -90,7 +90,7 @@ func init() {
 	buildCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit' [deprecated]); defaults to buildx")
+	flags.StringVar(&o.flagBuildEngine, "engine", "buildx", "Docker build engine to use ('buildx' or 'buildkit' [deprecated])")
 	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64'")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
@@ -301,11 +301,6 @@ func detectEnvVar(keys []string) string {
 
 func resolveBuildEngine(engine string) (string, error) {
 	validBuildEngines := []string{"buildx", "buildkit"}
-
-	// If not specified, default to buildx
-	if engine == "" {
-		return "buildx", nil
-	}
 
 	// Check that the specified engine is valid
 	if slices.Contains(validBuildEngines, engine) {
