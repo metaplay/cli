@@ -664,6 +664,9 @@ func printBitbucketRequirementsBanner() {
 	log.Warn().Msg("  Verify both are set in your pipeline config if the build above")
 	log.Warn().Msgf("  failed with %s", styles.RenderTechnical("--privileged=true is not allowed"))
 	log.Warn().Msg("  or any other 'docker buildx' related error.")
+	log.Warn().Msg("")
+	log.Warn().Msgf("  If you can't update the runtime, fall back to the legacy engine")
+	log.Warn().Msgf("  with %s (deprecated, will be removed).", styles.RenderTechnical("--engine=buildkit"))
 	log.Warn().Msgf("%s", styles.RenderAttention(bar))
 	log.Warn().Msg("")
 }
