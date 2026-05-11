@@ -626,6 +626,9 @@ pipelines:
     # Build and deploy the game server into the '{{.HumanID}}' environment
     build-deploy-server-{{.HumanID}}:
       - step:
+          runtime: # required by Metaplay CLI (v3 provides docker buildx)
+            cloud:
+              version: 3
           size: 2x # must use at least 2x size to have 6GB of memory for Docker
           name: 'Build server and deploy to {{.DisplayName}} ({{.HumanID}})'
           services:
@@ -635,6 +638,8 @@ pipelines:
             - set -eo pipefail
             # Install metaplay CLI
             - bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
+            # Make installed metaplay binary visible on PATH
+            - export PATH="$HOME/.local/bin:$PATH"
             # Login to Metaplay cloud (using machine user with credentials from the METAPLAY_CREDENTIALS secret)
             - metaplay auth machine-login
             # Generate unique image tag
