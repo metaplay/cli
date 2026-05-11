@@ -76,9 +76,6 @@ func init() {
 			# Build docker image with commit ID and build number specified.
 			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
 
-			# Build using docker's BuildKit engine (in case buildx isn't available).
-			metaplay build image mygame:364cff09 --engine=buildkit
-
 			# Build an image to be run on an arm64 machine.
 			metaplay build image mygame:364cff09 --architecture=arm64
 
@@ -93,7 +90,7 @@ func init() {
 	buildCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
+	flags.StringVar(&o.flagBuildEngine, "engine", "buildx", "Docker build engine to use ('buildx' or 'buildkit' [deprecated])")
 	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64'")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
@@ -200,7 +197,11 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	buildEngine, err := resolveBuildEngine(o.flagBuildEngine)
 	if err != nil {
 		return clierrors.Wrap(err, "Invalid Docker build engine").
-			WithSuggestion("Use --engine=buildx or --engine=buildkit")
+			WithSuggestion("Use --engine=buildx (buildkit is deprecated)")
+	}
+
+	if o.flagBuildEngine == "buildkit" {
+		log.Warn().Msgf("%s --engine=buildkit is deprecated and will be removed in a future release. Migrate to buildx (the default).", styles.RenderWarning("Deprecation:"))
 	}
 
 	// Check that the build engine is available.
@@ -301,16 +302,7 @@ func detectEnvVar(keys []string) string {
 func resolveBuildEngine(engine string) (string, error) {
 	validBuildEngines := []string{"buildx", "buildkit"}
 
-	// If not specified, auto-detect
-	if engine == "" {
-		// Bitbucket doesn't support buildx, fall back to buildkit
-		if _, exists := os.LookupEnv("BITBUCKET_PIPELINE_UUID"); exists {
-			return "buildkit", nil
-		}
-		return "buildx", nil
-	}
-
-	// Check validity if specified
+	// Check that the specified engine is valid
 	if slices.Contains(validBuildEngines, engine) {
 		return engine, nil
 	}
@@ -632,9 +624,53 @@ func buildDockerImage(params buildDockerImageParams) error {
 
 	// Execute the docker build
 	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
+		printBitbucketRequirementsBanner()
 		return clierrors.Wrap(err, "Docker build failed").
 			WithSuggestion("Check the build output above for details")
 	}
 
 	return nil
+}
+
+// printBitbucketRequirementsBanner prints a prominent banner reminding the user
+// of Metaplay's Bitbucket Pipelines requirements (runtime v3, default-image:5).
+// These cannot be detected from inside the build, so we surface them on failure
+// as a hint about the most likely cause.
+func printBitbucketRequirementsBanner() {
+	// BITBUCKET_PIPELINE_UUID can be empty/missing on some runs — check several
+	// well-known Bitbucket env vars to reliably detect Pipelines.
+	bbVars := []string{"BITBUCKET_BUILD_NUMBER", "BITBUCKET_COMMIT", "BITBUCKET_REPO_SLUG", "BITBUCKET_PIPELINE_UUID"}
+	inBitbucket := false
+	for _, v := range bbVars {
+		if val, ok := os.LookupEnv(v); ok && val != "" {
+			inBitbucket = true
+			break
+		}
+	}
+	if !inBitbucket {
+		return
+	}
+	bar := strings.Repeat("─", 70)
+	log.Warn().Msg("")
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msgf("  %s", styles.RenderAttention("Bitbucket Pipelines: required configuration"))
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msg("  This build is running in Bitbucket Pipelines. The Metaplay CLI")
+	log.Warn().Msg("  requires the following in your bitbucket-pipelines.yml:")
+	log.Warn().Msg("")
+	log.Warn().Msgf("    - %s   (per-step, required for docker buildx)", styles.RenderTechnical("runtime: { cloud: { version: 3 } }"))
+	log.Warn().Msgf("    - image: %s", styles.RenderTechnical("atlassian/default-image:5"))
+	log.Warn().Msg("")
+	log.Warn().Msg("  To regenerate your project's bitbucket-pipelines.yml with the")
+	log.Warn().Msg("  correct config, run:")
+	log.Warn().Msgf("    %s", styles.RenderTechnical("metaplay init ci --provider=bitbucket"))
+	log.Warn().Msg("")
+	log.Warn().Msg("  Verify both are set in your pipeline config if the build above")
+	log.Warn().Msgf("  failed with %s", styles.RenderTechnical("--privileged=true is not allowed"))
+	log.Warn().Msg("  or any other 'docker buildx' related error.")
+	log.Warn().Msg("")
+	log.Warn().Msgf("  If you can't update the runtime, fall back to the legacy engine")
+	log.Warn().Msgf("  with %s (deprecated, will be removed).", styles.RenderTechnical("--engine=buildkit"))
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msg("")
 }
