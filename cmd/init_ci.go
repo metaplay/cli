@@ -611,14 +611,6 @@ clone:
   lfs: true
   depth: 5
 
-definitions:
-  services:
-    # Give docker some extra memory to cope with the builds
-    # Be aware: if Docker runs out of memory in Bitbucket Pipelines, the CI job just hangs!
-    docker-6gb:
-      type: docker
-      memory: 6144
-
 pipelines:
   # TODO: You should customize this to fit your branching strategy, now needs to be triggered manually
   #       See: https://support.atlassian.com/bitbucket-cloud/docs/bitbucket-pipelines-configuration-reference/
@@ -630,10 +622,10 @@ pipelines:
           runtime:
             cloud:
               version: 3
-          size: 2x # must use at least 2x size to have 6GB of memory for Docker
+          size: 2x # 8GB required for the server builds
           name: 'Build server and deploy to {{.DisplayName}} ({{.HumanID}})'
           services:
-            - docker-6gb
+            - docker
           script:
             # Exit on failures
             - set -eo pipefail
