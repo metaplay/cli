@@ -636,10 +636,9 @@ pipelines:
           script:
             # Exit on failures
             - set -eo pipefail
-            # Install metaplay CLI
-            - bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
-            # Make installed metaplay binary visible on PATH
+            # Install metaplay CLI & ensure it's in path
             - export PATH="$HOME/.local/bin:$PATH"
+            - bash <(curl -sSfL --retry 10 --retry-all-errors --retry-max-time 60 https://metaplay.github.io/cli/install.sh)
             # Login to Metaplay cloud (using machine user with credentials from the METAPLAY_CREDENTIALS secret)
             - metaplay auth machine-login
             # Generate unique image tag
