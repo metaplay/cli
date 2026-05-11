@@ -316,7 +316,13 @@ func resolveBuildEngine(engine string) (string, error) {
 
 func checkCommand(command string, args ...string) error {
 	cmd := exec.Command(command, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		trimmed := strings.TrimSpace(stderr.String())
+		if trimmed != "" {
+			return fmt.Errorf("%v: %s", err, truncateForLog(trimmed, 500))
+		}
 		return fmt.Errorf("command failed: %v", err)
 	}
 	return nil
