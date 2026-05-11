@@ -302,10 +302,12 @@ func detectEnvVar(keys []string) string {
 func resolveBuildEngine(engine string) (string, error) {
 	validBuildEngines := []string{"buildx", "buildkit"}
 
+	// If not specified, default to buildx
 	if engine == "" {
 		return "buildx", nil
 	}
 
+	// Check validity if specified
 	if slices.Contains(validBuildEngines, engine) {
 		return engine, nil
 	}
