@@ -76,9 +76,6 @@ func init() {
 			# Build docker image with commit ID and build number specified.
 			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
 
-			# Build using docker's BuildKit engine (deprecated, use buildx instead).
-			metaplay build image mygame:364cff09 --engine=buildkit
-
 			# Build an image to be run on an arm64 machine.
 			metaplay build image mygame:364cff09 --architecture=arm64
 
