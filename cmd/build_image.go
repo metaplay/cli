@@ -452,18 +452,33 @@ type dockerVersionInfo struct {
 	} `json:"Server"`
 }
 
+// truncateForLog shortens s to at most n runes, adding an ellipsis suffix when truncated.
+func truncateForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
+}
+
 // Check Docker version and return parsed server version
 func checkDockerVersion() (*dockerVersionInfo, bool, error) {
 	// Get Docker version in JSON format to access server version
 	cmd := exec.Command("docker", "version", "--format", "json")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
+		log.Debug().Err(err).Str("stderr", stderr.String()).Msgf("'docker version --format json' failed")
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
 	}
 
 	var versionInfo dockerVersionInfo
 	if err := json.Unmarshal(output, &versionInfo); err != nil {
-		log.Debug().Err(err).Msgf("Could not parse Docker version JSON output")
+		log.Debug().
+			Err(err).
+			Str("stdout", truncateForLog(string(output), 500)).
+			Str("stderr", truncateForLog(stderr.String(), 500)).
+			Msgf("Could not parse Docker version JSON output")
 		return nil, false, nil // Don't fail the build if we can't parse the version
 	}
 
