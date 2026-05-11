@@ -235,12 +235,16 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		platforms = append(platforms, fmt.Sprintf("linux/%s", arch))
 	}
 
-	// Resolve Docker version badge and show update recommendation
+	// Resolve Docker version string and badge for the build summary.
+	dockerVersionStr := "unknown"
 	dockerVersionBadge := ""
 	if dockerVersionInfo == nil {
 		dockerVersionBadge = styles.RenderWarning("[unable to check version]")
-	} else if dockerUpgradeRecommended {
-		dockerVersionBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+	} else {
+		dockerVersionStr = dockerVersionInfo.Server.Version
+		if dockerUpgradeRecommended {
+			dockerVersionBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+		}
 	}
 
 	// Print build info.
@@ -250,7 +254,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
 	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
-	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionInfo.Server.Version), dockerVersionBadge)
+	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
 	// Build the Docker image using the extracted function
@@ -469,7 +473,10 @@ func truncateForLog(s string, n int) string {
 // Check Docker version and return parsed server version
 func checkDockerVersion() (*dockerVersionInfo, bool, error) {
 	// Get Docker version in JSON format to access server version
-	cmd := exec.Command("docker", "version", "--format", "json")
+	// Use the explicit Go template syntax instead of the `json` shorthand —
+	// the shorthand was added in Docker CLI 22.06 and older clients render
+	// it as the literal string "json".
+	cmd := exec.Command("docker", "version", "--format", "{{json .}}")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
