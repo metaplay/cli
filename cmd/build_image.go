@@ -307,7 +307,7 @@ func resolveBuildEngine(engine string) (string, error) {
 		return "buildx", nil
 	}
 
-	// Check validity if specified
+	// Check that the specified engine is valid
 	if slices.Contains(validBuildEngines, engine) {
 		return engine, nil
 	}
