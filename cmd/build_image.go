@@ -664,7 +664,7 @@ func printBitbucketRequirementsBanner() {
 	log.Warn().Msg("  This build is running in Bitbucket Pipelines. The Metaplay CLI")
 	log.Warn().Msg("  requires the following in your bitbucket-pipelines.yml:")
 	log.Warn().Msg("")
-	log.Warn().Msgf("    - %s   (per-step, enables docker buildx)", styles.RenderTechnical("runtime: { cloud: { version: 3 } }"))
+	log.Warn().Msgf("    - %s   (per-step, required for docker buildx)", styles.RenderTechnical("runtime: { cloud: { version: 3 } }"))
 	log.Warn().Msgf("    - image: %s", styles.RenderTechnical("atlassian/default-image:5"))
 	log.Warn().Msg("")
 	log.Warn().Msg("  These cannot be auto-detected. If the failure above mentions")

@@ -626,7 +626,7 @@ pipelines:
     # Build and deploy the game server into the '{{.HumanID}}' environment
     build-deploy-server-{{.HumanID}}:
       - step:
-          runtime: # required by Metaplay CLI (v3 provides docker buildx)
+          runtime: # required for docker buildx (used by Metaplay CLI image build)
             cloud:
               version: 3
           size: 2x # must use at least 2x size to have 6GB of memory for Docker
