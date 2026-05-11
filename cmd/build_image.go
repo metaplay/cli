@@ -664,9 +664,9 @@ func printBitbucketRequirementsBanner() {
 	log.Warn().Msgf("    - %s   (per-step, required for docker buildx)", styles.RenderTechnical("runtime: { cloud: { version: 3 } }"))
 	log.Warn().Msgf("    - image: %s", styles.RenderTechnical("atlassian/default-image:5"))
 	log.Warn().Msg("")
-	log.Warn().Msg("  These cannot be auto-detected. If the failure above mentions")
-	log.Warn().Msgf("  %s or 'docker buildx' missing/broken,", styles.RenderTechnical("--privileged=true is not allowed"))
-	log.Warn().Msg("  the runtime/image versions are the most likely cause.")
+	log.Warn().Msg("  Verify both are set in your pipeline config if the build above")
+	log.Warn().Msgf("  failed with %s", styles.RenderTechnical("--privileged=true is not allowed"))
+	log.Warn().Msg("  or any other 'docker buildx' related error.")
 	log.Warn().Msgf("%s", styles.RenderAttention(bar))
 	log.Warn().Msg("")
 }
