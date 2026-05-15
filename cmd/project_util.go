@@ -297,11 +297,40 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 				WithSuggestion("If the name is a custom environment alias, the CLI must be invoked from the folder (or a subfolder) where metaplay-project.yaml is located. Otherwise, use the full environment ID (e.g., 'lovely-wombats-build-nimbly').")
 		}
 
-		// Try to resolve the environment from the portal by its human ID.
-		var err error
-		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
+		// Resolve the environment from the portal by its human ID. The same human ID can
+		// legitimately exist on multiple stacks (self-hosted environments are unique per
+		// stack), and without a metaplay-project.yaml we have no stack domain to filter by,
+		// so disambiguate interactively when the portal returns more than one match.
+		environments, err := portalClient.FetchEnvironmentsByHumanID(environment, "")
 		if err != nil {
 			return nil, nil, err
+		}
+
+		switch len(environments) {
+		case 0:
+			return nil, nil, clierrors.Newf("Environment '%s' not found", environment).
+				WithSuggestion("Check available environments at https://portal.metaplay.dev")
+		case 1:
+			portalEnv = &environments[0]
+		default:
+			if !tui.IsInteractiveMode() {
+				return nil, nil, clierrors.Newf("Multiple environments match '%s'", environment).
+					WithDetails(fmt.Sprintf("Found %d environments across different stacks", len(environments))).
+					WithSuggestion("Run in interactive mode to choose, or invoke the CLI from a project directory whose metaplay-project.yaml pins the stack domain")
+			}
+
+			portalEnv, err = tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
+				"Select Target Environment",
+				environments,
+				func(env *portalapi.EnvironmentInfo) (string, string) {
+					return env.Name, fmt.Sprintf("[%s on %s]", env.HumanID, env.StackDomain)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s on %s]", portalEnv.HumanID, portalEnv.StackDomain)))
 		}
 	}
 
