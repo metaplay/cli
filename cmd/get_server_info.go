@@ -188,7 +188,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	var portalInfo *portalapi.EnvironmentInfo
 	if authProviderName == "metaplay" {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
-		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			log.Debug().Err(err).Msg("Failed to fetch portal environment info")
 		}
