@@ -31,7 +31,7 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "dashboard [flags]",
 		Aliases: []string{"dash"},
-		Short:   "Initializes custom LiveOps Dashboard for the project",
+		Short:   "Initialize a custom LiveOps Dashboard for the project",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
 			Setup the development environment for a custom LiveOps Dashboard in your project.
