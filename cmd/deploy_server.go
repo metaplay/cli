@@ -304,7 +304,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
 
 		// Fetch info from the portal.
-		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			return err
 		}
