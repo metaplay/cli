@@ -245,13 +245,32 @@ func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo
 	return environmentInfos, nil
 }
 
-// FetchEnvironmentInfoByHumanID fetches information about an environment using its human ID.
-func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo, error) {
+// FetchEnvironmentsByHumanID fetches all environments visible to the caller that match the given
+// human ID, optionally narrowed to a specific stack domain. Self-hosted environments are only
+// unique by (project, stack domain), so the same human ID can legitimately exist on multiple
+// stacks; passing stackDomain narrows the result to a single row. When stackDomain is empty,
+// the portal applies no stack filter and the response may contain multiple matches.
+func (c *Client) FetchEnvironmentsByHumanID(humanID, stackDomain string) ([]EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?human_id=%s", humanID)
-	log.Debug().Msgf("Fetch environment by human ID from %s%s", c.httpClient.BaseURL, url)
+	if stackDomain != "" {
+		url += fmt.Sprintf("&stack_domain=%s", stackDomain)
+	}
+	log.Debug().Msgf("Fetch environments by human ID from %s%s", c.httpClient.BaseURL, url)
 	envInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)
+	}
+	return envInfos, nil
+}
+
+// FetchEnvironmentInfoByHumanID resolves a single environment by its human ID. When stackDomain
+// is provided, the lookup is unambiguous and at most one matching row exists. When stackDomain
+// is empty and the human ID resolves to more than one environment (possible for self-hosted
+// environments across stacks), the call fails with guidance to disambiguate.
+func (c *Client) FetchEnvironmentInfoByHumanID(humanID, stackDomain string) (*EnvironmentInfo, error) {
+	envInfos, err := c.FetchEnvironmentsByHumanID(humanID, stackDomain)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(envInfos) == 0 {
@@ -260,7 +279,13 @@ func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo
 	}
 
 	if len(envInfos) > 1 {
-		return nil, clierrors.Newf("Multiple environments match '%s'", humanID).
+		if stackDomain == "" {
+			return nil, clierrors.Newf("Multiple environments match '%s'", humanID).
+				WithDetails("This human ID exists on more than one stack — typically a self-hosted environment shared across stacks.").
+				WithSuggestion("Set 'stackDomain' for the environment in metaplay-project.yaml so the CLI can resolve it unambiguously")
+		}
+		// With stackDomain set, more than one row is a true invariant violation.
+		return nil, clierrors.Newf("Multiple environments match '%s' on stack '%s'", humanID, stackDomain).
 			WithSuggestion("Contact support — this is unexpected and may indicate a configuration issue")
 	}
 
