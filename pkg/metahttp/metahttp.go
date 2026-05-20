@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -89,27 +90,54 @@ func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	}
 }
 
-// Download a file from the specified URL to the specified file path.
-// Note: The file gets created even if the request fails.
-func Download(c *Client, url string, filePath string) (*resty.Response, error) {
-	// Perform the request: download directly to a file.
-	response, err := c.Resty.R().SetOutput(filePath).Get(url)
+// Download a file from the specified URL to the specified file path. If
+// onProgress is non-nil it is called periodically with the number of bytes
+// downloaded so far and the total size (0 if unknown).
+//
+// Retries transient failures (connection errors before the first byte, or
+// stream interruptions mid-body such as unexpected EOF) with exponential
+// backoff. Local I/O failures and HTTP error statuses are not retried.
+func Download(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+	const maxAttempts = 4
+	backoff := 1 * time.Second
 
-	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
+	var resp *resty.Response
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var streamErr error
+		resp, streamErr, lastErr = downloadOnce(c, url, filePath, onProgress)
+
+		// Non-retryable: success, HTTP error status, or local I/O failure.
+		if streamErr == nil {
+			return resp, lastErr
+		}
+
+		// Transient streaming/network error — retry unless we're out of attempts.
+		if attempt == maxAttempts {
+			return resp, fmt.Errorf("download from %s%s failed after %d attempts: %w", c.BaseURL, url, maxAttempts, streamErr)
+		}
+
+		log.Warn().Msgf("Download from %s%s interrupted (attempt %d/%d), retrying in %v: %v", c.BaseURL, url, attempt, maxAttempts, backoff, streamErr)
+		time.Sleep(backoff)
+		backoff *= 2
 	}
 
-	return response, nil
+	return resp, lastErr
 }
 
-// DownloadWithProgress downloads a file from the specified URL to the specified
-// file path, calling onProgress periodically with the number of bytes downloaded
-// and the total size (0 if unknown).
-func DownloadWithProgress(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+// downloadOnce performs a single download attempt. Returns
+// (resp, streamErr, terminalErr):
+//   - streamErr != nil indicates a transient network/streaming failure the
+//     caller should retry. resp may be nil.
+//   - terminalErr is the final error to return to the caller and is never
+//     retried (covers local I/O failures; nil on success and on HTTP error
+//     statuses, where the caller inspects resp.StatusCode()).
+func downloadOnce(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error, error) {
 	// Use SetDoNotParseResponse to get raw response body for streaming.
 	resp, err := c.Resty.R().SetDoNotParseResponse(true).Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
+		return nil, fmt.Errorf("failed to reach %s%s: %w", c.BaseURL, url, err), nil
 	}
 
 	rawBody := resp.RawBody()
@@ -118,13 +146,13 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	// On HTTP error, return the response without a Go error so the caller can
 	// inspect resp.StatusCode() and produce a domain-specific error message.
 	if resp.IsError() {
-		return resp, nil
+		return resp, nil, nil
 	}
 
-	// Create the output file.
+	// Create the output file (local error — not retryable).
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		return resp, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
+		return resp, nil, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
 	}
 
 	// Determine total size from Content-Length header.
@@ -143,11 +171,12 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	_, copyErr := io.Copy(outFile, pr)
 	outFile.Close()
 	if copyErr != nil {
+		// Partial file is unusable; remove so the next attempt starts fresh.
 		os.Remove(filePath)
-		return resp, fmt.Errorf("Failed to write downloaded file %s: %w", filePath, copyErr)
+		return resp, fmt.Errorf("failed to write downloaded file %s: %w", filePath, copyErr), nil
 	}
 
-	return resp, nil
+	return resp, nil, nil
 }
 
 // progressReader wraps an io.Reader and reports progress via a callback.
