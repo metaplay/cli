@@ -460,7 +460,7 @@ func downloadSdkZipOnly(tokenSet *auth.TokenSet, versionID string) (string, erro
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
 
-	sdkZipPath, err := portalClient.DownloadSdkByVersionID(tmpDir, versionID)
+	sdkZipPath, err := portalClient.DownloadSdkByVersionID(tmpDir, versionID, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to download SDK: %w", err)
 	}

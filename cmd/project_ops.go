@@ -202,7 +202,7 @@ func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.
 
 	err := tui.RunWithProgressBar(label, func(update func(current, total int64)) error {
 		var dlErr error
-		sdkZipPath, dlErr = portalClient.DownloadSdkByVersionIDWithProgress(tmpDir, sdkVersionInfo.ID, update)
+		sdkZipPath, dlErr = portalClient.DownloadSdkByVersionID(tmpDir, sdkVersionInfo.ID, update)
 		return dlErr
 	})
 	if err != nil {
@@ -224,7 +224,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	var err error
 
 	// Download the specific version
-	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID)
+	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}

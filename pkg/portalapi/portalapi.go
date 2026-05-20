@@ -125,8 +125,10 @@ func (c *Client) AgreeToContract(contractID string) error {
 	return nil
 }
 
-// DownloadSdkByVersionID downloads the SDK with the specified version ID to the target directory.
-func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, error) {
+// DownloadSdkByVersionID downloads the SDK with the specified version ID to
+// the target directory. If onProgress is non-nil it is called periodically
+// with (bytesDownloaded, totalBytes).
+func (c *Client) DownloadSdkByVersionID(targetDir, versionID string, onProgress func(downloaded, total int64)) (string, error) {
 	if versionID == "" {
 		return "", fmt.Errorf("version ID is required")
 	}
@@ -135,38 +137,7 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionID)
 	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
 	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
-	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to download SDK: %w", err)
-	}
-
-	// Handle server errors.
-	if resp.IsError() {
-		os.Remove(tmpSdkZipPath)
-		if resp.StatusCode() == 403 {
-			return "", clierrors.New("SDK download requires accepting the terms and conditions").
-				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
-		}
-		return "", clierrors.Newf("Failed to download the Metaplay SDK (status %d)", resp.StatusCode()).
-			WithSuggestion("Check your network connection and try again")
-	}
-
-	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
-	return tmpSdkZipPath, nil
-}
-
-// DownloadSdkByVersionIDWithProgress downloads the SDK with progress reporting.
-// The onProgress callback receives (bytesDownloaded, totalBytes).
-func (c *Client) DownloadSdkByVersionIDWithProgress(targetDir, versionID string, onProgress func(downloaded, total int64)) (string, error) {
-	if versionID == "" {
-		return "", fmt.Errorf("version ID is required")
-	}
-
-	// Download the SDK to a temp file.
-	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionID)
-	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
-	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
-	resp, err := metahttp.DownloadWithProgress(c.httpClient, path, tmpSdkZipPath, onProgress)
+	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath, onProgress)
 	if err != nil {
 		return "", fmt.Errorf("failed to download SDK: %w", err)
 	}
@@ -440,5 +411,5 @@ func (c *Client) DownloadLatestSdk(targetDir string) (string, error) {
 	}
 
 	// Download the SDK
-	return c.DownloadSdkByVersionID(targetDir, latestSdk.ID)
+	return c.DownloadSdkByVersionID(targetDir, latestSdk.ID, nil)
 }
