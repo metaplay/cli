@@ -77,14 +77,15 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderTitle("Run Game Server Locally"))
 	log.Info().Msg("")
 
+	ctx := cmd.Context()
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
 	// Resolve server path.
 	serverPath := project.GetServerDir()
-	ctx := cmd.Context()
 
 	if o.flagWatch {
 		// Run with file watching (auto-restart on code changes).

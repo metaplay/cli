@@ -53,6 +53,8 @@ func init() {
 func (o *testSystemOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
 
 func (o *testSystemOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Resolve project
 	project, err := resolveProject()
 	if err != nil {
@@ -64,7 +66,7 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check for .NET SDK installation and required version (based on SDK version)
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
@@ -80,14 +82,14 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 
 	// Install Playwright browsers.
 	log.Info().Msg(styles.RenderBright("🔷 Install Playwright browsers"))
-	if err := execChildTask(sdkSystemTestsDir, "playwright", []string{"install"}); err != nil {
+	if err := execChildTask(ctx, sdkSystemTestsDir, "playwright", []string{"install"}); err != nil {
 		return clierrors.Wrapf(err, "Playwright install failed in %s", sdkSystemTestsDir)
 	}
 
 	// SDK core system tests
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderBright("🔷 Run tests in MetaplaySDK/Backend/System.Tests"))
-	if err := execChildTask(sdkSystemTestsDir, "dotnet", []string{"test"}); err != nil {
+	if err := execChildTask(ctx, sdkSystemTestsDir, "dotnet", []string{"test"}); err != nil {
 		return clierrors.Wrapf(err, "SDK system tests failed in %s", sdkSystemTestsDir)
 	}
 
@@ -97,7 +99,7 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	userSystemTestsDir := filepath.Join(userBackendRootDir, "System.Tests")
 	if st, err := os.Stat(userSystemTestsDir); err == nil && st.IsDir() {
 		log.Info().Msg(styles.RenderBright("🔷 Run tests in Backend/System.Tests"))
-		if err := execChildTask(userSystemTestsDir, "dotnet", []string{"test"}); err != nil {
+		if err := execChildTask(ctx, userSystemTestsDir, "dotnet", []string{"test"}); err != nil {
 			return clierrors.Wrapf(err, "Project system tests failed in %s", userSystemTestsDir)
 		}
 	} else {

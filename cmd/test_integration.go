@@ -141,6 +141,7 @@ func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
 	// Resolve project configuration
 	project, err := resolveProject()
 	if err != nil {
@@ -169,24 +170,24 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Ensure Docker is available (binary + daemon)
-	if err := checkDockerAvailable(); err != nil {
+	if err := checkDockerAvailable(ctx); err != nil {
 		return err
 	}
 
 	// Check Docker version: warn if using old versions
-	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion()
+	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion(ctx)
 	if err != nil {
 		log.Warn().Msgf("Warning: Failed to check Docker version: %v", err)
 	}
 
 	// Resolve docker build engine for integration tests
 	buildEngine := "buildkit"
-	if dockerSupportsBuildx() {
+	if dockerSupportsBuildx(ctx) {
 		buildEngine = "buildx"
 	}
 
 	// Check that the build engine is available
-	err = checkBuildEngineAvailable(buildEngine)
+	err = checkBuildEngineAvailable(ctx, buildEngine)
 	if err != nil {
 		return err
 	}
@@ -220,13 +221,25 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to create output directory %s: %w", o.flagOutputDir, err)
 	}
 
-	// Create a context with the configured timeout
-	ctx, cancel := context.WithTimeout(context.Background(), o.flagTimeout)
+	// Build the container images first (not subject to --timeout but still
+	// cancelable via Ctrl+C through cmd.Context()).
+	if !o.flagSkipBuild {
+		if err := o.buildDockerImages(ctx, project, serverImage, pwTsImage, pwNetImage, integrationTestsConfig); err != nil {
+			return fmt.Errorf("failed to build container images: %w", err)
+		}
+	} else {
+		log.Info().Msg("")
+		log.Info().Msg("Skipping container image build step due to --skip-build")
+	}
+
+	// Apply --timeout to the test phase, derived from cmd.Context() so Ctrl+C
+	// still cancels.
+	testRunCtx, cancel := context.WithTimeout(ctx, o.flagTimeout)
 	defer cancel()
 
 	// Build runtime context for test functions.
 	testCtx := integrationTestCtx{
-		ctx:                ctx,
+		ctx:                testRunCtx,
 		opts:               o,
 		project:            project,
 		serverImage:        serverImage,
@@ -235,20 +248,10 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		config:             integrationTestsConfig,
 	}
 
-	// Build the container images first (not subject to --timeout).
-	if !o.flagSkipBuild {
-		if err := o.buildDockerImages(project, serverImage, pwTsImage, pwNetImage, integrationTestsConfig); err != nil {
-			return fmt.Errorf("failed to build container images: %w", err)
-		}
-	} else {
-		log.Info().Msg("")
-		log.Info().Msg("Skipping container image build step due to --skip-build")
-	}
-
 	// Run all the active tests.
 	for _, t := range tests {
 		// Check if the timeout has been reached
-		if ctx.Err() != nil {
+		if testRunCtx.Err() != nil {
 			return fmt.Errorf("test run timed out after %s", o.flagTimeout)
 		}
 
@@ -257,7 +260,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 
 		runFn := t.run
-		if err := o.runTestCase(ctx, project, serverImage, integrationTestsConfig, t.displayName, func(server *testutil.BackgroundGameServer) error {
+		if err := o.runTestCase(testRunCtx, project, serverImage, integrationTestsConfig, t.displayName, func(server *testutil.BackgroundGameServer) error {
 			return runFn(testCtx, server)
 		}); err != nil {
 			return fmt.Errorf("test '%s' failed: %w", t.displayName, err)
@@ -537,11 +540,11 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 // the server image, and additional testing images for Playwright.
 // Note: Docker builds are not subject to the --timeout flag as cancelling them mid-build
 // is complex and unreliable. Builds are typically fast when cached.
-func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProject, serverImage, pwTsImage, pwNetImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig) error {
+func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *metaproj.MetaplayProject, serverImage, pwTsImage, pwNetImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig) error {
 	// Determine build engine
 	// \todo allow specifying this with a flag?
 	buildEngine := "buildkit"
-	if dockerSupportsBuildx() {
+	if dockerSupportsBuildx(ctx) {
 		buildEngine = "buildx"
 	}
 
@@ -566,7 +569,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	log.Info().Msg(styles.RenderBright("🔷 Build server image"))
 	serverParams := commonParams
 	serverParams.imageName = serverImage
-	if err := buildDockerImage(serverParams); err != nil {
+	if err := buildDockerImage(ctx,serverParams); err != nil {
 		return fmt.Errorf("failed to build server image: %w", err)
 	}
 
@@ -576,7 +579,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	pwTsParams := commonParams
 	pwTsParams.imageName = pwTsImage
 	pwTsParams.target = "playwright-ts-tests"
-	if err := buildDockerImage(pwTsParams); err != nil {
+	if err := buildDockerImage(ctx,pwTsParams); err != nil {
 		return fmt.Errorf("failed to build playwright-ts image: %w", err)
 	}
 
@@ -586,7 +589,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	pwNetParams := commonParams
 	pwNetParams.imageName = pwNetImage
 	pwNetParams.target = "playwright-net-tests"
-	if err := buildDockerImage(pwNetParams); err != nil {
+	if err := buildDockerImage(ctx,pwNetParams); err != nil {
 		return fmt.Errorf("failed to build playwright-net image: %w", err)
 	}
 
@@ -594,9 +597,12 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 }
 
 // dockerSupportsBuildx returns true if docker buildx is available.
-func dockerSupportsBuildx() bool {
+func dockerSupportsBuildx(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	// Try `docker buildx version`
-	cmd := exec.Command("docker", "buildx", "version")
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "version")
 	if err := cmd.Run(); err != nil {
 		return false
 	}

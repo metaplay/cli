@@ -73,13 +73,20 @@ Visit: https://dotnet.microsoft.com/download for instructions specific to your o
 
 // Checks if .NET SDK is installed and check that it is recent enough for the SDK
 // version used.
-func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
+func checkDotnetSdkVersion(ctx context.Context, requiredDotnetVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Note: This gets the SDK version, not runtime version (eg, 8.0.400)
-	cmd := exec.Command("dotnet", "--version")
+	cmd := exec.CommandContext(ctx, "dotnet", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return clierrors.New(".NET SDK is not installed or not in PATH").
 			WithSuggestion(getDotnetInstallInstructions())
 	}
@@ -105,14 +112,22 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 	return nil
 }
 
-func execChildTask(workingDir string, binary string, args []string) error {
-	cmd := exec.Command(binary, args...)
+func execChildTask(ctx context.Context, workingDir string, binary string, args []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workingDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("%s$ %s %s", workingDir, binary, strings.Join(args, " "))))
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start the binary: %w", err)
+	}
+	defer killOnExit(cmd)()
+	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("failed to build the project: %w", err)
 	}
 

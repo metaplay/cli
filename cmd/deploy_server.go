@@ -133,7 +133,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
-	err = checkDockerAvailable()
+	err = checkDockerAvailable(cmd.Context())
 	if err != nil {
 		return err
 	}

@@ -101,14 +101,15 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Flags to run against environment %s: %v", o.flagEnvironment, targetEnvFlags)
 	}
 
+	ctx := cmd.Context()
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
 	// Resolve botclient path.
 	botClientPath := project.GetBotClientDir()
-	ctx := cmd.Context()
 
 	// Build the BotClient project
 	if err := execChildInteractive(ctx, botClientPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
