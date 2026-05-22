@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/hashicorp/go-version"
@@ -19,6 +20,18 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
+
+// SignaledError indicates a child process exited after a forwarded
+// SIGINT/SIGTERM (or was killed by an uncaught signal). It renders
+// identically to the underlying error — callers that want to tolerate
+// Ctrl+C detect it with errors.As.
+type SignaledError struct {
+	Signal os.Signal
+	Err    error
+}
+
+func (e *SignaledError) Error() string { return e.Err.Error() }
+func (e *SignaledError) Unwrap() error { return e.Err }
 
 // Environment variables to pass to all dotnet commands.
 var commonDotnetEnvVars = []string{
@@ -121,18 +134,33 @@ func execChildInteractive(workingDir string, binary string, args []string, extra
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
 
-	// Create a channel to forward signals to the subprocess
+	// Create a channel to forward signals to the subprocess. Track whether we
+	// forwarded one so we can mark the resulting error as signal-induced; this
+	// works on Windows too (where ExitCode() != -1 for Ctrl+C).
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	var (
+		mu           sync.Mutex
+		forwardedSig os.Signal
+	)
+
+	defer func() {
+		signal.Stop(signalChan)
+		close(signalChan)
+	}()
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start the binary: %w", err)
 	}
 
-	// Goroutine to forward signals to the subprocess
+	// Goroutine to forward signals to the subprocess. Exits when signalChan is closed.
 	go func() {
 		for sig := range signalChan {
+			mu.Lock()
+			forwardedSig = sig
+			mu.Unlock()
 			if cmd.Process != nil {
 				_ = cmd.Process.Signal(sig)
 			}
@@ -140,12 +168,27 @@ func execChildInteractive(workingDir string, binary string, args []string, extra
 	}()
 
 	// Wait for the subprocess to complete
-	if err := cmd.Wait(); err != nil {
-		// If the process was terminated by a signal, exit cleanly
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("binary exited with error: %w", err)
-		}
+	err := cmd.Wait()
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	wrapped := fmt.Errorf("binary exited with error: %w", err)
+
+	mu.Lock()
+	sig := forwardedSig
+	mu.Unlock()
+
+	// On Unix, ExitCode() == -1 indicates the child was killed by a signal.
+	// On Windows, that signal won't be observable that way, so we also fall
+	// back to whether we forwarded one ourselves.
+	killedBySignal := sig != nil
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
+		killedBySignal = true
+	}
+
+	if killedBySignal {
+		return &SignaledError{Signal: sig, Err: wrapped}
+	}
+	return wrapped
 }

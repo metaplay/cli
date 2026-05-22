@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -361,6 +362,14 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
+			// A child process killed by a forwarded Ctrl+C (or SIGTERM) is a
+			// deliberate interrupt, not a failure. Exit silently with the
+			// POSIX SIGINT convention (128 + 2) without printing misleading
+			// error guidance.
+			var sigErr *SignaledError
+			if errors.As(err, &sigErr) {
+				os.Exit(130)
+			}
 			// Only show usage for explicit usage errors from Run()
 			if clierrors.IsUsageError(err) {
 				stderrLogger.Info().Msgf("%s", cmd.UsageString())
