@@ -349,6 +349,9 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
+			if wasInterrupted(cmd, err) {
+				os.Exit(130)
+			}
 			// Show usage help for Prepare errors that are either explicit usage errors
 			// or plain Go errors (which are assumed to be usage errors since Prepare
 			// validates arguments). CLIErrors with ExitRuntime skip usage text.
@@ -362,12 +365,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
-			// A child process killed by a forwarded Ctrl+C (or SIGTERM) is a
-			// deliberate interrupt, not a failure. Exit silently with the
-			// POSIX SIGINT convention (128 + 2) without printing misleading
-			// error guidance.
-			var sigErr *SignaledError
-			if errors.As(err, &sigErr) {
+			if wasInterrupted(cmd, err) {
 				os.Exit(130)
 			}
 			// Only show usage for explicit usage errors from Run()
@@ -378,6 +376,31 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 			os.Exit(clierrors.GetExitCode(err))
 		}
 	}
+}
+
+// wasInterrupted reports whether the error is a side-effect of the user
+// interrupting the CLI (Ctrl+C / SIGTERM). When true, callers should exit
+// silently with the POSIX SIGINT convention (128 + 2) rather than printing
+// the error — a signal-killed child can otherwise surface as a misleading
+// message (e.g. `exec.Command("pnpm", "--version").Run()` failing during
+// interrupt looks identical to "pnpm not installed").
+//
+// We check three signals in order of specificity:
+//  1. the root context was canceled via SIGINT/SIGTERM (matches signal.NotifyContext);
+//  2. the error chain itself carries context.Canceled (e.g. an interactive prompt);
+//  3. a SignaledError from execChildInteractive (defensive — covers the case
+//     where a forwarded signal killed the child but didn't reach our context).
+func wasInterrupted(cmd *cobra.Command, err error) bool {
+	if errors.Is(cmd.Context().Err(), context.Canceled) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if _, ok := errors.AsType[*SignaledError](err); ok {
+		return true
+	}
+	return false
 }
 
 // isCLIError checks if the error is a CLIError type.
