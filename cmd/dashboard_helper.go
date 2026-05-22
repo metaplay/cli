@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -20,14 +21,21 @@ import (
 )
 
 // Checks if Node.js is installed and verifies the version
-func checkNodeVersion(recommendedVersion *version.Version) error {
+func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'node --version' command
-	cmd := exec.Command("node", "--version")
+	cmd := exec.CommandContext(ctx, "node", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
 	}
 
@@ -64,13 +72,20 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 }
 
 // Checks if pnpm is installed and verifies the version
-func checkPnpmVersion(recommendedVersion *version.Version) error {
+func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'pnpm --version' command
-	cmd := exec.Command("pnpm", "--version")
+	cmd := exec.CommandContext(ctx, "pnpm", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return errors.New("pnpm is not installed or not in PATH. Please install pnpm: https://pnpm.io/installation")
 	}
 
@@ -108,14 +123,14 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 	return nil
 }
 
-func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
+func checkDashboardToolVersions(ctx context.Context, project *metaproj.MetaplayProject) error {
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(project.VersionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(ctx, project.VersionMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(project.VersionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(ctx, project.VersionMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 

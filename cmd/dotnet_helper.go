@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -121,9 +122,18 @@ func execChildTask(workingDir string, binary string, args []string) error {
 // Runs a child process in "interactive" mode where all inputs/outputs are forwarded
 // to the sub-process. If extraEnv is specified, its contents are appended to the current
 // environment variables.
-func execChildInteractive(workingDir string, binary string, args []string, extraEnv []string) error {
+//
+// If ctx is already canceled, returns ctx.Err() without spawning anything — this
+// matters when a previous Ctrl+C canceled the root context: we don't want to
+// start the next pipeline step (e.g. `pnpm install` after a Ctrl+C during the
+// preceding version check).
+func execChildInteractive(ctx context.Context, workingDir string, binary string, args []string, extraEnv []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Create the command to run the .NET binary
-	cmd := exec.Command(binary, args...)
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workingDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

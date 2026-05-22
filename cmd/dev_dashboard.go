@@ -54,7 +54,8 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check that required dashboard tools are installed and satisfy version requirements.
-	if err := checkDashboardToolVersions(project); err != nil {
+	ctx := cmd.Context()
+	if err := checkDashboardToolVersions(ctx, project); err != nil {
 		return err
 	}
 
@@ -62,14 +63,14 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
+	if err := execChildInteractive(ctx, dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
 		return clierrors.Wrap(err, "Failed to install dashboard dependencies").
 			WithSuggestion("Try `metaplay dev clean-dashboard-artifacts` to remove stale build artifacts before reinstalling.")
 	}
 
 	// Run the dashboard project in dev mode
 	devArgs := append([]string{"dev"}, o.extraArgs...)
-	if err := execChildInteractive(dashboardPath, "pnpm", devArgs, nil); err != nil {
+	if err := execChildInteractive(ctx, dashboardPath, "pnpm", devArgs, nil); err != nil {
 		return clierrors.Wrap(err, "Failed to run the LiveOps Dashboard").
 			WithSuggestion("Try `metaplay dev clean-dashboard-artifacts` to remove stale build artifacts before reinstalling.")
 	}
