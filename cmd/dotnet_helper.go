@@ -165,6 +165,11 @@ func execChildInteractive(ctx context.Context, workingDir string, binary string,
 		return fmt.Errorf("failed to start the binary: %w", err)
 	}
 
+	// On Windows, attach the child to a Job Object so the entire process
+	// tree dies together when we exit. Without this, pnpm/npm .cmd shims
+	// leave node descendants alive on Ctrl+C. No-op on other platforms.
+	defer killOnExit(cmd)()
+
 	// Goroutine to forward signals to the subprocess. Exits when signalChan is closed.
 	go func() {
 		for sig := range signalChan {
