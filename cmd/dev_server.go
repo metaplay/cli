@@ -77,8 +77,10 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderTitle("Run Game Server Locally"))
 	log.Info().Msg("")
 
+	ctx := cmd.Context()
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
@@ -88,18 +90,18 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 	if o.flagWatch {
 		// Run with file watching (auto-restart on code changes).
 		watchArgs := append([]string{"watch", "run", "--no-hot-reload", "/p:Configuration=Watch"}, o.extraArgs...)
-		if err := execChildInteractive(serverPath, "dotnet", watchArgs, commonDotnetEnvVars); err != nil {
+		if err := execChildInteractive(ctx, serverPath, "dotnet", watchArgs, commonDotnetEnvVars); err != nil {
 			return fmt.Errorf("game server exited with error: %s", err)
 		}
 	} else {
 		// Build the game server .NET project.
-		if err := execChildInteractive(serverPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
+		if err := execChildInteractive(ctx, serverPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
 			return fmt.Errorf("failed to build the game server .NET project: %s", err)
 		}
 
 		// Run the game server (skip build).
 		runArgs := append([]string{"run", "--no-build"}, o.extraArgs...)
-		if err := execChildInteractive(serverPath, "dotnet", runArgs, commonDotnetEnvVars); err != nil {
+		if err := execChildInteractive(ctx, serverPath, "dotnet", runArgs, commonDotnetEnvVars); err != nil {
 			return fmt.Errorf("game server exited with error: %s", err)
 		}
 	}

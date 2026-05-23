@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -111,6 +112,7 @@ func (o *buildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *buildImageOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Build Docker Image"))
 	log.Info().Msg("")
@@ -181,13 +183,13 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check that docker is available")
-	err = checkDockerAvailable()
+	err = checkDockerAvailable(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Check Docker version: warn if using old versions
-	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion()
+	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion(ctx)
 	if err != nil {
 		log.Warn().Msgf("Warning: Failed to check Docker version: %v", err)
 	}
@@ -205,7 +207,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that the build engine is available.
-	err = checkBuildEngineAvailable(buildEngine)
+	err = checkBuildEngineAvailable(ctx, buildEngine)
 	if err != nil {
 		return err
 	}
@@ -269,7 +271,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		extraArgs:   o.extraArgs,
 	}
 
-	if err := buildDockerImage(buildParams); err != nil {
+	if err := buildDockerImage(ctx, buildParams); err != nil {
 		return err
 	}
 
@@ -310,11 +312,17 @@ func resolveBuildEngine(engine string) (string, error) {
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
 }
 
-func checkCommand(command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+func checkCommand(ctx context.Context, command string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		trimmed := strings.TrimSpace(stderr.String())
 		if trimmed != "" {
 			return fmt.Errorf("%v: %s", err, truncateForLog(trimmed, 500))
@@ -325,13 +333,20 @@ func checkCommand(command string, args ...string) error {
 }
 
 // executeCommand runs a command with the given arguments in the specified working directory.
-func executeCommand(workingDir string, env []string, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+func executeCommand(ctx context.Context, workingDir string, env []string, command string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = workingDir
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	defer killOnExit(cmd)()
+	return cmd.Wait()
 }
 
 // rebasePath calculates a new path for `targetPath` such that it is relative
@@ -362,7 +377,11 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 // Check if docker is available and running. Uses a short timeout as 'docker' invocation
 // can sometimes hang indefinitely. In CI environments, uses a longer timeout to account
 // for slower daemon startup.
-func checkDockerAvailable() error {
+func checkDockerAvailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Use a longer timeout in CI where Docker daemon startup can be slower.
 	// GitHub Actions in particular is known to have long Docker init latencies.
 	timeout := 10 * time.Second
@@ -374,7 +393,7 @@ func checkDockerAvailable() error {
 	// indefinitely in some cases).
 	done := make(chan error)
 	go func() {
-		done <- checkCommand("docker", "info")
+		done <- checkCommand(ctx, "docker", "info")
 	}()
 
 	// Wait for docker to respond, printing a waiting message after 1sec.
@@ -385,6 +404,8 @@ func checkDockerAvailable() error {
 				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 		}
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-time.After(time.Second):
 		log.Info().Msgf("Waiting for docker daemon to respond...")
 	}
@@ -402,6 +423,8 @@ func checkDockerAvailable() error {
 					WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 			}
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-tick.C:
 			log.Info().Msgf("Still waiting for docker daemon to respond...")
 		case <-deadline:
@@ -412,12 +435,12 @@ func checkDockerAvailable() error {
 }
 
 // Check that the specified docker build engine is available.
-func checkBuildEngineAvailable(buildEngine string) error {
+func checkBuildEngineAvailable(ctx context.Context, buildEngine string) error {
 	log.Debug().Msgf("Check that build engine %s is available", buildEngine)
 
 	switch buildEngine {
 	case "buildx":
-		err := checkCommand("docker", "buildx", "version")
+		err := checkCommand(ctx, "docker", "buildx", "version")
 		if err != nil {
 			return clierrors.Wrap(err, "Docker buildx is not available").
 				WithSuggestion("Install Docker buildx or use --engine=buildkit instead")
@@ -463,16 +486,22 @@ func truncateForLog(s string, n int) string {
 }
 
 // Check Docker version and return parsed server version
-func checkDockerVersion() (*dockerVersionInfo, bool, error) {
+func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	// Get Docker version in JSON format to access server version
 	// Use the explicit Go template syntax instead of the `json` shorthand —
 	// the shorthand was added in Docker CLI 22.06 and older clients render
 	// it as the literal string "json".
-	cmd := exec.Command("docker", "version", "--format", "{{json .}}")
+	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{json .}}")
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, false, ctxErr
+		}
 		log.Debug().Err(err).Str("stderr", stderr.String()).Msgf("'docker version --format json' failed")
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
 	}
@@ -513,7 +542,7 @@ type buildDockerImageParams struct {
 }
 
 // buildDockerImage builds a Docker image with the given parameters.
-func buildDockerImage(params buildDockerImageParams) error {
+func buildDockerImage(ctx context.Context, params buildDockerImageParams) error {
 	// Resolve docker build root directory. All other paths need to be made relative to it.
 	buildRootDir := params.project.GetBuildRootDir()
 
@@ -623,7 +652,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 	log.Info().Msg("")
 
 	// Execute the docker build
-	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
+	if err := executeCommand(ctx, buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
 		printBitbucketRequirementsBanner()
 		return clierrors.Wrap(err, "Docker build failed").
 			WithSuggestion("Check the build output above for details")

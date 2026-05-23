@@ -6,12 +6,14 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/hashicorp/go-version"
@@ -19,6 +21,18 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
+
+// SignaledError indicates a child process exited after a forwarded
+// SIGINT/SIGTERM (or was killed by an uncaught signal). It renders
+// identically to the underlying error — callers that want to tolerate
+// Ctrl+C detect it with errors.As.
+type SignaledError struct {
+	Signal os.Signal
+	Err    error
+}
+
+func (e *SignaledError) Error() string { return e.Err.Error() }
+func (e *SignaledError) Unwrap() error { return e.Err }
 
 // Environment variables to pass to all dotnet commands.
 var commonDotnetEnvVars = []string{
@@ -59,13 +73,20 @@ Visit: https://dotnet.microsoft.com/download for instructions specific to your o
 
 // Checks if .NET SDK is installed and check that it is recent enough for the SDK
 // version used.
-func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
+func checkDotnetSdkVersion(ctx context.Context, requiredDotnetVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Note: This gets the SDK version, not runtime version (eg, 8.0.400)
-	cmd := exec.Command("dotnet", "--version")
+	cmd := exec.CommandContext(ctx, "dotnet", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		return clierrors.New(".NET SDK is not installed or not in PATH").
 			WithSuggestion(getDotnetInstallInstructions())
 	}
@@ -91,14 +112,22 @@ func checkDotnetSdkVersion(requiredDotnetVersion *version.Version) error {
 	return nil
 }
 
-func execChildTask(workingDir string, binary string, args []string) error {
-	cmd := exec.Command(binary, args...)
+func execChildTask(ctx context.Context, workingDir string, binary string, args []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workingDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("%s$ %s %s", workingDir, binary, strings.Join(args, " "))))
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start the binary: %w", err)
+	}
+	defer killOnExit(cmd)()
+	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("failed to build the project: %w", err)
 	}
 
@@ -108,9 +137,18 @@ func execChildTask(workingDir string, binary string, args []string) error {
 // Runs a child process in "interactive" mode where all inputs/outputs are forwarded
 // to the sub-process. If extraEnv is specified, its contents are appended to the current
 // environment variables.
-func execChildInteractive(workingDir string, binary string, args []string, extraEnv []string) error {
+//
+// If ctx is already canceled, returns ctx.Err() without spawning anything — this
+// matters when a previous Ctrl+C canceled the root context: we don't want to
+// start the next pipeline step (e.g. `pnpm install` after a Ctrl+C during the
+// preceding version check).
+func execChildInteractive(ctx context.Context, workingDir string, binary string, args []string, extraEnv []string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Create the command to run the .NET binary
-	cmd := exec.Command(binary, args...)
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = workingDir
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -121,18 +159,38 @@ func execChildInteractive(workingDir string, binary string, args []string, extra
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
 
-	// Create a channel to forward signals to the subprocess
+	// Create a channel to forward signals to the subprocess. Track whether we
+	// forwarded one so we can mark the resulting error as signal-induced; this
+	// works on Windows too (where ExitCode() != -1 for Ctrl+C).
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	var (
+		mu           sync.Mutex
+		forwardedSig os.Signal
+	)
+
+	defer func() {
+		signal.Stop(signalChan)
+		close(signalChan)
+	}()
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start the binary: %w", err)
 	}
 
-	// Goroutine to forward signals to the subprocess
+	// On Windows, attach the child to a Job Object so the entire process
+	// tree dies together when we exit. Without this, pnpm/npm .cmd shims
+	// leave node descendants alive on Ctrl+C. No-op on other platforms.
+	defer killOnExit(cmd)()
+
+	// Goroutine to forward signals to the subprocess. Exits when signalChan is closed.
 	go func() {
 		for sig := range signalChan {
+			mu.Lock()
+			forwardedSig = sig
+			mu.Unlock()
 			if cmd.Process != nil {
 				_ = cmd.Process.Signal(sig)
 			}
@@ -140,12 +198,27 @@ func execChildInteractive(workingDir string, binary string, args []string, extra
 	}()
 
 	// Wait for the subprocess to complete
-	if err := cmd.Wait(); err != nil {
-		// If the process was terminated by a signal, exit cleanly
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() != 0 {
-			return fmt.Errorf("binary exited with error: %w", err)
-		}
+	err := cmd.Wait()
+	if err == nil {
+		return nil
 	}
 
-	return nil
+	wrapped := fmt.Errorf("binary exited with error: %w", err)
+
+	mu.Lock()
+	sig := forwardedSig
+	mu.Unlock()
+
+	// On Unix, ExitCode() == -1 indicates the child was killed by a signal.
+	// On Windows, that signal won't be observable that way, so we also fall
+	// back to whether we forwarded one ourselves.
+	killedBySignal := sig != nil
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
+		killedBySignal = true
+	}
+
+	if killedBySignal {
+		return &SignaledError{Signal: sig, Err: wrapped}
+	}
+	return wrapped
 }
