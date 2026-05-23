@@ -96,7 +96,8 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that required dashboard tools are installed and satisfy version requirements.
-	if err := checkDashboardToolVersions(project); err != nil {
+	ctx := cmd.Context()
+	if err := checkDashboardToolVersions(ctx, project); err != nil {
 		return err
 	}
 
@@ -164,7 +165,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msgf("Running %s to install dashboard dependencies...", styles.RenderTechnical("pnpm install"))
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
-	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
+	if err := execChildInteractive(ctx, pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
 		return clierrors.Wrap(err, "Failed to run 'pnpm install'").
 			WithSuggestion("Check that pnpm is installed and try running 'pnpm install' manually")
 	}

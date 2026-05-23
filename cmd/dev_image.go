@@ -60,6 +60,8 @@ func (o *devImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *devImageOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Try to resolve the project & auth provider.
 	project, err := resolveProject()
 	if err != nil {
@@ -67,7 +69,7 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that docker is installed and running
-	if err := checkCommand("docker", "info"); err != nil {
+	if err := checkCommand(ctx, "docker", "info"); err != nil {
 		return clierrors.New("Failed to invoke Docker").
 			WithSuggestion("Ensure Docker Desktop is installed and running")
 	}
@@ -123,7 +125,7 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Run the docker image.
-	if err := executeCommand(".", nil, "docker", dockerRunArgs...); err != nil {
+	if err := executeCommand(ctx, ".", nil, "docker", dockerRunArgs...); err != nil {
 		return clierrors.Wrap(err, "Docker run failed")
 	}
 
