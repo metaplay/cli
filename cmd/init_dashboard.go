@@ -136,11 +136,14 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Render pnpm-workspace.yaml content. SDK R37 introduced pnpm 11, which
 	// fails install if native-build deps aren't listed in 'allowBuilds:'.
+	// We also emit the block on R33-R36 (pnpm 10.9+) as forward-proofing
+	// in case someone upgrades their local pnpm. R32 (pnpm 10.6.2) doesn't
+	// honor the field.
 	// The package list below is for SDK 37.x; revisit when bumping pnpm or
 	// when the scaffolded dashboard's dep tree changes.
-	// '37.0.0-aaaaa' is the lowest possible pre-release of 37.0.0 so R37
-	// preview builds (e.g. 37.0.0-alpha.1) are included.
-	minSdkVersionPnpmAllowBuilds := version.Must(version.NewVersion("37.0.0-aaaaa"))
+	// '33.0.0-aaaaa' is the lowest possible pre-release of 33.0.0 so R33
+	// preview builds (e.g. 33.0.0-alpha.1) are included.
+	minSdkVersionPnpmAllowBuilds := version.Must(version.NewVersion("33.0.0-aaaaa"))
 	var allowBuildsPackages []string
 	if !project.VersionMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
 		allowBuildsPackages = []string{
