@@ -7,43 +7,86 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 )
 
-// startCmd starts cmd inside a Windows Job Object so that closing the
-// returned cleanup func (or letting our process die) atomically terminates
-// the child and every descendant.
+// isCmdShim reports whether path resolves to a Windows .cmd or .bat script.
+// exec.Cmd invokes those via cmd.exe, which shows
+// "Terminate batch job (Y/N)?" on Ctrl+C and blocks until answered —
+// startCmd uses this to opt into a faster Cancel policy (kill the whole
+// process tree atomically) instead of giving the child a graceful window.
+func isCmdShim(path string) bool {
+	p := strings.ToLower(path)
+	return strings.HasSuffix(p, ".cmd") || strings.HasSuffix(p, ".bat")
+}
+
+// startCmd configures cmd.Cancel/WaitDelay, starts cmd inside a Windows
+// Job Object, and returns a cleanup function. Closing the cleanup func
+// (or letting our process die) atomically terminates the child and every
+// descendant via JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
 //
 // To win the race against descendants spawning before we can put the child
-// in the job, we create the process with CREATE_SUSPENDED, attach it to
-// the job, and only then resume its main thread. Any process spawned by
-// the child after that point inherits the job automatically.
+// in the job, the process is created with CREATE_SUSPENDED, attached to
+// the job, and only then resumed. Anything the child spawns after that
+// inherits the job automatically.
 //
 // This matters because tools like pnpm/npm are installed as .cmd shims:
 // `exec.Command("pnpm", ...)` actually launches cmd.exe to run pnpm.cmd,
 // which spawns node.exe, which spawns its own worker processes. CTRL_C_EVENT
-// propagation across that chain is unreliable — the immediate cmd.exe may
-// catch the signal and prompt "Terminate batch job (Y/N)?" while the node
-// descendants stay alive as orphans. With the job object, killing the parent
-// reliably tears down the whole tree.
+// propagation across that chain is unreliable — cmd.exe catches the signal
+// and shows "Terminate batch job (Y/N)?" while node descendants stay alive.
+// With the job object, killing the parent reliably tears down the whole tree.
+//
+// cmd.Cancel and cmd.WaitDelay are configured here (rather than by callers)
+// so the Cancel closure captures the cleanup func directly — no indirection
+// variable, no race window between cmd.Start and a post-hoc setCleanup.
 func startCmd(cmd *exec.Cmd) (func(), error) {
 	job, jobErr := prepareJob()
+
+	// cleanup is referenced by cmd.Cancel below, so it must be in scope
+	// before cmd.Start (which spawns exec.Cmd's ctx-watching goroutine).
+	// sync.Once makes it safe to invoke from both Cancel and a deferred
+	// caller path without double-closing a recycled handle.
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			if jobErr == nil {
+				_ = windows.CloseHandle(job)
+			}
+		})
+	}
+
+	// For .cmd/.bat shims (pnpm.cmd, playwright.cmd, ...): close the Job
+	// Object immediately on cancel so cmd.exe is killed before it can write
+	// "Terminate batch job (Y/N)?" to the console. For native executables
+	// (dotnet, docker): no-op Cancel + a 10s WaitDelay so the child can
+	// handle its own SIGINT/CTRL_C_EVENT (forwarding to containers, flushing
+	// build state, etc.) before being force-killed.
+	if isCmdShim(cmd.Path) {
+		cmd.Cancel = func() error { cleanup(); return nil }
+		cmd.WaitDelay = 2 * time.Second
+	} else {
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = 10 * time.Second
+	}
+
 	if jobErr != nil {
-		// Job setup failed; degrade gracefully to a plain Start. Descendants
-		// will outlive cancellation, but we don't want job-object problems
+		// Job setup failed; fall through to a plain Start. Descendants
+		// may outlive cancellation, but we don't want job-object problems
 		// to break the build.
 		log.Debug().Err(jobErr).Msg("Job object setup failed; subprocess tree may outlive cancellation")
 		if err := cmd.Start(); err != nil {
 			return nil, err
 		}
-		return func() {}, nil
+		return cleanup, nil
 	}
 
 	// Create the child suspended so we can attach it to the job before it
@@ -54,7 +97,7 @@ func startCmd(cmd *exec.Cmd) (func(), error) {
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 
 	if err := cmd.Start(); err != nil {
-		_ = windows.CloseHandle(job)
+		cleanup()
 		return nil, err
 	}
 
@@ -63,29 +106,27 @@ func startCmd(cmd *exec.Cmd) (func(), error) {
 
 	// We MUST resume the thread no matter what — leaving it suspended hangs
 	// cmd.Wait forever. If we couldn't assign to the job, the cleanup func
-	// becomes a no-op, but the process still runs to completion.
+	// stays a job-closer but the process runs outside the job.
 	if err := resumeProcessThreads(pid); err != nil {
 		// Truly stuck: process is suspended and we can't unstick it. Best
 		// effort is to kill it and Wait so exec.Cmd's internal watchdog
-		// goroutine exits (cmd.Wait signals ctxDone; without it the
-		// goroutine lives until ctx.Done fires).
+		// goroutine exits.
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		_ = windows.CloseHandle(job)
+		cleanup()
 		return nil, fmt.Errorf("failed to resume suspended child (pid %d): %w", pid, err)
 	}
 
 	if assignErr != nil {
 		log.Debug().Err(assignErr).Uint32("pid", pid).Msg("AssignProcessToJobObject failed; subprocess tree may outlive cancellation")
-		_ = windows.CloseHandle(job)
+		// Close the orphaned job. cmd.Cancel still references our cleanup
+		// closure — since the process isn't in the job, the Cancel hook
+		// degrades to a no-op (sync.Once swallows the second close).
+		cleanup()
 		return func() {}, nil
 	}
 
-	// Wrap CloseHandle in sync.Once so callers can invoke cleanup more than
-	// once (e.g. from both cmd.Cancel and a deferred call) without risking
-	// a double-close on a recycled handle.
-	var once sync.Once
-	return func() { once.Do(func() { _ = windows.CloseHandle(job) }) }, nil
+	return cleanup, nil
 }
 
 // prepareJob creates a Job Object configured to terminate every process in
@@ -171,12 +212,4 @@ func resumeProcessThreads(pid uint32) error {
 		return fmt.Errorf("no threads found for pid %d", pid)
 	}
 	return nil
-}
-
-// wasKilledBySignal: Windows doesn't surface signal-induced termination via
-// ProcessState (TerminateProcess sets an arbitrary exit code, and even
-// Ctrl+C handlers may set their own). Callers must track forwarded signals
-// themselves; this helper exists for cross-platform symmetry.
-func wasKilledBySignal(_ *os.ProcessState) bool {
-	return false
 }

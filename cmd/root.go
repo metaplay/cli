@@ -408,9 +408,13 @@ func wasInterrupted(cmd *cobra.Command, err error) bool {
 // closure after subprocess output — e.g. docker prints
 // "ERROR: failed to build: failed to solve: Canceled: context canceled"
 // on its way out and that shouldn't be the last thing the user sees.
+//
+// We write directly to os.Stderr rather than through stderrLogger so
+// verbose mode doesn't decorate the trailing line with timestamp and
+// level prefixes.
 func exitInterrupted() {
-	stderrLogger.Info().Msg("")
-	stderrLogger.Info().Msg(styles.RenderMuted("Canceled."))
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
 	os.Exit(130)
 }
 
