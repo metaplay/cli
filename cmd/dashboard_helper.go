@@ -61,7 +61,7 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 	requiredMajorVersion := recommendedVersion.Segments()[0]
 	requiredMinorVersion := recommendedVersion.Segments()[1]
 	if installedMajorVersion > requiredMajorVersion {
-		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%d.x.y; downgrade if you encounter any problems]", requiredMajorVersion))
+		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%s; downgrade if you encounter any problems]", recommendedVersion))
 	} else if installedMinorVersion > requiredMinorVersion {
 		badge = badge + " " + styles.RenderWarning("[warning: minor version is more recent; downgrade if you encounter any problems]")
 	}
@@ -109,7 +109,7 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// If installed major version is more recent than expected, fail.
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
+		return fmt.Errorf("detected pnpm version %s is too recent; expecting v%s", installedVersion, recommendedVersion)
 	}
 
 	// Print the info.
