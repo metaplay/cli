@@ -569,7 +569,7 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 	log.Info().Msg(styles.RenderBright("🔷 Build server image"))
 	serverParams := commonParams
 	serverParams.imageName = serverImage
-	if err := buildDockerImage(ctx,serverParams); err != nil {
+	if err := buildDockerImage(ctx, serverParams); err != nil {
 		return fmt.Errorf("failed to build server image: %w", err)
 	}
 
@@ -579,7 +579,7 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 	pwTsParams := commonParams
 	pwTsParams.imageName = pwTsImage
 	pwTsParams.target = "playwright-ts-tests"
-	if err := buildDockerImage(ctx,pwTsParams); err != nil {
+	if err := buildDockerImage(ctx, pwTsParams); err != nil {
 		return fmt.Errorf("failed to build playwright-ts image: %w", err)
 	}
 
@@ -589,7 +589,7 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 	pwNetParams := commonParams
 	pwNetParams.imageName = pwNetImage
 	pwNetParams.target = "playwright-net-tests"
-	if err := buildDockerImage(ctx,pwNetParams); err != nil {
+	if err := buildDockerImage(ctx, pwNetParams); err != nil {
 		return fmt.Errorf("failed to build playwright-net image: %w", err)
 	}
 

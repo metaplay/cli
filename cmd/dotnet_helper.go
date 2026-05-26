@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hashicorp/go-version"
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -33,6 +34,58 @@ type SignaledError struct {
 
 func (e *SignaledError) Error() string { return e.Err.Error() }
 func (e *SignaledError) Unwrap() error { return e.Err }
+
+// isCmdShim reports whether cmd.Path resolves to a Windows .cmd or .bat
+// script. exec.Cmd invokes those via cmd.exe, which shows
+// "Terminate batch job (Y/N)?" on Ctrl+C and blocks until answered —
+// callers use this to opt into a faster Cancel policy (kill the whole
+// process tree atomically) instead of giving the child a graceful window.
+func isCmdShim(path string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	p := strings.ToLower(path)
+	return strings.HasSuffix(p, ".cmd") || strings.HasSuffix(p, ".bat")
+}
+
+// applyCancelPolicy configures cmd.Cancel and cmd.WaitDelay for graceful
+// vs. fast shutdown when ctx is canceled. It returns a setter the caller
+// must invoke after startCmd to wire the Job-Object cleanup into Cancel.
+//
+//   - .cmd/.bat shims (pnpm.cmd, playwright.cmd …): close the Job Object
+//     immediately on cancel. Otherwise cmd.exe would prompt
+//     "Terminate batch job (Y/N)?" and block until WaitDelay force-kills
+//     it. WaitDelay stays as a small safety net.
+//   - native executables (dotnet, docker, …): no-op Cancel + 10 s
+//     WaitDelay. The child handles its own SIGINT/CTRL_C_EVENT
+//     (forwarding to containers, flushing build state, etc.); we only
+//     force-kill if it wedges.
+func applyCancelPolicy(cmd *exec.Cmd) func(cleanup func()) {
+	var (
+		mu      sync.Mutex
+		cleanup func()
+	)
+	if isCmdShim(cmd.Path) {
+		cmd.Cancel = func() error {
+			mu.Lock()
+			c := cleanup
+			mu.Unlock()
+			if c != nil {
+				c()
+			}
+			return nil
+		}
+		cmd.WaitDelay = 2 * time.Second
+	} else {
+		cmd.Cancel = func() error { return nil }
+		cmd.WaitDelay = 10 * time.Second
+	}
+	return func(c func()) {
+		mu.Lock()
+		cleanup = c
+		mu.Unlock()
+	}
+}
 
 // Environment variables to pass to all dotnet commands.
 var commonDotnetEnvVars = []string{
@@ -121,14 +174,17 @@ func execChildTask(ctx context.Context, workingDir string, binary string, args [
 	cmd.Dir = workingDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	setCleanup := applyCancelPolicy(cmd)
 
 	log.Info().Msg(styles.RenderMuted(fmt.Sprintf("%s$ %s %s", workingDir, binary, strings.Join(args, " "))))
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start the binary: %w", err)
+	cleanup, err := startCmd(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to start %s: %w", binary, err)
 	}
-	defer killOnExit(cmd)()
+	setCleanup(cleanup)
+	defer cleanup()
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("failed to build the project: %w", err)
+		return fmt.Errorf("%s exited with error: %w", binary, err)
 	}
 
 	return nil
@@ -159,9 +215,20 @@ func execChildInteractive(ctx context.Context, workingDir string, binary string,
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
 
-	// Create a channel to forward signals to the subprocess. Track whether we
-	// forwarded one so we can mark the resulting error as signal-induced; this
-	// works on Windows too (where ExitCode() != -1 for Ctrl+C).
+	// We forward signals to the child manually (see goroutine below) and
+	// also rely on OS-level signal delivery (process group on Unix, console
+	// attachment on Windows). exec.CommandContext's default Cancel is
+	// Process.Kill — that would race ahead of our graceful signal and
+	// SIGKILL/TerminateProcess the child mid-shutdown. applyCancelPolicy
+	// installs a no-op (or, for .cmd/.bat shims on Windows, a Job-Object-
+	// closing) Cancel along with a WaitDelay safety net.
+	setCleanup := applyCancelPolicy(cmd)
+
+	// Create a channel to forward signals to the subprocess. Track whether
+	// we forwarded one so we can mark the resulting error as signal-induced
+	// — needed on Windows in particular, where TerminateProcess just sets
+	// an exit code and ProcessState can't distinguish signal-kill from a
+	// normal failure.
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
@@ -175,15 +242,16 @@ func execChildInteractive(ctx context.Context, workingDir string, binary string,
 		close(signalChan)
 	}()
 
-	// Start the process
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start the binary: %w", err)
+	// Start the child. On Windows this attaches it to a Job Object so the
+	// entire process tree dies together when we exit — without that, the
+	// .cmd shims that fork pnpm/npm leave node descendants alive on Ctrl+C.
+	// startCmd is a thin wrapper over cmd.Start on other platforms.
+	cleanup, err := startCmd(cmd)
+	if err != nil {
+		return fmt.Errorf("failed to start %s: %w", binary, err)
 	}
-
-	// On Windows, attach the child to a Job Object so the entire process
-	// tree dies together when we exit. Without this, pnpm/npm .cmd shims
-	// leave node descendants alive on Ctrl+C. No-op on other platforms.
-	defer killOnExit(cmd)()
+	setCleanup(cleanup)
+	defer cleanup()
 
 	// Goroutine to forward signals to the subprocess. Exits when signalChan is closed.
 	go func() {
@@ -198,7 +266,7 @@ func execChildInteractive(ctx context.Context, workingDir string, binary string,
 	}()
 
 	// Wait for the subprocess to complete
-	err := cmd.Wait()
+	err = cmd.Wait()
 	if err == nil {
 		return nil
 	}
@@ -209,13 +277,11 @@ func execChildInteractive(ctx context.Context, workingDir string, binary string,
 	sig := forwardedSig
 	mu.Unlock()
 
-	// On Unix, ExitCode() == -1 indicates the child was killed by a signal.
-	// On Windows, that signal won't be observable that way, so we also fall
-	// back to whether we forwarded one ourselves.
-	killedBySignal := sig != nil
-	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == -1 {
-		killedBySignal = true
-	}
+	// On Unix, syscall.WaitStatus.Signaled() reports signal-induced exit
+	// reliably (unlike ExitCode == -1, which also fires for processes that
+	// haven't exited). Windows can't distinguish via ProcessState, so we
+	// fall back to whether we forwarded a signal ourselves.
+	killedBySignal := sig != nil || wasKilledBySignal(cmd.ProcessState)
 
 	if killedBySignal {
 		return &SignaledError{Signal: sig, Err: wrapped}

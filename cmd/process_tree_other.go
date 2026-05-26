@@ -1,17 +1,40 @@
+//go:build !windows
+
 /*
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 
-//go:build !windows
-
 package cmd
 
-import "os/exec"
+import (
+	"os"
+	"os/exec"
+	"syscall"
+)
 
-// killOnExit is a no-op on Unix: process groups + SIGTERM/SIGKILL already
-// handle descendant cleanup naturally. The Windows variant attaches the
-// child to a Job Object so killing the parent atomically tears down the
-// whole subprocess tree.
-func killOnExit(_ *exec.Cmd) func() {
-	return func() {}
+// startCmd starts the command and returns a cleanup function that callers
+// should defer. On Unix it's a thin wrapper over cmd.Start — process group
+// + SIGTERM/SIGKILL naturally tear down descendants. The Windows variant
+// goes through a job-object dance to atomically kill the whole subprocess
+// tree on cancellation.
+func startCmd(cmd *exec.Cmd) (func(), error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return func() {}, nil
+}
+
+// wasKilledBySignal reports whether the process was terminated by a signal
+// rather than exiting normally. Relies on syscall.WaitStatus.Signaled() —
+// more reliable than checking ExitCode == -1, which also fires for processes
+// that haven't yet exited.
+func wasKilledBySignal(ps *os.ProcessState) bool {
+	if ps == nil {
+		return false
+	}
+	ws, ok := ps.Sys().(syscall.WaitStatus)
+	if !ok {
+		return false
+	}
+	return ws.Signaled()
 }
