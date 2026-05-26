@@ -342,10 +342,19 @@ func executeCommand(ctx context.Context, workingDir string, env []string, comman
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = workingDir
-	if err := cmd.Start(); err != nil {
+	// On ctx cancellation, don't immediately TerminateProcess/SIGKILL the
+	// child — the OS already delivers Ctrl+C to the whole foreground process
+	// group (Unix) or console-attached processes (Windows). docker CLI needs
+	// that window to forward SIGTERM to its own descendants (a --rm
+	// container) and to drain its daemon-side build cancel. applyCancelPolicy
+	// installs a no-op Cancel + 10 s WaitDelay safety net.
+	setCleanup := applyCancelPolicy(cmd)
+	cleanup, err := startCmd(cmd)
+	if err != nil {
 		return err
 	}
-	defer killOnExit(cmd)()
+	setCleanup(cleanup)
+	defer cleanup()
 	return cmd.Wait()
 }
 

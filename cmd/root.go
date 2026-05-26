@@ -350,7 +350,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		err := opts.Prepare(cmd, args)
 		if err != nil {
 			if wasInterrupted(cmd, err) {
-				os.Exit(130)
+				exitInterrupted()
 			}
 			// Show usage help for Prepare errors that are either explicit usage errors
 			// or plain Go errors (which are assumed to be usage errors since Prepare
@@ -366,7 +366,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		err = opts.Run(cmd)
 		if err != nil {
 			if wasInterrupted(cmd, err) {
-				os.Exit(130)
+				exitInterrupted()
 			}
 			// Only show usage for explicit usage errors from Run()
 			if clierrors.IsUsageError(err) {
@@ -401,6 +401,17 @@ func wasInterrupted(cmd *cobra.Command, err error) bool {
 		return true
 	}
 	return false
+}
+
+// exitInterrupted prints a clean trailing acknowledgement and exits with
+// the POSIX SIGINT convention (128 + 2). The trailing line gives the user
+// closure after subprocess output — e.g. docker prints
+// "ERROR: failed to build: failed to solve: Canceled: context canceled"
+// on its way out and that shouldn't be the last thing the user sees.
+func exitInterrupted() {
+	stderrLogger.Info().Msg("")
+	stderrLogger.Info().Msg(styles.RenderMuted("Canceled."))
+	os.Exit(130)
 }
 
 // isCLIError checks if the error is a CLIError type.
