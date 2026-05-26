@@ -37,20 +37,25 @@ func TestRenderPnpmWorkspaceContent_WithAllowBuilds(t *testing.T) {
 }
 
 func TestRenderPnpmWorkspaceContent_WithoutAllowBuilds(t *testing.T) {
-	got, err := renderPnpmWorkspaceContent(
-		[]string{"MetaplaySDK/Frontend/*", "Backend/Dashboard"},
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("renderPnpmWorkspaceContent returned error: %v", err)
-	}
-
-	out := string(got)
-
-	if !strings.Contains(out, "packages:") {
-		t.Errorf("expected 'packages:' in output, got:\n%s", out)
-	}
-	if strings.Contains(out, "allowBuilds") {
-		t.Errorf("did not expect 'allowBuilds' in output, got:\n%s", out)
+	for name, allowBuilds := range map[string][]string{
+		"nil slice":   nil,
+		"empty slice": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := renderPnpmWorkspaceContent(
+				[]string{"MetaplaySDK/Frontend/*", "Backend/Dashboard"},
+				allowBuilds,
+			)
+			if err != nil {
+				t.Fatalf("renderPnpmWorkspaceContent returned error: %v", err)
+			}
+			out := string(got)
+			if !strings.Contains(out, "packages:") {
+				t.Errorf("expected 'packages:' in output, got:\n%s", out)
+			}
+			if strings.Contains(out, "allowBuilds") {
+				t.Errorf("did not expect 'allowBuilds' in output, got:\n%s", out)
+			}
+		})
 	}
 }
