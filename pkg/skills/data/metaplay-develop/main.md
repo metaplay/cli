@@ -15,6 +15,15 @@ Before writing code:
 3. **Consult docs for unfamiliar primitives.** Use `metaplay-docs` for SDK API and concept questions rather than guessing — the SDK has constraints (determinism, serialization, fast-forward) that aren't obvious from type signatures alone.
 4. **Load the matching sub-skill before generating code.** When a piece of the feature lands in the actions, configs, or models areas, load the corresponding sub-skill *first*. Its rule checklist applies at write time, not just review time — catching a determinism or commit-discipline violation while writing is much cheaper than fixing it after.
 
+## Validating changes locally
+
+Two commands cover the routine local validation loop for code changes:
+
+- `metaplay build server` — compiles the .NET game server. The fastest signal that a change compiles cleanly.
+- `dotnet test Backend/SharedCode.Tests` (and `dotnet test Backend/Server.Tests` if present) — runs the project's own unit tests. These test projects are optional; not every project has them.
+
+These are the canonical paths; `Backend/SharedCode.Tests` and `Backend/Server.Tests` are the conventional locations for user-authored unit tests in a Metaplay project.
+
 {{subskills}}
 
 Each `review-*` sub-skill ships design patterns, discovery grep patterns, and a full rule checklist with codes (e.g. `S1`, `D2`, `GT3`) — useful both when authoring new code and when reviewing. Load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The `incident-analysis` and `update-sdk` sub-skills are a different shape: workflow playbooks — `incident-analysis` traces a player report back to the offending code, and `update-sdk` walks the project through an SDK version bump and its release-notes migration guide. More sub-skills will land here as additional workflows are codified.
