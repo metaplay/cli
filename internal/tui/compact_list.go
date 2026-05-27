@@ -7,6 +7,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -145,6 +146,7 @@ func (d multiSelectDelegate) Render(w io.Writer, m list.Model, index int, listIt
 // multiSelectModel for the multi-select list.
 type multiSelectModel struct {
 	title    string
+	footer   string
 	model    list.Model
 	checked  map[int]bool
 	done     bool
@@ -152,9 +154,10 @@ type multiSelectModel struct {
 	err      error
 }
 
-func newMultiSelectModel(title string, model list.Model, checked map[int]bool) multiSelectModel {
+func newMultiSelectModel(title string, footer string, model list.Model, checked map[int]bool) multiSelectModel {
 	return multiSelectModel{
 		title:   title,
+		footer:  footer,
 		model:   model,
 		checked: checked,
 	}
@@ -174,8 +177,9 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			m.quitting = true
 			return m, tea.Quit
-		case " ":
-			// Toggle selection of the current item
+		case "space":
+			// Toggle selection of the current item. (bubbletea v2 reports
+			// space as "space" rather than " ".)
 			if item, ok := m.model.SelectedItem().(compactListItem); ok {
 				if m.checked[item.index] {
 					delete(m.checked, item.index)
@@ -201,6 +205,13 @@ func (m multiSelectModel) View() tea.View {
 
 	if !m.quitting {
 		content += styles.ListStyle.Render(m.model.View())
+		if m.footer != "" {
+			// The list output trails with whitespace and no final newline,
+			// so trim and control spacing explicitly: one blank line above
+			// the footer, footer line itself, then the help line.
+			content = strings.TrimRight(content, " \t\n") + "\n\n"
+			content += styles.RenderMuted("  "+m.footer) + "\n"
+		}
 		content += styles.RenderMuted("  space to toggle, enter to confirm")
 	}
 
@@ -305,13 +316,28 @@ func ChooseFromListDialogWithHeader[TItem any](title string, header string, item
 
 // ChooseMultipleFromListDialog shows a dialog to select multiple items from a list using checkboxes.
 // The toItemFunc() is used to convert the items into a (name, description) tuple for display.
-// Returns the selected items (or error). Returns an error if no items are selected.
+// All items are pre-selected by default. Returns the selected items (or error if none chosen).
 func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItemFunc func(item *TItem) (string, string)) ([]TItem, error) {
+	return ChooseMultipleFromListDialogWithDefaults(title, "", items, toItemFunc, func(*TItem) bool { return true })
+}
+
+// ChooseMultipleFromListDialogWithDefaults is like ChooseMultipleFromListDialog
+// but lets the caller specify which items start checked via the
+// defaultChecked predicate, invoked once per item before showing the dialog.
+// An optional footer is rendered (muted) below the list, above the
+// "space to toggle, enter to confirm" help line. Pass "" to omit it.
+func ChooseMultipleFromListDialogWithDefaults[TItem any](
+	title string,
+	footer string,
+	items []TItem,
+	toItemFunc func(item *TItem) (string, string),
+	defaultChecked func(item *TItem) bool,
+) ([]TItem, error) {
 	if len(items) == 0 {
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderTitle(title))
 		log.Info().Msg("")
-		return nil, fmt.Errorf("ChooseMultipleFromListDialog(): an empty list was provided")
+		return nil, fmt.Errorf("ChooseMultipleFromListDialogWithDefaults(): an empty list was provided")
 	}
 
 	// Convert items to list items.
@@ -326,10 +352,12 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 		}
 	}
 
-	// Initialize list with multi-select delegate, all items pre-selected
+	// Initialise the checked map per the predicate.
 	checked := make(map[int]bool, len(items))
 	for ndx := range items {
-		checked[ndx] = true
+		if defaultChecked(&items[ndx]) {
+			checked[ndx] = true
+		}
 	}
 	delegate := &multiSelectDelegate{checked: checked}
 	l := list.New(listItems, delegate, 0, min(2+len(listItems), 20))
@@ -338,8 +366,8 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 
-	// Create and run model
-	model := newMultiSelectModel(title, l, checked)
+	// Create and run model.
+	model := newMultiSelectModel(title, footer, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
 	if err != nil {
@@ -354,7 +382,7 @@ func ChooseMultipleFromListDialog[TItem any](title string, items []TItem, toItem
 		return nil, fmt.Errorf("selection canceled")
 	}
 
-	// Collect selected items in order
+	// Collect selected items in order.
 	var selected []TItem
 	for ndx := range items {
 		if finalM.checked[ndx] {
