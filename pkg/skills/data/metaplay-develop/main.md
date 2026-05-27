@@ -28,10 +28,7 @@ For running the full local stack (server + dashboard + Unity client) as part of 
 
 {{subskills}}
 
-The sub-skills above fall into two shapes:
-
-- **Rule checklists** — `review-actions`, `review-configs`, `review-models`. Each ships design patterns, discovery grep patterns, and a rule checklist with codes (`S1`, `D2`, `GT3`, …). Useful at write time *and* review time. Load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic).
-- **Workflow playbooks** — `local-development` for the daily inner loop; `init-project` and `init-dashboard` for one-time setup; `update-sdk` for SDK version bumps; `incident-analysis` for tracing a single player's dashboard incident report back to game code.
+The `review-*` sub-skills are rule checklists with codes (`S1`, `D2`, `GT3`, …) usable at write time as well as review time — load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The other sub-skills are workflow playbooks; load whichever fits the task.
 
 For deploy/logs/profiling/secrets work against a *cloud* environment (not local), use the sibling `metaplay-devops` skill instead.
 

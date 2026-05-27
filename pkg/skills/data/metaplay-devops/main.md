@@ -20,16 +20,7 @@ This rule applies to every sub-skill below. The sub-skills include command-speci
 
 {{subskills}}
 
-Each sub-skill is a focused playbook — load only what the current task needs:
-
-- **`deploy-server`** — `build image` → `image push` → `deploy server`, with rollback and post-deploy verification.
-- **`diagnose-server`** — symptom-to-tool routing for a misbehaving cloud deployment (server down, slow, OOM, crash-looping). Usually the right entry point when something is wrong but you don't know what yet.
-- **`view-logs`** — `metaplay debug logs` with time windows, live tailing, per-pod filtering.
-- **`cpu-profiling`** — `collect-cpu-profile` (a `dotnet-trace` wrapper) for latency and CPU-bound issues.
-- **`memory-profiling`** — `collect-heap-dump` for OOMs and suspected leaks. Intrusive — re-read the production safety section.
-- **`secrets`** — `metaplay secrets *` for per-environment Kubernetes user secrets.
-
-Common pairings: `deploy-server` + `diagnose-server` (deploy, then verify the result); `diagnose-server` first, then `view-logs` or one of the profile sub-skills once a symptom is narrowed down.
+The sub-skills are independent playbooks — load only what the current task needs. The production safety section above applies to every one of them; re-read it before running anything destructive or intrusive against a live env.
 
 ## When NOT to use this skill
 
