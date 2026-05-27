@@ -7,6 +7,7 @@ package skills
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,15 @@ import (
 // substitutes the entire block — `## Sub-skills` heading and bullet list —
 // or drops the line entirely if the skill has no listable sub-skills.
 const subSkillsMarker = "{{subskills}}"
+
+// Both patterns capture the leading newline group so the replacement preserves
+// the original line-ending style (LF vs CRLF). markerParagraph also collapses
+// the surrounding blank lines so a marker that sat in its own paragraph leaves
+// exactly one blank line behind, not two.
+var (
+	markerParagraph = regexp.MustCompile(`(\r?\n\r?\n)` + regexp.QuoteMeta(subSkillsMarker) + `\r?\n\r?\n`)
+	markerLine      = regexp.MustCompile(`(\r?\n)` + regexp.QuoteMeta(subSkillsMarker) + `\r?\n`)
+)
 
 // RenderRootPage substitutes the {{subskills}} marker in a root page's content
 // with an auto-generated sub-skills section. The expansion includes the
@@ -36,9 +46,12 @@ func RenderRootPage(skill *Skill, content []byte) []byte {
 	if section == "" {
 		// Drop the marker. Collapse a marker that sits alone on a line
 		// surrounded by blank lines so the result has one blank line
-		// where the section would have been, not two.
-		s = strings.ReplaceAll(s, "\n\n"+subSkillsMarker+"\n\n", "\n\n")
-		s = strings.ReplaceAll(s, "\n"+subSkillsMarker+"\n", "\n")
+		// where the section would have been, not two. Patterns are
+		// LF/CRLF-tolerant so Windows-authored content is handled too;
+		// the leading newline group is preserved when collapsing a
+		// paragraph, which keeps the original line-ending style.
+		s = markerParagraph.ReplaceAllString(s, "$1")
+		s = markerLine.ReplaceAllString(s, "$1")
 		s = strings.ReplaceAll(s, subSkillsMarker, "")
 	} else {
 		s = strings.ReplaceAll(s, subSkillsMarker, section)

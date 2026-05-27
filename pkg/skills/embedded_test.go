@@ -19,10 +19,10 @@ func TestEmbedded_LoadsBundledSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadAll: %v", err)
 	}
-	if len(loaded) != 3 {
-		t.Fatalf("expected 3 skills, got %d", len(loaded))
+	if len(loaded) != 4 {
+		t.Fatalf("expected 4 skills, got %d", len(loaded))
 	}
-	wantIDs := []string{"metaplay-develop", "metaplay-docs", "metaplay-troubleshoot"}
+	wantIDs := []string{"metaplay-develop", "metaplay-devops", "metaplay-docs", "metaplay-troubleshoot"}
 	for i, want := range wantIDs {
 		if loaded[i].ID != want {
 			t.Errorf("skill[%d].ID = %q, want %q", i, loaded[i].ID, want)
@@ -42,21 +42,46 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 	if develop == nil {
 		t.Fatal("metaplay-develop not found")
 	}
-	wantSubSkills := map[string]bool{
+	wantDevelopSubSkills := map[string]bool{
 		"main":              true,
 		"review-actions":    true,
 		"review-configs":    true,
 		"review-models":     true,
 		"incident-analysis": true,
 		"update-sdk":        true,
+		"local-development": true,
+		"init-project":      true,
+		"init-dashboard":    true,
 	}
-	for subSkillID := range wantSubSkills {
+	for subSkillID := range wantDevelopSubSkills {
 		if _, ok := develop.SubSkills[subSkillID]; !ok {
-			t.Errorf("missing sub-skill %q", subSkillID)
+			t.Errorf("metaplay-develop missing sub-skill %q", subSkillID)
 		}
 	}
-	if len(develop.SubSkills) != len(wantSubSkills) {
-		t.Errorf("sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantSubSkills), develop.SubSkills)
+	if len(develop.SubSkills) != len(wantDevelopSubSkills) {
+		t.Errorf("metaplay-develop sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantDevelopSubSkills), develop.SubSkills)
+	}
+
+	devops := FindByID(loaded, "metaplay-devops")
+	if devops == nil {
+		t.Fatal("metaplay-devops not found")
+	}
+	wantDevopsSubSkills := map[string]bool{
+		"main":             true,
+		"deploy-server":    true,
+		"diagnose-server":  true,
+		"view-logs":        true,
+		"cpu-profiling":    true,
+		"memory-profiling": true,
+		"secrets":          true,
+	}
+	for subSkillID := range wantDevopsSubSkills {
+		if _, ok := devops.SubSkills[subSkillID]; !ok {
+			t.Errorf("metaplay-devops missing sub-skill %q", subSkillID)
+		}
+	}
+	if len(devops.SubSkills) != len(wantDevopsSubSkills) {
+		t.Errorf("metaplay-devops sub-skill count = %d, want %d (%v)", len(devops.SubSkills), len(wantDevopsSubSkills), devops.SubSkills)
 	}
 
 	docs := FindByID(loaded, "metaplay-docs")

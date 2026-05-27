@@ -1,6 +1,6 @@
 # Metaplay develop
 
-Day-to-day work on a Metaplay SDK project: designing and implementing new features, refactoring and debugging existing code, triaging per-player incidents, and upgrading the SDK to a newer release. A Metaplay project blends server-side game logic, a Unity client, designer-tunable game configs, and a LiveOps Dashboard — most features touch more than one of these layers, and the SDK has strong opinions about how state, logic, and configuration are structured.
+Day-to-day work on a Metaplay SDK project: designing and implementing new features, refactoring and debugging existing code, running the stack locally, setting up a new project or a custom LiveOps Dashboard, triaging per-player incidents, and upgrading the SDK to a newer release. A Metaplay project blends server-side game logic, a Unity client, designer-tunable game configs, and a LiveOps Dashboard — most features touch more than one of these layers, and the SDK has strong opinions about how state, logic, and configuration are structured.
 
 This skill is about *how to work* in a Metaplay project. For SDK API references, concepts, and "how do I…" questions, pair it with the `metaplay-docs` skill, which is about *what the SDK provides*.
 
@@ -24,9 +24,13 @@ Two commands cover the routine local validation loop for code changes:
 
 These are the canonical paths; `Backend/SharedCode.Tests` and `Backend/Server.Tests` are the conventional locations for user-authored unit tests in a Metaplay project.
 
+For running the full local stack (server + dashboard + Unity client) as part of the inner-loop, see the `local-development` sub-skill below.
+
 {{subskills}}
 
-Each `review-*` sub-skill ships design patterns, discovery grep patterns, and a full rule checklist with codes (e.g. `S1`, `D2`, `GT3`) — useful both when authoring new code and when reviewing. Load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The `incident-analysis` and `update-sdk` sub-skills are a different shape: workflow playbooks — `incident-analysis` traces a player report back to the offending code, and `update-sdk` walks the project through an SDK version bump and its release-notes migration guide. More sub-skills will land here as additional workflows are codified.
+The `review-*` sub-skills are rule checklists with codes (`S1`, `D2`, `GT3`, …) usable at write time as well as review time — load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The other sub-skills are workflow playbooks; load whichever fits the task.
+
+For deploy/logs/profiling/secrets work against a *cloud* environment (not local), use the sibling `metaplay-devops` skill instead.
 
 ## Reviewing existing code
 
@@ -49,4 +53,5 @@ For each finding include: the class name, `file:line`, the violated rule code (e
 
 - Non-Metaplay C# code — use standard practice.
 - SDK API or "how do I…" questions — use `metaplay-docs`.
-- CLI tool problems — use `metaplay-troubleshoot`.
+- Deploying, viewing cloud logs, profiling a deployed server, or managing per-env secrets — use `metaplay-devops`.
+- CLI tool problems (`metaplay` not found, outdated, weird output) — use `metaplay-troubleshoot`.

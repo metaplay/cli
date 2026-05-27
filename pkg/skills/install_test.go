@@ -247,7 +247,7 @@ func TestInstall_DedupesSharedDirs(t *testing.T) {
 		switch a.Status {
 		case StatusWritten:
 			written++
-		case StatusUnchanged:
+		case StatusSkippedShared:
 			shared++
 		}
 	}

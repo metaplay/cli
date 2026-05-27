@@ -214,11 +214,10 @@ func reportInstallActions(actions []skillspkg.InstallAction) {
 			line = styles.RenderSuccess("WROTE   ") + " " + a.Path
 		case skillspkg.StatusUnchanged:
 			unchanged++
-			suffix := ""
-			if a.Reason != "" {
-				suffix = "  " + styles.RenderMuted("("+a.Reason+")")
-			}
-			line = styles.RenderMuted("unchanged") + " " + a.Path + suffix
+			line = styles.RenderMuted("unchanged") + " " + a.Path
+		case skillspkg.StatusSkippedShared:
+			unchanged++
+			line = styles.RenderMuted("shared   ") + " " + a.Path + "  " + styles.RenderMuted("("+a.Reason+")")
 		case skillspkg.StatusSkippedNewer:
 			skipped++
 			line = styles.RenderAttention("SKIP    ") + " " + a.Path + "  " + styles.RenderMuted("("+a.Reason+")")
