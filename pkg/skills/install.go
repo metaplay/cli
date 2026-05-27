@@ -60,6 +60,10 @@ const (
 	StatusSkippedUser
 	// StatusSkippedError means the on-disk version stamp could not be parsed.
 	StatusSkippedError
+	// StatusSkippedShared means another target in this same Install call
+	// already wrote (or would have written) the wrapper at this path. Only
+	// occurs when two AgentDirs map to the same scope-relative directory.
+	StatusSkippedShared
 )
 
 // InstallAction records what happened to one (skill, target) pair.
@@ -116,7 +120,7 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 	// Dedupe (skill, target-path) tuples. Two AgentDirs that share a path
 	// (not the case for the bundled set, but defensive) only get written once.
 	type key struct{ skill, path string }
-	seen := map[key]string{} // first TargetID claimed for this path
+	seen := map[key]string{} // first TargetID claimed for this (skill, path)
 	var actions []InstallAction
 
 	for _, target := range opts.Targets {
@@ -137,7 +141,7 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 					SkillID:  skill.ID,
 					TargetID: target.ID,
 					Path:     targetPath,
-					Status:   StatusUnchanged,
+					Status:   StatusSkippedShared,
 					Reason:   fmt.Sprintf("shared with target %q", claimedBy),
 				})
 				continue
