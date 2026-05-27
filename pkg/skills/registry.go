@@ -2,8 +2,6 @@
  * Copyright Metaplay. Licensed under the Apache-2.0 license.
  */
 
-// Package skills implements installation and serving of Metaplay agent skills
-// (Claude-Code-style markdown bundles with YAML frontmatter) for AI coding tools.
 package skills
 
 // AgentDir describes one filesystem location that AI coding tools read skill

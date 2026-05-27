@@ -99,6 +99,27 @@ func TestRenderRootPage_DropsMarkerWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestRenderRootPage_DropsMarkerWhenEmptyCRLF(t *testing.T) {
+	skill := &Skill{
+		ID: "alpha",
+		SubSkills: map[string]*SubSkill{
+			"main": mkSubSkill(t, "", "alpha root\r\n"),
+		},
+	}
+	in := []byte("# Alpha\r\n\r\nIntro.\r\n\r\n{{subskills}}\r\n\r\nOutro.\r\n")
+	got := string(RenderRootPage(skill, in))
+
+	if strings.Contains(got, "{{subskills}}") {
+		t.Errorf("marker should be removed when empty: %q", got)
+	}
+	if strings.Contains(got, "## Sub-skills") {
+		t.Errorf("empty list should not emit a heading: %q", got)
+	}
+	if !strings.Contains(got, "Intro.\r\n\r\nOutro.\r\n") {
+		t.Errorf("expected intro/outro separated by single CRLF blank line, got %q", got)
+	}
+}
+
 func TestRenderRootPage_FallbackForMissingDescription(t *testing.T) {
 	skill := &Skill{
 		ID: "alpha",
