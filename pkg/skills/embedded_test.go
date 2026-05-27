@@ -48,6 +48,7 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 		"review-configs":    true,
 		"review-models":     true,
 		"incident-analysis": true,
+		"update-sdk":        true,
 	}
 	for subSkillID := range wantSubSkills {
 		if _, ok := develop.SubSkills[subSkillID]; !ok {

@@ -1,6 +1,6 @@
 # Metaplay develop
 
-Day-to-day development on a Metaplay SDK project: designing and implementing new features, refactoring and debugging existing code, and triaging per-player incidents. A Metaplay project blends server-side game logic, a Unity client, designer-tunable game configs, and a LiveOps Dashboard — most features touch more than one of these layers, and the SDK has strong opinions about how state, logic, and configuration are structured.
+Day-to-day work on a Metaplay SDK project: designing and implementing new features, refactoring and debugging existing code, triaging per-player incidents, and upgrading the SDK to a newer release. A Metaplay project blends server-side game logic, a Unity client, designer-tunable game configs, and a LiveOps Dashboard — most features touch more than one of these layers, and the SDK has strong opinions about how state, logic, and configuration are structured.
 
 This skill is about *how to work* in a Metaplay project. For SDK API references, concepts, and "how do I…" questions, pair it with the `metaplay-docs` skill, which is about *what the SDK provides*.
 
@@ -17,7 +17,7 @@ Before writing code:
 
 {{subskills}}
 
-Each `review-*` sub-skill ships design patterns, discovery grep patterns, and a full rule checklist with codes (e.g. `S1`, `D2`, `GT3`) — useful both when authoring new code and when reviewing. Load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The `incident-analysis` sub-skill is a different shape: a diagnostic playbook for tracing a specific player report back to the offending code. More sub-skills will land here as additional workflows are codified.
+Each `review-*` sub-skill ships design patterns, discovery grep patterns, and a full rule checklist with codes (e.g. `S1`, `D2`, `GT3`) — useful both when authoring new code and when reviewing. Load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The `incident-analysis` and `update-sdk` sub-skills are a different shape: workflow playbooks — `incident-analysis` traces a player report back to the offending code, and `update-sdk` walks the project through an SDK version bump and its release-notes migration guide. More sub-skills will land here as additional workflows are codified.
 
 ## Reviewing existing code
 
