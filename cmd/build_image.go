@@ -342,10 +342,14 @@ func executeCommand(ctx context.Context, workingDir string, env []string, comman
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = workingDir
-	if err := cmd.Start(); err != nil {
+	// startCmd installs a no-op Cancel + 10s WaitDelay so docker CLI can
+	// forward SIGTERM to its --rm container and drain a daemon-side build
+	// cancel before being force-killed.
+	cleanup, err := startCmd(cmd)
+	if err != nil {
 		return err
 	}
-	defer killOnExit(cmd)()
+	defer cleanup()
 	return cmd.Wait()
 }
 
