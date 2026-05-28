@@ -13,7 +13,7 @@ Tell the user: **this is a preview workflow** — behavior is stable enough for 
 
 ## Phase 0 — Verify source control
 
-The SDK directory is wiped and reinstalled in Phase 3. Without a clean source-controlled tree, local SDK edits — especially binary files, which the modification-patch cannot capture — can be lost with no way to recover.
+The SDK directory is wiped and reinstalled in Phase 2. Without a clean source-controlled tree, local SDK edits — especially binary files, which the modification-patch cannot capture — can be lost with no way to recover.
 
 1. **Identify the source control system.** Ask the user if it's not obvious from the project.
 
@@ -44,19 +44,10 @@ The SDK directory is wiped and reinstalled in Phase 3. Without a clean source-co
 3. **Ask the user which target they want** (`AskUserQuestion`):
    - Latest minor within the current major (e.g. 34.1 → 34.3), or
    - Latest minor within the next major (e.g. 34.3 → 35.2).
+   - If only one upgrade is possible, confirm that with the user.
+   - Note: Major versions cannot be skipped! If the user wants 33.x → 35.x, tell them to upgrade to 34.x first. Minor bumps within the same major are always fine.
 
-4. **Validate the upgrade path.** The CLI rejects skipping a major version — only the current major and the next one are selectable. If the user wants 33.x → 35.x, tell them to upgrade to 34.x first. Minor bumps within the same major are always fine.
-
-## Phase 2 — Confirm the plan
-
-Present the plan and `AskUserQuestion` for confirmation:
-
-- Current version: X.Y
-- Target version: A.B
-- Type: Major upgrade / Minor upgrade
-- For major upgrades: name the release notes that will be applied (e.g. `release-notes/release-35.md`).
-
-## Phase 3 — Run the update
+## Phase 2 — Run the update
 
 ```bash
 metaplay update sdk --to-version=<target_major>.<target_minor> --yes
@@ -76,7 +67,7 @@ The command replaces the SDK directory in place. If local modifications were det
 
 2. Apply the patch — preview first, then apply so failed hunks land in `.rej` files. Stop and surface any `.rej` files to the user; they own the conflict resolution. Do not silently force-apply.
 
-## Phase 4 — Apply the migration guide (major upgrades only)
+## Phase 3 — Apply the migration guide (major upgrades only)
 
 Skip this phase for minor bumps.
 
@@ -96,7 +87,7 @@ Skip this phase for minor bumps.
 
 4. **Skip non-applicable entries.** Some migrations are conditional (e.g. "For Games With Customized LiveOps Dashboard"). If the project doesn't use the feature, skip the entry; if you can't tell from the code, ask the user.
 
-## Phase 5 — Verify
+## Phase 4 — Verify
 
 After all migrations are applied:
 
@@ -114,7 +105,7 @@ After all migrations are applied:
    metaplay test integration
    ```
 
-## Phase 6 — Report and generate review guide
+## Phase 5 — Report and generate review guide
 
 Two outputs: a short summary inline, and a project-specific review guide written to `metaplay-sdk-update-review.md` in the project root.
 
