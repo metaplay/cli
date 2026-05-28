@@ -1,6 +1,6 @@
 ---
 name: metaplay-develop-code-review
-description: Code review checklist for Metaplay projects, covering entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Includes the severity convention, scoping workflow, per-area design patterns, grep entry points, and the full rule checklists — actions (S/CM/D/PS/CO/AD), configs (TS/CD/V), and models (GT/FF/MS/MI). Load when reviewing existing Metaplay code, and load proactively when writing code in any of these areas — the rules apply at write time as well as review time.
+description: Code review checklist for Metaplay projects, covering entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Includes the severity convention, scoping workflow, grep entry points, and the full rule checklists — actions (S/CM/D/PS/CO/AD), configs (TS/CD/V), and models (GT/FF/MS/MI). Load when reviewing existing Metaplay code, or after implementing a change with metaplay-develop-game-logic. The write-time design patterns and code templates live in that companion sub-skill.
 ---
 
 # Code review
@@ -20,19 +20,11 @@ When the user asks to review, audit, or check Metaplay code:
 
 For each finding include: the class name, `file:line`, the violated rule code (e.g. `D2`, `CD2`), and a one-line explanation of what's wrong and what to change. End with a summary — files reviewed, findings per severity, key concerns. If no issues are found, report a clean result.
 
+Write-time design patterns and SDK code templates live in the `metaplay-develop-game-logic` sub-skill — load it instead of (or in addition to) this one when generating new code.
+
 ## Actions
 
-Authoring patterns and review rules for all entity action types — `PlayerAction`, `GuildAction`, and custom multiplayer entity actions.
-
-### Design patterns
-
-Apply these when writing new actions:
-
-- **Transactional by default.** An action should spend the cost and grant the reward in the same `Execute`. E.g. `PlayerPurchaseItem` deducts gold and adds the item in one atomic step. Never split cost and reward into separate actions — a hacked client will skip the cost action. See S4.
-- **Resource-granting-only actions are debug-only.** An action that adds resources without spending anything (e.g. `PlayerGainGoldDebug`) must carry `[DevelopmentOnlyAction]` so it cannot execute in production. See S1.
-- **State-only features don't need actions.** If a feature only holds model state and has no behavior, skip the action entirely. Debug actions may still be useful for testing.
-- **Server-authoritative data comes from the model or config, not from client parameters.** Prices, reward amounts, and quantities must be looked up from `GameConfig` or model state inside `Execute`. Client-supplied parameters are untrusted. See S2.
-- **Validate before the `if (commit)` block, mutate inside it.** The pre-commit phase is pure validation and computed values. All state changes go inside `if (commit) { ... }`. See CM1, CO2.
+Entity action types — `PlayerAction`, `GuildAction`, and custom multiplayer entity actions.
 
 ### Discovery patterns
 
@@ -122,54 +114,7 @@ Verify completeness: count `[ModelAction(` attribute usages and compare against 
 
 ## GameConfigs
 
-Authoring patterns and review rules for GameConfig classes — `GameConfigLibrary`, `GameConfigKeyValue` (global configs), config item classes, and cross-library references (`MetaRef<>`).
-
-### Design patterns
-
-Apply these when adding or modifying configs:
-
-- **Don't change the data source of an existing config.** If a library is already backed by CSV, Google Sheets, or C# code, keep it on that source unless explicitly asked to migrate.
-- **New libraries and globals default to C# code.** Use the templates below. CSV or Google Sheets are explicit opt-ins.
-- **Google Sheets edits are out of scope.** If a change requires modifying a Google Sheet, tell the user and hand them the data in a table for copy-paste.
-- **Pick the right container type:**
-  - `GameConfigLibrary<TKey, TInfo>` — items referred to by id (troops, items, quests, levels).
-  - `GameConfigKeyValue<T>` ("global config") — singleton config data that isn't referred to by id, including small "nameless" arrays.
-
-#### GameConfigLibrary in C#
-
-```csharp
-public class GameConfigContent
-{
-    public static readonly GameConfigLibrary<TKey, TInfo> SomeLibrary =
-        GameConfigLibrary<TKey, TInfo>.CreateSolo(new TInfo[] {
-            new TInfo(...),
-            new TInfo(...),
-            // ...
-        });
-}
-
-public class SharedGameConfig : SharedGameConfigBase
-{
-    // No attribute — values come from source code.
-    public GameConfigLibrary<TKey, TInfo> SomeLibrary { get; private set; } = GameConfigContent.SomeLibrary;
-}
-```
-
-#### GameConfigKeyValue in C#
-
-```csharp
-public class GlobalConfig : GameConfigKeyValue<GlobalConfig>
-{
-    [MetaMember(id)] public int SomeValue { get; private set; } = 123;
-    [MetaMember(id)] public int[] SomeArray { get; private set; } = new int[] { /* values */ };
-}
-
-public class SharedGameConfig : SharedGameConfigBase
-{
-    // No attribute — values come from source code.
-    public GlobalConfig Global { get; private set; } = new GlobalConfig();
-}
-```
+GameConfig classes — `GameConfigLibrary`, `GameConfigKeyValue` (global configs), config item classes, and cross-library references (`MetaRef<>`).
 
 ### Discovery patterns
 
@@ -227,18 +172,7 @@ Verify completeness: count `[GameConfigEntry]` attribute usages and compare agai
 
 ## Models
 
-Authoring patterns and review rules for entity model types — `PlayerModel` (most common), `GuildModel`, and custom multiplayer entity models — with focus on state design, deterministic types, GameTick performance, fast-forward correctness, and sub-models.
-
-### Design patterns
-
-Apply these when writing model code:
-
-- **Deterministic types throughout.** `MetaDictionary<,>` over `Dictionary<,>`, `OrderedSet<>` over `HashSet<>`, `MetaTime`/`MetaDuration` over `DateTime`/`TimeSpan`/raw integers, `F32`/`F64` over `float`/`double`. See MS1–MS3.
-- **Split state into sub-models.** Group related state (inventory, quests, energy, wallet) into sub-model classes annotated with `[MetaMember]`. All rules apply to sub-models the same as to the root.
-- **Event-driven, not polled.** GameTick should not scan state each tick to see if anything needs doing — store "next event time" values and only act when `CurrentTime >= nextEventTime`. See GT3.
-- **Fast-forward computes analytically.** `GameFastForwardTime` must produce the same result as running GameTick for the elapsed duration, but without iterating tick-by-tick — entities can be offline for weeks. See FF1.
-- **Only Actions and GameTick mutate model state.** Never mutate from API endpoints, session handlers, or listeners. See MI3.
-- **Bound growing collections.** Any collection that appends over a player's lifetime (history logs, completed quests) needs a pruning strategy. See MI1.
+Entity model types — `PlayerModel` (most common), `GuildModel`, and custom multiplayer entity models, plus the sub-models they contain.
 
 ### Discovery patterns
 
