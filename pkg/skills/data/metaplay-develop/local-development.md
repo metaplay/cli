@@ -91,4 +91,4 @@ That clears the Vite/pnpm caches under `Backend/Dashboard/`. Re-run the build/de
 - **`.NET SDK not found / wrong version`:** `metaplay dev server` validates the .NET SDK on each run. Install per the error's suggested URL.
 - **`port already in use`:** another local process holds the port. Find and kill it, or change the port via the relevant `Options.*.yaml`.
 - **Dashboard build fails with `pnpm`/`node` complaints:** `metaplay dev clean-dashboard-artifacts`, then rebuild.
-- **`MetaplaySDK/` not found:** the project hasn't been initialized. See `metaplay-develop/init-project`.
+- **`MetaplaySDK/` not found:** the project hasn't been initialized. See `metaplay-develop-init-project`.

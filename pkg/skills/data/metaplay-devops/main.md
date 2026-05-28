@@ -2,7 +2,7 @@
 
 Operating a Metaplay game server in a cloud environment: building and pushing images, deploying and rolling back, checking status, pulling logs, capturing CPU and heap profiles for diagnosis, and managing per-environment Kubernetes secrets.
 
-This skill is about *what to run when something is wrong with — or about to change in — a deployed server*. For writing game code, use `metaplay-develop`. For per-player crash/desync reports surfaced in the dashboard, use `metaplay-develop/incident-analysis`. For the CLI itself misbehaving (missing, outdated, weird output), use `metaplay-troubleshoot`.
+This skill is about *what to run when something is wrong with — or about to change in — a deployed server*. For writing game code, use `metaplay-develop`. For per-player crash/desync reports surfaced in the dashboard, use `metaplay-develop-incident-analysis`. For the CLI itself misbehaving (missing, outdated, weird output), use `metaplay-troubleshoot`.
 
 ## Environments
 
@@ -25,6 +25,6 @@ The sub-skills are independent playbooks — load only what the current task nee
 ## When NOT to use this skill
 
 - Authoring or reviewing C# code, models, actions, or configs — use `metaplay-develop`.
-- Per-player crash, desync, or network incident reports from the dashboard — use `metaplay-develop/incident-analysis`.
+- Per-player crash, desync, or network incident reports from the dashboard — use `metaplay-develop-incident-analysis`.
 - The `metaplay` CLI itself is missing, outdated, or returns garbled output — use `metaplay-troubleshoot`.
 - SDK API or concept questions ("how does X work?") — use `metaplay-docs`.

@@ -56,8 +56,8 @@ Longer captures produce much bigger files and slow down the post-processing. Don
 
 A flamegraph in speedscope is the canonical first view: wide bars at the top of the stack = the methods burning CPU. Cross-reference hot frames against:
 
-- `metaplay-develop/review-actions` rule **PS1** (performance on frequently-invoked actions).
-- `metaplay-develop/review-models` rules **GT1**/**GT3** (GameTick performance, per-tick work).
+- `metaplay-develop-review-actions` rule **PS1** (performance on frequently-invoked actions).
+- `metaplay-develop-review-models` rules **GT1**/**GT3** (GameTick performance, per-tick work).
 - The `metaplay-develop` rule **D3** (avoid `SortedSet`/`SortedDictionary`) — sorted-collection hot frames are a common false positive that's actually a real issue.
 
 If the hot path is inside SDK code (e.g. serialization, scheduler), it's usually a downstream symptom of a userland mistake — back up the stack until you find the userland frame that called it.

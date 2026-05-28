@@ -23,7 +23,7 @@ func init() {
 	o := skillsGetOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-skill address (e.g., 'metaplay-develop' or 'metaplay-develop/review-models').")
+	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-skill address (e.g., 'metaplay-develop' or 'metaplay-develop-review-models').")
 
 	cmd := &cobra.Command{
 		Use:   "get NAME",
@@ -37,7 +37,7 @@ func init() {
 			{Arguments}
 
 			NAME is either a skill name (returns its SKILL.md) or
-			'<skill>/<sub-skill>' (returns a sub-skill).
+			'<skill>-<sub-skill>' (returns a sub-skill).
 
 			Output goes to stdout with a single trailing newline so it can
 			be piped or captured by an AI agent.
@@ -47,7 +47,7 @@ func init() {
 			metaplay skills get metaplay-develop
 
 			# Print the review-models sub-skill.
-			metaplay skills get metaplay-develop/review-models
+			metaplay skills get metaplay-develop-review-models
 		`),
 	}
 
@@ -85,10 +85,8 @@ func (o *skillsGetOpts) Run(cmd *cobra.Command) error {
 
 	// Root address: substitute the {{subskills}} marker (if present) with an
 	// auto-rendered sub-skills section. Sub-skill reads pass through verbatim.
-	if !strings.Contains(o.argName, "/") {
-		if skill := skillspkg.FindByID(skills, o.argName); skill != nil {
-			content = skillspkg.RenderRootPage(skill, content)
-		}
+	if skill := skillspkg.FindByID(skills, o.argName); skill != nil {
+		content = skillspkg.RenderRootPage(skill, content)
 	}
 
 	printSkillContent(content)

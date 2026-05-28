@@ -90,8 +90,8 @@ The command shows a summary of detected paths and asks for confirmation before w
 Typical next steps:
 
 1. Open the Unity project; the SDK scaffold and HelloWorld scene are now part of the asset tree.
-2. Run the server locally: `metaplay dev server` (see `metaplay-develop/local-development`).
-3. Build the dashboard if customizing it: `metaplay init dashboard` (see `metaplay-develop/init-dashboard`).
+2. Run the server locally: `metaplay dev server` (see `metaplay-develop-local-development`).
+3. Build the dashboard if customizing it: `metaplay init dashboard` (see `metaplay-develop-init-dashboard`).
 4. Look at the generated `metaplay-project.yaml` — it lists the environments the project can deploy to.
 
 ## Common mistakes
@@ -103,6 +103,6 @@ Typical next steps:
 
 ## Related
 
-- After init: `metaplay-develop/local-development` to run the stack, and the parent `metaplay-develop` page's rule sub-skills (`review-actions`, `review-configs`, `review-models`) once code starts being written.
-- Updating the SDK in an already-initialized project: `metaplay-develop/update-sdk`.
-- Custom LiveOps Dashboard scaffolding: `metaplay-develop/init-dashboard`.
+- After init: `metaplay-develop-local-development` to run the stack, and the parent `metaplay-develop` page's rule sub-skills (`review-actions`, `review-configs`, `review-models`) once code starts being written.
+- Updating the SDK in an already-initialized project: `metaplay-develop-update-sdk`.
+- Custom LiveOps Dashboard scaffolding: `metaplay-develop-init-dashboard`.

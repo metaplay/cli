@@ -58,19 +58,19 @@ func TestRenderRootPage_ExpandsWithSubSkills(t *testing.T) {
 		t.Errorf("missing section header in output: %q", got)
 	}
 	wantBullets := []string{
-		"- `metaplay skills get alpha/one` — First sub-skill.",
-		"- `metaplay skills get alpha/three` — Third sub-skill.",
-		"- `metaplay skills get alpha/two` — Second sub-skill.",
+		"- `metaplay skills get alpha-one` — First sub-skill.",
+		"- `metaplay skills get alpha-three` — Third sub-skill.",
+		"- `metaplay skills get alpha-two` — Second sub-skill.",
 	}
 	for _, b := range wantBullets {
 		if !strings.Contains(got, b) {
 			t.Errorf("missing bullet %q in output: %q", b, got)
 		}
 	}
-	if strings.Contains(got, "alpha/main") {
+	if strings.Contains(got, "alpha-main") {
 		t.Errorf("main should be excluded from sub-skills list, got %q", got)
 	}
-	if i := strings.Index(got, "alpha/one"); i < 0 || strings.Index(got, "alpha/three") < i {
+	if i := strings.Index(got, "alpha-one"); i < 0 || strings.Index(got, "alpha-three") < i {
 		t.Errorf("sub-skills should be sorted alphabetically: %q", got)
 	}
 }

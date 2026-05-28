@@ -69,7 +69,7 @@ func (o *skillsTryOpts) Run(cmd *cobra.Command) error {
 	fmt.Println()
 	fmt.Println("If the main page references sub-skills relevant to the task, load those too:")
 	fmt.Println()
-	fmt.Println("  metaplay skills get <skill>/<sub-skill>")
+	fmt.Println("  metaplay skills get <skill>-<sub-skill>")
 	fmt.Println()
 	fmt.Println("Available skills:")
 

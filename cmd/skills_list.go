@@ -34,7 +34,7 @@ func init() {
 
 			By default only top-level skills are listed. Pass --full to also
 			list each skill's sub-skills after their parent in DFS order, with
-			their full '<skill>/<sub-skill>' address (the same form
+			their full '<skill>-<sub-skill>' address (the same form
 			'metaplay skills get' accepts) and the description from the
 			sub-skill's own frontmatter.
 		`),
@@ -76,7 +76,7 @@ func (o *skillsListOpts) Run(cmd *cobra.Command) error {
 			if subDesc == "" {
 				subDesc = styles.RenderMuted("(no description)")
 			}
-			fmt.Printf("  %s: %s\n", styles.RenderSuccess(s.ID+"/"+p), subDesc)
+			fmt.Printf("  %s: %s\n", styles.RenderSuccess(s.ID+"-"+p), subDesc)
 		}
 	}
 	return nil

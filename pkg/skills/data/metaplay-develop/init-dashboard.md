@@ -39,7 +39,7 @@ No flags; it's a one-shot setup. The command is idempotent only in the loose sen
 
 ## Prerequisites
 
-- `metaplay-project.yaml` exists (the project is initialized — see `metaplay-develop/init-project` if not).
+- `metaplay-project.yaml` exists (the project is initialized — see `metaplay-develop-init-project` if not).
 - Node.js and `pnpm` are installed and meet the version requirements the SDK declares. The command will fail with a clear error if not.
 - No existing `Backend/Dashboard/` directory (or you accept it being clobbered).
 
@@ -65,7 +65,7 @@ metaplay build dashboard --output-prebuilt
 # Commit Backend/PrebuiltDashboard/ to version control.
 ```
 
-See `metaplay-develop/local-development` for the broader local-dev loop.
+See `metaplay-develop-local-development` for the broader local-dev loop.
 
 ## Troubleshooting
 
@@ -77,11 +77,11 @@ metaplay dev clean-dashboard-artifacts
 
 This clears the Vite/pnpm caches under `Backend/Dashboard/`. Re-run `metaplay build dashboard` or `metaplay dev dashboard` afterward.
 
-If the SDK has been updated and dashboard build starts failing, that's usually a peer-dependency drift — `metaplay update sdk` walks the SDK release-notes migration guide for changes that affect the dashboard. See `metaplay-develop/update-sdk`.
+If the SDK has been updated and dashboard build starts failing, that's usually a peer-dependency drift — `metaplay update sdk` walks the SDK release-notes migration guide for changes that affect the dashboard. See `metaplay-develop-update-sdk`.
 
 ## Error patterns
 
 - **`Backend/Dashboard already exists`:** the dashboard is already scaffolded. Either delete the directory and re-init (destructive — confirm with the user), or skip the init and go straight to `metaplay dev dashboard`.
 - **`pnpm-workspace.yaml already exists`:** same situation; the user has already done this.
 - **Node / pnpm version too old:** install the required versions; the SDK pins these and the command's error names the minimum.
-- **`metaplay-project.yaml not found`:** run `metaplay init project` (or `metaplay init project-config`) first — see `metaplay-develop/init-project`.
+- **`metaplay-project.yaml not found`:** run `metaplay init project` (or `metaplay init project-config`) first — see `metaplay-develop-init-project`.

@@ -29,7 +29,7 @@ var (
 // RenderRootPage substitutes the {{subskills}} marker in a root page's content
 // with an auto-generated sub-skills section. The expansion includes the
 // `## Sub-skills` heading and a bullet list — one bullet per sub-skill, with
-// the full `metaplay skills get <skill>/<sub-skill>` address and the
+// the full `metaplay skills get <skill>-<sub-skill>` address and the
 // sub-skill's frontmatter description. The `main` entry (the root body
 // itself) is excluded.
 //
@@ -70,7 +70,7 @@ func buildSubSkillsSection(skill *Skill) string {
 		if desc == "" {
 			desc = "(no description)"
 		}
-		entries = append(entries, fmt.Sprintf("- `metaplay skills get %s/%s` — %s", skill.ID, p, desc))
+		entries = append(entries, fmt.Sprintf("- `metaplay skills get %s-%s` — %s", skill.ID, p, desc))
 	}
 	if len(entries) == 0 {
 		return ""
