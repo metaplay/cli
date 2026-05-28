@@ -396,3 +396,176 @@ func ChooseMultipleFromListDialogWithDefaults[TItem any](
 
 	return selected, nil
 }
+
+// compactListMultilineItem carries a name, optional muted hint on the same
+// row as the name, and description lines rendered under the name. Used by
+// ChooseFromListDialogMultiline.
+type compactListMultilineItem struct {
+	index            int
+	name             string
+	hint             string
+	descriptionLines []string
+}
+
+func (item compactListMultilineItem) FilterValue() string { return item.name }
+
+// compactMultilineDelegate renders an item as: selected marker + name on the
+// first line, then each description line under it. The list expects
+// every item to have the same height, so the caller pads descriptionLines to
+// a common length.
+type compactMultilineDelegate struct {
+	rowsPerItem int
+}
+
+func (d compactMultilineDelegate) Height() int                               { return d.rowsPerItem }
+func (d compactMultilineDelegate) Spacing() int                              { return 1 }
+func (d compactMultilineDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+
+func (d compactMultilineDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	item, ok := listItem.(compactListMultilineItem)
+	if !ok {
+		return
+	}
+	selected := index == m.Index()
+	hint := ""
+	if item.hint != "" {
+		hint = " " + styles.RenderMuted(item.hint)
+	}
+	var lines []string
+	if selected {
+		lines = append(lines, selectedStyle.Render("▸ "+item.name)+hint)
+	} else {
+		lines = append(lines, "  "+item.name+hint)
+	}
+	for _, dl := range item.descriptionLines {
+		if dl == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, "  "+styles.RenderMuted(dl))
+	}
+	fmt.Fprint(w, strings.Join(lines, "\n"))
+}
+
+// ChooseFromListDialogMultiline is like ChooseFromListDialog but renders a
+// multi-line description under each selectable item. toItemFunc returns
+// (name, hint, descriptionLines): hint is rendered on the same row as
+// the name (e.g. a path), descriptionLines render indented underneath. All
+// items are padded to the same number of rows.
+func ChooseFromListDialogMultiline[TItem any](
+	title string,
+	items []TItem,
+	toItemFunc func(item *TItem) (string, string, []string),
+) (*TItem, error) {
+	if len(items) == 0 {
+		log.Info().Msg("")
+		log.Info().Msg(styles.RenderTitle(title))
+		log.Info().Msg("")
+		return nil, fmt.Errorf("ChooseFromListDialogMultiline(): an empty list was provided")
+	}
+
+	// Build items; pad description rows so every slot has the same height.
+	listItems := make([]list.Item, len(items))
+	maxDescLines := 0
+	type prepped struct {
+		name string
+		hint string
+		desc []string
+	}
+	prep := make([]prepped, len(items))
+	for ndx := range items {
+		name, hint, desc := toItemFunc(&items[ndx])
+		prep[ndx] = prepped{name: name, hint: hint, desc: desc}
+		if len(desc) > maxDescLines {
+			maxDescLines = len(desc)
+		}
+	}
+	for ndx, p := range prep {
+		desc := p.desc
+		for len(desc) < maxDescLines {
+			desc = append(desc, "")
+		}
+		listItems[ndx] = compactListMultilineItem{
+			index:            ndx,
+			name:             p.name,
+			hint:             p.hint,
+			descriptionLines: desc,
+		}
+	}
+
+	rowsPerItem := 1 + maxDescLines
+	delegate := compactMultilineDelegate{rowsPerItem: rowsPerItem}
+	// Bubble list height: rowsPerItem*N + spacing*(N-1) + slack.
+	listHeight := rowsPerItem*len(items) + delegate.Spacing()*(len(items)-1) + 2
+	if listHeight > 30 {
+		listHeight = 30
+	}
+	l := list.New(listItems, delegate, 0, listHeight)
+	l.SetShowTitle(false)
+	l.SetFilteringEnabled(false)
+	l.SetShowStatusBar(false)
+	l.SetShowHelp(false)
+
+	model := newCompactListMultilineModel(title, l)
+	program := tea.NewProgram(model)
+	finalModel, err := program.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run selection dialog: %w", err)
+	}
+	finalM := finalModel.(compactListMultilineModel)
+	if finalM.err != nil {
+		return nil, finalM.err
+	}
+	if finalM.selectedIndex < 0 {
+		return nil, fmt.Errorf("selection canceled")
+	}
+	return &items[finalM.selectedIndex], nil
+}
+
+// compactListMultilineModel drives ChooseFromListDialogMultiline. Mirrors
+// compactListModel but tracks the selected index by value (the multi-line
+// item type doesn't reuse compactListItem).
+type compactListMultilineModel struct {
+	title         string
+	model         list.Model
+	selectedIndex int
+	quitting      bool
+	err           error
+}
+
+func newCompactListMultilineModel(title string, model list.Model) compactListMultilineModel {
+	return compactListMultilineModel{title: title, model: model, selectedIndex: -1}
+}
+
+func (m compactListMultilineModel) Init() tea.Cmd { return nil }
+
+func (m compactListMultilineModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.model.SetWidth(msg.Width)
+		return m, nil
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+		case "enter":
+			if item, ok := m.model.SelectedItem().(compactListMultilineItem); ok {
+				m.selectedIndex = item.index
+				m.quitting = true
+				return m, tea.Quit
+			}
+		}
+	}
+	var cmd tea.Cmd
+	m.model, cmd = m.model.Update(msg)
+	return m, cmd
+}
+
+func (m compactListMultilineModel) View() tea.View {
+	content := "\n" + styles.RenderTitle(m.title) + "\n\n"
+	if !m.quitting {
+		content += styles.ListStyle.Render(m.model.View())
+	}
+	return tea.NewView(content)
+}

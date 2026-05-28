@@ -149,7 +149,7 @@ func (o *skillsInstallOpts) Run(cmd *cobra.Command) error {
 		Version:    version.AppVersion,
 		Force:      o.flagForce,
 		DevMode:    devMode,
-		Prompter:   newSkillsPrompter("Install scope", "Install target(s)", footer),
+		Prompter:   newSkillsInstallPrompter("Install scope", "Install target(s)", footer),
 	})
 	if err != nil {
 		return clierrors.Wrap(err, "Install failed")

@@ -116,7 +116,7 @@ func (o *skillsRemoveOpts) Run(cmd *cobra.Command) error {
 		UserDir:    homeDir,
 		TargetIDs:  o.flagTargets,
 		SkillIDs:   skillIDs,
-		Prompter:   newSkillsPrompter("Remove scope", "Remove target(s)", ""),
+		Prompter:   newSkillsRemovePrompter("Remove scope", "Remove target(s)", ""),
 	})
 	if err != nil {
 		return clierrors.Wrap(err, "Remove failed")

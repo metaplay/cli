@@ -15,17 +15,21 @@ import (
 
 // tuiPrompter is the cobra-side adapter that satisfies skills.Prompter using
 // the existing internal/tui dialogs. Built only when interactive mode is on
-// — see newSkillsPrompter below.
+// — see newSkillsInstallPrompter / newSkillsRemovePrompter below.
 type tuiPrompter struct {
-	scopeTitle  string // "Install scope" / "Remove scope"
-	targetTitle string // "Install target(s)" / "Remove target(s)"
-	footer      string // optional prompt footer for the multi-select
+	scopeTitle       string   // "Install scope" / "Remove scope"
+	scopePreamble    []string // optional lines printed once above the dialog
+	projectScopeDesc []string // multi-line description for the Project option
+	userScopeDesc    []string // multi-line description for the User option
+	targetTitle      string   // "Install target(s)" / "Remove target(s)"
+	footer           string   // optional prompt footer for the multi-select
+	recommendProject bool     // mark Project option as recommended in the scope dialog
 }
 
-// newSkillsPrompter returns a Prompter for cobra-driven runs. When the
-// process is running non-interactively (CI, --verbose, no TTY) it returns
-// nil so the orchestrator falls back to its non-interactive defaults.
-func newSkillsPrompter(scopeTitle, targetTitle, footer string) skills.Prompter {
+// newSkillsRemovePrompter returns a Prompter for the remove command. Returns
+// nil in non-interactive mode (CI, --verbose, no TTY) so the orchestrator
+// falls back to its non-interactive defaults.
+func newSkillsRemovePrompter(scopeTitle, targetTitle, footer string) skills.Prompter {
 	if !tui.IsInteractiveMode() {
 		return nil
 	}
@@ -33,6 +37,42 @@ func newSkillsPrompter(scopeTitle, targetTitle, footer string) skills.Prompter {
 		scopeTitle:  scopeTitle,
 		targetTitle: targetTitle,
 		footer:      footer,
+		scopePreamble: []string{
+			"This will remove the Metaplay Agent skill files from your machine.",
+			"Only files installed by " + styles.RenderTechnical("metaplay skills install") + " are affected.",
+		},
+		projectScopeDesc: []string{
+			"Remove the skill files from the current project directory.",
+		},
+		userScopeDesc: []string{
+			"Remove the skill files from your home folder (all-projects install).",
+		},
+	}
+}
+
+// newSkillsInstallPrompter is like newSkillsRemovePrompter but adds the
+// install-specific scope explanation and marks the Project option as
+// recommended.
+func newSkillsInstallPrompter(scopeTitle, targetTitle, footer string) skills.Prompter {
+	if !tui.IsInteractiveMode() {
+		return nil
+	}
+	return &tuiPrompter{
+		scopeTitle:  scopeTitle,
+		targetTitle: targetTitle,
+		footer:      footer,
+		scopePreamble: []string{
+			"This will install the Metaplay Agent skill files into your machine.",
+		},
+		projectScopeDesc: []string{
+			"Skill files are added into the current project and shared with your",
+			"team by committing them into your repository.",
+		},
+		userScopeDesc: []string{
+			"Skill files are installed in your home folder. They are available",
+			"in all your projects, but not shared with your team members.",
+		},
+		recommendProject: true,
 	}
 }
 
@@ -41,18 +81,26 @@ func (p *tuiPrompter) AskScope(currentDir, homeDir string) (skills.Scope, error)
 		id    string
 		label string
 		hint  string
+		desc  []string
+	}
+	projectLabel := "Project"
+	if p.recommendProject {
+		projectLabel = "Project (recommended)"
 	}
 	items := []scopeOpt{
-		{id: "project", label: "Project", hint: "— " + currentDir},
-		{id: "user", label: "User", hint: "— " + homeDir},
+		{id: "project", label: projectLabel, hint: "— " + currentDir, desc: p.projectScopeDesc},
+		{id: "user", label: "User", hint: "— " + homeDir, desc: p.userScopeDesc},
 	}
-	chosen, err := tui.ChooseFromListDialog(p.scopeTitle, items, func(it *scopeOpt) (string, string) {
-		return it.label, it.hint
+	for _, line := range p.scopePreamble {
+		log.Info().Msg(line)
+	}
+	chosen, err := tui.ChooseFromListDialogMultiline(p.scopeTitle, items, func(it *scopeOpt) (string, string, []string) {
+		return it.label, it.hint, it.desc
 	})
 	if err != nil {
 		return 0, err
 	}
-	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), chosen.label, chosen.hint)
+	log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), chosen.label, styles.RenderMuted(chosen.hint))
 	if chosen.id == "user" {
 		return skills.ScopeUser, nil
 	}
