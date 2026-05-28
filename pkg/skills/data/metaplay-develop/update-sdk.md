@@ -53,8 +53,7 @@ The SDK directory is wiped and reinstalled in Phase 2. Without a clean source-co
 metaplay update sdk --to-version=<target_major>.<target_minor> --yes
 ```
 
-- If the CLI surfaces a privacy-policy or terms-and-conditions prompt/error, the user hasn't accepted the contracts yet. Show the URLs to the user, `AskUserQuestion` whether they accept, and only after explicit consent re-run with `--auto-agree` added. Never pass `--auto-agree` preemptively.
-- If modification detection itself fails (network error, portal lookup failure), the CLI will suggest `--skip-patch`. Surface the failure to the user; only re-run with `--skip-patch` if they confirm they'll preserve their SDK edits some other way.
+- If the CLI surfaces a privacy-policy or terms-and-conditions prompt/error, the user hasn't accepted the contracts yet. Show the URLs to the user, `AskUserQuestion` whether they accept, and only after explicit consent re-run with `--auto-agree` added.
 
 The command replaces the SDK directory in place. If local modifications were detected, it also writes `metaplay-sdk-modifications.patch` next to the project root — it does **not** apply the patch.
 
@@ -65,7 +64,28 @@ The command replaces the SDK directory in place. If local modifications were det
    - Call out any **binary SDK modifications** — the patch cannot represent them, so they are gone from the new SDK and the user must restore them from version control history.
    - If any non-SDK files in the project are dirty, remind the user those edits will land in the same commit as the upgrade.
 
-2. Apply the patch — preview first, then apply so failed hunks land in `.rej` files. Stop and surface any `.rej` files to the user; they own the conflict resolution. Do not silently force-apply.
+2. **Preview the patch** from the SDK root, so you see which hunks will fail before writing anything:
+
+   ```bash
+   patch -p1 --dry-run < <path-to-metaplay-sdk-modifications.patch>
+   ```
+
+3. **Apply the patch** from the SDK root. Prefer `git apply --reject` if the project uses git (cleaner `.rej` output); fall back to `patch -p1` otherwise:
+
+   ```bash
+   git apply --reject <path-to-metaplay-sdk-modifications.patch>
+   # or
+   patch -p1 < <path-to-metaplay-sdk-modifications.patch>
+   ```
+
+   Hunks that don't apply cleanly land in `<file>.rej` next to the target file. This is expected when the new SDK has changed the same lines the user modified.
+
+4. **Resolve `.rej` files.** Find each one (`git status` or a recursive search for `*.rej` under the SDK root), then for every one:
+   - Read the `.rej` file and the target file together.
+   - If the intent is unambiguous (e.g. a renamed symbol, a moved line, a trivially relocated block), apply the change manually and delete the `.rej` file.
+   - If it's ambiguous, the surrounding code has been rewritten, or two changes genuinely conflict — stop and surface that specific `.rej` to the user via `AskUserQuestion`. Do not guess.
+
+5. **Report what's left.** After your pass, list any `.rej` files you couldn't resolve and the binary files the patch couldn't capture. Those are the user's to handle.
 
 ## Phase 3 — Apply the migration guide (major upgrades only)
 
