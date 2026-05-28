@@ -56,12 +56,12 @@ What to look for:
 
 - **Object counts by type** sorted by retained size — the top entries name the leaking class.
 - **`gcroot`** on a leaking instance — shows what's holding the reference (the actual leak path).
-- **Unbounded collections** — a `List<T>` / `MetaDictionary<>` with millions of entries is almost always a missing prune. Cross-reference `metaplay-develop-review-models` rule **MI1**.
+- **Unbounded collections** — a `List<T>` / `MetaDictionary<>` with millions of entries is almost always a missing prune. Cross-reference `metaplay-develop-code-review` rule **MI1**.
 
 ## Common leak shapes in Metaplay code
 
-- **Unbounded model collections** that append over a player's lifetime (history logs, completed quest records). See `review-models` MI1.
-- **Static caches** in server-side helpers that never evict. See `review-actions` D5 (no global mutable state) — leaks here are also concurrency hazards.
+- **Unbounded model collections** that append over a player's lifetime (history logs, completed quest records). See `metaplay-develop-code-review` MI1.
+- **Static caches** in server-side helpers that never evict. See `metaplay-develop-code-review` D5 (no global mutable state) — leaks here are also concurrency hazards.
 - **Event-handler subscriptions** never unsubscribed when the entity actor stops.
 - **Large game-config retained per session** when it should be shared — confirm with `metaplay debug shell` that there is only one config instance live.
 

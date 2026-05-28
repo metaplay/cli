@@ -47,7 +47,7 @@ var skillsCmd = &cobra.Command{
 		metaplay skills get metaplay-develop
 
 		# Print a sub-skill.
-		metaplay skills get metaplay-develop-review-models
+		metaplay skills get metaplay-develop-code-review
 
 		# Install the wrappers into the current project for Claude Code.
 		metaplay skills install

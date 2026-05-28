@@ -23,7 +23,7 @@ func init() {
 	o := skillsGetOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-skill address (e.g., 'metaplay-develop' or 'metaplay-develop-review-models').")
+	args.AddStringArgument(&o.argName, "NAME", "Skill or sub-skill address (e.g., 'metaplay-develop' or 'metaplay-develop-code-review').")
 
 	cmd := &cobra.Command{
 		Use:   "get NAME",
@@ -46,8 +46,8 @@ func init() {
 			# Print the metaplay-develop SKILL.md.
 			metaplay skills get metaplay-develop
 
-			# Print the review-models sub-skill.
-			metaplay skills get metaplay-develop-review-models
+			# Print the code-review sub-skill.
+			metaplay skills get metaplay-develop-code-review
 		`),
 	}
 

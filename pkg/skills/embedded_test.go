@@ -44,9 +44,7 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 	}
 	wantDevelopSubSkills := map[string]bool{
 		"main":              true,
-		"review-actions":    true,
-		"review-configs":    true,
-		"review-models":     true,
+		"code-review":       true,
 		"incident-analysis": true,
 		"update-sdk":        true,
 		"local-development": true,
@@ -106,7 +104,7 @@ func TestEmbedded_ResolveSkillRoot(t *testing.T) {
 
 func TestEmbedded_ResolveSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(EmbeddedFS())
-	got, err := Resolve(loaded, "metaplay-develop-review-models")
+	got, err := Resolve(loaded, "metaplay-develop-code-review")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

@@ -103,6 +103,6 @@ Typical next steps:
 
 ## Related
 
-- After init: `metaplay-develop-local-development` to run the stack, and the parent `metaplay-develop` page's rule sub-skills (`review-actions`, `review-configs`, `review-models`) once code starts being written.
+- After init: `metaplay-develop-local-development` to run the stack, and `metaplay-develop-code-review` once code starts being written (its rule checklist applies at write time as well as review time).
 - Updating the SDK in an already-initialized project: `metaplay-develop-update-sdk`.
 - Custom LiveOps Dashboard scaffolding: `metaplay-develop-init-dashboard`.

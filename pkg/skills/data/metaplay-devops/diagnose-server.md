@@ -67,7 +67,7 @@ Examples in `metaplay-develop-incident-analysis` (it uses `admin-request` to fet
 
 ## Closing the loop
 
-Once a symptom is narrowed down to a code-level bug (stack trace in logs, hot method in CPU profile, leak path in heap dump), hand off to `metaplay-develop` — the rule sub-skills (`review-actions`, `review-configs`, `review-models`) cover the kinds of mistakes that produce desyncs, leaks, and exceptions.
+Once a symptom is narrowed down to a code-level bug (stack trace in logs, hot method in CPU profile, leak path in heap dump), hand off to `metaplay-develop` — the `metaplay-develop-code-review` sub-skill covers the kinds of mistakes that produce desyncs, leaks, and exceptions.
 
 ## Error patterns
 

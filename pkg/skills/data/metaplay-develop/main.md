@@ -13,7 +13,7 @@ Before writing code:
 1. **Pin down the feature shape.** What state is involved, who owns it (single player, guild, server), what mutations are possible, and what's designer-tunable? The right SDK primitive (model member vs. action vs. config vs. server entity) follows directly from these answers — sketch them before touching files.
 2. **Read what exists.** Grep the project for similar features and the SDK markers they use (`[ModelAction(`, `[GameConfigEntry]`, `EntityActor`, `MetaplayClient`). Local patterns are the most reliable guide to project conventions.
 3. **Consult docs for unfamiliar primitives.** Use `metaplay-docs` for SDK API and concept questions rather than guessing — the SDK has constraints (determinism, serialization, fast-forward) that aren't obvious from type signatures alone.
-4. **Load the matching sub-skill before generating code.** When a piece of the feature lands in the actions, configs, or models areas, load the corresponding sub-skill *first*. Its rule checklist applies at write time, not just review time — catching a determinism or commit-discipline violation while writing is much cheaper than fixing it after.
+4. **Load the `code-review` sub-skill before generating code.** When a piece of the feature lands in the actions, configs, or models areas, load `code-review` *first*. Its rule checklist applies at write time, not just review time — catching a determinism or commit-discipline violation while writing is much cheaper than fixing it after.
 
 ## Validating changes locally
 
@@ -28,26 +28,9 @@ For running the full local stack (server + dashboard + Unity client) as part of 
 
 {{subskills}}
 
-The `review-*` sub-skills are rule checklists with codes (`S1`, `D2`, `GT3`, …) usable at write time as well as review time — load more than one when the work crosses areas (an action that mutates a sub-model, a config item referenced by model logic). The other sub-skills are workflow playbooks; load whichever fits the task.
+`code-review` is the rule checklist for the actions, configs, and models areas — load it both at write time (to catch determinism or commit-discipline mistakes while writing) and at review time. The other sub-skills are workflow playbooks; load whichever fits the task.
 
 For deploy/logs/profiling/secrets work against a *cloud* environment (not local), use the sibling `metaplay-devops` skill instead.
-
-## Reviewing existing code
-
-When the user asks to review, audit, or check Metaplay code:
-
-1. **Scope.** Pin down what to review from the request — file paths, class names, commit ref, `changes in this PR`, or area-wide (if unspecified). If they named a focus ("security", "determinism", "validation", "immutability", "fast-forward", "performance"), limit to those rule categories.
-2. **Discover.** Grep for the entry points listed in the relevant sub-skill. Traverse to sub-models, member types (reward structs, cost definitions), and partial class declarations. Verify completeness by counting attributes (`[ModelAction(`, `[GameConfigEntry]`, `[MetaMember]`) against discovered classes — investigate mismatches.
-3. **Analyze.** For reviews spanning many files, cluster into small groups (a model + its sub-models, an actions file + its listeners) and launch one subagent per cluster in parallel. Give each subagent the file paths and the checklist from the relevant sub-skill.
-4. **Consolidate.** Deduplicate findings, group by severity, report.
-
-### Severity convention
-
-- **Issues (must fix):** bugs, desyncs, cheating or security holes.
-- **Warnings (should fix):** performance problems, patterns that break at scale, fragile designs.
-- **Suggestions (consider):** style, naming, minor refinements.
-
-For each finding include: the class name, `file:line`, the violated rule code (e.g. `D2`, `CD2`), and a one-line explanation of what's wrong and what to change. End with a summary — files reviewed, findings per severity, key concerns. If no issues are found, report a clean result.
 
 ## When NOT to use this skill
 
