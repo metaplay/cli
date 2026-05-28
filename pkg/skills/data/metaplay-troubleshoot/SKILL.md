@@ -1,6 +1,6 @@
 ---
 name: metaplay-troubleshoot
-description: Recover when the `metaplay` CLI is missing, outdated, or misbehaving. Trigger when any `metaplay …` command fails or returns unexpected output.
+description: Use to when the `metaplay` CLI is missing, outdated, or when any `metaplay …` command fails or returns unexpected output.
 ---
 
 - **Check CLI existence and version:** `metaplay version`.
