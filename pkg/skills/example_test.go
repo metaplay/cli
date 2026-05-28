@@ -60,7 +60,7 @@ func ExampleResolve() {
 	}
 	fmt.Printf("wrapper present: %v\n", len(wrapper) > 0)
 
-	subSkill, err := skills.Resolve(loaded, "metaplay-develop/review-models")
+	subSkill, err := skills.Resolve(loaded, "metaplay-develop-review-models")
 	if err != nil {
 		fmt.Println("sub-skill:", err)
 		return

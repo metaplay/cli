@@ -48,7 +48,7 @@ metaplay get server-info <env>           # Helm release, image, replicas, etc.
 metaplay debug server-status <env>       # Re-run the health checks any time.
 ```
 
-If verification fails, jump to `metaplay-devops/diagnose-server` (and `metaplay-devops/view-logs` for the actual error).
+If verification fails, jump to `metaplay-devops-diagnose-server` (and `metaplay-devops-view-logs` for the actual error).
 
 ## Rolling back
 
@@ -82,5 +82,5 @@ If the user is fighting Helm-level issues, `--dry-run` plus the relevant overrid
 - **`401` / authentication:** session expired — `metaplay auth login`.
 - **`403` / permission denied:** user lacks the `api.deployments.write` permission for that environment.
 - **Image not found in registry:** the tag wasn't pushed. Either pass `mygame:<tag>` to `deploy server` (auto-push), or `metaplay image push <env> mygame:<tag>` first.
-- **Health checks fail after deploy:** the deploy itself probably succeeded but the server didn't come up cleanly. Go to `metaplay-devops/diagnose-server`.
+- **Health checks fail after deploy:** the deploy itself probably succeeded but the server didn't come up cleanly. Go to `metaplay-devops-diagnose-server`.
 - **Helm-level error (chart not found, release exists, etc.):** rerun with `--dry-run` to inspect what's being applied; the error message names the offending resource.

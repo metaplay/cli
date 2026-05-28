@@ -96,7 +96,7 @@ func TestResolve_SkillRoot(t *testing.T) {
 
 func TestResolve_SubSkill(t *testing.T) {
 	loaded, _ := LoadAll(fakeSkillFS())
-	got, err := Resolve(loaded, "alpha/extra")
+	got, err := Resolve(loaded, "alpha-extra")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestResolve_UnknownSkill(t *testing.T) {
 
 func TestResolve_UnknownSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(fakeSkillFS())
-	_, err := Resolve(loaded, "alpha/nonexistent")
+	_, err := Resolve(loaded, "alpha-nonexistent")
 	if !errors.Is(err, ErrSubSkillNotFound) {
 		t.Errorf("expected ErrSubSkillNotFound, got %v", err)
 	}

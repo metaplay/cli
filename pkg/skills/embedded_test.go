@@ -106,7 +106,7 @@ func TestEmbedded_ResolveSkillRoot(t *testing.T) {
 
 func TestEmbedded_ResolveSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(EmbeddedFS())
-	got, err := Resolve(loaded, "metaplay-develop/review-models")
+	got, err := Resolve(loaded, "metaplay-develop-review-models")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestEmbedded_ResolveUnknownSkill(t *testing.T) {
 
 func TestEmbedded_ResolveUnknownSubSkill(t *testing.T) {
 	loaded, _ := LoadAll(EmbeddedFS())
-	_, err := Resolve(loaded, "metaplay-develop/nonexistent")
+	_, err := Resolve(loaded, "metaplay-develop-nonexistent")
 	if !errors.Is(err, ErrSubSkillNotFound) {
 		t.Errorf("expected ErrSubSkillNotFound, got %v", err)
 	}

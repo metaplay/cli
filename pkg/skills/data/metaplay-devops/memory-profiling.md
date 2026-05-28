@@ -56,7 +56,7 @@ What to look for:
 
 - **Object counts by type** sorted by retained size — the top entries name the leaking class.
 - **`gcroot`** on a leaking instance — shows what's holding the reference (the actual leak path).
-- **Unbounded collections** — a `List<T>` / `MetaDictionary<>` with millions of entries is almost always a missing prune. Cross-reference `metaplay-develop/review-models` rule **MI1**.
+- **Unbounded collections** — a `List<T>` / `MetaDictionary<>` with millions of entries is almost always a missing prune. Cross-reference `metaplay-develop-review-models` rule **MI1**.
 
 ## Common leak shapes in Metaplay code
 

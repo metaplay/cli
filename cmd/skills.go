@@ -34,7 +34,7 @@ var skillsCmd = &cobra.Command{
 		'metaplay skills install'.
 
 		Sub-skills of a skill are not written to disk — they stay in the CLI
-		and are fetched on demand via 'metaplay skills get <skill>/<sub-skill>'.
+		and are fetched on demand via 'metaplay skills get <skill>-<sub-skill>'.
 	`),
 	Example: renderExample(`
 		# List the skills shipped with this CLI.
@@ -47,7 +47,7 @@ var skillsCmd = &cobra.Command{
 		metaplay skills get metaplay-develop
 
 		# Print a sub-skill.
-		metaplay skills get metaplay-develop/review-models
+		metaplay skills get metaplay-develop-review-models
 
 		# Install the wrappers into the current project for Claude Code.
 		metaplay skills install

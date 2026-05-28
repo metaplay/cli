@@ -180,35 +180,38 @@ var ErrSkillNotFound = errors.New("skill not found")
 // skill but an unknown sub-skill within it.
 var ErrSubSkillNotFound = errors.New("sub-skill not found")
 
-// Resolve looks up content by an address of the form `<skill>` or
-// `<skill>/<sub-skill>`. The first form returns the skill's main payload —
-// `main.md` if present, else SKILL.md as a fallback. The second form
-// returns a sub-skill's bytes; the special name `SKILL.md` returns
-// the raw wrapper file (intended for internal/debug use, not advertised).
+// Resolve looks up content by a dash-separated address. The plain skill ID
+// (e.g. `metaplay-develop`) returns that skill's main payload — `main.md` if
+// present, else SKILL.md as a fallback. A sub-skill address is the skill ID
+// followed by `-` and the sub-skill name (e.g. `metaplay-develop-update-sdk`).
+// Skill IDs are matched longest-first so a future ID that is itself a prefix
+// of another resolves unambiguously.
 func Resolve(skills []*Skill, address string) ([]byte, error) {
-	skillID, subSkillID, hasSubSkill := strings.Cut(address, "/")
-	if skillID == "" {
+	if address == "" {
 		return nil, fmt.Errorf("empty skill address")
 	}
-	skill := FindByID(skills, skillID)
-	if skill == nil {
-		return nil, fmt.Errorf("%w: %s", ErrSkillNotFound, skillID)
-	}
-	if !hasSubSkill {
+	if skill := FindByID(skills, address); skill != nil {
 		if main, ok := skill.SubSkills["main"]; ok {
 			return main.Raw, nil
 		}
 		return skill.RawSKILL, nil
 	}
-	if subSkillID == "" {
-		return nil, fmt.Errorf("empty sub-skill name in address %q", address)
+	candidates := make([]*Skill, len(skills))
+	copy(candidates, skills)
+	sort.Slice(candidates, func(i, j int) bool {
+		return len(candidates[i].ID) > len(candidates[j].ID)
+	})
+	for _, skill := range candidates {
+		prefix := skill.ID + "-"
+		if !strings.HasPrefix(address, prefix) {
+			continue
+		}
+		subSkillID := address[len(prefix):]
+		sub, ok := skill.SubSkills[subSkillID]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrSubSkillNotFound, address)
+		}
+		return sub.Raw, nil
 	}
-	if subSkillID == "SKILL.md" {
-		return skill.RawSKILL, nil
-	}
-	sub, ok := skill.SubSkills[subSkillID]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s/%s", ErrSubSkillNotFound, skillID, subSkillID)
-	}
-	return sub.Raw, nil
+	return nil, fmt.Errorf("%w: %s", ErrSkillNotFound, address)
 }

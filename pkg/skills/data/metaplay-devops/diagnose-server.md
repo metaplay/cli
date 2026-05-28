@@ -5,7 +5,7 @@ description: Diagnose a misbehaving Metaplay game server in a cloud environment 
 
 # Diagnose a running cloud server
 
-Whole-server triage. For a single player's incident report from the dashboard, use `metaplay-develop/incident-analysis` instead.
+Whole-server triage. For a single player's incident report from the dashboard, use `metaplay-develop-incident-analysis` instead.
 
 ## Symptom → first tool
 
@@ -13,9 +13,9 @@ Whole-server triage. For a single player's incident report from the dashboard, u
 |---|---|
 | Deploy reported health-check failures | `metaplay debug server-status <env>` to re-run and read the failure detail; then `metaplay debug logs <env>` for the actual error. |
 | Site is down or unreachable | `metaplay debug server-status <env>` — tells you which check failed (pod readiness vs DNS vs admin endpoint vs client endpoint). |
-| Server up but throwing errors | `metaplay debug logs <env> --since=15m` then filter for `ERR`/`Exception`. See `metaplay-devops/view-logs`. |
-| Latency spike, server slow | `metaplay debug collect-cpu-profile <env>` — see `metaplay-devops/cpu-profiling`. |
-| OOM, server memory growing | `metaplay debug collect-heap-dump <env>` — see `metaplay-devops/memory-profiling`. |
+| Server up but throwing errors | `metaplay debug logs <env> --since=15m` then filter for `ERR`/`Exception`. See `metaplay-devops-view-logs`. |
+| Latency spike, server slow | `metaplay debug collect-cpu-profile <env>` — see `metaplay-devops-cpu-profiling`. |
+| OOM, server memory growing | `metaplay debug collect-heap-dump <env>` — see `metaplay-devops-memory-profiling`. |
 | Pod crash-looping or stuck | `metaplay debug server-status` to confirm, then `metaplay debug logs <env> --pod <name>` for the dying pod's output. |
 | Suspect data issue (corrupt entity, missing row) | `metaplay debug database <env>` — read-only by default; pass `--read-write` deliberately. |
 | Need to poke around inside a pod | `metaplay debug shell <env> [pod]` — ephemeral debug container attached to the game server container. |
@@ -63,7 +63,7 @@ For server-wide observability data the admin API exposes (active connections, in
 metaplay debug admin-request <env> GET <api-path>
 ```
 
-Examples in `metaplay-develop/incident-analysis` (it uses `admin-request` to fetch per-player incidents).
+Examples in `metaplay-develop-incident-analysis` (it uses `admin-request` to fetch per-player incidents).
 
 ## Closing the loop
 
@@ -74,4 +74,4 @@ Once a symptom is narrowed down to a code-level bug (stack trace in logs, hot me
 - **`401` / auth:** `metaplay auth login`.
 - **`403` / permission denied:** user lacks the relevant per-env permission (e.g. `api.logs.view`, `api.shell.access`, `api.deployments.read`).
 - **`env not found`:** name doesn't match `metaplay-project.yaml`.
-- **`no pods found`:** the env has no running game server. `metaplay deploy server` first; see `metaplay-devops/deploy-server`.
+- **`no pods found`:** the env has no running game server. `metaplay deploy server` first; see `metaplay-devops-deploy-server`.
