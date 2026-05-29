@@ -123,7 +123,7 @@ Structure the response as:
 3. **Recommended actions.** Concrete code changes or config adjustments to investigate, plus a repro or verification path.
 4. **Related documentation.** Payload-relative paths to relevant SDK docs (readable via `metaplay llm-docs read <path>`) and similar sample patterns. Defer to the `metaplay-docs` skill for deeper SDK lookups.
 
-## Error handling
+## Error patterns
 
 - **401/authentication**: user needs `metaplay auth login`.
 - **Environment not found**: verify the env name matches one in `metaplay-project.yaml`.

@@ -157,7 +157,7 @@ Generate it from what was actually done in this run — do not template generic 
 
 6. **Recommended next step** — "review this file, then commit". Do **not** commit yourself unless asked (see the parent skill's workflow).
 
-## Error handling
+## Error patterns
 
 - **`metaplay get sdk-versions` 401/403:** user needs `metaplay auth login`.
 - **`version.yaml` missing:** the project isn't a Metaplay SDK project, or `sdkRootDir` in `metaplay-project.yaml` points elsewhere — check before assuming a bug.

@@ -1,6 +1,6 @@
 ---
 name: metaplay-troubleshoot
-description: Use to when the `metaplay` CLI is missing, outdated, or when any `metaplay …` command fails or returns unexpected output.
+description: Use when the `metaplay` CLI is missing or outdated, or when any `metaplay …` command fails or returns unexpected output.
 ---
 
 - **Check CLI existence and version:** `metaplay version`.

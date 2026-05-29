@@ -1,6 +1,6 @@
 ---
 name: metaplay-develop-game-logic
-description: Implementation playbook for Metaplay game logic — entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Covers feature-shape planning, write-time design patterns per area, SDK code templates for game configs, the deterministic type conventions that apply across all three areas, and the local validation commands. Load before writing game logic; after implementation, load metaplay-develop-code-review to verify the changes against the full rule checklist.
+description: Implementation playbook for Metaplay game logic — entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Covers feature-shape planning, write-time design patterns per area, SDK code templates for game configs, the deterministic type conventions that apply across all three areas, and the local validation commands. Load before writing game logic; after implementation, load `metaplay-develop-code-review` to verify the changes against the full rule checklist.
 ---
 
 # Implementing game logic
@@ -16,17 +16,17 @@ Most feature work boils down to deciding where each piece of the feature lives w
 
 ## Actions
 
-- **Transactional by default.** An action should spend the cost and grant the reward in the same `Execute`. E.g. `PlayerPurchaseItem` deducts gold and adds the item in one atomic step. Never split cost and reward into separate actions — a hacked client will skip the cost action.
-- **Resource-granting-only actions are debug-only.** An action that adds resources without spending anything (e.g. `PlayerGainGoldDebug`) must carry `[DevelopmentOnlyAction]` so it cannot execute in production.
-- **State-only features don't need actions.** If a feature only holds model state and has no behavior, skip the action entirely. Debug actions may still be useful for testing.
-- **Server-authoritative data comes from the model or config, not from client parameters.** Prices, reward amounts, and quantities must be looked up from `GameConfig` or model state inside `Execute`. Client-supplied parameters are untrusted.
-- **Validate before the `if (commit)` block, mutate inside it.** The pre-commit phase is pure validation and computed values. All state changes go inside `if (commit) { ... }`.
+- **Transactional by default** — an action should spend the cost and grant the reward in the same `Execute`. E.g. `PlayerPurchaseItem` deducts gold and adds the item in one atomic step. Never split cost and reward into separate actions — a hacked client will skip the cost action.
+- **Resource-granting-only actions are debug-only** — an action that adds resources without spending anything (e.g. `PlayerGainGoldDebug`) must carry `[DevelopmentOnlyAction]` so it cannot execute in production.
+- **State-only features don't need actions** — if a feature only holds model state and has no behavior, skip the action entirely. Debug actions may still be useful for testing.
+- **Server-authoritative data comes from the model or config, not from client parameters** — prices, reward amounts, and quantities must be looked up from `GameConfig` or model state inside `Execute`. Client-supplied parameters are untrusted.
+- **Validate before the `if (commit)` block, mutate inside it** — the pre-commit phase is pure validation and computed values. All state changes go inside `if (commit) { ... }`.
 
 ## GameConfigs
 
-- **Don't change the data source of an existing config.** If a library is already backed by CSV, Google Sheets, or C# code, keep it on that source unless explicitly asked to migrate.
-- **New libraries and globals default to C# code.** Use the templates below. CSV or Google Sheets are explicit opt-ins.
-- **Google Sheets edits are out of scope.** If a change requires modifying a Google Sheet, tell the user and hand them the data in a table for copy-paste.
+- **Don't change the data source of an existing config** — if a library is already backed by CSV, Google Sheets, or C# code, keep it on that source unless explicitly asked to migrate.
+- **New libraries and globals default to C# code** — use the templates below. CSV or Google Sheets are explicit opt-ins.
+- **Google Sheets edits are out of scope** — if a change requires modifying a Google Sheet, tell the user and hand them the data in a table for copy-paste.
 - **Pick the right container type:**
   - `GameConfigLibrary<TKey, TInfo>` — items referred to by id (troops, items, quests, levels).
   - `GameConfigKeyValue<T>` ("global config") — singleton config data that isn't referred to by id, including small "nameless" arrays.
@@ -70,11 +70,11 @@ public class SharedGameConfig : SharedGameConfigBase
 ## Models
 
 - **Deterministic types throughout** — see "Deterministic data types" below.
-- **Split state into sub-models.** Group related state (inventory, quests, energy, wallet) into sub-model classes annotated with `[MetaMember]`. The rules below apply to sub-models the same as to the root.
-- **Event-driven, not polled.** `GameTick` should not scan state each tick to see if anything needs doing — store "next event time" values and only act when `CurrentTime >= nextEventTime`.
-- **Fast-forward computes analytically.** `GameFastForwardTime` must produce the same result as running `GameTick` for the elapsed duration, but without iterating tick-by-tick — entities can be offline for weeks.
-- **Only actions and `GameTick` mutate model state.** Never mutate from API endpoints, session handlers, or listeners.
-- **Bound growing collections.** Any collection that appends over a player's lifetime (history logs, completed quests) needs a pruning strategy.
+- **Split state into sub-models** — group related state (inventory, quests, energy, wallet) into sub-model classes annotated with `[MetaMember]`. The rules below apply to sub-models the same as to the root.
+- **Event-driven, not polled** — `GameTick` should not scan state each tick to see if anything needs doing; store "next event time" values and only act when `CurrentTime >= nextEventTime`.
+- **Fast-forward computes analytically** — `GameFastForwardTime` must produce the same result as running `GameTick` for the elapsed duration, but without iterating tick-by-tick. Entities can be offline for weeks.
+- **Only actions and `GameTick` mutate model state** — never mutate from API endpoints, session handlers, or listeners.
+- **Bound growing collections** — any collection that appends over a player's lifetime (history logs, completed quests) needs a pruning strategy.
 
 ## Deterministic data types
 

@@ -1,6 +1,6 @@
 ---
 name: metaplay-develop-code-review
-description: Code review checklist for Metaplay projects, covering entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Includes the severity convention, scoping workflow, grep entry points, and the full rule checklists — actions (S/CM/D/PS/CO/AD), configs (TS/CD/V), and models (GT/FF/MS/MI). Load when reviewing existing Metaplay code, or after implementing a change with metaplay-develop-game-logic. The write-time design patterns and code templates live in that companion sub-skill.
+description: Code review checklist for Metaplay projects, covering entity actions (PlayerAction, GuildAction, custom entity actions), GameConfig classes (libraries and globals), and entity models (PlayerModel, GuildModel, custom entity models). Includes the severity convention, scoping workflow, grep entry points, and the full rule checklists — actions (S/CM/D/PS/CO/AD), configs (TS/CD/V), and models (GT/FF/MS/MI). Load when reviewing existing Metaplay code, or after implementing a change with `metaplay-develop-game-logic`. The write-time design patterns and code templates live in that companion sub-skill.
 ---
 
 # Code review
