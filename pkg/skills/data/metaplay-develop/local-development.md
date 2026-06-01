@@ -44,8 +44,8 @@ metaplay dev dashboard
 For testing the real Docker image (the thing that actually ships to the cloud):
 
 ```bash
-metaplay build image                       # Produces <projectId>:<timestamp>-<commit>, alias 'latest-local'.
-metaplay dev image latest-local            # Run the just-built image in Docker.
+metaplay build image                       # Produces a uniquely-tagged image: <projectId>:<timestamp>-<commit> (timestamp only if no commit).
+metaplay dev image <projectId>:<tag>       # Run the just-built image in Docker (use the tag printed by 'build image').
 ```
 
 Use `dev image` when:
