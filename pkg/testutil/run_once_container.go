@@ -45,7 +45,7 @@ func NewRunOnceContainer(opts RunOnceContainerOptions) *RunOnceContainer {
 	if opts.LogPrefix == "" {
 		opts.LogPrefix = "[container] "
 	}
-	if opts.AutoRemove == false && opts.ContainerName == "" {
+	if !opts.AutoRemove && opts.ContainerName == "" {
 		// Default to auto-remove if no explicit name is set
 		opts.AutoRemove = true
 	}
@@ -271,7 +271,7 @@ func (r *RunOnceContainer) drainAllLogs(ctx context.Context, consumer *container
 	if err != nil {
 		return err
 	}
-	defer logReader.Close()
+	defer func() { _ = logReader.Close() }()
 	// Pipe logs to the consumer using io.Copy for simplicity and efficiency.
 	_, _ = io.Copy(consumer, logReader)
 	return nil

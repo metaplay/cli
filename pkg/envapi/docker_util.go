@@ -97,7 +97,7 @@ func NewDockerClient() (*client.Client, error) {
 	// If connection failed, decide if we should try a fallback.
 	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" {
 		log.Debug().Msg("Docker connection with default settings failed, trying Docker Desktop socket path as a fallback...")
-		dockerClient.Close() // Close the failed client.
+		_ = dockerClient.Close() // Close the failed client.
 
 		homeDir, homeErr := os.UserHomeDir()
 		if homeErr != nil {
@@ -115,7 +115,7 @@ func NewDockerClient() (*client.Client, error) {
 		// Ping again to verify the fallback connection.
 		pingResponse, err = dockerClient.Ping(context.Background())
 		if err != nil {
-			dockerClient.Close()
+			_ = dockerClient.Close()
 			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
 				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
 		}
@@ -126,9 +126,10 @@ func NewDockerClient() (*client.Client, error) {
 
 	// For non-connection errors, or non-macOS systems, return the original error.
 	dockerSuggestion := "Start Docker Desktop"
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		dockerSuggestion = "Start Docker Desktop from the Start menu"
 	}
 	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
@@ -142,7 +143,7 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
-	defer dockerClient.Close()
+	defer func() { _ = dockerClient.Close() }()
 
 	// Parse the image reference string (e.g., "myimage:latest" or "image-id")
 	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
@@ -254,7 +255,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
-	defer dockerClient.Close()
+	defer func() { _ = dockerClient.Close() }()
 
 	// Create filter for the project ID label
 	filterArgs := filters.NewArgs()

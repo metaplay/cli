@@ -72,7 +72,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	// Construct redirect URI with the port.
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
@@ -90,8 +90,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	done := make(chan struct{})
 
 	// Create a new HTTP server.
-	var server *http.Server
-	server = &http.Server{
+	server := &http.Server{
 		Addr: listener.Addr().String(),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// OAuth2 callback handler
@@ -130,7 +129,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 					return
 				}
 
-				fmt.Fprintln(w, "Authentication successful! You can close this window.")
+				_, _ = fmt.Fprintln(w, "Authentication successful! You can close this window.")
 
 				// Signal that authentication is complete
 				close(done)

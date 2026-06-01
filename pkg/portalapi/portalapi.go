@@ -117,7 +117,7 @@ func (c *Client) AgreeToContract(contractID string) error {
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.PutJSON[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
+	_, err := metahttp.PutJSON[any](c.httpClient, "/api/v1/contract_signatures", payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}
@@ -144,7 +144,7 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string, onProgress 
 
 	// Handle server errors.
 	if resp.IsError() {
-		os.Remove(tmpSdkZipPath)
+		_ = os.Remove(tmpSdkZipPath)
 		if resp.StatusCode() == 403 {
 			return "", clierrors.New("SDK download requires accepting the terms and conditions").
 				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
@@ -160,7 +160,7 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string, onProgress 
 // Fetch the organizations and projects (within each org) that the user has access to.
 // Note: It's considered an error if the user has no accessible organizations.
 func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) {
-	path := fmt.Sprintf("/api/v1/organizations/user-organizations")
+	path := "/api/v1/organizations/user-organizations"
 	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user's organizations and projects: %w", err)
@@ -362,7 +362,7 @@ func IsMajorVersionOnly(version string) bool {
 func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (*SdkVersionInfo, error) {
 	prefix := majorVersion + "."
 	var best *SdkVersionInfo
-	var bestMinor, bestPatch int = -1, -1
+	var bestMinor, bestPatch = -1, -1
 
 	for i := range versions {
 		v := &versions[i]

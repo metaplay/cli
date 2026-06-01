@@ -607,12 +607,13 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 
 	// Handle build engine differences.
 	var buildEngineArgs []string
-	if params.buildEngine == "buildkit" {
+	switch params.buildEngine {
+	case "buildkit":
 		dockerEnv = append(dockerEnv, "DOCKER_BUILDKIT=1")
 		buildEngineArgs = []string{"build"}
-	} else if params.buildEngine == "buildx" {
+	case "buildx":
 		buildEngineArgs = []string{"buildx", "build", "--load"}
-	} else {
+	default:
 		log.Panic().Msgf("Unsupported docker build engine: %s", params.buildEngine)
 	}
 

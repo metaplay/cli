@@ -108,7 +108,7 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 		return nil, errors.New("RootDir is required")
 	}
 	if opts.Version == "" {
-		return nil, errors.New("Version is required")
+		return nil, errors.New("version is required")
 	}
 	if len(opts.Skills) == 0 {
 		return nil, errors.New("no skills to install")

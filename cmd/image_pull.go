@@ -164,7 +164,7 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 		return clierrors.Wrap(err, "Failed to pull docker image").
 			WithSuggestion("Make sure Docker Desktop is running")
 	}
-	defer pullResponseReader.Close()
+	defer func() { _ = pullResponseReader.Close() }()
 
 	// Follow pull progress
 	decoder := json.NewDecoder(pullResponseReader)
@@ -209,4 +209,3 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 
 	return nil
 }
-

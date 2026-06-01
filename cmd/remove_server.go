@@ -70,6 +70,9 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return clierrors.Wrap(err, "Failed to get kubeconfig to access environment")
+	}
 	log.Debug().Msgf("Resolved kubeconfig to access environment")
 
 	// Configure Helm.

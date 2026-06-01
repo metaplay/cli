@@ -129,14 +129,14 @@ func validateUnixUsername(username string) error {
 
 	// Check first character
 	first := username[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		return fmt.Errorf("username must start with a letter or underscore")
 	}
 
 	// Check remaining characters
 	for i := 1; i < len(username); i++ {
 		c := username[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
 			return fmt.Errorf("username can only contain letters, numbers, underscores, and hyphens")
 		}
 	}

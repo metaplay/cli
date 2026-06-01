@@ -36,7 +36,7 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
+		return errors.New("node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
 	}
 
 	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
@@ -51,7 +51,7 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Fail if version older than recommended.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
+		return fmt.Errorf("node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
 	}
 
 	// Print the info.
@@ -98,7 +98,7 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Fail if installed version is older than required.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm!", recommendedVersion, installedVersion)
+		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm", recommendedVersion, installedVersion)
 	}
 
 	// Grab versions.

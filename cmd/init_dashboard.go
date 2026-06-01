@@ -33,7 +33,7 @@ func init() {
 		Use:     "dashboard [flags]",
 		Aliases: []string{"dash"},
 		Short:   "Initialize a custom LiveOps Dashboard for the project",
-		Run:   runCommand(&o),
+		Run:     runCommand(&o),
 		Long: renderLong(&o, `
 			Setup the development environment for a custom LiveOps Dashboard in your project.
 
@@ -238,7 +238,7 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	}
 
 	// Update features.dashboard with new values.
-	updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
+	_ = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})

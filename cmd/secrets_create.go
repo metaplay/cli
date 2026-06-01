@@ -95,7 +95,7 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// Split the literal pair into key and value
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
-			return fmt.Errorf("Invalid --from-literal format: '%s'. Expected 'key=value'.", pair)
+			return fmt.Errorf("invalid --from-literal format: '%s'. Expected 'key=value'", pair)
 		}
 
 		// Check for duplicate keys
@@ -112,7 +112,7 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// Split the literal pair into key and value
 		key, filePath, ok := strings.Cut(pair, "=")
 		if !ok {
-			return fmt.Errorf("invalid --from-file format: '%s'. Expected 'key=filepath'.", pair)
+			return fmt.Errorf("invalid --from-file format: '%s'. Expected 'key=filepath'", pair)
 		}
 
 		// Check for duplicate keys

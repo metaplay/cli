@@ -160,7 +160,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 			return clierrors.Wrap(err, "Failed to download current SDK for modification comparison").
 				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
 		}
-		defer os.Remove(sdkZipPath)
+		defer func() { _ = os.Remove(sdkZipPath) }()
 
 		result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath)
 		if err != nil {
@@ -241,7 +241,6 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 		if patchContent != "" {
 			if err := os.WriteFile(patchPath, []byte(patchContent), 0644); err != nil {
 				log.Warn().Msgf("Could not save patch file: %v", err)
-				patchPath = "" // Clear path so we don't show restore instructions
 			}
 		}
 	}
@@ -513,7 +512,7 @@ func formatMajorList(majors []int) string {
 	for i, m := range majors {
 		strs[i] = fmt.Sprintf("%d", m)
 	}
-	return fmt.Sprintf("%s", joinWithCommaAnd(strs))
+	return joinWithCommaAnd(strs)
 }
 
 // joinWithCommaAnd joins strings with commas and "and" for the last item.
@@ -654,7 +653,7 @@ func findLatestMajorUpdate(versions []portalapi.SdkVersionInfo, currentMajor int
 // findLatestForMajor finds the latest version for a specific major version number.
 func findLatestForMajor(versions []portalapi.SdkVersionInfo, majorStr string) *portalapi.SdkVersionInfo {
 	var targetMajor int
-	fmt.Sscanf(majorStr, "%d", &targetMajor)
+	_, _ = fmt.Sscanf(majorStr, "%d", &targetMajor)
 
 	var best *portalapi.SdkVersionInfo
 	var bestParsed *version.Version

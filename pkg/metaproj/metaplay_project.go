@@ -280,15 +280,15 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 
 	// Check project .NET version.
 	if config.DotnetRuntimeVersion == nil {
-		return fmt.Errorf("missing dotnetRuntimeVersion. Must specify the 'major.minor' for the .NET runtime framework to use, e.g., '9.0'.")
+		return fmt.Errorf("missing dotnetRuntimeVersion. Must specify the 'major.minor' for the .NET runtime framework to use, e.g., '9.0'")
 	}
 	dotnetMajorVersion := config.DotnetRuntimeVersion.Segments()[0]
 	dotnetPatchVersion := config.DotnetRuntimeVersion.Segments()[2]
 	if dotnetMajorVersion < 8 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only versions 8.x or later are supported.", config.DotnetRuntimeVersion)
+		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only versions 8.x or later are supported", config.DotnetRuntimeVersion)
 	}
 	if dotnetPatchVersion != 0 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only specify 'major.minor' version, eg, '9.0'.", config.DotnetRuntimeVersion)
+		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only specify 'major.minor' version, eg, '9.0'", config.DotnetRuntimeVersion)
 	}
 
 	// Helm charts.
@@ -373,10 +373,6 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if err := validateProjectDir(projectDir, "features.dashboard.rootDir", dashboardConfig.RootDir); err != nil {
 			return err
 		}
-	} else {
-		// if dashboardConfig.RootDir != "" {
-		// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
-		// }
 	}
 
 	// Validate environments.
@@ -670,7 +666,8 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 		return fmt.Errorf("environment ID '%s' contains invalid characters - only alphanumeric characters and dashes are allowed", id)
 	}
 
-	if hostingType == portalapi.HostingTypeMetaplayHosted {
+	switch hostingType {
+	case portalapi.HostingTypeMetaplayHosted:
 		// Split the string by dashes
 		parts := strings.Split(id, "-")
 
@@ -686,7 +683,7 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 				return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII alphanumeric characters (a-z, 0-9) are allowed", i+1, part)
 			}
 		}
-	} else if hostingType == portalapi.HostingTypeSelfHosted {
+	case portalapi.HostingTypeSelfHosted:
 		// Cannot start or end with a dash.
 		if strings.HasPrefix(id, "-") {
 			return fmt.Errorf("environment ID '%s' cannot start with a dash", id)
@@ -831,11 +828,6 @@ func GenerateProjectConfigFile(
 	return projectConfig, nil
 }
 
-func isValidEnvironmentType(envType portalapi.EnvironmentType) bool {
-	_, found := environmentTypeToFamilyMapping[envType]
-	return found
-}
-
 // validateHelmValuesFile validates the given Helm values file path.
 func validateHelmValuesFile(filePath string) error {
 	// Check if the file has a .yaml or .yml suffix
@@ -848,7 +840,7 @@ func validateHelmValuesFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Check if the file can be parsed as YAML
 	data, err := io.ReadAll(file)

@@ -187,7 +187,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	// If download SDK from portal, general terms & conditions must be approved for download to work.
 	portalClient := portalapi.NewClient(tokenSet)
 	var sdkVersionInfo *portalapi.SdkVersionInfo = nil
-	var sdkVersionBadge string = ""
+	var sdkVersionBadge = ""
 	if o.flagSdkSource == "" {
 		// Ensure Privacy Policy is accepted.
 		err = ensureSdkDownloadContractsAccepted(cmd.Context(), portalClient, o.flagAutoAgreeContracts)
@@ -275,7 +275,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
-		defer os.Remove(sdkZipPath)
+		defer func() { _ = os.Remove(sdkZipPath) }()
 	} else if isDirectory(metaplaySdkSource) {
 		// Existing directory: just reference it, no zip involved.
 		relativePathToSdk, sdkMetadata, err = resolveSdkSource(o.absoluteProjectPath, metaplaySdkSource)

@@ -54,7 +54,7 @@ func (o *devCleanDashboardArtifactsOpts) Run(cmd *cobra.Command) error {
 	}
 	sdkPath := project.GetSdkRootDir()
 
-	cleanTemporaryDashboardFiles(projectRootPath, sdkPath, dashboardPath)
+	_ = cleanTemporaryDashboardFiles(projectRootPath, sdkPath, dashboardPath)
 
 	return nil
 }

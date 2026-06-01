@@ -10,10 +10,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
-	"strings"
 	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -187,7 +185,7 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	err = o.exportDatabaseContents(cmd.Context(), kubeCli, podName, "debug", shards)
 	if err != nil {
 		// Hard failure - remove incomplete file
-		os.Remove(o.argOutputFile)
+		_ = os.Remove(o.argOutputFile)
 
 		log.Error().Err(err).Msg("Database export failed - removed incomplete zip file")
 
@@ -224,11 +222,11 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	if err != nil {
 		return fmt.Errorf("failed to create zip file: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	// Create zip writer
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	defer func() { _ = zipWriter.Close() }()
 
 	// Write metadata to zip
 	log.Debug().Msg("Writing metadata to zip file")
@@ -254,7 +252,6 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	}
 
 	// Export data from each shard
-	var shardFileNames []string
 	for _, shard := range shards {
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard data export")
 		shardFileName, err := o.exportDatabaseShardData(ctx, zipWriter, kubeCli, podName, debugContainerName, shard)
@@ -262,7 +259,6 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 			return fmt.Errorf("failed to export shard %d data: %v", shard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("shard_file", shardFileName).Msg("Shard data export completed")
-		shardFileNames = append(shardFileNames, shardFileName)
 	}
 
 	return nil
@@ -481,115 +477,4 @@ func (o *databaseExportArchiveOpts) exportDatabaseShardData(ctx context.Context,
 	log.Debug().Str("file", shardFileName).Msg("Shard data streamed directly to zip archive")
 
 	return shardFileName, nil
-}
-
-// validateShardFile validates an uncompressed shard file by checking its content
-func (o *databaseExportArchiveOpts) validateShardFile(file *zip.File) error {
-	// Open the file for reading
-	reader, err := file.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open file for reading: %v", err)
-	}
-	defer reader.Close()
-
-	// Read a portion to validate it contains SQL dump data
-	buffer := make([]byte, 8192) // 8KB buffer for validation
-	n, err := reader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read shard file: %v", err)
-	}
-
-	if n == 0 {
-		return fmt.Errorf("shard file appears to be empty")
-	}
-
-	content := string(buffer[:n])
-
-	// Basic validation - check for SQL dump patterns
-	sqlPatterns := []string{"INSERT INTO", "CREATE TABLE", "LOCK TABLES", "UNLOCK TABLES", "mysqldump", "-- Dump completed"}
-	hasSQL := false
-	for _, pattern := range sqlPatterns {
-		if strings.Contains(strings.ToUpper(content), strings.ToUpper(pattern)) {
-			hasSQL = true
-			break
-		}
-	}
-
-	if !hasSQL {
-		return fmt.Errorf("shard file does not appear to contain valid SQL dump data")
-	}
-
-	log.Debug().Int("file_size", n).Msg("Successfully validated shard file content")
-	return nil
-}
-
-// validateZipFileEntry validates a single file entry in the zip archive
-func (o *databaseExportArchiveOpts) validateZipFileEntry(file *zip.File) error {
-	// Open the file for reading
-	reader, err := file.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open file for reading: %v", err)
-	}
-	defer reader.Close()
-
-	// Validate based on file type
-	switch {
-	case file.Name == "export_metadata.json":
-		return o.validateMetadataFile(reader)
-	case file.Name == "schema.sql":
-		return o.validateSchemaFile(reader)
-	case regexp.MustCompile(`^shard_\d+\.sql$`).MatchString(file.Name):
-		return o.validateShardFile(file)
-	default:
-		log.Warn().Str("file_name", file.Name).Msg("Unknown file type, skipping validation")
-		return nil
-	}
-}
-
-// validateMetadataFile validates the JSON metadata file
-func (o *databaseExportArchiveOpts) validateMetadataFile(reader io.ReadCloser) error {
-	// Try to decode the JSON to ensure it's valid
-	var metadata map[string]any
-	decoder := json.NewDecoder(reader)
-	if err := decoder.Decode(&metadata); err != nil {
-		return fmt.Errorf("invalid JSON metadata: %v", err)
-	}
-
-	// Check for required fields
-	requiredFields := []string{"environment", "timestamp", "export_options"}
-	for _, field := range requiredFields {
-		if _, exists := metadata[field]; !exists {
-			return fmt.Errorf("missing required field '%s' in metadata", field)
-		}
-	}
-
-	return nil
-}
-
-// validateSchemaFile validates the SQL schema file
-func (o *databaseExportArchiveOpts) validateSchemaFile(reader io.ReadCloser) error {
-	// Read a small portion to check if it looks like SQL
-	buffer := make([]byte, 1024)
-	n, err := reader.Read(buffer)
-	if err != nil && err != io.EOF {
-		return fmt.Errorf("failed to read schema file: %v", err)
-	}
-
-	content := string(buffer[:n])
-
-	// Basic validation - check for SQL keywords
-	sqlKeywords := []string{"CREATE", "TABLE", "INSERT", "DROP", "ALTER"}
-	hasSQL := false
-	for _, keyword := range sqlKeywords {
-		if strings.Contains(strings.ToUpper(content), keyword) {
-			hasSQL = true
-			break
-		}
-	}
-
-	if !hasSQL {
-		return fmt.Errorf("schema file does not appear to contain valid SQL")
-	}
-
-	return nil
 }

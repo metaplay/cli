@@ -76,13 +76,14 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
-	if o.argImageTag == "" {
+	switch o.argImageTag {
+	case "":
 		selectedImage, err := selectDockerImageInteractively("Select Image to Run Locally", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageTag = selectedImage.RepoTag
-	} else if o.argImageTag == "latest-local" {
+	case "latest-local":
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {

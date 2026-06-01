@@ -24,7 +24,7 @@ func mkSkill(t *testing.T, id string) *Skill {
 		Frontmatter: fm,
 		Body:        body,
 		RawSKILL:    raw,
-		SubSkills:    map[string]*SubSkill{},
+		SubSkills:   map[string]*SubSkill{},
 	}
 }
 
@@ -34,15 +34,6 @@ func claudeTarget() AgentDir {
 		DisplayName: "Claude Code",
 		ProjectDir:  ".claude/skills",
 		UserDir:     ".claude/skills",
-	}
-}
-
-func standardTarget() AgentDir {
-	return AgentDir{
-		ID:          AgentDirStandardID,
-		DisplayName: "Standard",
-		ProjectDir:  ".agents/skills",
-		UserDir:     ".agents/skills",
 	}
 }
 

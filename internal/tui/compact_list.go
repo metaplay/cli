@@ -50,9 +50,9 @@ func (d compactListDelegate) Render(w io.Writer, m list.Model, index int, listIt
 	// Render differently if selected
 	if index == m.Index() {
 		styledTitle := "▸ " + title
-		fmt.Fprint(w, selectedStyle.Render(styledTitle))
+		_, _ = fmt.Fprint(w, selectedStyle.Render(styledTitle))
 	} else {
-		fmt.Fprint(w, "  "+title)
+		_, _ = fmt.Fprint(w, "  "+title)
 	}
 }
 
@@ -137,9 +137,9 @@ func (d multiSelectDelegate) Render(w io.Writer, m list.Model, index int, listIt
 
 	if index == m.Index() {
 		styledTitle := "▸ " + checkbox + title
-		fmt.Fprint(w, lipgloss.NewStyle().Foreground(styles.ColorOrange).Render(styledTitle))
+		_, _ = fmt.Fprint(w, lipgloss.NewStyle().Foreground(styles.ColorOrange).Render(styledTitle))
 	} else {
-		fmt.Fprint(w, "  "+checkbox+title)
+		_, _ = fmt.Fprint(w, "  "+checkbox+title)
 	}
 }
 
@@ -444,7 +444,7 @@ func (d compactMultilineDelegate) Render(w io.Writer, m list.Model, index int, l
 		}
 		lines = append(lines, "  "+styles.RenderMuted(dl))
 	}
-	fmt.Fprint(w, strings.Join(lines, "\n"))
+	_, _ = fmt.Fprint(w, strings.Join(lines, "\n"))
 }
 
 // ChooseFromListDialogMultiline is like ChooseFromListDialog but renders a

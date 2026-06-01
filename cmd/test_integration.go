@@ -64,7 +64,7 @@ func init() {
 	// Build the test list for the Long description from integrationTests.
 	var testListLines strings.Builder
 	for _, t := range integrationTests {
-		testListLines.WriteString(fmt.Sprintf("\n\t\t\t- %s: %s.", t.name, t.displayName))
+		fmt.Fprintf(&testListLines, "\n\t\t\t- %s: %s.", t.name, t.displayName)
 	}
 
 	cmd := &cobra.Command{

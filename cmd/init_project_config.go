@@ -316,6 +316,9 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 
 			return true, nil
 		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Find game-specific dashboard directory.
@@ -323,7 +326,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 	if o.flagGameDashboardPath != "" {
 		gameDashboardPath = o.flagGameDashboardPath
 	} else {
-		gameDashboardPath, err = findSubDirectory("game-specific dashboard", o.absoluteProjectPath, func(rootPath, relPath string) (bool, error) {
+		gameDashboardPath, _ = findSubDirectory("game-specific dashboard", o.absoluteProjectPath, func(rootPath, relPath string) (bool, error) {
 			// Check for required files
 			packageJSONPath := filepath.Join(rootPath, relPath, "package.json")
 			tsconfigPath := filepath.Join(rootPath, relPath, "tsconfig.json")

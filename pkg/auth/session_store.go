@@ -220,7 +220,9 @@ func decryptLegacyCFB(data []byte, key []byte) ([]byte, error) {
 	iv := data[:aes.BlockSize]
 	data = data[aes.BlockSize:]
 
-	stream := cipher.NewCFBDecrypter(block, iv)
+	// CFB is deprecated, but required here to decrypt sessions written by older
+	// CLI versions. This path is only used for one-time migration to GCM.
+	stream := cipher.NewCFBDecrypter(block, iv) //nolint:staticcheck // SA1019: legacy migration path only
 	stream.XORKeyStream(data, data)
 
 	return data, nil
@@ -236,13 +238,14 @@ func resolvePersistedConfigFilePath() (string, error) {
 
 	// Use the appropriate directory for storing application data
 	var baseDir string
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		// Windows: Use AppData\Local for application-specific data
 		baseDir = filepath.Join(homeDir, "AppData", "Local", "Metaplay")
-	} else if runtime.GOOS == "darwin" {
+	case "darwin":
 		// macOS: Use ~/Library/Application Support for application data
 		baseDir = filepath.Join(homeDir, "Library", "Application Support", "Metaplay")
-	} else {
+	default:
 		// Linux and other Unix-like systems: Use ~/.config/metaplay for user-specific configuration data
 		baseDir = filepath.Join(homeDir, ".config", "metaplay")
 	}

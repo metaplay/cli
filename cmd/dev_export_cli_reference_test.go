@@ -106,7 +106,7 @@ func TestCollectFlags_AlwaysReturnsArray(t *testing.T) {
 	root := &cobra.Command{Use: "metaplay", Short: "root"}
 	output := buildCliReferenceOutput(root)
 
-	if output.Commands == nil || len(output.Commands) == 0 {
+	if len(output.Commands) == 0 {
 		t.Fatalf("expected commands to be present")
 	}
 

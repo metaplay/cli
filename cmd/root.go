@@ -221,7 +221,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 	message, _ := event["message"].(string)
 
 	// Determine color based on level
-	var color string = ""
+	var color = ""
 	switch level {
 	case "trace":
 		// color = "\033[95m" // Bright Magenta
@@ -342,9 +342,8 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 				displayError(err)
 				os.Exit(clierrors.GetExitCode(err))
 			}
-		} else {
-			// \todo implement me: expect no args provided
 		}
+		// \todo implement me: when no UsePositionalArgs, expect no args provided
 
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)

@@ -162,7 +162,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Prepare request body if needed
 	var requestBody any
 
-	var contentType string = o.flagContentType
+	var contentType = o.flagContentType
 
 	if o.flagBody != "" {
 		// Use raw body content

@@ -287,7 +287,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	}
 
 	if string(credentials.Spec.Cluster.CertificateAuthorityData) == "" && credentials.Spec.Cluster.Server == "" {
-		return "", fmt.Errorf("Received kubeExecCredential with missing spec.cluster")
+		return "", fmt.Errorf("received kubeExecCredential with missing spec.cluster")
 	}
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{
@@ -333,6 +333,9 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 			},
 		},
 	})
+	if err != nil {
+		return "", err
+	}
 	dump := string(kubeConfig[:])
 	return dump, nil
 }

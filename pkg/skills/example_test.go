@@ -22,7 +22,7 @@ func ExampleRunInstall() {
 	}
 
 	tmp, _ := os.MkdirTemp("", "skills-example-*")
-	defer os.RemoveAll(tmp)
+	defer func() { _ = os.RemoveAll(tmp) }()
 
 	scope := skills.ScopeProject
 	res, err := skills.RunInstall(skills.InstallRequest{

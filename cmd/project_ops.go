@@ -229,7 +229,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
 	log.Debug().Msgf("Downloaded SDK version '%s' (ID: %s)", versionInfo.Version, versionInfo.ID)
-	defer os.Remove(sdkZipPath)
+	defer func() { _ = os.Remove(sdkZipPath) }()
 
 	// Validate the SDK archive file.
 	sdkMetadata, err := validateSdkZipFile(sdkZipPath)
@@ -316,7 +316,7 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	if err != nil {
 		return nil, fmt.Errorf("invalid ZIP archive: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Find and read version.yaml from the ZIP
 	var versionFile *zip.File
@@ -335,7 +335,7 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	if err != nil {
 		return nil, fmt.Errorf("failed to open version.yaml in ZIP: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	content, err := io.ReadAll(rc)
 	if err != nil {
@@ -359,16 +359,12 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open ZIP archive: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	log.Debug().Msgf("Extracting SDK to: %s", targetDir)
 
-	// Check that MetaplaySDK/ doesn't exist in target
-	metaplaySdkPath := filepath.Join(targetDir, "MetaplaySDK")
-	if _, err := os.Stat(metaplaySdkPath); err == nil {
-		// \todo enable check later -- just override files for now
-		// return fmt.Errorf("MetaplaySDK directory already exists in target: %s", metaplaySdkPath)
-	}
+	// \todo enable check later -- just override files for now: refuse to extract if
+	// MetaplaySDK/ already exists in the target directory.
 
 	// Extract only files from MetaplaySDK directory
 	for _, file := range reader.File {
@@ -402,14 +398,14 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 		// Open the zip file
 		rc, err := file.Open()
 		if err != nil {
-			outFile.Close()
+			_ = outFile.Close()
 			return fmt.Errorf("failed to open zip file %s: %v", file.Name, err)
 		}
 
 		// Copy the contents
 		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+		_ = rc.Close()
+		_ = outFile.Close()
 		if err != nil {
 			return fmt.Errorf("failed to write file %s: %v", targetPath, err)
 		}
@@ -551,7 +547,7 @@ func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, template
 	if err != nil {
 		return fmt.Errorf("failed to open zip archive: %v", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Find the template file inside the zip.
 	entryName := "MetaplaySDK/Installer/" + templateFileName
@@ -571,7 +567,7 @@ func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, template
 	if err != nil {
 		return fmt.Errorf("failed to open template file in zip: %v", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	templateJSON, err := io.ReadAll(rc)
 	if err != nil {
@@ -630,4 +626,3 @@ func computeManifestUpdate(project *metaproj.MetaplayProject) (string, []byte, e
 	log.Debug().Msgf("Successfully computed manifest.json update: \"%s\" from \"%s\"", packageName, clientRef)
 	return manifestPath, updatedManifest, nil
 }
-

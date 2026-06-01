@@ -24,7 +24,6 @@ import (
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
-const metaplayGameServerPodLabelSelector = "app=metaplay-server"
 
 // Deploy a game server to the target environment with specified docker image version.
 type deployGameServerOpts struct {
@@ -179,13 +178,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
-	if o.argImageNameTag == "" {
+	switch o.argImageNameTag {
+	case "":
 		selectedImage, err := selectDockerImageInteractively("Select Image to Deploy", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageNameTag = selectedImage.RepoTag
-	} else if o.argImageNameTag == "latest-local" {
+	case "latest-local":
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
@@ -482,7 +482,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// If there's a pending release, uninstall it first.
 	if uninstallExistingRelease {
-		taskRunner.AddTask(fmt.Sprintf("Uninstall existing Helm release"), func(output *tui.TaskOutput) error {
+		taskRunner.AddTask("Uninstall existing Helm release", func(output *tui.TaskOutput) error {
 			output.SetHeaderLines([]string{
 				fmt.Sprintf("Release status: %s", existingRelease.Info.Status),
 			})

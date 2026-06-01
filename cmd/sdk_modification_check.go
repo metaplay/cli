@@ -83,8 +83,10 @@ type gitignoreMatcher struct {
 func buildGitignoreMatcherForDir(rootDir string) *gitignoreMatcher {
 	matcher := &gitignoreMatcher{}
 
-	// Walk the directory tree to find all .gitignore files
-	filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	// Walk the directory tree to find all .gitignore files. The callback handles
+	// per-entry errors itself (returning nil to continue), so Walk never returns a
+	// non-nil error here; gitignore matching is best-effort, so discard it.
+	_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Continue on errors
 		}
@@ -180,28 +182,13 @@ func (m *gitignoreMatcher) isPathIgnored(relativePath string, isDir bool) bool {
 	return false
 }
 
-// computeFileChecksum computes SHA256 checksum of a file on disk.
-func computeFileChecksum(filePath string) (string, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // computeZipFileChecksum computes SHA256 checksum of a file within a zip archive.
 func computeZipFileChecksum(file *zip.File) (string, error) {
 	rc, err := file.Open()
 	if err != nil {
 		return "", err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, rc); err != nil {
@@ -222,7 +209,7 @@ func readZipFileContent(file *zip.File) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	return io.ReadAll(rc)
 }
 
@@ -264,7 +251,7 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
 	// Write git-style header
-	buf.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", pathInPatch, pathInPatch))
+	fmt.Fprintf(&buf, "diff --git a/%s b/%s\n", pathInPatch, pathInPatch)
 	if isNew {
 		buf.WriteString("new file mode 100644\n")
 	} else if isDeleted {
@@ -274,13 +261,13 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	if isNew {
 		buf.WriteString("--- /dev/null\n")
 	} else {
-		buf.WriteString(fmt.Sprintf("--- a/%s\n", pathInPatch))
+		fmt.Fprintf(&buf, "--- a/%s\n", pathInPatch)
 	}
 
 	if isDeleted {
 		buf.WriteString("+++ /dev/null\n")
 	} else {
-		buf.WriteString(fmt.Sprintf("+++ b/%s\n", pathInPatch))
+		fmt.Fprintf(&buf, "+++ b/%s\n", pathInPatch)
 	}
 
 	// Generate unified diff content from the diffs
@@ -442,7 +429,7 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 		}
 
 		// Write hunk header
-		buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount))
+		fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
 
 		// Write hunk lines
 		for _, line := range hunkLines {
@@ -485,7 +472,7 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SDK zip: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Build a map of relativePath -> {checksum, *zip.File} for all files in MetaplaySDK/ within the zip
 	zipEntries := make(map[string]zipFileEntry)

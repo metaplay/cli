@@ -59,7 +59,7 @@ func TestAddCreatesNewFile(t *testing.T) {
 func TestAddOverwritesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "existing.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -83,7 +83,7 @@ func TestAddOverwritesExistingFile(t *testing.T) {
 func TestAddSkipExistingSkipsWhenPresent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "existing.txt")
-	os.WriteFile(path, []byte("keep"), 0644)
+	_ = os.WriteFile(path, []byte("keep"), 0644)
 
 	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("new"), 0644)
@@ -128,7 +128,7 @@ func TestAddWithRenameUsesAlternateWhenExists(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.txt")
 	alternate := filepath.Join(dir, "alternate.txt")
-	os.WriteFile(primary, []byte("original"), 0644)
+	_ = os.WriteFile(primary, []byte("original"), 0644)
 
 	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
@@ -173,7 +173,7 @@ func TestAddWithRenameCreatesPrimaryWhenAbsent(t *testing.T) {
 func TestReadOnlyDetection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readonly.txt")
-	os.WriteFile(path, []byte("locked"), 0444)
+	_ = os.WriteFile(path, []byte("locked"), 0444)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -194,7 +194,7 @@ func TestReadOnlyDetection(t *testing.T) {
 func TestReadOnlySkippedFileNotReported(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readonly.txt")
-	os.WriteFile(path, []byte("locked"), 0444)
+	_ = os.WriteFile(path, []byte("locked"), 0444)
 
 	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("new"), 0644)
@@ -212,8 +212,8 @@ func TestReadOnlyAlternatePath(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.txt")
 	alternate := filepath.Join(dir, "alternate.txt")
-	os.WriteFile(primary, []byte("original"), 0644)
-	os.WriteFile(alternate, []byte("locked"), 0444)
+	_ = os.WriteFile(primary, []byte("original"), 0644)
+	_ = os.WriteFile(alternate, []byte("locked"), 0444)
 
 	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
@@ -270,7 +270,7 @@ func TestExecuteCreatesFiles(t *testing.T) {
 func TestExecuteOverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -291,7 +291,7 @@ func TestExecuteOverwritesExisting(t *testing.T) {
 func TestExecuteSkipsExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("keep"), 0644)
+	_ = os.WriteFile(path, []byte("keep"), 0644)
 
 	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("ignored"), 0644)
@@ -316,7 +316,7 @@ func TestExecuteRenames(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.txt")
 	alternate := filepath.Join(dir, "alternate.txt")
-	os.WriteFile(primary, []byte("original"), 0644)
+	_ = os.WriteFile(primary, []byte("original"), 0644)
 
 	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
@@ -348,7 +348,7 @@ func TestExecuteTracksPartialWrites(t *testing.T) {
 	good := filepath.Join(dir, "good.txt")
 	// Place a regular file where MkdirAll expects a directory, forcing a failure.
 	blocker := filepath.Join(dir, "blocker")
-	os.WriteFile(blocker, []byte("I'm a file"), 0644)
+	_ = os.WriteFile(blocker, []byte("I'm a file"), 0644)
 	bad := filepath.Join(blocker, "sub", "bad.txt")
 
 	p := NewPlan(false)
@@ -388,7 +388,7 @@ func TestChainingAPI(t *testing.T) {
 func TestMultiplePoliciesMixed(t *testing.T) {
 	dir := t.TempDir()
 	existing := filepath.Join(dir, "existing.txt")
-	os.WriteFile(existing, []byte("old"), 0644)
+	_ = os.WriteFile(existing, []byte("old"), 0644)
 
 	newFile := filepath.Join(dir, "new.txt")
 	skipFile := filepath.Join(dir, "existing.txt")
@@ -396,7 +396,7 @@ func TestMultiplePoliciesMixed(t *testing.T) {
 
 	// Use separate paths for each to avoid ambiguity; reuse existing for skip+overwrite.
 	overwrite := filepath.Join(dir, "overwrite.txt")
-	os.WriteFile(overwrite, []byte("old2"), 0644)
+	_ = os.WriteFile(overwrite, []byte("old2"), 0644)
 
 	p := NewPlan(false)
 	p.Add(newFile, []byte("new"), 0644)
@@ -620,7 +620,7 @@ func TestPreviewMultipleGroupsAndIndividuals(t *testing.T) {
 func TestAddUpdateWhenFileExists(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "manifest.json")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.AddUpdate(path, []byte("updated"), 0644, "added reference")
@@ -664,7 +664,7 @@ func TestAddUpdateWhenFileAbsent(t *testing.T) {
 func TestExecuteUpdatesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.json")
-	os.WriteFile(path, []byte("old content"), 0644)
+	_ = os.WriteFile(path, []byte("old content"), 0644)
 
 	p := NewPlan(false)
 	p.AddUpdate(path, []byte("new content"), 0644, "updated field")
@@ -766,7 +766,7 @@ func TestAddZipExtractionScanCounts(t *testing.T) {
 func TestAddZipExtractionExecute(t *testing.T) {
 	dir := t.TempDir()
 	destDir := filepath.Join(dir, "output")
-	os.MkdirAll(destDir, 0755)
+	_ = os.MkdirAll(destDir, 0755)
 
 	zipPath := createTestZip(t, dir, map[string]string{
 		"MetaplaySDK/hello.txt":     "hello world",
@@ -804,10 +804,10 @@ func TestAddZipExtractionExecute(t *testing.T) {
 func TestAddZipExtractionWithPrefix(t *testing.T) {
 	dir := t.TempDir()
 	destDir := filepath.Join(dir, "output")
-	os.MkdirAll(destDir, 0755)
+	_ = os.MkdirAll(destDir, 0755)
 
 	zipPath := createTestZip(t, dir, map[string]string{
-		"MetaplaySDK/included.txt":    "yes",
+		"MetaplaySDK/included.txt":     "yes",
 		"MetaplaySamples/excluded.txt": "no",
 		"other.txt":                    "no",
 	})
@@ -841,7 +841,7 @@ func TestAddZipExtractionWithPrefix(t *testing.T) {
 func TestSetConflictPolicyOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.AddSkipExisting(path, []byte("new"), 0644)
@@ -870,7 +870,7 @@ func TestSetConflictPolicyOverwrite(t *testing.T) {
 func TestSetConflictPolicySkip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -899,7 +899,7 @@ func TestSetConflictPolicySkip(t *testing.T) {
 func TestSetConflictPolicyRename(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -950,7 +950,7 @@ func TestUnchangedFileDetected(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	content := []byte("same content")
-	os.WriteFile(path, content, 0644)
+	_ = os.WriteFile(path, content, 0644)
 
 	p := NewPlan(false)
 	p.Add(path, content, 0644)
@@ -977,7 +977,7 @@ func TestUnchangedFileDetected(t *testing.T) {
 func TestChangedFileIsConflict(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
-	os.WriteFile(path, []byte("old content"), 0644)
+	_ = os.WriteFile(path, []byte("old content"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new content"), 0644)
@@ -999,7 +999,7 @@ func TestUnchangedFileNotWritten(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file.txt")
 	content := []byte("keep this")
-	os.WriteFile(path, content, 0644)
+	_ = os.WriteFile(path, content, 0644)
 
 	p := NewPlan(false)
 	p.Add(path, content, 0644)
@@ -1022,8 +1022,8 @@ func TestReadOnlyFilesReturnsCorrectPaths(t *testing.T) {
 	dir := t.TempDir()
 	roPath := filepath.Join(dir, "readonly.txt")
 	rwPath := filepath.Join(dir, "writable.txt")
-	os.WriteFile(roPath, []byte("old"), 0444)
-	os.WriteFile(rwPath, []byte("old"), 0644)
+	_ = os.WriteFile(roPath, []byte("old"), 0444)
+	_ = os.WriteFile(rwPath, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(roPath, []byte("new"), 0644)
@@ -1047,8 +1047,8 @@ func TestReadOnlyFilesExcludesSkippedAndUnchanged(t *testing.T) {
 	skipped := filepath.Join(dir, "skipped.txt")
 	unchanged := filepath.Join(dir, "unchanged.txt")
 	content := []byte("same")
-	os.WriteFile(skipped, []byte("old"), 0444)
-	os.WriteFile(unchanged, content, 0444)
+	_ = os.WriteFile(skipped, []byte("old"), 0444)
+	_ = os.WriteFile(unchanged, content, 0444)
 
 	p := NewPlan(false)
 	p.AddSkipExisting(skipped, []byte("new"), 0644)
@@ -1067,7 +1067,7 @@ func TestReadOnlyFilesExcludesSkippedAndUnchanged(t *testing.T) {
 func TestReadOnlyFilesEmpty(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "writable.txt")
-	os.WriteFile(path, []byte("old"), 0644)
+	_ = os.WriteFile(path, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(path, []byte("new"), 0644)
@@ -1085,8 +1085,8 @@ func TestReadOnlyFilesIncludesAlternatePath(t *testing.T) {
 	dir := t.TempDir()
 	primary := filepath.Join(dir, "primary.txt")
 	alternate := filepath.Join(dir, "alternate.txt")
-	os.WriteFile(primary, []byte("original"), 0644)
-	os.WriteFile(alternate, []byte("locked"), 0444)
+	_ = os.WriteFile(primary, []byte("original"), 0644)
+	_ = os.WriteFile(alternate, []byte("locked"), 0444)
 
 	p := NewPlan(false)
 	p.AddWithRename(primary, alternate, []byte("new"), 0644)
@@ -1126,7 +1126,7 @@ func TestWaitForWritableNoReadOnlyFiles(t *testing.T) {
 func TestWaitForWritableNonInteractiveErrors(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readonly.txt")
-	os.WriteFile(path, []byte("old"), 0444)
+	_ = os.WriteFile(path, []byte("old"), 0444)
 
 	p := NewPlan(false) // non-interactive
 	p.Add(path, []byte("new"), 0644)
@@ -1147,7 +1147,7 @@ func TestWaitForWritableNonInteractiveErrors(t *testing.T) {
 func TestWaitForWritableContextCancelled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "readonly.txt")
-	os.WriteFile(path, []byte("old"), 0444)
+	_ = os.WriteFile(path, []byte("old"), 0444)
 
 	p := NewPlan(true) // interactive
 	p.Add(path, []byte("new"), 0644)
@@ -1175,8 +1175,8 @@ func TestPreviewLinesReadOnlyOverride(t *testing.T) {
 	dir := t.TempDir()
 	roPath := filepath.Join(dir, "readonly.txt")
 	rwPath := filepath.Join(dir, "writable.txt")
-	os.WriteFile(roPath, []byte("old"), 0444)
-	os.WriteFile(rwPath, []byte("old"), 0644)
+	_ = os.WriteFile(roPath, []byte("old"), 0444)
+	_ = os.WriteFile(rwPath, []byte("old"), 0644)
 
 	p := NewPlan(false)
 	p.Add(roPath, []byte("new"), 0644)
@@ -1214,7 +1214,7 @@ func TestPreviewLinesReadOnlyOverride(t *testing.T) {
 func TestPreviewLinesMatchesPreviewCount(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
-		os.WriteFile(filepath.Join(dir, name), []byte("old"), 0644)
+		_ = os.WriteFile(filepath.Join(dir, name), []byte("old"), 0644)
 	}
 
 	p := NewPlan(false)
