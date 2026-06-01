@@ -60,11 +60,11 @@ If the log lines look like JSON, pipe through `jq -R 'fromjson?'` to drop non-JS
 - **Crash-looping pod:** `--pod <name> --since=15m` gets that pod's last few startup attempts.
 - **No idea, just want to see what's going on:** `--since=15m -f` shows recent history then tails live.
 
-Avoid omitting `--since` on a busy env — the default is *all available logs* and the volume can be hundreds of MB.
+Avoid omitting `--since` on a busy env — the default is *all available logs* and the volume can be large.
 
 ## Limitations
 
-- The CLI streams what Kubernetes retained — logs older than the cluster's retention window (typically a few days) are not available here. For longer-horizon investigations, point the user at their log-aggregation system if the project has one.
+- The CLI streams what Kubernetes retained — logs older than the cluster's retention window (typically a few days) are not available here. For longer-horizon investigations, point the user at the environment's Grafana at `<admin-hostname>/grafana` (e.g. `https://tiny-squids-admin.p1.metaplay.io/grafana`). The admin hostname is shown by `metaplay get environment-info <env>`.
 - `metaplay debug logs` cannot directly grep server-side. Filter on the local end (`| grep`).
 - If logs stop unexpectedly during `-f`, the pod likely restarted. Rerun, or pull `--since=<small>` to confirm.
 

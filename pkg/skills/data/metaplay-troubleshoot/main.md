@@ -4,6 +4,10 @@ Diagnostic playbooks for Metaplay tooling and SDK problems.
 
 {{subskills}}
 
+## Dashboard failures
+
+If `metaplay dev dashboard` or `metaplay build dashboard` starts behaving strangely (stale assets, weird Node errors, dependency mismatches), run: `metaplay dev clean-dashboard-artifacts`
+
 ## Where else to look
 
 - **General "how do I X in Metaplay" questions** (SDK, dashboard, cloud deployments, samples): `metaplay skills get metaplay-docs`.

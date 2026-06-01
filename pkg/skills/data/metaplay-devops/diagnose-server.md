@@ -38,7 +38,7 @@ Failure in (1) is a Kubernetes / image / config issue. Failures in (2)/(4) are D
 
 ```bash
 metaplay debug shell <env>             # Pick interactively (or implicit if only one pod).
-metaplay debug shell <env> service-0   # Direct target.
+metaplay debug shell <env> service-0   # Target specific pod.
 ```
 
 Inside the debug shell, the host filesystem of the game server container is available, plus the standard diagnostic tools from the `metaplay/diagnostics:latest` image (`dotnet-trace`, `dotnet-gcdump`, `dotnet-dump`, `jq`, `mariadb`, etc.).

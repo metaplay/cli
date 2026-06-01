@@ -26,9 +26,11 @@ metaplay debug admin-request <env> GET api/players/<PlayerId>/incidentReport/<In
 Show the user the recent-incident catalog and let them pick.
 
 1. Fetch last-24h statistics (grouped by fingerprint, with counts):
+
    ```bash
    metaplay debug admin-request <env> GET api/incidentReports/statistics
    ```
+
    Response is `List<PlayerIncidentStatistics>` with:
    - `Fingerprint` — MD5 of Type/SubType/Reason (use to fetch specific incidents)
    - `Type` — e.g. `TerminatedConnection`, `UnhandledException`, `ChecksumMismatch`
@@ -37,6 +39,7 @@ Show the user the recent-incident catalog and let them pick.
    - `Count`, `CountIsLimitedByQuerySize`
 
 2. Display the top 15, sorted by `Count` descending:
+
    ```
     #  | Count | Type                    | Reason
    ----|-------|-------------------------|------------------------------------------
@@ -44,14 +47,17 @@ Show the user the recent-incident catalog and let them pick.
     2  |   523 | UnhandledException      | NullReferenceException in PlayerActor
     3  |   156 | ChecksumMismatch        | Desync detected after PlayerBuyItem
    ```
+
    Include `SubType` in parens after `Type` when it adds clarity.
 
 3. Ask the user to pick a number. Grab that entry's `Fingerprint`.
 
 4. Fetch one sample instance via the fingerprint:
+
    ```bash
    metaplay debug admin-request <env> GET api/incidentReports/<Fingerprint>/1
    ```
+
    Response is `List<PlayerIncidentHeader>` — take the first entry's `IncidentId` and `PlayerId`.
 
 5. Fetch full details using the same URL form as Case A.

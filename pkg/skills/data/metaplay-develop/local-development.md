@@ -1,6 +1,6 @@
 ---
 name: metaplay-develop-local-development
-description: Run a Metaplay game server, LiveOps Dashboard, and BotClient locally for development — `metaplay dev server`, `metaplay dev dashboard`, `metaplay dev image`, plus the relationship to `metaplay build server` / `build dashboard` / `build image`. Use when the user asks to run the game locally, test on a local server, start the dashboard, or iterate without deploying. Cover the typical inner-loop, port layout, and when to test the real Docker image vs the raw .NET process.
+description: Run a Metaplay game server, LiveOps Dashboard, and BotClient locally for development — `metaplay dev ...` commands. Use when the user asks to run the game locally, test on a local server, start the dashboard, or iterate without deploying. Cover the typical inner-loop, port layout, and when to test the real Docker image vs the raw .NET process.
 ---
 
 # Local development loop
@@ -14,7 +14,7 @@ A live local stack typically runs three processes:
 | Piece | Command | What it serves |
 |---|---|---|
 | Game server (.NET) | `metaplay dev server` | TCP game traffic + admin API. Connect Unity clients and the dashboard to it. |
-| LiveOps Dashboard (Vue) | `metaplay dev dashboard` | The admin UI at `http://localhost:5550` once the server is up. |
+| LiveOps Dashboard (Vue) | `metaplay dev dashboard` | The admin UI at `http://localhost:5551` once the server is up. |
 | BotClient | `metaplay dev botclient` | Synthetic clients for load testing or scripted scenarios. Optional. |
 
 `metaplay dev server` is roughly `cd Backend/Server && dotnet run`. `metaplay dev dashboard` is the Vue.js dev server with hot reload. They're separate processes — run them in separate terminals (or background one of them).
@@ -29,16 +29,12 @@ metaplay dev server
 
 # Auto-restart on .cs changes (file watcher).
 metaplay dev server --watch
-
-# Pass extra args to dotnet run (after --).
-metaplay dev server -- -LogLevel=Warning
-metaplay dev server -- -ExitAfter=00:00:30
 ```
 
 For dashboard development:
 
 ```bash
-# In one terminal: the game server (which also serves the bundled dashboard).
+# In one terminal: the game server (which also serves the *pre-built* dashboard).
 metaplay dev server
 
 # In another: Vue dev server with hot reload. Use the URL the command prints.
@@ -70,21 +66,11 @@ The Unity client connects to whichever server URL is configured in its `Metaplay
 
 ## Validating changes
 
-See the parent skill's "Validating changes locally" section: `metaplay build server` for a fast compile check, `dotnet test Backend/SharedCode.Tests` (and `Backend/Server.Tests` if present) for unit tests. The local dev stack itself is *not* a substitute for tests — desync bugs and other determinism-class issues won't always reproduce against a fresh server with one connected client.
-
-## Dashboard build artifacts gotcha
-
-If `metaplay dev dashboard` or `metaplay build dashboard` starts behaving strangely (stale assets, weird Node errors, dependency mismatches), run:
-
-```bash
-metaplay dev clean-dashboard-artifacts
-```
-
-That clears the Vite/pnpm caches under `Backend/Dashboard/`. Re-run the build/dev command afterward.
+See the parent skill's "Validating changes locally" section: `metaplay build server` for a fast compile check, e.g., `dotnet test Backend/SharedCode.Tests` and `Backend/Server.Tests` (which ever are present) for unit tests.
 
 ## Stopping cleanly
 
-`metaplay dev server` listens for `q` on stdin and shuts down gracefully. Ctrl+C also works but may leave the .NET process briefly orphaned on Windows — the CLI handles this defensively but graceful is preferred when possible. `metaplay dev dashboard` and `metaplay dev image` exit on Ctrl+C.
+`metaplay dev server` listens for `q` on stdin or Ctrl+C and shuts down gracefully. `metaplay dev dashboard` and `metaplay dev image` exit on Ctrl+C.
 
 ## Error patterns
 

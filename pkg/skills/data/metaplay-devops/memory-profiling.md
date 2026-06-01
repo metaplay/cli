@@ -7,7 +7,7 @@ description: Capture a heap dump from a running Metaplay game server pod with `m
 
 When to reach for this: process memory is climbing without bound, the kubelet OOM-killed a pod, a specific entity type is suspected of leaking, or you need evidence for an unbounded-collection bug.
 
-**This operation is intrusive.** Collecting a heap dump completely freezes the target process for the duration — seconds to minutes depending on heap size. Health probes are temporarily patched to keep the kubelet from killing the pod during the freeze. **Never run against a production env at peak load without coordinating with the user.**
+**This operation is intrusive:** Collecting a heap dump completely freezes the target process for the duration — seconds to minutes depending on heap size. Health probes are temporarily patched to keep the kubelet from killing the pod during the freeze. **Never run against a production env without explicit permission from the user.**
 
 ## Collecting
 
@@ -22,8 +22,8 @@ metaplay debug collect-heap-dump <env> service-0
 metaplay debug collect-heap-dump <env> --mode=dump
 
 # Custom output path. Use .gcdump extension for gcdump mode; no extension for dump mode.
-metaplay debug collect-heap-dump <env> -o /tmp/leak.gcdump
-metaplay debug collect-heap-dump <env> --mode=dump -o /tmp/core_250901_093000
+metaplay debug collect-heap-dump <env> -o ./leak.gcdump
+metaplay debug collect-heap-dump <env> --mode=dump -o ./core_250901_093000
 
 # Skip the heap-size warning (only when you've already decided).
 metaplay debug collect-heap-dump <env> --yes
@@ -67,7 +67,7 @@ What to look for:
 
 ## Safety notes — re-read before running
 
-- **Freezes the pod.** Seconds for a small heap, minutes for a large one. Players connected to that pod will time out.
+- **Freezes the pod:** Seconds for a small heap, minutes for a large one. Players connected to that pod will time out.
 - **Health-probe patch:** restored when the dump finishes or the debug container exits. If the CLI crashes mid-dump, restart the pod (or wait for the next deploy).
 - **`--mode=dump` files are large** — many GB for a server with a populated heap. Make sure the local disk has room.
 - The `--yes` flag bypasses the size warning; only set it when you've already confirmed with the user.

@@ -15,7 +15,7 @@ Tell the user: **this is a preview workflow** — behavior is stable enough for 
 
 The SDK directory is wiped and reinstalled in Phase 2. Without a clean source-controlled tree, local SDK edits — especially binary files, which the modification-patch cannot capture — can be lost with no way to recover.
 
-1. **Identify the source control system.** Ask the user if it's not obvious from the project.
+1. **Identify the source control system.**
 
    If the project has no source control at all, print a prominent warning:
 
@@ -42,10 +42,10 @@ The SDK directory is wiped and reinstalled in Phase 2. Without a clean source-co
    ```
 
 3. **Ask the user which target they want** (`AskUserQuestion`):
-   - Latest minor within the current major (e.g. 34.1 → 34.3), or
+   - Latest minor within the current major (e.g. 34.1 → 34.3 -- bumping multiple minor versions is always fine), or
    - Latest minor within the next major (e.g. 34.3 → 35.2).
    - If only one upgrade is possible, confirm that with the user.
-   - Note: Major versions cannot be skipped! If the user wants 33.x → 35.x, tell them to upgrade to 34.x first. Minor bumps within the same major are always fine.
+   - Note: Major versions cannot be skipped! If the user wants 33.x → 35.x, tell them to upgrade to 34.x first.
 
 ## Phase 2 — Run the update
 
@@ -87,7 +87,7 @@ The command replaces the SDK directory in place. If local modifications were det
 
 5. **Report what's left.** After your pass, list any `.rej` files you couldn't resolve and the binary files the patch couldn't capture. Those are the user's to handle.
 
-## Phase 3 — Apply the migration guide (major upgrades only)
+## Phase 3 — Apply the migration guide
 
 Skip this phase for minor bumps.
 
@@ -103,7 +103,11 @@ Skip this phase for minor bumps.
 
    Each `::: details` block inside these sections is one migration task. Extract its title and contents.
 
-3. **Apply each entry in order**, tracking progress with a task list. Read the entry fully before touching files. If the migration is ambiguous, presents multiple options, or you're not sure it applies, ask the user via `AskUserQuestion` — do not guess.
+3. **Apply each entry in order**, tracking progress with a task list. Read the entry fully before touching files.
+
+   Usually only major versions have migration guides. If there are no migrations, just skip the rest of this phase.
+
+   If a migration is ambiguous, do what makes the most sense. Report such decisions to the user in the final report.
 
 4. **Skip non-applicable entries.** Some migrations are conditional (e.g. "For Games With Customized LiveOps Dashboard"). If the project doesn't use the feature, skip the entry; if you can't tell from the code, ask the user.
 
@@ -111,51 +115,49 @@ Skip this phase for minor bumps.
 
 After all migrations are applied:
 
-1. **Build the server:**
+1. **Build the various components:**
 
    ```bash
    metaplay build server
+   metaplay build dashboard
+   metaplay build botclient
    ```
 
    Treat any compile error as a migration-step failure — find the entry that owns it.
 
-2. **Run integration tests** if the project has them:
+2. **Run tests**:
 
    ```bash
+   donet test <test project>
    metaplay test integration
    ```
 
-## Phase 5 — Report and generate review guide
+## Phase 5 — Report results and produce review guide
 
-Two outputs: a short summary inline, and a project-specific review guide written to `metaplay-sdk-update-review.md` in the project root.
+Two outputs: a short summary inline, and a review guide on the changes done to the project.
 
 **Inline summary:**
 
 - Previous version → new version
 - Build and test status (pass/fail, with the failing entry and `file:line` if anything failed)
 - Count of migration entries applied / skipped
-- Pointer to the review guide file
 
-**Review guide (`metaplay-sdk-update-review.md`):**
+**Change review guide:**
 
-Generate it from what was actually done in this run — do not template generic SDK-upgrade advice. Structure:
-
-1. **Header** — previous version, new version, date, and a one-line note that the user owns final validation.
-
-2. **Per migration entry applied**, in the order applied:
+1. **Per migration entry applied**, in the order applied:
    - Entry title (verbatim from the release notes section).
    - What the migration changed (1–2 sentences, in this project's terms).
    - **Files touched in this project** — concrete `path/to/file:line` references from the edits actually made. If no project files were touched (SDK-internal migration), say so.
-   - **What to verify** — 1–3 specific things tied to the change: a behavior to exercise, an edge case, a value to spot-check, a save-game compatibility concern. Skip vague "test it works"; if you can't name something specific, say "no project-side verification needed" and explain why.
-   - Any ambiguity the user resolved via `AskUserQuestion` during this entry — record the question and their answer.
+   - **What to verify** — key changes tied to the change: a behavior to exercise, an edge case, a value to spot-check, a save-game compatibility concern. Find explicit actionable checks to do, or report that no checking is needed (with explanation why).
+   - Any ambiguity or other reasonable approaches that could have been taken.
 
-3. **Per migration entry skipped** — title and the reason it was skipped (e.g. "project does not use custom dashboard"). The user can scan this to sanity-check the skip decisions.
+2. **Per migration entry skipped** — title and the reason it was skipped (e.g. "project does not use custom dashboard"). The user can scan this to sanity-check the skip decisions.
 
-4. **Patch reapply status** — whether `metaplay-sdk-modifications.patch` was applied, and a list of any `.rej` files still outstanding.
+3. **Patch reapply status** — whether `metaplay-sdk-modifications.patch` was applied, and a list of any `.rej` files still outstanding.
 
-5. **Manual follow-ups the user still owes** — pulled from the release notes' non-code instructions: Google Sheets schema edits, Helm chart redeploys, dashboard custom code, infrastructure config changes, etc. Include only items the release notes actually flagged for this upgrade.
+4. **Manual follow-ups the user still owes** — pulled from the release notes' non-code instructions: Google Sheets schema edits, Helm chart redeploys, dashboard custom code, infrastructure config changes, etc. Include only items the release notes actually flagged for this upgrade.
 
-6. **Recommended next step** — "review this file, then commit". Do **not** commit yourself unless asked (see the parent skill's workflow).
+5. **Recommended next step** — "review the report/guide above before committing". Do **not** commit automatically unless explicitly asked.
 
 ## Error patterns
 

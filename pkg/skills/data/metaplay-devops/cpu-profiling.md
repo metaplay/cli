@@ -1,6 +1,6 @@
 ---
 name: metaplay-devops-cpu-profiling
-description: Collect a CPU profile from a running Metaplay game server pod with `metaplay debug collect-cpu-profile` (a `dotnet-trace` wrapper). Covers when to profile (latency spike, high CPU), output formats (`nettrace`, `speedscope`, `chromium`), durations, and how to read the result. Use when the user asks to profile, capture a trace, or diagnose a CPU/latency hotspot.
+description: Collect a CPU profile from a running Metaplay game server pod with `metaplay debug collect-cpu-profile`. Covers when to profile (latency spike, high CPU), output formats (`nettrace`, `speedscope`, `chromium`), durations, and how to read the result. Use when the user asks to profile, capture a trace, or diagnose a CPU/latency hotspot.
 ---
 
 # CPU profiling
@@ -26,7 +26,7 @@ metaplay debug collect-cpu-profile <env> --format speedscope
 metaplay debug collect-cpu-profile <env> --format chromium
 
 # Custom output path.
-metaplay debug collect-cpu-profile <env> -o /tmp/server-hotpath.nettrace
+metaplay debug collect-cpu-profile <env> -o ./server-hotpath.nettrace
 
 # Pass extra args through to dotnet-trace (after `--`).
 metaplay debug collect-cpu-profile <env> -- --providers Microsoft-Windows-DotNETRuntime:4:4
@@ -46,7 +46,7 @@ Default to `speedscope` when sharing with the user — it's the fastest "look at
 
 ## How long to capture
 
-- **Steady-state high CPU:** 30s (default) is plenty.
+- **Steady-state high CPU:** 30s (default) is a good default.
 - **Intermittent / bursty:** 60–120s, and time it to coincide with the symptom (e.g. start the trace right before a known traffic spike).
 - **One specific slow request:** trigger the request just after starting the trace; 30s is still usually enough.
 
@@ -56,16 +56,14 @@ Longer captures produce much bigger files and slow down the post-processing. Don
 
 A flamegraph in speedscope is the canonical first view: wide bars at the top of the stack = the methods burning CPU. Cross-reference hot frames against:
 
-- `metaplay-develop-code-review` rule **PS1** (performance on frequently-invoked actions, Actions section).
-- `metaplay-develop-code-review` rules **GT1**/**GT3** (GameTick performance, per-tick work, Models section).
-- `metaplay-develop-code-review` rule **D3** (avoid `SortedSet`/`SortedDictionary`, Actions section) — sorted-collection hot frames are a common false positive that's actually a real issue.
+- See skill `metaplay-develop-code-review` for potential performance-related issues within Metaplay projects.
 
-If the hot path is inside SDK code (e.g. serialization, scheduler), it's usually a downstream symptom of a userland mistake — back up the stack until you find the userland frame that called it.
+Analyze all hot paths thoroughly to understand where the root cause is coming from. If a given function is consuming a lot of CPU time, the issue can be in the callers as well.
 
 ## Safety notes
 
 - Tracing has measurable overhead while running (~5–10% CPU plus disk). Coordinate with the user before tracing a production env at peak hours.
-- The health-probe patch is temporary: it's reverted when the trace finishes or the debug container exits. If the CLI crashes mid-collection, restart the affected pod (or wait for the next deploy) to restore the original probe behavior.
+- The health-probe patch is temporary. Even if the profiling fails without resetting the probe state, it'll automatically correct itself.
 - Trace files are not sensitive by themselves but include method names from your game code — treat them as you would source code.
 
 ## Error patterns

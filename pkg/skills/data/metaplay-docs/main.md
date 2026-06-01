@@ -2,9 +2,11 @@
 
 The `metaplay` CLI exposes a remote documentation service designed for AI coding agents. Treat it like a read-only filesystem covering the Metaplay SDK source, sample projects, the full docs site, blog posts, and the CLI reference — searchable from the shell.
 
-All commands live under `metaplay llm-docs` and print plain text to stdout.
-
 {{subskills}}
+
+## CLI commands
+
+All commands live under `metaplay llm-docs` and print plain text to stdout.
 
 | Command | Use it to... |
 |---|---|
