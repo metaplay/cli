@@ -476,7 +476,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			_, err := pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			return err
 		})
 	}
 
