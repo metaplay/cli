@@ -111,8 +111,11 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	taskRunner := tui.NewTaskRunner()
 
 	// Push the image to the remote repository.
+	imagePushed := false
 	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-		return pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		imagePushed = pushed
+		return err
 	})
 
 	// Run the tasks.
@@ -121,7 +124,11 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	if imagePushed {
+		log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	} else {
+		log.Info().Msg(styles.RenderSuccess("✅ Image already present in repository; nothing to push."))
+	}
 	return nil
 }
 
@@ -144,30 +151,61 @@ func extractDockerImageTag(imageName string) (string, error) {
 	return srcImageParts[1], nil
 }
 
-// Push a docker image from the local repo to a remote one.
-// Output progress into the task output.
-func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
+// pushDockerImage pushes a local image from the local repo to the remote repository, writing
+// progress into the task output. The returned bool is true if an image was actually pushed, and
+// false if the push was skipped because the identical image was already present in the repository.
+func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) (bool, error) {
 	// Create a Docker client
 	cli, err := envapi.NewDockerClient()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Extract tag from source image.
 	imageTag, err := extractDockerImageTag(imageName)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Resolve source and destination image names.
 	srcImageName := imageName
 	dstImageName := fmt.Sprintf("%s:%s", dstRepoName, imageTag)
 
+	// Check whether the tag already exists in the remote repository. Image tags must be unique
+	// per build: re-using a tag (e.g. 'latest', a bare commit SHA, or any tag that has already
+	// been pushed) means a deployed environment can't reliably resolve which artifact it's
+	// running. We therefore refuse to overwrite a tag that already holds a different image.
+	remoteDigests, exists, err := envapi.FetchRemoteDockerImageDigests(dockerCredentials, dstImageName)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		// Resolve the local image's ID so we can tell apart "same image, re-pushed" (a harmless
+		// no-op we can skip) from "different image, same tag" (a hard error). The local image ID is
+		// the config digest under the legacy image store and the manifest digest under the
+		// containerd image store, so accept a match against either remote digest.
+		localImage, err := envapi.ReadLocalDockerImageMetadata(srcImageName)
+		if err != nil {
+			return false, err
+		}
+
+		if localImage.ImageID == remoteDigests.ConfigDigest || localImage.ImageID == remoteDigests.ManifestDigest {
+			// Identical image already in the repository: nothing to do.
+			output.AppendLinef("Image %s is already present in the repository (identical digest), skipping push", dstImageName)
+			return false, nil
+		}
+
+		// Same tag, different image content: refuse to overwrite.
+		return false, clierrors.Newf("Image tag '%s' already exists in the environment's repository with different content", imageTag).
+			WithDetails("Re-using an image tag is not supported: each build must be pushed with a unique tag.").
+			WithSuggestion("Rebuild with a unique tag and push that. A '<timestamp>-<commit>' tag (e.g. '20260601-153000-1a27c25') is recommended; 'metaplay build image' without a tag generates one automatically.")
+	}
+
 	// If names don't match, tag the source image as the destination.
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
 		if err := cli.ImageTag(ctx, srcImageName, dstImageName); err != nil {
-			return fmt.Errorf("failed to tag image: %w", err)
+			return false, fmt.Errorf("failed to tag image: %w", err)
 		}
 	}
 
@@ -180,7 +218,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 	}
 	authConfigBytes, err := json.Marshal(authConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal auth config: %w", err)
+		return false, fmt.Errorf("failed to marshal auth config: %w", err)
 	}
 
 	// Encode with base64
@@ -190,7 +228,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to push docker image: %w", err)
+		return false, fmt.Errorf("failed to push docker image: %w", err)
 	}
 	defer func() { _ = pushResponseReader.Close() }()
 
@@ -205,7 +243,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to decode push response: %w", err)
+			return false, fmt.Errorf("failed to decode push response: %w", err)
 		}
 
 		// Track progress by ID to show the latest status for each layer
@@ -219,7 +257,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 		// If progress has an error, return it
 		if progress.Error != nil {
-			return fmt.Errorf("error pushing image: %s", progress.Error.Message)
+			return false, fmt.Errorf("error pushing image: %s", progress.Error.Message)
 		}
 
 		// Update the output with current progress information (only in interactive mode).
@@ -228,7 +266,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.

@@ -6,7 +6,9 @@ package envapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +22,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/rs/zerolog/log"
 )
@@ -161,6 +164,79 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	// Use the helper function to convert inspect data to MetaplayImageInfo
 	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
 	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect)
+}
+
+// RemoteDockerImageDigests holds the two content digests that can identify a remote image. Which
+// one matches a local image's reported ID depends on the local Docker daemon's image store:
+// the legacy store reports the config digest as the image ID, while the containerd store reports
+// the manifest digest. Both are preserved across push/pull, so comparing a local ID against both
+// detects an identical already-pushed image regardless of the store backend.
+type RemoteDockerImageDigests struct {
+	ConfigDigest   string // Digest of the image config blob (the legacy image-store ID).
+	ManifestDigest string // Digest of the image manifest (the containerd image-store ID).
+}
+
+// FetchRemoteDockerImageDigests returns the config and manifest digests of the image at the given
+// reference in a remote Docker registry.
+//
+// The 'exists' return value is false (with a nil error) when no image exists at the reference.
+func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (digests *RemoteDockerImageDigests, exists bool, err error) {
+	log.Debug().Msgf("Fetch digests of remote container image: %s", imageRef)
+	if imageRef == "" {
+		return nil, false, fmt.Errorf("empty image reference")
+	}
+
+	// Create a registry authenticator using the provided credentials.
+	authenticator := authn.FromConfig(authn.AuthConfig{
+		Username: creds.Username,
+		Password: creds.Password,
+	})
+
+	// Parse the image reference (name + tag or digest).
+	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
+	}
+
+	// Fetch the image descriptor. A 'not found' response means the tag is free.
+	desc, err := remote.Get(ref, remote.WithAuth(authenticator))
+	if err != nil {
+		if isRemoteImageNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to query remote docker image '%s': %w", imageRef, err)
+	}
+
+	// Resolve the image and read its config digest. The descriptor digest is the manifest digest.
+	img, err := desc.Image()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get remote docker image from descriptor '%s': %w", imageRef, err)
+	}
+	cfgName, err := img.ConfigName()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get config digest for remote docker image '%s': %w", imageRef, err)
+	}
+
+	return &RemoteDockerImageDigests{
+		ConfigDigest:   cfgName.String(),
+		ManifestDigest: desc.Digest.String(),
+	}, true, nil
+}
+
+// isRemoteImageNotFound reports whether err from a remote registry query indicates that no image
+// exists at the requested reference (as opposed to a transport/auth/other failure).
+func isRemoteImageNotFound(err error) bool {
+	if transportErr, ok := errors.AsType[*transport.Error](err); ok {
+		for _, code := range transportErr.Errors {
+			if code.Code == transport.ManifestUnknownErrorCode || code.Code == transport.NameUnknownErrorCode {
+				return true
+			}
+		}
+		if transportErr.StatusCode == http.StatusNotFound {
+			return true
+		}
+	}
+	return false
 }
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
