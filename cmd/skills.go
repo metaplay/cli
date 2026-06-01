@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/charmbracelet/glamour"
-	"github.com/charmbracelet/glamour/ansi"
-	"github.com/charmbracelet/glamour/styles"
+	"charm.land/glamour/v2"
+	"charm.land/glamour/v2/ansi"
+	"charm.land/glamour/v2/styles"
+	"charm.land/lipgloss/v2"
 	"github.com/metaplay/cli/internal/tui"
-	"github.com/muesli/termenv"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -97,16 +97,18 @@ func renderMarkdownForTerminal(content []byte) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	return out, true
+	// glamour v2 is "pure" and always emits truecolor; downsample to the
+	// terminal's actual color profile via lipgloss before printing.
+	return lipgloss.Sprint(out), true
 }
 
-// skillsStyleConfig picks glamour's dark or light style the same way
-// WithAutoStyle does, then blanks the inline-code Prefix/Suffix so spans
-// like `file:line` don't render with visible padding around them. The
-// returned value is a copy; the package-global style is not mutated.
+// skillsStyleConfig picks glamour's dark or light style based on the detected
+// terminal background, then blanks the inline-code Prefix/Suffix so spans like
+// `file:line` don't render with visible padding around them. The returned value
+// is a copy; the package-global style is not mutated.
 func skillsStyleConfig() ansi.StyleConfig {
 	var s ansi.StyleConfig
-	if termenv.HasDarkBackground() {
+	if lipgloss.HasDarkBackground(os.Stdin, os.Stdout) {
 		s = styles.DarkStyleConfig
 	} else {
 		s = styles.LightStyleConfig
