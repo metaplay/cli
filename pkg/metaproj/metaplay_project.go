@@ -280,15 +280,18 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 
 	// Check project .NET version.
 	if config.DotnetRuntimeVersion == nil {
-		return fmt.Errorf("missing dotnetRuntimeVersion. Must specify the 'major.minor' for the .NET runtime framework to use, e.g., '9.0'")
+		return clierrors.New("Missing dotnetRuntimeVersion in project config").
+			WithSuggestion("Specify the 'major.minor' .NET runtime framework version to use, e.g. '10.0'")
 	}
 	dotnetMajorVersion := config.DotnetRuntimeVersion.Segments()[0]
 	dotnetPatchVersion := config.DotnetRuntimeVersion.Segments()[2]
 	if dotnetMajorVersion < 8 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only versions 8.x or later are supported", config.DotnetRuntimeVersion)
+		return clierrors.Newf("Invalid dotnetRuntimeVersion ('%s')", config.DotnetRuntimeVersion).
+			WithSuggestion("Only versions 8.x or later are supported")
 	}
 	if dotnetPatchVersion != 0 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only specify 'major.minor' version, eg, '9.0'", config.DotnetRuntimeVersion)
+		return clierrors.Newf("Invalid dotnetRuntimeVersion ('%s')", config.DotnetRuntimeVersion).
+			WithSuggestion("Specify only the 'major.minor' version, e.g. '10.0'")
 	}
 
 	// Helm charts.

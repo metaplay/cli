@@ -7,6 +7,7 @@ package helmutil
 import (
 	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/release"
 )
@@ -34,11 +35,14 @@ func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*
 	if len(releases) > 1 {
 		switch chartName {
 		case wellKnownGameServerChartName:
-			return nil, fmt.Errorf("multiple Helm releases found! Remove them first using 'metaplay remove server' command")
+			return nil, clierrors.New("Multiple Helm releases found").
+				WithSuggestion("Remove them first with 'metaplay remove server'")
 		case wellKnownBotClientChartName:
-			return nil, fmt.Errorf("multiple Helm releases found! Remove them first using 'metaplay remove botclient' command")
+			return nil, clierrors.New("Multiple Helm releases found").
+				WithSuggestion("Remove them first with 'metaplay remove botclient'")
 		default:
-			return nil, fmt.Errorf("multiple Helm releases found! Remove release for chart %q first", chartName)
+			return nil, clierrors.Newf("Multiple Helm releases found for chart %q", chartName).
+				WithSuggestion("Remove the existing release first")
 		}
 	}
 

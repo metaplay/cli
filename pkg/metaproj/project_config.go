@@ -51,7 +51,7 @@ type ProjectConfig struct {
 	SharedCodeDir   string `yaml:"sharedCodeDir"`   // Relative path to the shared code directory
 	UnityProjectDir string `yaml:"unityProjectDir"` // Relative path to the Unity (client) project
 
-	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '8.0' or '9.0'
+	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '10.0'
 
 	HelmChartRepository   string `yaml:"helmChartRepository"`   // Helm chart repository to use (defaults to 'https://charts.metaplay.dev')
 	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)

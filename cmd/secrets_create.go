@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -95,12 +96,14 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// Split the literal pair into key and value
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok {
-			return fmt.Errorf("invalid --from-literal format: '%s'. Expected 'key=value'", pair)
+			return clierrors.NewUsageErrorf("Invalid --from-literal format: '%s'", pair).
+				WithSuggestion("Expected 'key=value'")
 		}
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {
-			return fmt.Errorf("duplicate key detected: %s. All keys must be unique", key)
+			return clierrors.NewUsageErrorf("Duplicate key detected: '%s'", key).
+				WithSuggestion("All keys must be unique")
 		}
 
 		// Insert into the map
@@ -112,12 +115,14 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 		// Split the literal pair into key and value
 		key, filePath, ok := strings.Cut(pair, "=")
 		if !ok {
-			return fmt.Errorf("invalid --from-file format: '%s'. Expected 'key=filepath'", pair)
+			return clierrors.NewUsageErrorf("Invalid --from-file format: '%s'", pair).
+				WithSuggestion("Expected 'key=filepath'")
 		}
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {
-			return fmt.Errorf("duplicate key detected: %s. All keys must be unique", key)
+			return clierrors.NewUsageErrorf("Duplicate key detected: '%s'", key).
+				WithSuggestion("All keys must be unique")
 		}
 
 		// Read the file content

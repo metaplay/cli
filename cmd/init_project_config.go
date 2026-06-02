@@ -438,7 +438,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("invalid .NET runtime version in global.json")
 			}
-			// Only keep major.minor, e.g., '9.0'.
+			// Only keep major.minor, e.g., '10.0'.
 			dotnetRuntimeVersion = strings.Join(parts[0:2], ".")
 		}
 	}

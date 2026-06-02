@@ -37,8 +37,8 @@ node_modules/
 
 	// Create directory structure
 	dirs := []string{
-		"Backend/Attributes/bin/Debug/net9.0",
-		"Backend/Attributes/obj/Debug/net9.0",
+		"Backend/Attributes/bin/Debug/net10.0",
+		"Backend/Attributes/obj/Debug/net10.0",
 		"Backend/Server/bin/Release",
 		"Backend/Server/obj/Release",
 		"Backend/Server/src",
@@ -71,9 +71,9 @@ node_modules/
 		{"Backend/Server/bin", true, true, "another nested bin directory"},
 
 		// Files inside bin/obj should be ignored (via parent directory check)
-		{"Backend/Attributes/bin/Debug/net9.0/Metaplay.Attributes.dll", false, true, "dll in bin"},
-		{"Backend/Attributes/obj/Debug/net9.0/Metaplay.Attributes.dll", false, true, "dll in obj"},
-		{"Backend/Attributes/bin/Debug/net9.0/Metaplay.Attributes.pdb", false, true, "pdb in bin"},
+		{"Backend/Attributes/bin/Debug/net10.0/Metaplay.Attributes.dll", false, true, "dll in bin"},
+		{"Backend/Attributes/obj/Debug/net10.0/Metaplay.Attributes.dll", false, true, "dll in obj"},
+		{"Backend/Attributes/bin/Debug/net10.0/Metaplay.Attributes.pdb", false, true, "pdb in bin"},
 
 		// node_modules should be ignored
 		{"Frontend/node_modules", true, true, "node_modules directory"},
