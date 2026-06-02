@@ -365,6 +365,10 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 
 	// \todo enable check later -- just override files for now: refuse to extract if
 	// MetaplaySDK/ already exists in the target directory.
+	// metaplaySdkPath := filepath.Join(targetDir, "MetaplaySDK")
+	// if _, err := os.Stat(metaplaySdkPath); err == nil {
+	// 	return fmt.Errorf("MetaplaySDK directory already exists in target: %s", metaplaySdkPath)
+	// }
 
 	// Extract only files from MetaplaySDK directory
 	for _, file := range reader.File {

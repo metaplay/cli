@@ -377,6 +377,10 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			return err
 		}
 	}
+	// \todo enable check later: when a custom dashboard is not used, rootDir must be empty.
+	// } else if dashboardConfig.RootDir != "" {
+	// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
+	// }
 
 	// Validate environments.
 	for endNdx, envConfig := range config.Environments {
