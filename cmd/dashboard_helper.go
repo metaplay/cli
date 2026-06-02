@@ -7,7 +7,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -36,7 +36,8 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
+		return clierrors.New("Node.js is not installed or not in PATH").
+			WithSuggestion("Install Node.js from https://nodejs.org/")
 	}
 
 	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
@@ -51,7 +52,8 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Fail if version older than recommended.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
+		return clierrors.Newf("Node.js version %s or higher is required, but found %s", recommendedVersion, installedVersionStr).
+			WithSuggestion("Upgrade Node.js (e.g. via your version manager such as nvm, fnm, or volta)")
 	}
 
 	// Print the info.
@@ -86,7 +88,8 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		return errors.New("pnpm is not installed or not in PATH. Please install pnpm: https://pnpm.io/installation")
+		return clierrors.New("pnpm is not installed or not in PATH").
+			WithSuggestion("Install pnpm from https://pnpm.io/installation")
 	}
 
 	// Parse pnpm version
@@ -98,7 +101,8 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Fail if installed version is older than required.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm!", recommendedVersion, installedVersion)
+		return clierrors.Newf("pnpm version %s or higher is required, but found %s", recommendedVersion, installedVersion).
+			WithSuggestion("Upgrade pnpm (e.g. 'pnpm self-update', or via corepack)")
 	}
 
 	// Grab versions.

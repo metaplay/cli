@@ -76,7 +76,7 @@ type InstallResult struct {
 // the action records.
 func RunInstall(req InstallRequest) (InstallResult, error) {
 	if req.Version == "" {
-		return InstallResult{}, errors.New("Version is required")
+		return InstallResult{}, errors.New("version is required")
 	}
 	if len(req.Skills) == 0 {
 		return InstallResult{}, errors.New("no skills to install")

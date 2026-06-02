@@ -77,7 +77,7 @@ func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), llmDocsDefaultTimeout)
 	defer cancel()

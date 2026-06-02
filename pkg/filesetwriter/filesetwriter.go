@@ -221,7 +221,7 @@ func (p *Plan) Scan() error {
 				count++
 			}
 		}
-		reader.Close()
+		_ = reader.Close()
 		ze.count = count
 	}
 
@@ -398,10 +398,7 @@ func buildPreviewEntries(results []FileResult) []previewEntry {
 			continue
 		}
 		dir := filepath.Dir(r.File.Path)
-		for {
-			if tainted[dir] {
-				break
-			}
+		for !tainted[dir] {
 			tainted[dir] = true
 			parent := filepath.Dir(dir)
 			if parent == dir {
@@ -651,7 +648,7 @@ func (p *Plan) executeZipExtraction(ze ZipExtraction) error {
 	if err != nil {
 		return clierrors.Wrap(err, fmt.Sprintf("Failed to open zip archive %s", ze.ZipPath))
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	displayName := strings.TrimSuffix(ze.Prefix, "/")
 	spinnerFrames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -711,13 +708,13 @@ func extractZipFile(file *zip.File, targetPath string) error {
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	outFile, err := os.Create(targetPath)
 	if err != nil {
 		return err
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	_, err = io.Copy(outFile, rc)
 	return err

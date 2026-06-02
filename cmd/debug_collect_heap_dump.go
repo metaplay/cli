@@ -108,12 +108,13 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 	} else {
 		// Validate file extension based on mode
 		actualExtension := filepath.Ext(o.flagOutputPath)
-		if o.flagCollectMode == "gcdump" {
+		switch o.flagCollectMode {
+		case "gcdump":
 			if actualExtension != ".gcdump" {
 				return clierrors.NewUsageErrorf("Invalid file extension '%s' for gcdump mode", actualExtension).
 					WithSuggestion("Use .gcdump extension for gcdump mode, e.g., 'dump.gcdump'")
 			}
-		} else if o.flagCollectMode == "dump" {
+		case "dump":
 			if actualExtension != "" {
 				return clierrors.NewUsageErrorf("Invalid file extension '%s' for dump mode", actualExtension).
 					WithSuggestion("Use no extension for dump mode, e.g., 'core_250901_093000'")
@@ -185,7 +186,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 		// Ask for confirmation
 		fmt.Print("Are you sure you want to continue? [y/N] ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
 			log.Info().Msg(styles.RenderError("❌ Operation canceled"))
 			return fmt.Errorf("heap dump collection cancelled by user")

@@ -24,8 +24,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const metaplayGameServerChartName = "metaplay-gameserver"
-
 // \todo is there an official k8s type for this?
 type GameServerPodPhase string
 
@@ -281,7 +279,7 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 				Message: "Pod is Pending",
 			}
 		}
-		if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
+		if len(pod.Status.ContainerStatuses) == 0 {
 			return GameServerPodStatus{
 				Phase:   PhaseUnknown,
 				Message: "ContainerStatuses is empty",
@@ -517,7 +515,7 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod logs: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	builder := &strings.Builder{}
 	_, err = io.Copy(builder, stream)
@@ -617,12 +615,12 @@ func attemptTLSConnection(hostname string, port int) error {
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).
 	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	healthCheckPacket := buildHealthCheckPacket()
 	if _, err := conn.Write(healthCheckPacket); err != nil {
 		return fmt.Errorf("failed to send HealthCheck packet: %v", err)
@@ -630,7 +628,7 @@ func attemptTLSConnection(hostname string, port int) error {
 
 	// Read the protocol header from the server.
 	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buffer := make([]byte, protocolHeaderSize)
 	totalRead := 0
 	for totalRead < protocolHeaderSize {
@@ -704,17 +702,17 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 				switch {
 				case resp.StatusCode >= 200 && resp.StatusCode < 300:
 					// Accept 2xx (Success) status codes.
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				case resp.StatusCode >= 300 && resp.StatusCode < 400:
 					// Accept 3xx (Redirection) status codes.
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
 					return nil
 				}
 				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		}
 

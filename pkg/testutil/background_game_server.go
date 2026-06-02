@@ -318,7 +318,7 @@ func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *conta
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	// Pipe logs to the same consumer using io.Copy for simplicity and efficiency.
 	_, _ = io.Copy(consumer, r)
 	return nil
@@ -326,7 +326,7 @@ func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *conta
 
 // TerminateSilently helps internal error paths to try to clean up without masking errors.
 func (s *BackgroundGameServer) TerminateSilently(ctx context.Context) error {
-	defer func() { recover() }() // best-effort
+	defer func() { _ = recover() }() // best-effort
 	_ = s.Shutdown(ctx)
 	return nil
 }

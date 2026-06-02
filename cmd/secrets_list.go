@@ -162,7 +162,7 @@ func formatAge(duration time.Duration) string {
 }
 
 func logSecret(secret *corev1.Secret, showValues bool) {
-	age := time.Now().Sub(secret.CreationTimestamp.Time)
+	age := time.Since(secret.CreationTimestamp.Time)
 	log.Info().Msgf("Name: %s", styles.RenderTechnical(secret.Name))
 	log.Info().Msgf("Age:  %s", styles.RenderTechnical(formatAge(age)))
 	log.Info().Msgf("Data:")

@@ -17,7 +17,7 @@ func TestGitignoreMatching(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create .gitignore at root with patterns similar to MetaplaySDK
 	gitignoreContent := `# Build results
@@ -105,7 +105,7 @@ func TestGitignoreNestedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Root .gitignore
 	rootGitignore := `bin/
@@ -169,7 +169,7 @@ func TestGitignoreEmptyDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	matcher := buildGitignoreMatcherForDir(tmpDir)
 

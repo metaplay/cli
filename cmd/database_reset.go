@@ -181,7 +181,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 
 		fmt.Print("Type 'yes' to confirm database reset: ")
 		var confirmation string
-		fmt.Scanln(&confirmation)
+		_, _ = fmt.Scanln(&confirmation)
 		if strings.ToLower(confirmation) != "yes" {
 			log.Info().Msg("Database reset cancelled.")
 			return nil

@@ -25,7 +25,7 @@ func GetExecutablePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open the executable file: %v", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Get the Windows handle
 	handle := windows.Handle(file.Fd())

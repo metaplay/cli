@@ -166,7 +166,7 @@ func assignProcessToJob(job windows.Handle, pid uint32) error {
 	if err != nil {
 		return fmt.Errorf("OpenProcess: %w", err)
 	}
-	defer windows.CloseHandle(proc)
+	defer func() { _ = windows.CloseHandle(proc) }()
 	if err := windows.AssignProcessToJobObject(job, proc); err != nil {
 		return fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}
@@ -182,7 +182,7 @@ func resumeProcessThreads(pid uint32) error {
 	if err != nil {
 		return fmt.Errorf("CreateToolhelp32Snapshot: %w", err)
 	}
-	defer windows.CloseHandle(snap)
+	defer func() { _ = windows.CloseHandle(snap) }()
 
 	var te windows.ThreadEntry32
 	te.Size = uint32(unsafe.Sizeof(te))

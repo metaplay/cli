@@ -141,7 +141,7 @@ func downloadOnce(c *Client, url string, filePath string, onProgress func(downlo
 	}
 
 	rawBody := resp.RawBody()
-	defer rawBody.Close()
+	defer func() { _ = rawBody.Close() }()
 
 	// On HTTP error, return the response without a Go error so the caller can
 	// inspect resp.StatusCode() and produce a domain-specific error message.
@@ -152,7 +152,7 @@ func downloadOnce(c *Client, url string, filePath string, onProgress func(downlo
 	// Create the output file (local error — not retryable).
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		return resp, nil, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
+		return resp, nil, fmt.Errorf("failed to create output file %s: %w", filePath, err)
 	}
 
 	// Determine total size from Content-Length header.
@@ -169,10 +169,10 @@ func downloadOnce(c *Client, url string, filePath string, onProgress func(downlo
 	}
 
 	_, copyErr := io.Copy(outFile, pr)
-	outFile.Close()
+	_ = outFile.Close()
 	if copyErr != nil {
 		// Partial file is unusable; remove so the next attempt starts fresh.
-		os.Remove(filePath)
+		_ = os.Remove(filePath)
 		return resp, fmt.Errorf("failed to write downloaded file %s: %w", filePath, copyErr), nil
 	}
 

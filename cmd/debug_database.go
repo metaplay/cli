@@ -295,7 +295,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			if err != nil {
 				return fmt.Errorf("failed to open query file '%s': %v", o.flagQueryFile, err)
 			}
-			defer queryFile.Close()
+			defer func() { _ = queryFile.Close() }()
 			stdin = queryFile
 		}
 
@@ -306,7 +306,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			if err != nil {
 				return fmt.Errorf("failed to open output file '%s': %v", o.flagOutput, err)
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			stdout = file
 		}
 	}

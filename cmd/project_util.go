@@ -345,24 +345,6 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 	return envConfig, tokenSet, nil
 }
 
-// Helper for resolving both the MetaplayProject and a specific environment at the same time.
-// This operation is common enough to justify its own method.
-func resolveProjectAndEnvironment(environment string) (*metaproj.MetaplayProject, *metaproj.ProjectEnvironmentConfig, error) {
-	// Resolve the project.
-	project, err := resolveProject()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Find target environment.
-	envConfig, err := project.Config.FindEnvironmentConfig(environment)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return project, envConfig, nil
-}
-
 // Choose target project either with human ID provided (still validated against the portal-returned data) or
 // let the user interactively choose from a list of projects fetched from the portal.
 func chooseOrgAndProject(portalClient *portalapi.Client, projectID string) (*portalapi.ProjectInfo, error) {

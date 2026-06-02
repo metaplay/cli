@@ -230,7 +230,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 	if err != nil {
 		return false, fmt.Errorf("failed to push docker image: %w", err)
 	}
-	defer pushResponseReader.Close()
+	defer func() { _ = pushResponseReader.Close() }()
 
 	// Follow push progress
 	decoder := json.NewDecoder(pushResponseReader)

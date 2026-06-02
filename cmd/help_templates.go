@@ -160,9 +160,8 @@ func styleExample(text string) string {
 		} else if trimmedLine != "" {
 			// This is a command line, style it with RenderTechnical (blue)
 			lines[ndx] = styles.RenderTechnical(line)
-		} else {
-			// Empty line, leave as is
 		}
+		// Empty line, leave as is
 	}
 	return strings.Join(lines, "\n")
 }

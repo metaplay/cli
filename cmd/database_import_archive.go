@@ -195,7 +195,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 
 		fmt.Print("Type 'yes' to confirm database import: ")
 		var confirmation string
-		fmt.Scanln(&confirmation)
+		_, _ = fmt.Scanln(&confirmation)
 		if strings.ToLower(confirmation) != "yes" {
 			log.Info().Msg("Database import cancelled.")
 			return nil
@@ -243,7 +243,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 	if err != nil {
 		return fmt.Errorf("failed to validate zip file: %v", err)
 	}
-	defer zipReader.Close()
+	defer func() { _ = zipReader.Close() }()
 	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
 
 	// Number of shards must match
@@ -308,27 +308,27 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	}
 
 	if metadataFile == nil {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("metadata file 'metadata.json' not found in zip archive")
 	}
 
 	if schemaFile == nil {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("schema file 'schema.sql' not found in zip archive")
 	}
 
 	// Read and parse metadata
 	metadataReader, err := metadataFile.Open()
 	if err != nil {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("failed to open metadata file: %v", err)
 	}
-	defer metadataReader.Close()
+	defer func() { _ = metadataReader.Close() }()
 
 	// Read metadata.json.
 	metadataBytes, err := io.ReadAll(metadataReader)
 	if err != nil {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
 	}
 
@@ -336,13 +336,13 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	var metadata DatabaseArchiveMetadata
 	err = json.Unmarshal(metadataBytes, &metadata)
 	if err != nil {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("failed to parse metadata: %v", err)
 	}
 
 	// Check version compatibility
 	if metadata.Version != 1 {
-		zipReader.Close()
+		_ = zipReader.Close()
 		return nil, nil, nil, nil, fmt.Errorf("unsupported archive version %d, expected version 1", metadata.Version)
 	}
 
@@ -356,7 +356,7 @@ func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, zi
 	if err != nil {
 		return fmt.Errorf("failed to open schema file %s: %v", schemaFile.Name, err)
 	}
-	defer schemaReader.Close()
+	defer func() { _ = schemaReader.Close() }()
 
 	// Build mariadb import command for schema
 	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
@@ -406,7 +406,7 @@ func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context,
 	if err != nil {
 		return fmt.Errorf("failed to open shard file %s: %v", shardFile.Name, err)
 	}
-	defer shardReader.Close()
+	defer func() { _ = shardReader.Close() }()
 
 	// Build mariadb import command for uncompressed SQL
 	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",

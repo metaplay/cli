@@ -299,9 +299,11 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the botclient with 'metaplay remove botclient'", releaseName)
+			return clierrors.Newf("Helm release %s is in state 'uninstalling'", releaseName).
+				WithSuggestion("Try again later, or manually uninstall the botclient with 'metaplay remove botclient'")
 		} else if releaseStatus.IsPending() {
-			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the botclient with 'metaplay remove botclient'", releaseName, releaseStatus)
+			return clierrors.Newf("Helm release %s is in state '%s'", releaseName, releaseStatus).
+				WithSuggestion("Manually uninstall the botclient with 'metaplay remove botclient'")
 		}
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
 	}
