@@ -86,11 +86,15 @@ func detectLatestGA(ctx context.Context) (string, error) {
 }
 
 // parseTagFromLocation extracts the version from a /releases/latest redirect target, which
-// looks like https://github.com/metaplay/cli/releases/tag/1.11.0.
+// looks like https://github.com/metaplay/cli/releases/tag/1.11.0. If no GA release exists,
+// GitHub instead redirects to .../releases (no /tag/ segment); we reject that explicitly so
+// it surfaces as a clear error rather than a bogus "releases" version.
 func parseTagFromLocation(location string) (string, error) {
+	if !strings.Contains(location, "/releases/tag/") {
+		return "", fmt.Errorf("redirect URL %q does not point to a release tag (no release published?)", location)
+	}
 	tag := strings.TrimPrefix(path.Base(location), "v")
-	switch tag {
-	case "", ".", "/", "latest":
+	if tag == "" {
 		return "", fmt.Errorf("could not parse a version from redirect URL %q", location)
 	}
 	return tag, nil
@@ -109,6 +113,10 @@ type atomFeed struct {
 // detectLatestDev resolves the latest dev/prerelease version from the releases Atom feed.
 // The feed lists releases (including prereleases) newest-first; we pick the highest dev
 // version by semver rather than relying on ordering.
+//
+// GitHub caps the feed at the 10 most recent releases. Dev releases are published on every
+// push (and old ones pruned), so the feed is normally dev-dominated; if it ever contains
+// only GA releases we return a clear "no dev release found" error rather than a wrong result.
 func detectLatestDev(ctx context.Context) (string, error) {
 	client := &http.Client{Timeout: httpTimeout}
 

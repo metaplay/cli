@@ -47,6 +47,8 @@ func TestParseTagFromLocation(t *testing.T) {
 		{"https://github.com/metaplay/cli/releases/tag/1.11.1-dev.12", "1.11.1-dev.12", false},
 		// No actual release (redirect points back to /releases/latest).
 		{"https://github.com/metaplay/cli/releases/latest", "", true},
+		// No release published at all (GitHub redirects to .../releases, no /tag/ segment).
+		{"https://github.com/metaplay/cli/releases", "", true},
 		{"", "", true},
 	}
 	for _, tt := range tests {

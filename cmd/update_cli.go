@@ -13,6 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// manualDownloadSuggestion is shown when an update fails for a reason the user can work
+// around by fetching a release themselves.
+const manualDownloadSuggestion = "Check your network connection, or download a release manually from https://github.com/metaplay/cli/releases"
+
 type updateCliOpts struct {
 	flagPrerelease bool
 }
@@ -49,10 +53,12 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 	latest, err := version.DetectLatest(ctx, prerelease)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to detect the latest Metaplay CLI version").
-			WithSuggestion("Check your network connection, or download a release manually from https://github.com/metaplay/cli/releases")
+			WithSuggestion(manualDownloadSuggestion)
 	}
 
-	if !version.IsNewer(latest, version.AppVersion) {
+	// A local "dev" build has no parseable version, so IsNewer can't compare it; always
+	// proceed in that case so `update cli` can move a locally built binary onto a release.
+	if !version.IsDevBuild() && !version.IsNewer(latest, version.AppVersion) {
 		log.Info().Msgf("Already on the latest Metaplay CLI version (%s)", version.AppVersion)
 		return nil
 	}
@@ -69,7 +75,7 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 
 	if err := version.DownloadAndApply(ctx, latest, exe); err != nil {
 		return clierrors.Wrap(err, "Failed to update the Metaplay CLI binary").
-			WithSuggestion("Check your network connection, or download a release manually from https://github.com/metaplay/cli/releases")
+			WithSuggestion(manualDownloadSuggestion)
 	}
 
 	log.Info().Msg("")

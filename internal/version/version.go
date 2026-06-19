@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/metaplay/cli/internal/envutil"
@@ -34,7 +35,7 @@ func IsPrerelease() bool {
 	return strings.Contains(AppVersion, "-dev.")
 }
 
-func CheckVersion(stderrLogger *zerolog.Logger) {
+func CheckVersion(ctx context.Context, stderrLogger *zerolog.Logger) {
 	if IsDevBuild() {
 		log.Debug().Msgf("Skipping version check for development build (version is '%s')", AppVersion)
 		return
@@ -46,7 +47,7 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	// Errors are only logged, not fatal, so the command still runs if the check fails.
 	// The request is bounded by a short timeout so it can't hang the command.
 	usePrerelease := IsPrerelease()
-	latest, err := DetectLatest(context.Background(), usePrerelease)
+	latest, err := DetectLatest(ctx, usePrerelease)
 	if err != nil {
 		log.Debug().Msgf("Failed to detect the latest Metaplay CLI version: %v", err)
 		return
@@ -67,7 +68,12 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 			log.Debug().Msgf("Auto-update failed: could not determine executable path: %v", err)
 			return
 		}
-		if err := DownloadAndApply(context.Background(), latest, exe); err != nil {
+		// Bound the background download: it runs on every command for prerelease builds, so a
+		// stalled connection must not hang the command indefinitely. Ctrl+C still interrupts via
+		// the command context; the timeout is generous enough for a large archive on a slow link.
+		dlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		if err := DownloadAndApply(dlCtx, latest, exe); err != nil {
 			log.Debug().Msgf("Auto-update failed: %v", err)
 			return
 		}
