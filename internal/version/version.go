@@ -7,11 +7,10 @@ package version
 import (
 	"context"
 	"fmt"
-	"io"
 	"strings"
+	"time"
 	"unicode/utf8"
 
-	"github.com/creativeprojects/go-selfupdate"
 	"github.com/metaplay/cli/internal/envutil"
 	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/pkg/styles"
@@ -36,32 +35,7 @@ func IsPrerelease() bool {
 	return strings.Contains(AppVersion, "-dev.")
 }
 
-// PrereleaseOnlySource wraps a Source and filters ListReleases to only return
-// prerelease releases. This ensures the updater stays on the prerelease channel
-// and won't "upgrade" to a GA release.
-type PrereleaseOnlySource struct {
-	Inner selfupdate.Source
-}
-
-func (s *PrereleaseOnlySource) ListReleases(ctx context.Context, repository selfupdate.Repository) ([]selfupdate.SourceRelease, error) {
-	releases, err := s.Inner.ListReleases(ctx, repository)
-	if err != nil {
-		return nil, err
-	}
-	filtered := make([]selfupdate.SourceRelease, 0, len(releases))
-	for _, r := range releases {
-		if r.GetPrerelease() {
-			filtered = append(filtered, r)
-		}
-	}
-	return filtered, nil
-}
-
-func (s *PrereleaseOnlySource) DownloadReleaseAsset(ctx context.Context, rel *selfupdate.Release, assetID int64) (io.ReadCloser, error) {
-	return s.Inner.DownloadReleaseAsset(ctx, rel, assetID)
-}
-
-func CheckVersion(stderrLogger *zerolog.Logger) {
+func CheckVersion(ctx context.Context, stderrLogger *zerolog.Logger) {
 	if IsDevBuild() {
 		log.Debug().Msgf("Skipping version check for development build (version is '%s')", AppVersion)
 		return
@@ -69,42 +43,17 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 
 	log.Debug().Msgf("Checking for new CLI version (current: v%s)", AppVersion)
 
-	// Check for new releases using go-selfupdate.
-	// Errors are only logged, not fatal, in order to allow the command to run even if the version check fails.
-	ghSource, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
-		APIToken: "", // Public repo doesn't need auth
-	})
-	if err != nil {
-		log.Debug().Msg("Error: Failed to initialize the Metaplay CLI self-updater source")
-		return
-	}
-
-	var source selfupdate.Source = ghSource
+	// Detect the latest version via the non-throttled github.com endpoints (see detect.go).
+	// Errors are only logged, not fatal, so the command still runs if the check fails.
+	// The request is bounded by a short timeout so it can't hang the command.
 	usePrerelease := IsPrerelease()
-	if usePrerelease {
-		source = &PrereleaseOnlySource{Inner: source}
-	}
-
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source:     source,
-		Prerelease: usePrerelease,
-	})
+	latest, err := DetectLatest(ctx, usePrerelease)
 	if err != nil {
-		log.Debug().Msg("Error: Failed to initialize the Metaplay CLI self-updater")
+		log.Debug().Msgf("Failed to detect the latest Metaplay CLI version: %v", err)
 		return
 	}
 
-	latest, found, err := updater.DetectLatest(context.Background(), selfupdate.ParseSlug("metaplay/cli"))
-	if err != nil {
-		log.Debug().Msg("Error: Failed to detect the latest Metaplay CLI version")
-		return
-	}
-
-	if !found {
-		return
-	}
-
-	if !latest.GreaterThan(AppVersion) {
+	if !IsNewer(latest, AppVersion) {
 		return
 	}
 
@@ -112,23 +61,28 @@ func CheckVersion(stderrLogger *zerolog.Logger) {
 	if usePrerelease && !envutil.IsCI() {
 		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
 			styles.RenderError(AppVersion),
-			styles.RenderSuccess(latest.Version()),
+			styles.RenderSuccess(latest),
 		)
 		exe, err := pathutil.GetExecutablePath()
 		if err != nil {
 			log.Debug().Msgf("Auto-update failed: could not determine executable path: %v", err)
 			return
 		}
-		if err := updater.UpdateTo(context.Background(), latest, exe); err != nil {
+		// Bound the background download: it runs on every command for prerelease builds, so a
+		// stalled connection must not hang the command indefinitely. Ctrl+C still interrupts via
+		// the command context; the timeout is generous enough for a large archive on a slow link.
+		dlCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		defer cancel()
+		if err := DownloadAndApply(dlCtx, latest, exe); err != nil {
 			log.Debug().Msgf("Auto-update failed: %v", err)
 			return
 		}
-		stderrLogger.Info().Msgf(styles.RenderSuccess("Updated CLI to %s.") + " Note: this command is still running with the previous version.", latest.Version())
+		stderrLogger.Info().Msgf(styles.RenderSuccess("Updated CLI to %s.")+" Note: this command is still running with the previous version.", latest)
 		return
 	}
 
 	// GA builds: show update banner.
-	for _, line := range renderUpdateBanner(AppVersion, latest.Version()) {
+	for _, line := range renderUpdateBanner(AppVersion, latest) {
 		stderrLogger.Info().Msg(line)
 	}
 }

@@ -120,7 +120,7 @@ var rootCmd = &cobra.Command{
 		// Check for new CLI version available.
 		isUpdateCliCmd := parentCmd != nil && parentCmd.Name() == "update" && cmd.Use == "cli"
 		if !skipAppVersionCheck && !isUpdateCliCmd {
-			version.CheckVersion(&stderrLogger)
+			version.CheckVersion(cmd.Context(), &stderrLogger)
 		}
 	},
 }
