@@ -9,15 +9,10 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
-	"time"
 
 	"github.com/creativeprojects/go-selfupdate"
 	"github.com/creativeprojects/go-selfupdate/update"
 )
-
-// downloadTimeout bounds the asset download. It's larger than httpTimeout because the
-// archive is several MB and pulled from the CDN.
-const downloadTimeout = 60 * time.Second
 
 // DownloadAndApply downloads the release archive for the given version from the GitHub
 // CDN (not the throttled api.github.com), extracts the 'metaplay' binary, and atomically
@@ -25,16 +20,19 @@ const downloadTimeout = 60 * time.Second
 //
 // It reuses go-selfupdate's standalone helpers for the archive handling and the safe,
 // cross-platform binary swap, so we don't have to reimplement either.
+//
+// The archive is tens of MB, so this deliberately does NOT impose a hard timeout (a slow
+// connection should not fail a legitimate update). Cancellation is governed by ctx, so the
+// caller can bound or interrupt it (e.g. Ctrl+C via the command context).
 func DownloadAndApply(ctx context.Context, tag, exePath string) error {
 	url := assetURL(tag)
 
-	client := &http.Client{Timeout: downloadTimeout}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
 
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to download %s: %w", url, err)
 	}
