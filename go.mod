@@ -43,6 +43,7 @@ require (
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.2
 	k8s.io/kubectl v0.36.2
+	modernc.org/sqlite v1.53.0
 )
 
 require (
@@ -165,12 +166,14 @@ require (
 	github.com/morikuni/aec v1.0.0 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rubenv/sql-migrate v1.8.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -217,6 +220,9 @@ require (
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/streaming v0.36.2 // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
+	modernc.org/libc v1.73.4 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
 	oras.land/oras-go/v2 v2.6.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/kustomize/api v0.21.1 // indirect
