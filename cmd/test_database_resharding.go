@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -196,7 +197,7 @@ func (o *testDatabaseReshardingOpts) Run(cmd *cobra.Command) error {
 	// Duplicate shard 0 -> shard 1, then reshard 1 -> 2 (fast-path).
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderBright("🔷 Duplicate shard 0 -> shard 1"))
-	if err := copyFile(filepath.Join(absShardDir, "Shardy-0.db"), filepath.Join(absShardDir, "Shardy-1.db")); err != nil {
+	if err := duplicateShardFile(filepath.Join(absShardDir, "Shardy-0.db"), filepath.Join(absShardDir, "Shardy-1.db")); err != nil {
 		return clierrors.Wrap(err, "Failed to duplicate database shard")
 	}
 	log.Info().Msgf("%s Duplicated Shardy-0.db -> Shardy-1.db", styles.RenderSuccess("✓"))
@@ -475,4 +476,31 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return out.Close()
+}
+
+// duplicateShardFile copies a SQLite shard file to dst for the resharding fast-path (the 1 -> 2 step
+// pre-populates Shardy-1 from Shardy-0). The shard files are written from inside the server container and
+// are therefore owned by the (non-root) container user, not the host. On Linux CI the host process cannot
+// truncate or overwrite an existing destination directly — O_TRUNC needs write permission on the file,
+// which the host user lacks. (This stayed hidden on Docker Desktop, whose bind mounts translate UIDs so
+// the host always appears to own the files; the legacy host-only `dotnet run` + `cp` test never hit it
+// because the server and the copy ran as the same host user.)
+//
+// The host does own the shard *directory*, so it can still replace the entry: remove any existing
+// destination first, then write a fresh, host-owned copy. The copy is then made world-writable (0666) so
+// the subsequent reshard step — running as the container user — can rewrite it.
+func duplicateShardFile(src, dst string) error {
+	// Remove any existing (container-owned) destination. The host owns the directory, so the unlink
+	// succeeds even though it doesn't own the file itself.
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := copyFile(src, dst); err != nil {
+		return err
+	}
+	// Make the freshly created host-owned file writable by the container user, which reshards it next.
+	if err := os.Chmod(dst, 0o666); err != nil {
+		return err
+	}
+	return nil
 }
