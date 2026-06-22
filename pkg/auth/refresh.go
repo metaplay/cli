@@ -133,5 +133,19 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		return nil, clierrors.Wrap(err, "Failed to parse authentication tokens")
 	}
 
-	return &tokens, nil
+	return mergeRefreshedTokenSet(tokenSet, &tokens), nil
+}
+
+// mergeRefreshedTokenSet treats the refresh response as a delta: access_token comes from it,
+// while id_token and refresh_token are carried forward when omitted (Ory drops id_token on
+// refresh; refresh_token may be absent when rotation is disabled).
+func mergeRefreshedTokenSet(previous, refreshed *TokenSet) *TokenSet {
+	merged := *refreshed
+	if merged.IDToken == "" {
+		merged.IDToken = previous.IDToken
+	}
+	if merged.RefreshToken == "" {
+		merged.RefreshToken = previous.RefreshToken
+	}
+	return &merged
 }
