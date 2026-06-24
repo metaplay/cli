@@ -158,6 +158,14 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 	hasGameServer := len(helmReleases) > 0
 
+	// Open and validate the archive up front so we can show its shard count and fail fast on mismatch.
+	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
+	if err != nil {
+		return fmt.Errorf("failed to validate zip file: %v", err)
+	}
+	defer func() { _ = zipReader.Close() }()
+	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
+
 	log.Info().Msg("")
 	log.Info().Msg("Import database archive:")
 	log.Info().Msgf("  Environment:     %s", styles.RenderTechnical(o.argEnvironment))
@@ -166,9 +174,15 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	} else {
 		log.Info().Msgf("  Game server:     %s", styles.RenderSuccess("✓ not deployed"))
 	}
-	log.Info().Msgf("  Database shards: %s", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
 	log.Info().Msgf("  Import file:     %s", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msgf("  Archive shards:  %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shardFiles))))
+	log.Info().Msgf("  Env DB shards:   %s", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
 	log.Info().Msg("")
+
+	// The archive and target environment must have the same number of shards.
+	if len(shardFiles) != len(dbShards) {
+		return fmt.Errorf("shard count mismatch: archive has %d shards, target environment has %d", len(shardFiles), len(dbShards))
+	}
 
 	// Check if there's a game server deployed.
 	if hasGameServer {
@@ -221,7 +235,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("input_file", o.argInputFile).Msg("Starting database import process")
-	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards)
+	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards, zipReader, schemaFile, shardFiles)
 	if err != nil {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
@@ -235,21 +249,8 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
-func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig, zipReader *zip.ReadCloser, schemaFile *zip.File, shardFiles []*zip.File) error {
 	log.Info().Msgf("Importing database...")
-
-	// Open and validate zip file
-	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
-	if err != nil {
-		return fmt.Errorf("failed to validate zip file: %v", err)
-	}
-	defer func() { _ = zipReader.Close() }()
-	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
-
-	// Number of shards must match
-	if len(shardFiles) != len(dbShards) {
-		return fmt.Errorf("shard count mismatch: archive has %d shards, target environment has %d", metadata.NumShards, len(dbShards))
-	}
 
 	// Apply schema to all shards first
 	log.Debug().Msg("Apply schema to all shards")
