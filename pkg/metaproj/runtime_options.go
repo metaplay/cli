@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,9 +36,15 @@ type runtimeOptionsFile struct {
 // `Database:MasterVersion`), matching the Metaplay-generated options files.
 func (project *MetaplayProject) ReadDatabaseRuntimeOptions(envConfig *ProjectEnvironmentConfig) (*DatabaseRuntimeOptions, error) {
 	serverDir := project.GetServerDir()
-	paths := []string{
-		filepath.Join(serverDir, "Config", "Options.base.yaml"),
-		filepath.Join(serverDir, envConfig.GetEnvironmentSpecificRuntimeOptionsFile()),
+	paths := []string{filepath.Join(serverDir, "Config", "Options.base.yaml")}
+
+	// Add the environment-specific options file. Look the mapping up directly (rather than via
+	// GetEnvironmentSpecificRuntimeOptionsFile, which panics on an unknown type) so an unexpected
+	// environment type degrades to reading only the base file instead of crashing this best-effort read.
+	if envFile, ok := environmentTypeToRuntimeOptionsFileMapping[envConfig.Type]; ok {
+		paths = append(paths, filepath.Join(serverDir, envFile))
+	} else {
+		log.Debug().Msgf("Unknown environment type '%s'; reading only Options.base.yaml", envConfig.Type)
 	}
 
 	merged := &DatabaseRuntimeOptions{}

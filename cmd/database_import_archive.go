@@ -133,10 +133,20 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if this is a production environment and require additional confirmation
-	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
+	// Check if this is a production environment and require additional confirmation. A dry run imports
+	// nothing, so it doesn't require --confirm-production.
+	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction && !o.flagDryRun {
 		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when importing to production environments", envConfig.Name)
 	}
+
+	// Open and validate the archive up front (local-only) so a bad input file fails fast, before any
+	// cluster round-trips.
+	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
+	if err != nil {
+		return fmt.Errorf("failed to validate zip file: %v", err)
+	}
+	defer func() { _ = zipReader.Close() }()
+	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
@@ -167,39 +177,31 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 	hasGameServer := len(helmReleases) > 0
 
-	// Open and validate the archive up front so we can show its shard count and fail fast on mismatch.
-	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
-	if err != nil {
-		return fmt.Errorf("failed to validate zip file: %v", err)
-	}
-	defer func() { _ = zipReader.Close() }()
-	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
-
 	// Detect whether importing this archive risks being wiped on the next server deploy due to a
 	// database master-version mismatch in an environment that nukes the DB on mismatch. Best-effort:
 	// requires a local project config and the archive's captured master version.
-	masterVersionWarning := o.checkMasterVersionMismatch(project, envConfig, metadata)
+	masterVersionWarning := checkMasterVersionMismatch(project, envConfig, metadata)
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Import Database Archive"))
 	log.Info().Msg("")
 	log.Info().Msg("Archive:")
-	log.Info().Msgf("  %-16s %s", "File:", styles.RenderTechnical(o.argInputFile))
-	log.Info().Msgf("  %-16s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(shardFiles))))
+	log.Info().Msgf("  %-23s %s", "File:", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msgf("  %-23s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(shardFiles))))
 	if metadata.MasterVersion != nil {
-		log.Info().Msgf("  %-16s %s", "Master version:", styles.RenderTechnical(fmt.Sprintf("%d", *metadata.MasterVersion)))
+		log.Info().Msgf("  %-23s %s", "Database:MasterVersion:", styles.RenderTechnical(fmt.Sprintf("%d", *metadata.MasterVersion)))
 	} else {
-		log.Info().Msgf("  %-16s %s", "Master version:", styles.RenderMuted("not recorded in archive"))
+		log.Info().Msgf("  %-23s %s", "Database:MasterVersion:", styles.RenderMuted("not recorded in archive"))
 	}
 	log.Info().Msg("")
 	log.Info().Msg("Target environment:")
-	log.Info().Msgf("  %-16s %s", "Name:", styles.RenderTechnical(o.argEnvironment))
+	log.Info().Msgf("  %-23s %s", "Name:", styles.RenderTechnical(o.argEnvironment))
 	if hasGameServer {
-		log.Info().Msgf("  %-16s %s", "Game server:", styles.RenderWarning("⚠️ deployed"))
+		log.Info().Msgf("  %-23s %s", "Game server:", styles.RenderWarning("⚠️ deployed"))
 	} else {
-		log.Info().Msgf("  %-16s %s", "Game server:", styles.RenderSuccess("✓ not deployed"))
+		log.Info().Msgf("  %-23s %s", "Game server:", styles.RenderSuccess("✓ not deployed"))
 	}
-	log.Info().Msgf("  %-16s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
+	log.Info().Msgf("  %-23s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
 	if masterVersionWarning != "" {
 		log.Info().Msg("")
 		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), styles.RenderWarning(masterVersionWarning))
@@ -227,7 +229,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	// back here because nothing is imported.
 	if o.flagDryRun {
 		log.Info().Msg(styles.RenderMuted("Dry-run mode: skipping import"))
-		o.logMasterVersionMatchReminder(metadata.MasterVersion)
+		logMasterVersionMatchReminder(metadata.MasterVersion)
 		return nil
 	}
 
@@ -238,12 +240,8 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 			return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database import operation")
 		}
 
-		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the database!"))
+		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the environment's database!"))
 		log.Info().Msg("")
-		if masterVersionWarning != "" {
-			log.Info().Msg(styles.RenderWarning(masterVersionWarning))
-			log.Info().Msg("")
-		}
 		log.Info().Msg("This operation cannot be undone. Make sure this is the correct environment.")
 		log.Info().Msg("")
 
@@ -295,7 +293,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		importedMasterVersion = queryDatabaseMasterVersion(cmd.Context(), kubeCli, podName, "debug",
 			shard.ReadWriteHost, shard.UserId, shard.Password, shard.DatabaseName)
 	}
-	o.logMasterVersionMatchReminder(importedMasterVersion)
+	logMasterVersionMatchReminder(importedMasterVersion)
 
 	return nil
 }
@@ -348,7 +346,7 @@ func (m *masterVersionMismatch) warningLine() string {
 	if m.NukeIsDevDefault {
 		reason = "A development env resets"
 	}
-	return fmt.Sprintf("This archive is at MasterVersion %d but the project deploys %d. %s the DB on a MasterVersion mismatch — deploying a server will wipe this import.",
+	return fmt.Sprintf("This archive is at Database:MasterVersion %d but the project deploys %d. %s the database on a Database:MasterVersion mismatch — deploying a server will wipe this import.",
 		m.ArchiveMasterVersion, m.ProjectMasterVersion, reason)
 }
 
@@ -390,7 +388,7 @@ func detectMasterVersionMismatch(archiveMasterVersion *int, dbOpts *metaproj.Dat
 // when importing this archive risks being wiped on the next server deploy (see
 // detectMasterVersionMismatch). Returns "" when there is no project config, the options can't be read,
 // or there is no mismatch risk. This is a best-effort safety check and never fails the import.
-func (o *databaseImportArchiveOpts) checkMasterVersionMismatch(project *metaproj.MetaplayProject, envConfig *metaproj.ProjectEnvironmentConfig, metadata *DatabaseArchiveMetadata) string {
+func checkMasterVersionMismatch(project *metaproj.MetaplayProject, envConfig *metaproj.ProjectEnvironmentConfig, metadata *DatabaseArchiveMetadata) string {
 	if project == nil {
 		return ""
 	}
@@ -411,7 +409,7 @@ func (o *databaseImportArchiveOpts) checkMasterVersionMismatch(project *metaproj
 // logMasterVersionMatchReminder prints a reminder — shown after both a real import and a dry-run —
 // that the server's deployed Database:MasterVersion must match the imported archive, followed by the
 // archive's master version (or a note when it could not be determined).
-func (o *databaseImportArchiveOpts) logMasterVersionMatchReminder(masterVersion *int) {
+func logMasterVersionMatchReminder(masterVersion *int) {
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderWarning("Make sure that your game server's Database:MasterVersion matches the version in the imported"))
 	log.Info().Msg(styles.RenderWarning("archive. Otherwise, the database will be wiped when the game server is deployed."))
