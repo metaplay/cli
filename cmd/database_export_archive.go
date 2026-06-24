@@ -209,7 +209,11 @@ type DatabaseArchiveMetadata struct {
 	Environment  string    `json:"environment"`
 	DatabaseName string    `json:"database_name"`
 	NumShards    int       `json:"num_shards"`
-	ExportedAt   time.Time `json:"exported_at"`
+	// MasterVersion is the database schema master version captured at export time (from the MetaInfo
+	// table). It is omitted for archives where it could not be determined (e.g. older archives or a
+	// fresh database). Used by 'import-archive' to warn about master-version mismatches.
+	MasterVersion *int      `json:"master_version,omitempty"`
+	ExportedAt    time.Time `json:"exported_at"`
 }
 
 // Main function to export database contents - creates zip file, writes metadata, and exports all shards
@@ -228,9 +232,16 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	zipWriter := zip.NewWriter(zipFile)
 	defer func() { _ = zipWriter.Close() }()
 
+	// Capture the database master version (best-effort) so 'import-archive' can warn on a mismatch.
+	masterVersion := queryDatabaseMasterVersion(ctx, kubeCli, podName, debugContainerName,
+		shards[0].ReadOnlyHost, shards[0].UserId, shards[0].Password, shards[0].DatabaseName)
+	if masterVersion != nil {
+		log.Debug().Int("master_version", *masterVersion).Msg("Captured database master version")
+	}
+
 	// Write metadata to zip
 	log.Debug().Msg("Writing metadata to zip file")
-	err = o.writeMetadataToZip(zipWriter, shards)
+	err = o.writeMetadataToZip(zipWriter, shards, masterVersion)
 	if err != nil {
 		return fmt.Errorf("failed to write metadata: %v", err)
 	}
@@ -265,7 +276,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 }
 
 // Helper function to write metadata to zip file
-func (o *databaseExportArchiveOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig) error {
+func (o *databaseExportArchiveOpts) writeMetadataToZip(zipWriter *zip.Writer, shards []kubeutil.DatabaseShardConfig, masterVersion *int) error {
 
 	// Use first shard for database name (all shards should have same database name)
 	databaseName := ""
@@ -276,11 +287,12 @@ func (o *databaseExportArchiveOpts) writeMetadataToZip(zipWriter *zip.Writer, sh
 	// Create metadata
 	log.Debug().Str("database_name", databaseName).Int("num_shards", len(shards)).Msg("Creating export metadata")
 	metadata := DatabaseArchiveMetadata{
-		Version:      1,
-		Environment:  o.argEnvironment,
-		DatabaseName: databaseName,
-		NumShards:    len(shards),
-		ExportedAt:   time.Now().UTC(),
+		Version:       1,
+		Environment:   o.argEnvironment,
+		DatabaseName:  databaseName,
+		NumShards:     len(shards),
+		MasterVersion: masterVersion,
+		ExportedAt:    time.Now().UTC(),
 	}
 
 	// Create metadata JSON in memory
