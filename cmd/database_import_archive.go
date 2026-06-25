@@ -19,7 +19,6 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
-	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -62,8 +61,7 @@ func init() {
 
 			Safety protections:
 			- By default, requires manual confirmation before proceeding
-			- Use --dry-run to preview the import summary (including any database master-version
-			  warning) without importing anything
+			- Use --dry-run to preview the import summary without importing anything
 			- Use --yes to skip overwrite confirmation (intended for automation)
 			- Use --force to bypass game server deployment checks (can put the database in an
 			  inconsistent state!)
@@ -97,7 +95,7 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with import")
 	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with import even if a game server is deployed (DANGEROUS!)")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when importing to production environments")
-	cmd.Flags().BoolVar(&o.flagDryRun, "dry-run", false, "Show the import summary (including any master-version warning) without importing anything")
+	cmd.Flags().BoolVar(&o.flagDryRun, "dry-run", false, "Show the import summary without importing anything")
 
 	databaseCmd.AddCommand(cmd)
 }
@@ -177,11 +175,6 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 	hasGameServer := len(helmReleases) > 0
 
-	// Detect whether importing this archive risks being wiped on the next server deploy due to a
-	// database master-version mismatch in an environment that nukes the DB on mismatch. Best-effort:
-	// requires a local project config and the archive's captured master version.
-	masterVersionWarning := checkMasterVersionMismatch(project, envConfig, metadata)
-
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Import Database Archive"))
 	log.Info().Msg("")
@@ -202,10 +195,6 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  %-23s %s", "Game server:", styles.RenderSuccess("✓ not deployed"))
 	}
 	log.Info().Msgf("  %-23s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
-	if masterVersionWarning != "" {
-		log.Info().Msg("")
-		log.Info().Msgf("%s %s", styles.RenderWarning("⚠️"), styles.RenderWarning(masterVersionWarning))
-	}
 	log.Info().Msg("")
 
 	// The archive and target environment must have the same number of shards.
@@ -330,80 +319,6 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 	log.Info().Msgf("✅ Database import completed successfully")
 
 	return nil
-}
-
-// masterVersionMismatch describes a detected database master-version mismatch that would cause the
-// imported data to be wiped on the next server deploy.
-type masterVersionMismatch struct {
-	ArchiveMasterVersion int  // master version stored in the archive
-	ProjectMasterVersion int  // master version the project is configured to deploy
-	NukeIsDevDefault     bool // true if the nuke-on-mismatch behavior comes from the development default, false if explicitly configured
-}
-
-// warningLine renders a human-readable, single-line warning describing the mismatch.
-func (m *masterVersionMismatch) warningLine() string {
-	reason := "This environment is configured to reset"
-	if m.NukeIsDevDefault {
-		reason = "A development env resets"
-	}
-	return fmt.Sprintf("This archive is at Database:MasterVersion %d but the project deploys %d. %s the database on a Database:MasterVersion mismatch — deploying a server will wipe this import.",
-		m.ArchiveMasterVersion, m.ProjectMasterVersion, reason)
-}
-
-// detectMasterVersionMismatch returns a non-nil result when importing an archive risks being wiped on
-// the next server deploy: the archive's master version differs from the project's configured master
-// version, and the target environment nukes the database on a mismatch. Returns nil when there is no
-// such risk or it can't be determined (missing archive/project master version).
-func detectMasterVersionMismatch(archiveMasterVersion *int, dbOpts *metaproj.DatabaseRuntimeOptions, envType portalapi.EnvironmentType) *masterVersionMismatch {
-	// Need both the archive's and the project's configured master version to compare.
-	if archiveMasterVersion == nil || dbOpts == nil || dbOpts.MasterVersion == nil {
-		return nil
-	}
-
-	// No mismatch means no risk.
-	if *archiveMasterVersion == *dbOpts.MasterVersion {
-		return nil
-	}
-
-	// Determine whether the environment nukes the database on a master-version mismatch. Development
-	// environments default to nuking; this can be overridden explicitly in the runtime options.
-	nukeIsDevDefault := envType == portalapi.EnvironmentTypeDevelopment
-	nukesOnMismatch := nukeIsDevDefault
-	if dbOpts.NukeOnVersionMismatch != nil {
-		nukesOnMismatch = *dbOpts.NukeOnVersionMismatch
-		nukeIsDevDefault = false
-	}
-	if !nukesOnMismatch {
-		return nil
-	}
-
-	return &masterVersionMismatch{
-		ArchiveMasterVersion: *archiveMasterVersion,
-		ProjectMasterVersion: *dbOpts.MasterVersion,
-		NukeIsDevDefault:     nukeIsDevDefault,
-	}
-}
-
-// checkMasterVersionMismatch reads the project's database runtime options and returns a warning line
-// when importing this archive risks being wiped on the next server deploy (see
-// detectMasterVersionMismatch). Returns "" when there is no project config, the options can't be read,
-// or there is no mismatch risk. This is a best-effort safety check and never fails the import.
-func checkMasterVersionMismatch(project *metaproj.MetaplayProject, envConfig *metaproj.ProjectEnvironmentConfig, metadata *DatabaseArchiveMetadata) string {
-	if project == nil {
-		return ""
-	}
-
-	dbOpts, err := project.ReadDatabaseRuntimeOptions(envConfig)
-	if err != nil {
-		log.Debug().Err(err).Msg("Could not read database runtime options; skipping master-version mismatch check")
-		return ""
-	}
-
-	mismatch := detectMasterVersionMismatch(metadata.MasterVersion, dbOpts, envConfig.Type)
-	if mismatch == nil {
-		return ""
-	}
-	return mismatch.warningLine()
 }
 
 // logMasterVersionMatchReminder prints a reminder — shown after both a real import and a dry-run —

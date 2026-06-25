@@ -211,7 +211,7 @@ type DatabaseArchiveMetadata struct {
 	NumShards    int       `json:"num_shards"`
 	// MasterVersion is the database schema master version captured at export time (from the MetaInfo
 	// table). It is omitted for archives where it could not be determined (e.g. older archives or a
-	// fresh database). Used by 'import-archive' to warn about master-version mismatches.
+	// fresh database). Shown by 'import-archive' so the user can keep the deployed server's version in sync.
 	MasterVersion *int      `json:"master_version,omitempty"`
 	ExportedAt    time.Time `json:"exported_at"`
 }
@@ -232,7 +232,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	zipWriter := zip.NewWriter(zipFile)
 	defer func() { _ = zipWriter.Close() }()
 
-	// Capture the database master version (best-effort) so 'import-archive' can warn on a mismatch.
+	// Capture the database master version (best-effort) so 'import-archive' can show it to the user.
 	masterVersion := queryDatabaseMasterVersion(ctx, kubeCli, podName, debugContainerName,
 		shards[0].ReadOnlyHost, shards[0].UserId, shards[0].Password, shards[0].DatabaseName)
 	if masterVersion != nil {
