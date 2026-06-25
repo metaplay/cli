@@ -262,7 +262,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("input_file", o.argInputFile).Msg("Starting database import process")
-	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards, zipReader, schemaFile, shardFiles)
+	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards, schemaFile, shardFiles)
 	if err != nil {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
@@ -288,14 +288,14 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
-func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig, zipReader *zip.ReadCloser, schemaFile *zip.File, shardFiles []*zip.File) error {
+func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig, schemaFile *zip.File, shardFiles []*zip.File) error {
 	log.Info().Msgf("Importing database...")
 
 	// Apply schema to all shards first
 	log.Debug().Msg("Apply schema to all shards")
 	for _, targetShard := range dbShards {
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
-		err := o.importDatabaseSchema(ctx, zipReader, schemaFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importDatabaseSchema(ctx, schemaFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to apply schema to shard %d: %v", targetShard.ShardIndex, err)
 		}
@@ -308,7 +308,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 		targetShard := dbShards[i]
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Start shard data import")
 
-		err := o.importDatabaseShardData(ctx, zipReader, shardFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importDatabaseShardData(ctx, shardFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to import shard %d data: %v", targetShard.ShardIndex, err)
 		}
@@ -406,7 +406,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 }
 
 // Helper function to import database schema to a single shard
-func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, zipReader *zip.ReadCloser, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open schema file from zip
 	schemaReader, err := schemaFile.Open()
 	if err != nil {
@@ -456,7 +456,7 @@ func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, zi
 }
 
 // Helper function to import shard data by streaming compressed data to remote execution
-func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open shard file from zip
 	shardReader, err := shardFile.Open()
 	if err != nil {
