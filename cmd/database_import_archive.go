@@ -39,6 +39,7 @@ type databaseImportArchiveOpts struct {
 	flagYes               bool
 	flagForce             bool
 	flagConfirmProduction bool
+	flagDryRun            bool
 }
 
 func init() {
@@ -60,6 +61,7 @@ func init() {
 
 			Safety protections:
 			- By default, requires manual confirmation before proceeding
+			- Use --dry-run to preview the import summary without importing anything
 			- Use --yes to skip overwrite confirmation (intended for automation)
 			- Use --force to bypass game server deployment checks (can put the database in an
 			  inconsistent state!)
@@ -75,6 +77,9 @@ func init() {
 			- 'metaplay database export-archive' exports a database archive.
 		`),
 		Example: renderExample(`
+			# Preview the import summary without importing anything
+			metaplay database import-archive nimbly archive.mdb --dry-run
+
 			# Import database archive to 'nimbly' environment (asks for manual confirmation)
 			metaplay database import-archive nimbly archive.mdb
 
@@ -90,6 +95,7 @@ func init() {
 	cmd.Flags().BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompt and proceed with import")
 	cmd.Flags().BoolVar(&o.flagForce, "force", false, "Proceed with import even if a game server is deployed (DANGEROUS!)")
 	cmd.Flags().BoolVar(&o.flagConfirmProduction, "confirm-production", false, "Required flag when importing to production environments")
+	cmd.Flags().BoolVar(&o.flagDryRun, "dry-run", false, "Show the import summary without importing anything")
 
 	databaseCmd.AddCommand(cmd)
 }
@@ -103,8 +109,9 @@ func (o *databaseImportArchiveOpts) Prepare(cmd *cobra.Command, args []string) e
 		return fmt.Errorf("INPUT_FILE argument is required")
 	}
 
-	// In non-interactive mode, --yes flag is required for safety
-	if !tui.IsInteractiveMode() && !o.flagYes {
+	// In non-interactive mode, --yes flag is required for safety (unless this is a dry run, which
+	// imports nothing).
+	if !tui.IsInteractiveMode() && !o.flagYes && !o.flagDryRun {
 		return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database import operation")
 	}
 
@@ -124,10 +131,20 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if this is a production environment and require additional confirmation
-	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
+	// Check if this is a production environment and require additional confirmation. A dry run imports
+	// nothing, so it doesn't require --confirm-production.
+	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction && !o.flagDryRun {
 		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when importing to production environments", envConfig.Name)
 	}
+
+	// Open and validate the archive up front (local-only) so a bad input file fails fast, before any
+	// cluster round-trips.
+	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
+	if err != nil {
+		return fmt.Errorf("failed to validate zip file: %v", err)
+	}
+	defer func() { _ = zipReader.Close() }()
+	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
 
 	// Resolve target environment & game server
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
@@ -158,25 +175,26 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 	hasGameServer := len(helmReleases) > 0
 
-	// Open and validate the archive up front so we can show its shard count and fail fast on mismatch.
-	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
-	if err != nil {
-		return fmt.Errorf("failed to validate zip file: %v", err)
-	}
-	defer func() { _ = zipReader.Close() }()
-	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
-
 	log.Info().Msg("")
-	log.Info().Msg("Import database archive:")
-	log.Info().Msgf("  Environment:     %s", styles.RenderTechnical(o.argEnvironment))
-	if hasGameServer {
-		log.Info().Msgf("  Game server:     %s", styles.RenderWarning("⚠️ deployed"))
+	log.Info().Msg(styles.RenderTitle("Import Database Archive"))
+	log.Info().Msg("")
+	log.Info().Msg("Archive:")
+	log.Info().Msgf("  %-23s %s", "File:", styles.RenderTechnical(o.argInputFile))
+	log.Info().Msgf("  %-23s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(shardFiles))))
+	if metadata.MasterVersion != nil {
+		log.Info().Msgf("  %-23s %s", "Database:MasterVersion:", styles.RenderTechnical(fmt.Sprintf("%d", *metadata.MasterVersion)))
 	} else {
-		log.Info().Msgf("  Game server:     %s", styles.RenderSuccess("✓ not deployed"))
+		log.Info().Msgf("  %-23s %s", "Database:MasterVersion:", styles.RenderMuted("not recorded in archive"))
 	}
-	log.Info().Msgf("  Import file:     %s", styles.RenderTechnical(o.argInputFile))
-	log.Info().Msgf("  Archive shards:  %s", styles.RenderTechnical(fmt.Sprintf("%d", len(shardFiles))))
-	log.Info().Msgf("  Env DB shards:   %s", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
+	log.Info().Msg("")
+	log.Info().Msg("Target environment:")
+	log.Info().Msgf("  %-23s %s", "Name:", styles.RenderTechnical(o.argEnvironment))
+	if hasGameServer {
+		log.Info().Msgf("  %-23s %s", "Game server:", styles.RenderWarning("⚠️ deployed"))
+	} else {
+		log.Info().Msgf("  %-23s %s", "Game server:", styles.RenderSuccess("✓ not deployed"))
+	}
+	log.Info().Msgf("  %-23s %s", "Database shards:", styles.RenderTechnical(fmt.Sprintf("%d", len(dbShards))))
 	log.Info().Msg("")
 
 	// The archive and target environment must have the same number of shards.
@@ -195,6 +213,15 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 	}
 
+	// If dry-run mode, stop here (after all pre-flight checks, before importing anything). Use the
+	// archive's recorded master version; for older archives that don't record it, it can't be read
+	// back here because nothing is imported.
+	if o.flagDryRun {
+		log.Info().Msg(styles.RenderMuted("Dry-run mode: skipping import"))
+		logMasterVersionMatchReminder(metadata.MasterVersion)
+		return nil
+	}
+
 	// Show warning and get confirmation.
 	if !o.flagYes {
 		// Check if we're in non-interactive mode - fail if we can't prompt
@@ -202,7 +229,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 			return fmt.Errorf("--yes flag is required in non-interactive mode to confirm the destructive database import operation")
 		}
 
-		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the database!"))
+		log.Info().Msg(styles.RenderWarning("⚠️ WARNING: This will PERMANENTLY OVERWRITE ALL DATA in the environment's database!"))
 		log.Info().Msg("")
 		log.Info().Msg("This operation cannot be undone. Make sure this is the correct environment.")
 		log.Info().Msg("")
@@ -235,7 +262,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	defer cleanup()
 
 	log.Debug().Str("input_file", o.argInputFile).Msg("Starting database import process")
-	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards, zipReader, schemaFile, shardFiles)
+	err = o.importDatabaseContents(cmd.Context(), kubeCli, podName, "debug", dbShards, schemaFile, shardFiles)
 	if err != nil {
 		// Check if the error was due to context cancellation (e.g., user pressed Ctrl+C)
 		if cmd.Context().Err() != nil {
@@ -245,18 +272,30 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Remind the user (after every successful import) that the deployed master version must match the
+	// imported data, otherwise a nuke-on-mismatch environment wipes it on the next server deploy. For
+	// older archives that don't record the master version, read it back from the freshly imported data
+	// (the same way export-archive captures it) so we can always show it.
+	importedMasterVersion := metadata.MasterVersion
+	if importedMasterVersion == nil && len(dbShards) > 0 {
+		shard := dbShards[0]
+		importedMasterVersion = queryDatabaseMasterVersion(cmd.Context(), kubeCli, podName, "debug",
+			shard.ReadWriteHost, shard.UserId, shard.Password, shard.DatabaseName)
+	}
+	logMasterVersionMatchReminder(importedMasterVersion)
+
 	return nil
 }
 
 // Main function to import database contents - reads zip file, validates metadata, and imports all shards
-func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig, zipReader *zip.ReadCloser, schemaFile *zip.File, shardFiles []*zip.File) error {
+func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, dbShards []kubeutil.DatabaseShardConfig, schemaFile *zip.File, shardFiles []*zip.File) error {
 	log.Info().Msgf("Importing database...")
 
 	// Apply schema to all shards first
 	log.Debug().Msg("Apply schema to all shards")
 	for _, targetShard := range dbShards {
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
-		err := o.importDatabaseSchema(ctx, zipReader, schemaFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importDatabaseSchema(ctx, schemaFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to apply schema to shard %d: %v", targetShard.ShardIndex, err)
 		}
@@ -269,7 +308,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 		targetShard := dbShards[i]
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Start shard data import")
 
-		err := o.importDatabaseShardData(ctx, zipReader, shardFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importDatabaseShardData(ctx, shardFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to import shard %d data: %v", targetShard.ShardIndex, err)
 		}
@@ -280,6 +319,22 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 	log.Info().Msgf("✅ Database import completed successfully")
 
 	return nil
+}
+
+// logMasterVersionMatchReminder prints a reminder — shown after both a real import and a dry-run —
+// that the server's deployed Database:MasterVersion must match the imported archive, followed by the
+// archive's master version (or a note when it could not be determined).
+func logMasterVersionMatchReminder(masterVersion *int) {
+	log.Info().Msg("")
+	log.Info().Msg(styles.RenderWarning("Make sure that your game server's Database:MasterVersion matches the version in the imported"))
+	log.Info().Msg(styles.RenderWarning("archive. Otherwise, the database will be wiped when the game server is deployed."))
+	log.Info().Msg("")
+	if masterVersion != nil {
+		log.Info().Msgf("The archive is at Database:MasterVersion %s.", styles.RenderTechnical(fmt.Sprintf("%d", *masterVersion)))
+	} else {
+		log.Info().Msgf("%s This archive doesn't include a Database:MasterVersion — it was created with an earlier", styles.RenderWarning("⚠️"))
+		log.Info().Msg("version of the CLI that didn't record it.")
+	}
 }
 
 // Helper function to open zip file and validate metadata, schema, and shard files
@@ -351,7 +406,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 }
 
 // Helper function to import database schema to a single shard
-func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, zipReader *zip.ReadCloser, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open schema file from zip
 	schemaReader, err := schemaFile.Open()
 	if err != nil {
@@ -401,7 +456,7 @@ func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, zi
 }
 
 // Helper function to import shard data by streaming compressed data to remote execution
-func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context, zipReader *zip.ReadCloser, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	// Open shard file from zip
 	shardReader, err := shardFile.Open()
 	if err != nil {
