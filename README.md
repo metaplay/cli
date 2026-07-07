@@ -12,7 +12,7 @@ The installation is easiest using any of the supported package managers or insta
 
 ### On macOS
 
-Using Homebrew (recommended):
+Using [Homebrew](https://brew.sh/) (recommended):
 
 ```bash
 brew tap metaplay/homebrew-tap
@@ -27,18 +27,17 @@ bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 
 ### On Windows
 
-Using Scoop (recommended):
+Using [Scoop](https://scoop.sh/) (recommended):
 
 ```bash
 scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
 ```
 
-Using Chocolatey the package installed from the public feed is most likely outdated, as the review process is manual and very slow. Therefore, we recommend running the CLI's built-in update command immediately after installing:
+Using [Chocolatey](https://chocolatey.org/):
 
 ```bash
 choco install metaplay
-metaplay update cli
 ```
 
 ### On Linux
