@@ -92,16 +92,6 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve auth provider.
-	authProviderName := o.argAuthProvider
-	if authProviderName == "" {
-		authProviderName = "metaplay"
-	}
-	authProvider, err := getAuthProvider(project, authProviderName)
-	if err != nil {
-		return err
-	}
-
 	// Create environment helper.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
@@ -119,14 +109,17 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	var kubeconfigPayload string
 	switch credentialsType {
 	case "dynamic":
-		// Fetch the userinfo for an email.
+		// Resolve an identity for the kubeconfig user label (cosmetic; auth uses the exec plugin).
 		var userinfo *auth.UserInfoResponse
-		userinfo, err = auth.FetchUserInfo(authProvider, tokenSet)
+		userinfo, err = auth.ResolveUserInfo(tokenSet)
 		if err != nil {
 			return err
 		}
-
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email)
+		userID := userinfo.Email
+		if userID == "" {
+			userID = userinfo.Subject
+		}
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userID)
 	case "static":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	default:

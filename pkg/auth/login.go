@@ -16,8 +16,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/metaplay/cli/pkg/styles"
@@ -217,35 +219,110 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 		return fmt.Errorf("failed to save tokens: %w", err)
 	}
 
-	// Fetch the user info.
-	userinfo, err := FetchUserInfo(authProvider, &tokenSet)
-	if err != nil {
-		return err
-	}
-
-	log.Info().Msgf("You are now logged in with machine user %s %s (clientId=%s) and can execute other commands.", userinfo.GivenName, userinfo.FamilyName, userinfo.Subject)
+	log.Info().Msgf("You are now logged in as machine user (clientId=%s) and can execute other commands.", clientID)
 
 	return nil
 }
 
-func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
-	log.Debug().Msgf("Fetch user info from %s", authProvider.UserInfoEndpoint)
+// Metaplay-namespaced claims emitted by the portal's Ory claims webhook (present on both tokens).
+const (
+	claimMetaplayEmail = "https://schemas.metaplay.io/email"
+	claimMetaplayRoles = "https://schemas.metaplay.io/roles"
+)
 
-	var userinfo UserInfoResponse
-	resp, err := httputil.NewRetryClient().R().
-		SetAuthToken(tokenSet.AccessToken). // Set Bearer token for Authorization
-		SetResult(&userinfo).               // Unmarshal response into the struct
-		Get(authProvider.UserInfoEndpoint)
+// ResolveUserInfo builds the user's profile from the token claims, without contacting any UserInfo
+// endpoint. The access token (always present) supplies the subject and, for Metaplay Auth, a
+// namespaced email; the ID token (human logins) adds the standard OIDC profile claims and overrides.
+// Machine logins have no ID token and resolve to the subject (plus namespaced email, if present).
+func ResolveUserInfo(tokenSet *TokenSet) (*UserInfoResponse, error) {
+	info := &UserInfoResponse{}
 
+	if claims, err := parseTokenClaims(tokenSet.AccessToken); err == nil {
+		applyClaims(info, claims)
+	} else {
+		log.Debug().Msgf("Failed to parse access token claims: %v", err)
+	}
+	if tokenSet.IDToken != "" {
+		if claims, err := parseTokenClaims(tokenSet.IDToken); err == nil {
+			applyClaims(info, claims)
+		} else {
+			log.Debug().Msgf("Failed to parse ID token claims: %v", err)
+		}
+	}
+
+	if info.Subject == "" {
+		return nil, clierrors.New("Could not resolve user identity from the stored tokens").
+			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
+	}
+	if info.Name == "" {
+		info.Name = strings.TrimSpace(info.GivenName + " " + info.FamilyName)
+	}
+	return info, nil
+}
+
+// parseTokenClaims decodes a JWT's claims without verifying its signature. Safe here: the token was
+// issued to us by the token endpoint over TLS and stored locally, and we only read our own identity
+// from it (the same trust model used for the access token's 'exp' claim).
+func parseTokenClaims(rawToken string) (jwt.MapClaims, error) {
+	token, _, err := jwt.NewParser().ParseUnverified(rawToken, jwt.MapClaims{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch userinfo: %w", err)
+		return nil, err
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("unexpected claims type %T", token.Claims)
+	}
+	return claims, nil
+}
+
+// applyClaims copies recognized profile claims into info, overwriting only with non-empty values so
+// a later, richer token (ID token) fills gaps left by an earlier one (access token) without clobbering.
+func applyClaims(info *UserInfoResponse, claims jwt.MapClaims) {
+	setIfNonEmpty(&info.Subject, claimString(claims, "sub"))
+	setIfNonEmpty(&info.Picture, claimString(claims, "picture"))
+	setIfNonEmpty(&info.GivenName, claimString(claims, "given_name"))
+	setIfNonEmpty(&info.FamilyName, claimString(claims, "family_name"))
+	setIfNonEmpty(&info.Name, claimString(claims, "name"))
+
+	// Prefer the standard OIDC email (ID token); fall back to the namespaced one (access token).
+	if email := claimString(claims, "email"); email != "" {
+		info.Email = email
+	} else {
+		setIfNonEmpty(&info.Email, claimString(claims, claimMetaplayEmail))
 	}
 
-	if resp.IsError() {
-		return nil, fmt.Errorf("API error: %s", resp.Status())
+	if roles := claimStringSlice(claims, claimMetaplayRoles); len(roles) > 0 {
+		info.Roles = roles
 	}
+}
 
-	return &userinfo, nil
+func setIfNonEmpty(dst *string, value string) {
+	if value != "" {
+		*dst = value
+	}
+}
+
+// claimString returns the named claim as a string, or "" if absent or not a string.
+func claimString(claims jwt.MapClaims, key string) string {
+	if v, ok := claims[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// claimStringSlice returns the named claim as a []string, or nil if absent or not an array of strings.
+func claimStringSlice(claims jwt.MapClaims, key string) []string {
+	raw, ok := claims[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // Exchange the OAuth2 code for the token set.
