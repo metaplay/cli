@@ -6,20 +6,22 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
 	"strings"
 	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-isatty"
+	"github.com/metaplay/cli/internal/envutil"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
-	"github.com/muesli/termenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -35,8 +37,9 @@ var skipAppVersionCheck bool     // Skip check for a new version of the CLI (--s
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "metaplay",
-	Short: "Metaplay CLI for development, deployment, and operations",
+	Use:           "metaplay",
+	Short:         "Metaplay CLI for development, deployment, and operations",
+	SilenceErrors: true, // We handle errors ourselves in Execute()
 	Example: renderExample(`
 		# Initialize a new Metaplay project in an existing Unity project
 		MyGame$ metaplay init project
@@ -70,13 +73,6 @@ var rootCmd = &cobra.Command{
 			useColors = hasTerminal
 		}
 
-		// Configure lipgloss to use/not use colors.
-		if useColors {
-			lipgloss.SetColorProfile(termenv.TrueColor)
-		} else {
-			lipgloss.SetColorProfile(termenv.Ascii)
-		}
-
 		// Resolve whether using verbose mode
 		isVerbose := isTruthy(os.Getenv("METAPLAYCLI_VERBOSE")) || flagVerbose
 
@@ -84,21 +80,7 @@ var rootCmd = &cobra.Command{
 		initLogger(useColors, isVerbose)
 
 		// Check for common CI environment variables
-		isCI := os.Getenv("CI") != "" ||
-			os.Getenv("GITHUB_ACTIONS") != "" ||
-			os.Getenv("GITLAB_CI") != "" ||
-			os.Getenv("BITBUCKET_BUILD_NUMBER") != "" ||
-			os.Getenv("CIRCLECI") != "" ||
-			os.Getenv("TRAVIS") != "" ||
-			os.Getenv("APPVEYOR") != "" ||
-			os.Getenv("TEAMCITY_VERSION") != "" ||
-			os.Getenv("BUILDKITE") != "" ||
-			os.Getenv("HUDSON_URL") != "" ||
-			os.Getenv("JENKINS_URL") != "" ||
-			os.Getenv("BAMBOO_AGENT_HOME") != "" ||
-			os.Getenv("TFS_BUILD") != "" ||
-			os.Getenv("NETLIFY") != "" ||
-			os.Getenv("NOW_BUILDER") != ""
+		isCI := envutil.IsCI()
 
 		// Determine if the CLI is running in interactive mode:
 		// - Interactive mode requires a terminal
@@ -138,18 +120,31 @@ var rootCmd = &cobra.Command{
 		// Check for new CLI version available.
 		isUpdateCliCmd := parentCmd != nil && parentCmd.Name() == "update" && cmd.Use == "cli"
 		if !skipAppVersionCheck && !isUpdateCliCmd {
-			version.CheckVersion(&stderrLogger)
+			version.CheckVersion(cmd.Context(), &stderrLogger)
 		}
 	},
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
+// ExecuteContext adds all child commands to the root command and sets flags appropriately.
+// It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
 // This is called by main.main(). It only needs to happen once to the rootCmd.
-func Execute() {
-	err := rootCmd.Execute()
+func ExecuteContext(ctx context.Context) {
+	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
-		os.Exit(1)
+		// Handle Cobra errors (unknown flags, missing arguments, etc.)
+		// Usage was already shown by Cobra, now show formatted error at the end
+		displayCobraError(err)
+		os.Exit(2)
 	}
+}
+
+// displayCobraError formats Cobra's built-in errors (flag parsing, unknown commands, etc.)
+// This uses fmt.Fprintln directly instead of stderrLogger because Cobra errors can occur
+// before PersistentPreRun has initialized the logger (e.g., completely malformed commands).
+func displayCobraError(err error) {
+	// Add empty line for separation from usage text, then styled error
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, styles.RenderError(fmt.Sprintf("Error: %v", err)))
 }
 
 func init() {
@@ -226,7 +221,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 	message, _ := event["message"].(string)
 
 	// Determine color based on level
-	var color string = ""
+	var color = ""
 	switch level {
 	case "trace":
 		// color = "\033[95m" // Bright Magenta
@@ -313,7 +308,7 @@ type CommandOptions interface {
 func getUsePositionalArgs(opts CommandOptions) (UsePositionalArgs, bool) {
 	// Use reflection to access the embedded UsePositionalArgs (to parse PositionalArgs)
 	v := reflect.ValueOf(opts)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 
@@ -338,29 +333,122 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		if hasPosArgs {
 			err := posArgs.Arguments().ParseCommandLine(args)
 			if err != nil {
-				stderrLogger.Error().Msgf("Expected usage: %s", cmd.UseLine())
-				stderrLogger.Warn().Msgf("%s", posArgs.args.GetHelpText())
-				stderrLogger.Info().Msgf("Run with --help flag for full help.")
-				os.Exit(2)
+				// Add usage suggestion to the error
+				cliErr, ok := clierrors.AsCLIError(err)
+				if ok && cliErr.Suggestion == "" {
+					cliErr.Suggestion = fmt.Sprintf("Run '%s --help' for usage details", cmd.CommandPath())
+				}
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+				displayError(err)
+				os.Exit(clierrors.GetExitCode(err))
 			}
-		} else {
-			// \todo implement me: expect no args provided
 		}
+		// \todo implement me: when no UsePositionalArgs, expect no args provided
 
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
-			stderrLogger.Info().Msgf("%s", cmd.UsageString())
-			stderrLogger.Error().Msgf("USAGE ERROR: %v", err)
-			os.Exit(2)
+			if wasInterrupted(cmd, err) {
+				exitInterrupted()
+			}
+			// Show usage help for Prepare errors that are either explicit usage errors
+			// or plain Go errors (which are assumed to be usage errors since Prepare
+			// validates arguments). CLIErrors with ExitRuntime skip usage text.
+			if clierrors.IsUsageError(err) || !isCLIError(err) {
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+			}
+			displayError(err)
+			os.Exit(clierrors.GetExitCode(err))
 		}
 
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
-			stderrLogger.Error().Msgf("ERROR: %v", err)
-			os.Exit(1)
+			if wasInterrupted(cmd, err) {
+				exitInterrupted()
+			}
+			// Only show usage for explicit usage errors from Run()
+			if clierrors.IsUsageError(err) {
+				stderrLogger.Info().Msgf("%s", cmd.UsageString())
+			}
+			displayError(err)
+			os.Exit(clierrors.GetExitCode(err))
 		}
+	}
+}
+
+// wasInterrupted reports whether the error is a side-effect of the user
+// interrupting the CLI (Ctrl+C / SIGTERM). When true, callers should exit
+// silently with the POSIX SIGINT convention (128 + 2) rather than printing
+// the error — a signal-killed child can otherwise surface as a misleading
+// message (e.g. `exec.Command("pnpm", "--version").Run()` failing during
+// interrupt looks identical to "pnpm not installed").
+//
+// We check three signals in order of specificity:
+//  1. the root context was canceled via SIGINT/SIGTERM (matches signal.NotifyContext);
+//  2. the error chain itself carries context.Canceled (e.g. an interactive prompt);
+//  3. a SignaledError from execChildInteractive (defensive — covers the case
+//     where a forwarded signal killed the child but didn't reach our context).
+func wasInterrupted(cmd *cobra.Command, err error) bool {
+	if errors.Is(cmd.Context().Err(), context.Canceled) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if _, ok := errors.AsType[*SignaledError](err); ok {
+		return true
+	}
+	return false
+}
+
+// exitInterrupted prints a clean trailing acknowledgement and exits with
+// the POSIX SIGINT convention (128 + 2). The trailing line gives the user
+// closure after subprocess output — e.g. docker prints
+// "ERROR: failed to build: failed to solve: Canceled: context canceled"
+// on its way out and that shouldn't be the last thing the user sees.
+//
+// We write directly to os.Stderr rather than through stderrLogger so
+// verbose mode doesn't decorate the trailing line with timestamp and
+// level prefixes.
+func exitInterrupted() {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
+	os.Exit(130)
+}
+
+// isCLIError checks if the error is a CLIError type.
+func isCLIError(err error) bool {
+	_, ok := clierrors.AsCLIError(err)
+	return ok
+}
+
+// displayError formats and displays an error to the user.
+// CLIError instances get special formatting with suggestions and details.
+// Regular errors are displayed with a simple "Error:" prefix.
+func displayError(err error) {
+	cliErr, ok := clierrors.AsCLIError(err)
+	if ok {
+		// Display the main error message, with underlying cause on the same line if present
+		if cliErr.Cause != nil {
+			stderrLogger.Error().Msgf("Error: %s %s", cliErr.Message, styles.RenderMuted(fmt.Sprintf("(%v)", cliErr.Cause)))
+		} else {
+			stderrLogger.Error().Msgf("Error: %s", cliErr.Message)
+		}
+
+		// Display any detail bullet points
+		for _, detail := range cliErr.Details {
+			stderrLogger.Info().Msgf("  %s %s", styles.RenderMuted("-"), detail)
+		}
+
+		// Display the suggestion with empty line before and styled "Suggest:" prefix
+		if cliErr.Suggestion != "" {
+			stderrLogger.Info().Msg("")
+			stderrLogger.Info().Msgf("%s %s", styles.RenderPrompt("Hint:"), cliErr.Suggestion)
+		}
+	} else {
+		// Fallback for plain Go errors
+		stderrLogger.Error().Msgf("Error: %v", err)
 	}
 }
 
@@ -441,7 +529,7 @@ func renderLong(opts CommandOptions, str string) string {
 	}
 
 	// Highlight important keywords
-	for _, keyword := range []string{"Note:", "Warning:", "Important:"} {
+	for _, keyword := range []string{"Note:", "Warning:", "Important:", "PREVIEW:"} {
 		str = strings.ReplaceAll(str, keyword, styles.RenderAttention(keyword))
 	}
 

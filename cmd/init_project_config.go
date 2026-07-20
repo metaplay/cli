@@ -316,6 +316,9 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 
 			return true, nil
 		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Find game-specific dashboard directory.
@@ -323,7 +326,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 	if o.flagGameDashboardPath != "" {
 		gameDashboardPath = o.flagGameDashboardPath
 	} else {
-		gameDashboardPath, err = findSubDirectory("game-specific dashboard", o.absoluteProjectPath, func(rootPath, relPath string) (bool, error) {
+		gameDashboardPath, _ = findSubDirectory("game-specific dashboard", o.absoluteProjectPath, func(rootPath, relPath string) (bool, error) {
 			// Check for required files
 			packageJSONPath := filepath.Join(rootPath, relPath, "package.json")
 			tsconfigPath := filepath.Join(rootPath, relPath, "tsconfig.json")
@@ -408,7 +411,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 		sharedCodePath = content[startIndex+len(startTag) : endIndex]
 
 		// Replace '$(MSBuildThisFileDirectory)' with the path of the file.
-		sharedCodePath = strings.Replace(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/", -1)
+		sharedCodePath = strings.ReplaceAll(sharedCodePath, "$(MSBuildThisFileDirectory)", gameBackendPath+"/")
 
 		// Convert the path to be relative to the project root
 		// The path in Directory.Build.props is relative to the backend directory
@@ -435,7 +438,7 @@ func (o *initProjectConfigOpts) detectProjectConfig() (*detectedProjectConfig, e
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("invalid .NET runtime version in global.json")
 			}
-			// Only keep major.minor, e.g., '9.0'.
+			// Only keep major.minor, e.g., '10.0'.
 			dotnetRuntimeVersion = strings.Join(parts[0:2], ".")
 		}
 	}

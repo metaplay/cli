@@ -6,8 +6,8 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -101,8 +101,10 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Flags to run against environment %s: %v", o.flagEnvironment, targetEnvFlags)
 	}
 
+	ctx := cmd.Context()
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
@@ -110,17 +112,16 @@ func (o *devBotClientOpts) Run(cmd *cobra.Command) error {
 	botClientPath := project.GetBotClientDir()
 
 	// Build the BotClient project
-	if err := execChildInteractive(botClientPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
-		log.Error().Msgf("Failed to build the BotClient .NET project: %s", err)
-		os.Exit(1)
+	if err := execChildInteractive(ctx, botClientPath, "dotnet", []string{"build"}, commonDotnetEnvVars); err != nil {
+		return clierrors.Wrap(err, "Failed to build the BotClient .NET project").
+			WithSuggestion("Check the build output for errors")
 	}
 
 	// Run the project without rebuilding
 	botRunFlags := append([]string{"run", "--no-build"}, targetEnvFlags...)
 	botRunFlags = append(botRunFlags, o.extraArgs...)
-	if err := execChildInteractive(botClientPath, "dotnet", botRunFlags, commonDotnetEnvVars); err != nil {
-		log.Error().Msgf("BotClient exited with error: %s", err)
-		os.Exit(1)
+	if err := execChildInteractive(ctx, botClientPath, "dotnet", botRunFlags, commonDotnetEnvVars); err != nil {
+		return clierrors.Wrap(err, "BotClient exited with error")
 	}
 
 	// BotClients terminated normally

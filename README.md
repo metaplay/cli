@@ -12,7 +12,7 @@ The installation is easiest using any of the supported package managers or insta
 
 ### On macOS
 
-Using Homebrew (recommended):
+Using [Homebrew](https://brew.sh/) (recommended):
 
 ```bash
 brew tap metaplay/homebrew-tap
@@ -27,18 +27,17 @@ bash <(curl -sSfL https://metaplay.github.io/cli/install.sh)
 
 ### On Windows
 
-Using Scoop (recommended):
+Using [Scoop](https://scoop.sh/) (recommended):
 
 ```bash
 scoop bucket add metaplay https://github.com/metaplay/scoop-bucket
 scoop install metaplay
 ```
 
-Using Chocolatey the package installed from the public feed is most likely outdated, as the review process is manual and very slow. Therefore, we recommend running the CLI's built-in update command immediately after installing:
+Using [Chocolatey](https://chocolatey.org/):
 
 ```bash
 choco install metaplay
-metaplay update cli
 ```
 
 ### On Linux
@@ -169,13 +168,20 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 We continuously create development builds from the `metaplay/cli` repository `main` branch. These builds are tagged with a `-dev.N` suffix (e.g., `1.2.4-dev.1`) and published as draft releases. You can find the latest development build on the main [releases page](https://github.com/metaplay/cli/releases). The development builds are primarily intended for testing purposes and should generally not be used.
 
-Development builds do not currently perform any version checks (for the purpose of new release notifications), and the `update cli` command is disabled on development builds as well. If you need to override this behavior, you can mock up a specific version number with the following:
+#### Update Channels
+
+The CLI has two update channels:
+
+- **GA channel** — used by official releases (e.g., `1.2.3`). Shows an update banner when a newer GA release is available.
+- **Prerelease channel** — prerelease builds (e.g., `1.2.3-dev.5`). Automatically updates to the latest prerelease on every run (except in CI environments).
+
+To switch a GA build to the prerelease channel, run:
 
 ```bash
-cli$ go build -ldflags="-X 'github.com/metaplay/cli/internal/version.AppVersion=<major.minor.patch>'" .
+metaplay update cli --prerelease
 ```
 
-It is highly recommended to use the latest official release, so should you decide to mess with development builds, proceed with extreme caution!
+This also works with locally built `dev` version to upgrade it to the prerelease channel.
 
 #### Build Locally
 

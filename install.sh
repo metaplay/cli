@@ -68,11 +68,21 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --version)
+      if [ -z "${2:-}" ]; then
+        print_error "--version requires a value"
+        usage
+        exit 1
+      fi
       VERSION="$2"
       shift 2
       ;;
     --version=*)
       VERSION="${1#*=}"
+      if [ -z "$VERSION" ]; then
+        print_error "--version requires a value"
+        usage
+        exit 1
+      fi
       shift 1
       ;;
     --verbose)
@@ -169,6 +179,7 @@ print_verbose "Download URL: ${DOWNLOAD_URL}"
 
 # Download the tarball (show progress bar unless verbose)
 TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "${TMP_DIR}"' EXIT
 TARBALL_PATH="${TMP_DIR}/${TARBALL}"
 
 if [ "$VERBOSE" = "true" ]; then
@@ -181,7 +192,7 @@ fi
 # Extract the binary
 tar -C "${TMP_DIR}" -xzf "${TARBALL_PATH}"
 
-# Move to /usr/local/bin (may need sudo)
+# Move to install dir (may need sudo)
 EXTRACTED_BINARY="${TMP_DIR}/${BINARY_NAME}"
 if [ ! -f "${EXTRACTED_BINARY}" ]; then
   print_error "Downloaded archive does not contain the expected binary '${BINARY_NAME}'."
@@ -189,12 +200,17 @@ if [ ! -f "${EXTRACTED_BINARY}" ]; then
 fi
 
 chmod +x "${EXTRACTED_BINARY}"
-# print_info "Installing to ${INSTALL_DIR}."
+print_info "Installing to ${INSTALL_DIR}."
 
 # Ensure the directory exists
 mkdir -p "$INSTALL_DIR"
 
 if [ ! -w "${INSTALL_DIR}" ]; then
+  if ! command -v sudo >/dev/null 2>&1; then
+    print_error "Cannot write to ${INSTALL_DIR} and 'sudo' is not available."
+    print_error "Run this script as root or install to a writable directory."
+    exit 1
+  fi
   sudo mv "${EXTRACTED_BINARY}" "${INSTALL_DIR}/${BINARY_NAME}"
 else
   mv "${EXTRACTED_BINARY}" "${INSTALL_DIR}/${BINARY_NAME}"
@@ -207,25 +223,31 @@ chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 rm -rf "${TMP_DIR}"
 
 # Ensure INSTALL_DIR is in PATH
-if ! echo "$PATH" | tr ':' '\n' | grep -q "$INSTALL_DIR"; then
-  print_info "Note: $HOME/.local/bin is not your PATH."
+if ! echo "$PATH" | tr ':' '\n' | grep -qxF "$INSTALL_DIR"; then
+  print_info "Note: $HOME/.local/bin is not in your PATH."
 
   SHELL_PROFILE=""
-  if [ -n "$ZSH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.zshrc"
-  elif [ -n "$BASH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.bashrc"
-  elif [ -n "$FISH_VERSION" ]; then
-    SHELL_PROFILE="$HOME/.config/fish/config.fish"
-  elif [ -f "$HOME/.profile" ]; then
-    SHELL_PROFILE="$HOME/.profile"
-  fi
+  SHELL_PATH_EXPORT='export PATH="$HOME/.local/bin:$PATH"'
+  case "$(basename "${SHELL:-}")" in
+    zsh)  SHELL_PROFILE="${ZDOTDIR:-$HOME}/.zshrc" ;;
+    bash) SHELL_PROFILE="$HOME/.bashrc" ;;
+    fish)
+      SHELL_PROFILE="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+      SHELL_PATH_EXPORT='fish_add_path "$HOME/.local/bin"'
+      ;;
+    *)
+      if [ -f "$HOME/.profile" ]; then
+        SHELL_PROFILE="$HOME/.profile"
+      fi
+      ;;
+  esac
 
   if [ -n "$SHELL_PROFILE" ]; then
+    mkdir -p "$(dirname "$SHELL_PROFILE")"
     print_info "Updating your $SHELL_PROFILE to include $INSTALL_DIR in PATH..."
-    echo "" >> $SHELL_PROFILE
-    echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> $SHELL_PROFILE
-    print_info "Load the updated path in your shell session with:"
+    echo "" >> "$SHELL_PROFILE"
+    echo "$SHELL_PATH_EXPORT" >> "$SHELL_PROFILE"
+    print_info "To apply the changes, open a new terminal or run:"
     echo "  source $SHELL_PROFILE"
   else
     print_info "Manually add this to your shell profile:"

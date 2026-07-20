@@ -133,7 +133,7 @@ func (o *getEnvironmentInfoOpts) Run(cmd *cobra.Command) error {
 	if authProviderName == "metaplay" {
 		// Fetch information from the portal.
 		portalClient := portalapi.NewClient(tokenSet)
-		info, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		info, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			return err
 		}

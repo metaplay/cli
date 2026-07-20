@@ -7,15 +7,48 @@ package portalapi
 import (
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	goversion "github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
 )
+
+// CanonicalizeSdkVersion normalizes an SDK version string to always have three
+// segments (major.minor.patch). The portal omits trailing ".0" segments, e.g.,
+// "36" instead of "36.0.0" and "36.1" instead of "36.1.0". This function
+// ensures a consistent format for downstream comparisons.
+func CanonicalizeSdkVersion(v string) string {
+	parsed, err := goversion.NewVersion(v)
+	if err != nil {
+		return v
+	}
+	seg := parsed.Segments()
+	for len(seg) < 3 {
+		seg = append(seg, 0)
+	}
+	base := fmt.Sprintf("%d.%d.%d", seg[0], seg[1], seg[2])
+	if pre := parsed.Prerelease(); pre != "" {
+		base += "-" + pre
+	}
+	if meta := parsed.Metadata(); meta != "" {
+		base += "+" + meta
+	}
+	return base
+}
+
+// CanonicalizeSdkVersions normalizes the Version field on each SdkVersionInfo.
+func CanonicalizeSdkVersions(versions []SdkVersionInfo) {
+	for i := range versions {
+		versions[i].Version = CanonicalizeSdkVersion(versions[i].Version)
+	}
+}
 
 // NewClient creates a new Portal API client with the given auth token set.
 func NewClient(tokenSet *auth.TokenSet) *Client {
@@ -84,7 +117,7 @@ func (c *Client) AgreeToContract(contractID string) error {
 	}
 
 	// POST to the user to update the contract status.
-	_, err := metahttp.PutJSON[any](c.httpClient, fmt.Sprintf("/api/v1/contract_signatures"), payload)
+	_, err := metahttp.PutJSON[any](c.httpClient, "/api/v1/contract_signatures", payload)
 	if err != nil {
 		return fmt.Errorf("failed to agree to general terms and conditions: %w", err)
 	}
@@ -92,8 +125,10 @@ func (c *Client) AgreeToContract(contractID string) error {
 	return nil
 }
 
-// DownloadSdkByVersionID downloads the SDK with the specified version ID to the target directory.
-func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, error) {
+// DownloadSdkByVersionID downloads the SDK with the specified version ID to
+// the target directory. If onProgress is non-nil it is called periodically
+// with (bytesDownloaded, totalBytes).
+func (c *Client) DownloadSdkByVersionID(targetDir, versionID string, onProgress func(downloaded, total int64)) (string, error) {
 	if versionID == "" {
 		return "", fmt.Errorf("version ID is required")
 	}
@@ -102,17 +137,20 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 	path := fmt.Sprintf("/api/v1/sdk/%s/download", versionID)
 	tmpFilename := fmt.Sprintf("metaplay-sdk-%08x.zip", rand.Uint32())
 	tmpSdkZipPath := filepath.Join(targetDir, tmpFilename)
-	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath)
+	resp, err := metahttp.Download(c.httpClient, path, tmpSdkZipPath, onProgress)
 	if err != nil {
 		return "", fmt.Errorf("failed to download SDK: %w", err)
 	}
 
 	// Handle server errors.
 	if resp.IsError() {
+		_ = os.Remove(tmpSdkZipPath)
 		if resp.StatusCode() == 403 {
-			return "", fmt.Errorf("you must agree to the SDK terms and conditions in https://portal.metaplay.dev first")
+			return "", clierrors.New("SDK download requires accepting the terms and conditions").
+				WithSuggestion("Visit https://portal.metaplay.dev to accept the SDK terms and conditions")
 		}
-		return "", fmt.Errorf("failed to download the Metaplay SDK from the portal with status code %d", resp.StatusCode())
+		return "", clierrors.Newf("Failed to download the Metaplay SDK (status %d)", resp.StatusCode()).
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	log.Debug().Msgf("Downloaded SDK to %s", tmpSdkZipPath)
@@ -122,7 +160,7 @@ func (c *Client) DownloadSdkByVersionID(targetDir, versionID string) (string, er
 // Fetch the organizations and projects (within each org) that the user has access to.
 // Note: It's considered an error if the user has no accessible organizations.
 func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) {
-	path := fmt.Sprintf("/api/v1/organizations/user-organizations")
+	path := "/api/v1/organizations/user-organizations"
 	orgsWithProjects, err := metahttp.Get[[]OrganizationWithProjects](c.httpClient, path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list user's organizations and projects: %w", err)
@@ -130,7 +168,8 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 
 	// It's an error if the user has no accessible organizations.
 	if len(orgsWithProjects) == 0 {
-		return nil, fmt.Errorf("no accessible organizations found in the portal; either create a new one in https://portal.metaplay.dev or request access to an existing one from your team")
+		return nil, clierrors.New("No accessible organizations found").
+			WithSuggestion("Create a new organization at https://portal.metaplay.dev, or request access to an existing one from your team")
 	}
 
 	// Sanity check the returned data.
@@ -142,7 +181,7 @@ func (c *Client) FetchUserOrgsAndProjects() ([]OrganizationWithProjects, error) 
 		}
 	}
 
-	return orgsWithProjects, err
+	return orgsWithProjects, nil
 }
 
 // FetchProjectInfo fetches information about a project using its human ID.
@@ -155,8 +194,9 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 
 	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)
 	if len(projectInfos) == 0 {
-		return nil, fmt.Errorf("no project with ID %s found in the Metaplay portal. Are you sure it's correct and you have access?", projectHumanID)
-	} else if len(projectInfos) > 2 {
+		return nil, clierrors.Newf("Project '%s' not found", projectHumanID).
+			WithSuggestion("Check the project ID is correct, or run 'metaplay auth whoami' to verify your account has access")
+	} else if len(projectInfos) > 1 {
 		return nil, fmt.Errorf("portal returned %d matching projects, expecting only one", len(projectInfos))
 	}
 
@@ -176,21 +216,48 @@ func (c *Client) FetchProjectEnvironments(projectUUID string) ([]EnvironmentInfo
 	return environmentInfos, nil
 }
 
-// FetchEnvironmentInfoByHumanID fetches information about an environment using its human ID.
-func (c *Client) FetchEnvironmentInfoByHumanID(humanID string) (*EnvironmentInfo, error) {
+// FetchEnvironmentsByHumanID fetches all environments visible to the caller that match the given
+// human ID, optionally narrowed to a specific stack domain. Self-hosted environments are only
+// unique by (project, stack domain), so the same human ID can legitimately exist on multiple
+// stacks; passing stackDomain narrows the result to a single row. When stackDomain is empty,
+// the portal applies no stack filter and the response may contain multiple matches.
+func (c *Client) FetchEnvironmentsByHumanID(humanID, stackDomain string) ([]EnvironmentInfo, error) {
 	url := fmt.Sprintf("/api/v1/environments?human_id=%s", humanID)
-	log.Debug().Msgf("Fetch environment by human ID from %s%s", c.httpClient.BaseURL, url)
+	if stackDomain != "" {
+		url += fmt.Sprintf("&stack_domain=%s", stackDomain)
+	}
+	log.Debug().Msgf("Fetch environments by human ID from %s%s", c.httpClient.BaseURL, url)
 	envInfos, err := metahttp.Get[[]EnvironmentInfo](c.httpClient, url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch environment details from portal: %w", err)
 	}
+	return envInfos, nil
+}
+
+// FetchEnvironmentInfoByHumanID resolves a single environment by its human ID. When stackDomain
+// is provided, the lookup is unambiguous and at most one matching row exists. When stackDomain
+// is empty and the human ID resolves to more than one environment (possible for self-hosted
+// environments across stacks), the call fails with guidance to disambiguate.
+func (c *Client) FetchEnvironmentInfoByHumanID(humanID, stackDomain string) (*EnvironmentInfo, error) {
+	envInfos, err := c.FetchEnvironmentsByHumanID(humanID, stackDomain)
+	if err != nil {
+		return nil, err
+	}
 
 	if len(envInfos) == 0 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: no such environment")
+		return nil, clierrors.Newf("Environment '%s' not found", humanID).
+			WithSuggestion("Run 'metaplay update project-environments' to sync with portal, or check available environments in the portal")
 	}
 
 	if len(envInfos) > 1 {
-		return nil, fmt.Errorf("failed to fetch environment details from portal: multiple results returned")
+		if stackDomain == "" {
+			return nil, clierrors.Newf("Multiple environments match '%s'", humanID).
+				WithDetails("This human ID exists on more than one stack — typically a self-hosted environment shared across stacks.").
+				WithSuggestion("Set 'stackDomain' for the environment in metaplay-project.yaml so the CLI can resolve it unambiguously")
+		}
+		// With stackDomain set, more than one row is a true invariant violation.
+		return nil, clierrors.Newf("Multiple environments match '%s' on stack '%s'", humanID, stackDomain).
+			WithSuggestion("Contact support — this is unexpected and may indicate a configuration issue")
 	}
 
 	return &envInfos[0], nil
@@ -202,6 +269,7 @@ func (c *Client) GetLatestSdkVersionInfo() (*SdkVersionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get latest SDK version info: %w", err)
 	}
+	sdkInfo.Version = CanonicalizeSdkVersion(sdkInfo.Version)
 	return &sdkInfo, nil
 }
 
@@ -211,6 +279,7 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
+	CanonicalizeSdkVersions(sdkVersions)
 	return sdkVersions, nil
 }
 
@@ -218,30 +287,44 @@ func (c *Client) GetSdkVersions() ([]SdkVersionInfo, error) {
 // If only a major version is provided (e.g., "34"), returns the latest minor/patch for that major.
 // Returns nil if no matching version is found.
 func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersionInfo, error) {
-	log.Debug().Msgf("FindSdkVersionByVersionOrName: looking for '%s'", versionOrName)
+	log.Debug().Msgf("FindSdkVersionByVersionOrName(): looking for '%s'", versionOrName)
 
-	// Get all SDK versions
+	// Get all SDK versions (already canonicalized to X.Y.Z format).
 	versions, err := c.GetSdkVersions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get SDK versions: %w", err)
 	}
 
+	versionStrs := make([]string, len(versions))
+	for i, v := range versions {
+		versionStrs[i] = v.Version
+	}
+	log.Debug().Msgf("Available SDK versions: %v", versionStrs)
+
 	// If input looks like a major version only (digits with no dots), find the latest for that major.
 	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
-	if isMajorVersionOnly(versionOrName) {
+	if IsMajorVersionOnly(versionOrName) {
 		result, err := findLatestForMajorVersion(versions, versionOrName)
+		if err != nil {
+			return nil, err
+		}
 		if result != nil {
 			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
+			return result, nil
 		}
-		return result, err
+		log.Debug().Msgf("No versions found for major version %s, checking for exact match", versionOrName)
 	}
+
+	// Canonicalize the input so partial versions like "36.1" match "36.1.0".
+	canonicalInput := CanonicalizeSdkVersion(versionOrName)
 
 	// Try to find an exact match for the version string.
 	for _, v := range versions {
-		if v.Version == versionOrName {
+		if v.Version == canonicalInput {
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version '%s' found but it has no downloadable file", versionOrName)
 			}
+			log.Debug().Msgf("Matched version '%s' (canonicalized from '%s') to SDK version %s", canonicalInput, versionOrName, v.Version)
 			return &v, nil
 		}
 	}
@@ -252,16 +335,18 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 			if v.StoragePath == nil {
 				return nil, fmt.Errorf("SDK version with name '%s' found but it has no downloadable file", versionOrName)
 			}
+			log.Debug().Msgf("Matched name '%s' to SDK version %s", versionOrName, v.Version)
 			return &v, nil
 		}
 	}
 
 	// No match found
+	log.Debug().Msgf("No match found for '%s' (canonicalized: '%s')", versionOrName, canonicalInput)
 	return nil, nil
 }
 
-// isMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
-func isMajorVersionOnly(version string) bool {
+// IsMajorVersionOnly checks if the input is a major version number only (e.g., "34" but not "34.3")
+func IsMajorVersionOnly(version string) bool {
 	if version == "" {
 		return false
 	}
@@ -277,7 +362,7 @@ func isMajorVersionOnly(version string) bool {
 func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (*SdkVersionInfo, error) {
 	prefix := majorVersion + "."
 	var best *SdkVersionInfo
-	var bestMinor, bestPatch int = -1, -1
+	var bestMinor, bestPatch = -1, -1
 
 	for i := range versions {
 		v := &versions[i]
@@ -303,12 +388,10 @@ func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (
 
 // parseMinorPatch parses "3" or "3.1" into minor and patch numbers.
 func parseMinorPatch(s string) (minor, patch int) {
-	parts := strings.SplitN(s, ".", 2)
-	if len(parts) >= 1 {
-		minor, _ = strconv.Atoi(parts[0])
-	}
-	if len(parts) >= 2 {
-		patch, _ = strconv.Atoi(parts[1])
+	minorStr, patchStr, hasPatch := strings.Cut(s, ".")
+	minor, _ = strconv.Atoi(minorStr)
+	if hasPatch {
+		patch, _ = strconv.Atoi(patchStr)
 	}
 	return minor, patch
 }
@@ -328,5 +411,5 @@ func (c *Client) DownloadLatestSdk(targetDir string) (string, error) {
 	}
 
 	// Download the SDK
-	return c.DownloadSdkByVersionID(targetDir, latestSdk.ID)
+	return c.DownloadSdkByVersionID(targetDir, latestSdk.ID, nil)
 }

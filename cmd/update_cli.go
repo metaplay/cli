@@ -5,10 +5,7 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
-
-	"github.com/creativeprojects/go-selfupdate"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/styles"
@@ -16,7 +13,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type updateCliOpts struct{}
+// manualDownloadSuggestion is shown when an update fails for a reason the user can work
+// around by fetching a release themselves.
+const manualDownloadSuggestion = "Check your network connection, or download a release manually from https://github.com/metaplay/cli/releases"
+
+type updateCliOpts struct {
+	flagPrerelease bool
+}
 
 func init() {
 	o := updateCliOpts{}
@@ -27,6 +30,8 @@ func init() {
 		Run:   runCommand(&o),
 	}
 
+	cmd.Flags().BoolVar(&o.flagPrerelease, "prerelease", false, "Update to the latest prerelease version")
+
 	updateCmd.AddCommand(cmd)
 }
 
@@ -35,45 +40,46 @@ func (o *updateCliOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *updateCliOpts) Run(cmd *cobra.Command) error {
-	if version.IsDevBuild() {
-		return fmt.Errorf("the update command is disabled on development builds")
+	ctx := cmd.Context()
+
+	prerelease := o.flagPrerelease || version.IsPrerelease() || version.IsDevBuild()
+	if prerelease {
+		log.Info().Msgf("Checking for the latest Metaplay CLI prerelease version...")
+	} else {
+		log.Info().Msgf("Checking for the latest Metaplay CLI version...")
 	}
 
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{})
+	// Detect the latest version via the non-throttled github.com endpoints (see internal/version/detect.go).
+	latest, err := version.DetectLatest(ctx, prerelease)
 	if err != nil {
-		return fmt.Errorf("failed to initialize the Metaplay CLI updater source: %w", err)
+		return clierrors.Wrap(err, "Failed to detect the latest Metaplay CLI version").
+			WithSuggestion(manualDownloadSuggestion)
 	}
 
-	updater, err := selfupdate.NewUpdater(selfupdate.Config{
-		Source: source,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to initialize the Metaplay CLI updater: %w", err)
-	}
-
-	latest, found, err := updater.DetectLatest(context.Background(), selfupdate.ParseSlug("metaplay/cli"))
-	if err != nil {
-		return fmt.Errorf("failed to detect the latest Metaplay CLI version: %w", err)
-	}
-	if !found {
-		log.Info().Msgf("No newer Metaplay CLI version found")
+	// A local "dev" build has no parseable version, so IsNewer can't compare it; always
+	// proceed in that case so `update cli` can move a locally built binary onto a release.
+	if !version.IsDevBuild() && !version.IsNewer(latest, version.AppVersion) {
+		log.Info().Msgf("Already on the latest Metaplay CLI version (%s)", version.AppVersion)
 		return nil
 	}
+
+	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest))
 
 	// Calling vendored implementation of `GetExecutablePath()` due to a bug in `selfupdate.GetExecutablePath()`
 	// that uses `filepath.EvalSymlinks()` known to be broken on Windows.
 	// A PR has been made for the `go-selfupdate` library: https://github.com/creativeprojects/go-selfupdate/pull/46
 	exe, err := pathutil.GetExecutablePath()
 	if err != nil {
-		return fmt.Errorf("could not determine the Metaplay CLI executable path: %w", err)
+		return clierrors.Wrap(err, "Could not determine the Metaplay CLI executable path")
 	}
 
-	if err := updater.UpdateTo(context.Background(), latest, exe); err != nil {
-		return fmt.Errorf("failed to update the Metaplay CLI binary: %w", err)
+	if err := version.DownloadAndApply(ctx, latest, exe); err != nil {
+		return clierrors.Wrap(err, "Failed to update the Metaplay CLI binary").
+			WithSuggestion(manualDownloadSuggestion)
 	}
 
 	log.Info().Msg("")
-	log.Info().Msgf(styles.RenderSuccess("✅ Successfully updated to version %s!"), latest.Version())
+	log.Info().Msgf(styles.RenderSuccess("✅ Successfully updated to version %s!"), latest)
 
 	return nil
 }

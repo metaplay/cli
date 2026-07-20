@@ -8,7 +8,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/pkg/jsonmessage"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -62,7 +62,9 @@ func init() {
 func (o *imagePushOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate docker image name: must be a repository:tag pair.
 	if !strings.Contains(o.argImageName, ":") {
-		return fmt.Errorf("IMAGE must be a full docker image name 'NAME:TAG', got '%s'", o.argImageName)
+		return clierrors.NewUsageErrorf("Invalid image name '%s'", o.argImageName).
+			WithDetails("Image name must include a tag (e.g., 'mygame:abc123')").
+			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:abc123'")
 	}
 
 	return nil
@@ -109,8 +111,11 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	taskRunner := tui.NewTaskRunner()
 
 	// Push the image to the remote repository.
+	imagePushed := false
 	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-		return pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		imagePushed = pushed
+		return err
 	})
 
 	// Run the tasks.
@@ -119,51 +124,88 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	if imagePushed {
+		log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	} else {
+		log.Info().Msg(styles.RenderSuccess("✅ Image already present in repository; nothing to push."))
+	}
 	return nil
 }
 
-// Extrat the tag from a full 'name:tag' docker image name.
+// Extract the tag from a full 'name:tag' docker image name.
 func extractDockerImageTag(imageName string) (string, error) {
 	// Check if the image name is empty
 	if imageName == "" {
-		return "", errors.New("must specify a valid docker image name as the image-name argument")
+		return "", clierrors.NewUsageError("Docker image name is required").
+			WithSuggestion("Specify image name in format NAME:TAG")
 	}
 
 	// Split the image name into parts
 	srcImageParts := strings.Split(imageName, ":")
 	if len(srcImageParts) != 2 || len(srcImageParts[0]) == 0 || len(srcImageParts[1]) == 0 {
-		return "", fmt.Errorf("invalid docker image name '%s', expecting the name in format 'name:tag'", imageName)
+		return "", clierrors.NewUsageErrorf("Invalid docker image name '%s'", imageName).
+			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:abc123'")
 	}
 
 	// Return the tag part of the image name
 	return srcImageParts[1], nil
 }
 
-// Push a docker image from the local repo to a remote one.
-// Output progress into the task output.
-func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
+// pushDockerImage pushes a local image from the local repo to the remote repository, writing
+// progress into the task output. The returned bool is true if an image was actually pushed, and
+// false if the push was skipped because the identical image was already present in the repository.
+func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) (bool, error) {
 	// Create a Docker client
 	cli, err := envapi.NewDockerClient()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Extract tag from source image.
 	imageTag, err := extractDockerImageTag(imageName)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Resolve source and destination image names.
 	srcImageName := imageName
 	dstImageName := fmt.Sprintf("%s:%s", dstRepoName, imageTag)
 
+	// Check whether the tag already exists in the remote repository. Image tags must be unique
+	// per build: re-using a tag (e.g. 'latest', a bare commit SHA, or any tag that has already
+	// been pushed) means a deployed environment can't reliably resolve which artifact it's
+	// running. We therefore refuse to overwrite a tag that already holds a different image.
+	remoteDigests, exists, err := envapi.FetchRemoteDockerImageDigests(dockerCredentials, dstImageName)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		// Resolve the local image's ID so we can tell apart "same image, re-pushed" (a harmless
+		// no-op we can skip) from "different image, same tag" (a hard error). The local image ID is
+		// the config digest under the legacy image store and the manifest digest under the
+		// containerd image store, so accept a match against either remote digest.
+		localImage, err := envapi.ReadLocalDockerImageMetadata(srcImageName)
+		if err != nil {
+			return false, err
+		}
+
+		if localImage.ImageID == remoteDigests.ConfigDigest || localImage.ImageID == remoteDigests.ManifestDigest {
+			// Identical image already in the repository: nothing to do.
+			output.AppendLinef("Image %s is already present in the repository (identical digest), skipping push", dstImageName)
+			return false, nil
+		}
+
+		// Same tag, different image content: refuse to overwrite.
+		return false, clierrors.Newf("Image tag '%s' already exists in the environment's repository with different content", imageTag).
+			WithDetails("Re-using an image tag is not supported: each build must be pushed with a unique tag.").
+			WithSuggestion("Rebuild with a unique tag and push that. A '<timestamp>-<commit>' tag (e.g. '20260601-153000-1a27c25') is recommended; 'metaplay build image' without a tag generates one automatically.")
+	}
+
 	// If names don't match, tag the source image as the destination.
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
 		if err := cli.ImageTag(ctx, srcImageName, dstImageName); err != nil {
-			return fmt.Errorf("failed to tag image: %w", err)
+			return false, fmt.Errorf("failed to tag image: %w", err)
 		}
 	}
 
@@ -176,19 +218,19 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 	}
 	authConfigBytes, err := json.Marshal(authConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal auth config: %w", err)
+		return false, fmt.Errorf("failed to marshal auth config: %w", err)
 	}
 
 	// Encode with base64
-	authStr := string(base64.StdEncoding.EncodeToString(authConfigBytes))
+	authStr := base64.StdEncoding.EncodeToString(authConfigBytes)
 
 	pushResponseReader, err := cli.ImagePush(ctx, dstImageName, image.PushOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to push docker image: %w", err)
+		return false, fmt.Errorf("failed to push docker image: %w", err)
 	}
-	defer pushResponseReader.Close()
+	defer func() { _ = pushResponseReader.Close() }()
 
 	// Follow push progress
 	decoder := json.NewDecoder(pushResponseReader)
@@ -201,7 +243,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to decode push response: %w", err)
+			return false, fmt.Errorf("failed to decode push response: %w", err)
 		}
 
 		// Track progress by ID to show the latest status for each layer
@@ -215,38 +257,54 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 		// If progress has an error, return it
 		if progress.Error != nil {
-			return fmt.Errorf("error pushing image: %s", progress.Error.Message)
+			return false, fmt.Errorf("error pushing image: %s", progress.Error.Message)
 		}
 
 		// Update the output with current progress information (only in interactive mode).
 		if tui.IsInteractiveMode() {
-			updateProgressOutput(output, dstImageName, progressIDs, progresses)
+			updateDockerProgressOutput(output, progressIDs, progresses)
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
-// updateProgressOutput updates the task output with the current push progress information
-func updateProgressOutput(output *tui.TaskOutput, imageName string, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
-	// Start with the header line
+// updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.
+// Shared by both image push and image pull commands.
+func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
 	lines := []string{}
 
-	// Add progress for each layer
 	for _, id := range progressIDs {
-		// Skip empty progress entries
-		if progresses[id].Progress == nil && progresses[id].Status == "" {
+		progress, exists := progresses[id]
+		if !exists || (progress.Progress == nil && progress.Status == "") {
 			continue
 		}
 
-		// Format the progress line
-		progressLine := fmt.Sprintf("Layer %s: %s", id[:12], progresses[id].Status)
-		if progresses[id].Progress != nil {
-			progressLine += fmt.Sprintf(" %s", progresses[id].Progress.String())
+		// Shorten common verbose statuses
+		status := progress.Status
+		switch {
+		case strings.HasPrefix(status, "Pulling fs layer"):
+			status = "Pulling layer"
+		case strings.HasPrefix(status, "Waiting"):
+			status = "Waiting"
+		case strings.HasPrefix(status, "Downloading"):
+			status = "Downloading"
+		case strings.HasPrefix(status, "Verifying Checksum"):
+			status = "Verifying"
+		case strings.HasPrefix(status, "Download complete"):
+			status = "Downloaded"
+		case strings.HasPrefix(status, "Extracting"):
+			status = "Extracting"
+		case strings.HasPrefix(status, "Pull complete"):
+			status = "Complete"
 		}
-		lines = append(lines, progressLine)
+
+		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
+		if progress.Progress != nil {
+			progressLine += fmt.Sprintf(" %s", progress.Progress.String())
+		}
+		lines = append(lines, strings.TrimSpace(progressLine))
 	}
 
-	// Update all lines at once
 	output.SetFooterLines(lines)
 }

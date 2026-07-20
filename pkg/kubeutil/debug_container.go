@@ -98,6 +98,10 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 
 	// Wait for the debug container to be ready
 	err = waitForContainerReady(ctx, kubeCli, podName, debugContainerName)
+	if err != nil {
+		cleanup() // Clean up the container we created
+		return "", nil, fmt.Errorf("debug container failed to become ready: %w", err)
+	}
 
 	return debugContainerName, cleanup, nil
 }

@@ -6,12 +6,12 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metaproj"
@@ -31,7 +31,9 @@ func findProjectDirectory() (string, error) {
 		log.Debug().Msgf("Try to locate Metaplay project in path '%s'", flagProjectConfigPath)
 		info, err := os.Stat(flagProjectConfigPath)
 		if err != nil {
-			return "", fmt.Errorf("provided path '%s' is not a file or directory", flagProjectConfigPath)
+			return "", clierrors.Newf("Path '%s' does not exist", flagProjectConfigPath).
+				WithCause(err).
+				WithSuggestion("Check that the path is correct")
 		}
 
 		if info.IsDir() {
@@ -40,13 +42,15 @@ func findProjectDirectory() (string, error) {
 			if _, err := os.Stat(configFilePath); err == nil {
 				return flagProjectConfigPath, nil
 			}
-			return "", fmt.Errorf("unable to find metaplay-project.yaml in directory '%s'", flagProjectConfigPath)
+			return "", clierrors.Newf("No metaplay-project.yaml found in '%s'", flagProjectConfigPath).
+				WithSuggestion("Run 'metaplay init project' to create one, or specify a different directory with --project")
 		} else {
 			// Check if the specified file is the config file
 			if filepath.Base(flagProjectConfigPath) == metaproj.ConfigFileName {
 				return filepath.Dir(flagProjectConfigPath), nil
 			}
-			return "", errors.New("specified file is not metaplay-project.yaml")
+			return "", clierrors.New("Specified file is not metaplay-project.yaml").
+				WithSuggestion("Use --project to specify the directory containing metaplay-project.yaml")
 		}
 	}
 
@@ -85,7 +89,8 @@ func findProjectDirectory() (string, error) {
 		// Check if we've reached the root directory
 		if parentDir == absCurrentDir {
 			// We've reached the root and didn't find the config file
-			return "", errors.New("metaplay-project.yaml file not found in any parent directory, use --project=<path> to point to your project directory")
+			return "", clierrors.New("Cannot find metaplay-project.yaml").
+				WithSuggestion("Make sure you are in the right directory, or use --project=<path> to specify the project directory")
 		}
 
 		// Move up to the parent directory
@@ -105,7 +110,9 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 
 	// If have a project, return its auth provider.
 	if project.Config.AuthProviders == nil {
-		return nil, fmt.Errorf("trying to resolve auth provider '%s'; project doesn't define any custom providers", providerName)
+		return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
+			WithDetails("Project doesn't define any custom auth providers").
+			WithSuggestion("Use the default 'metaplay' provider, or add custom providers to metaplay-project.yaml")
 	}
 
 	// Find the matching provider (by ID or name).
@@ -120,7 +127,8 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 	for providerID := range project.Config.AuthProviders {
 		existingAuthProviders = append(existingAuthProviders, providerID)
 	}
-	return nil, fmt.Errorf("no matching auth provider '%s' found; project has the following providers: %v", providerName, existingAuthProviders)
+	return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
+		WithDetails(fmt.Sprintf("Available providers: %v", existingAuthProviders))
 }
 
 // Load the metaplay-project.yaml from the specified directory.
@@ -180,12 +188,14 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		if environment == "" {
 			// Must be in interactive mode.
 			if !tui.IsInteractiveMode() {
-				return nil, nil, fmt.Errorf("in non-interactive mode, target environment must be explicitly specified")
+				return nil, nil, clierrors.NewUsageError("Target environment must be specified in non-interactive mode").
+					WithSuggestion("Provide the environment name as an argument, e.g., 'metaplay <command> nimbly'")
 			}
 
 			// Error if no environments in the metaplay-project.yaml.
 			if len(project.Config.Environments) == 0 {
-				return nil, nil, fmt.Errorf("no environments found in metaplay-project.yaml; update the local file with 'metaplay update project-environments' or create a new environment via https://portal.metaplay.dev")
+				return nil, nil, clierrors.New("No environments found in metaplay-project.yaml").
+					WithSuggestion("Run 'metaplay update project-environments' to sync from portal, or create one at https://portal.metaplay.dev")
 			}
 
 			// Let the user choose the target environment.
@@ -257,12 +267,14 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 
 		// Must be in interactive mode.
 		if !tui.IsInteractiveMode() {
-			return nil, nil, fmt.Errorf("interactive mode required for project selection")
+			return nil, nil, clierrors.NewUsageError("Interactive mode required for project selection").
+				WithSuggestion("Specify the environment explicitly, or run in an interactive terminal")
 		}
 
 		// Error if no environments in portal project.
 		if len(environments) == 0 {
-			return nil, nil, fmt.Errorf("no accessible environments found in the portal for project '%s'; either create one in https://portal.metaplay.dev or request access to an existing one from your team", project.Name)
+			return nil, nil, clierrors.Newf("No accessible environments found for project '%s'", project.Name).
+				WithSuggestion("Create an environment at https://portal.metaplay.dev or request access from your team")
 		}
 
 		// Let user interactively choose the environment.
@@ -281,14 +293,44 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 	} else {
 		// Check that the specified environment ID is a valid human ID.
 		if err := metaproj.ValidateEnvironmentID(portalapi.HostingTypeMetaplayHosted, environment); err != nil {
-			return nil, nil, fmt.Errorf("full environment ID must be specified when metaplay-project.yaml not found (e.g., 'lovely-wombats-build-nimbly'): %w", err)
+			return nil, nil, clierrors.WrapUsageError(err, "Invalid environment ID format").
+				WithSuggestion("If the name is a custom environment alias, the CLI must be invoked from the folder (or a subfolder) where metaplay-project.yaml is located. Otherwise, use the full environment ID (e.g., 'lovely-wombats-build-nimbly').")
 		}
 
-		// Try to resolve the environment from the portal by its human ID.
-		var err error
-		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
+		// Resolve the environment from the portal by its human ID. The same human ID can
+		// legitimately exist on multiple stacks (self-hosted environments are unique per
+		// stack), and without a metaplay-project.yaml we have no stack domain to filter by,
+		// so disambiguate interactively when the portal returns more than one match.
+		environments, err := portalClient.FetchEnvironmentsByHumanID(environment, "")
 		if err != nil {
 			return nil, nil, err
+		}
+
+		switch len(environments) {
+		case 0:
+			return nil, nil, clierrors.Newf("Environment '%s' not found", environment).
+				WithSuggestion("Check available environments at https://portal.metaplay.dev")
+		case 1:
+			portalEnv = &environments[0]
+		default:
+			if !tui.IsInteractiveMode() {
+				return nil, nil, clierrors.Newf("Multiple environments match '%s'", environment).
+					WithDetails(fmt.Sprintf("Found %d environments across different stacks", len(environments))).
+					WithSuggestion("Run in interactive mode to choose, or invoke the CLI from a project directory whose metaplay-project.yaml pins the stack domain")
+			}
+
+			portalEnv, err = tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
+				"Select Target Environment",
+				environments,
+				func(env *portalapi.EnvironmentInfo) (string, string) {
+					return env.Name, fmt.Sprintf("[%s on %s]", env.HumanID, env.StackDomain)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s on %s]", portalEnv.HumanID, portalEnv.StackDomain)))
 		}
 	}
 
@@ -301,24 +343,6 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		AuthProvider: "metaplay",
 	}
 	return envConfig, tokenSet, nil
-}
-
-// Helper for resolving both the MetaplayProject and a specific environment at the same time.
-// This operation is common enough to justify its own method.
-func resolveProjectAndEnvironment(environment string) (*metaproj.MetaplayProject, *metaproj.ProjectEnvironmentConfig, error) {
-	// Resolve the project.
-	project, err := resolveProject()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Find target environment.
-	envConfig, err := project.Config.FindEnvironmentConfig(environment)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return project, envConfig, nil
 }
 
 // Choose target project either with human ID provided (still validated against the portal-returned data) or
@@ -346,7 +370,8 @@ func chooseOrgAndProject(portalClient *portalapi.Client, projectID string) (*por
 		}
 
 		if foundProject == nil {
-			return nil, fmt.Errorf("project with ID '%s' not found in any accessible organization; check the project ID and ensure you have access to it", projectID)
+			return nil, clierrors.Newf("Project '%s' not found", projectID).
+				WithSuggestion("Check the project ID and ensure you have access to it at https://portal.metaplay.dev")
 		}
 
 		return foundProject, nil

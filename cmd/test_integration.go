@@ -7,10 +7,12 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
@@ -19,15 +21,51 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// integrationTestCtx carries runtime state into test functions.
+type integrationTestCtx struct {
+	ctx                context.Context
+	opts               *testIntegrationOpts
+	project            *metaproj.MetaplayProject
+	serverImage        string
+	playwrightTsImage  string
+	playwrightNetImage string
+	config             *metaproj.IntegrationTestsConfig
+}
+
+type integrationTest struct {
+	name        string
+	displayName string
+	run         func(ctx integrationTestCtx, server *testutil.BackgroundGameServer) error
+}
+
+var integrationTests = []integrationTest{
+	{"bots", "Run botclient tests", func(testCtx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return testCtx.opts.runBotTests(testCtx.ctx, testCtx.project, server, testCtx.serverImage, testCtx.config)
+	}},
+	{"dashboard", "Run dashboard Playwright tests", func(testCtx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return testCtx.opts.runDashboardTests(testCtx.ctx, testCtx.project, server, testCtx.playwrightTsImage)
+	}},
+	{"system", "Run Playwright.NET system tests", func(testCtx integrationTestCtx, server *testutil.BackgroundGameServer) error {
+		return testCtx.opts.runSystemTests(testCtx.ctx, testCtx.project, server, testCtx.playwrightNetImage)
+	}},
+}
+
 type testIntegrationOpts struct {
 	flagSkipBuild    bool
 	flagDebugNetwork bool
 	flagOutputDir    string
 	flagTest         string
+	flagTimeout      time.Duration
 }
 
 func init() {
 	o := testIntegrationOpts{}
+
+	// Build the test list for the Long description from integrationTests.
+	var testListLines strings.Builder
+	for _, t := range integrationTests {
+		fmt.Fprintf(&testListLines, "\n\t\t\t- %s: %s.", t.name, t.displayName)
+	}
 
 	cmd := &cobra.Command{
 		Use:     "integration",
@@ -46,10 +84,7 @@ func init() {
 			For each of the tests, the game server container is first started in the background and then
 			the test-specific container is run against the game server.
 
-			Tests:
-			- bots: Run bots against the background server.
-			- dashboard: Run dashboard Playwright tests.
-			- system: Run Playwright.NET system tests.
+			Tests:`+testListLines.String()+`
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -60,6 +95,9 @@ func init() {
 
 			# Run only the 'bots' test.
 			metaplay test integration --test=bots
+
+			# Run with a custom timeout (e.g., 30 minutes)
+			metaplay test integration --timeout=30m
 		`),
 	}
 
@@ -70,17 +108,61 @@ func init() {
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip the docker image build step (faster if you already built the images)")
 	flags.BoolVar(&o.flagDebugNetwork, "debug-network", false, "[internal] Run network connectivity tests for debugging (for debugging the CLI itself)")
 	flags.StringVar(&o.flagOutputDir, "output-dir", "./integration-test-output", "Directory for test output and results")
-	flags.StringVar(&o.flagTest, "test", "", "Run only the specified test (e.g. 'bots', 'dashboard', 'system')")
+	var testNames []string
+	for _, t := range integrationTests {
+		testNames = append(testNames, "'"+t.name+"'")
+	}
+	flags.StringVar(&o.flagTest, "test", "", "Run only the specified test ("+strings.Join(testNames, ", ")+")")
+	flags.DurationVar(&o.flagTimeout, "timeout", 1*time.Hour, "Timeout for running tests (e.g., 30m, 1h, 2h30m). Does not apply to image builds.")
 	_ = flags.MarkDeprecated("only", "use --tests instead")
 }
 
-func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
+func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error {
+	if o.flagTimeout <= 0 {
+		return fmt.Errorf("--timeout must be a positive duration (e.g., 30m, 1h)")
+	}
+	if o.flagTest != "" {
+		found := false
+		for _, t := range integrationTests {
+			if t.name == o.flagTest {
+				found = true
+				break
+			}
+		}
+		if !found {
+			var names []string
+			for _, t := range integrationTests {
+				names = append(names, t.name)
+			}
+			return fmt.Errorf("unknown test '%s'. Available tests: %s", o.flagTest, strings.Join(names, ", "))
+		}
+	}
+	return nil
+}
 
 func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
 	// Resolve project configuration
 	project, err := resolveProject()
 	if err != nil {
 		return fmt.Errorf("failed to resolve project: %w", err)
+	}
+
+	// Derive container image names once and pass them to phases
+	projectID := strings.ToLower(project.Config.ProjectHumanID)
+	serverImage := fmt.Sprintf("%s/server:test", projectID)
+	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", projectID)
+	pwNetImage := fmt.Sprintf("%s/playwright-net:test", projectID)
+
+	// Get integration tests config (may be nil if not specified)
+	integrationTestsConfig := project.Config.IntegrationTests
+
+	// Build the list of tests to run, filtered by --test if specified.
+	var tests []integrationTest
+	for _, t := range integrationTests {
+		if o.flagTest == "" || o.flagTest == t.name {
+			tests = append(tests, t)
+		}
 	}
 
 	log.Info().Msg("")
@@ -88,24 +170,24 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Ensure Docker is available (binary + daemon)
-	if err := checkDockerAvailable(); err != nil {
+	if err := checkDockerAvailable(ctx); err != nil {
 		return err
 	}
 
 	// Check Docker version: warn if using old versions
-	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion()
+	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion(ctx)
 	if err != nil {
 		log.Warn().Msgf("Warning: Failed to check Docker version: %v", err)
 	}
 
 	// Resolve docker build engine for integration tests
 	buildEngine := "buildkit"
-	if dockerSupportsBuildx() {
+	if dockerSupportsBuildx(ctx) {
 		buildEngine = "buildx"
 	}
 
 	// Check that the build engine is available
-	err = checkBuildEngineAvailable(buildEngine)
+	err = checkBuildEngineAvailable(ctx, buildEngine)
 	if err != nil {
 		return err
 	}
@@ -132,21 +214,17 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Info().Msgf("Tests to run:           %s", styles.RenderTechnical(testsToRun))
 	log.Info().Msgf("Test output directory:  %s", styles.RenderTechnical(o.flagOutputDir))
+	log.Info().Msgf("Timeout:                %s", styles.RenderTechnical(o.flagTimeout.String()))
 
 	// Create output directory for test results
 	if err := os.MkdirAll(o.flagOutputDir, 0755); err != nil {
 		return fmt.Errorf("failed to create output directory %s: %w", o.flagOutputDir, err)
 	}
 
-	// Derive container image names once and pass them to phases
-	projectID := strings.ToLower(project.Config.ProjectHumanID)
-	serverImage := fmt.Sprintf("%s/server:test", projectID)
-	pwTsImage := fmt.Sprintf("%s/playwright-ts:test", projectID)
-	pwNetImage := fmt.Sprintf("%s/playwright-net:test", projectID)
-
-	// Build the container images first.
+	// Build the container images first (not subject to --timeout but still
+	// cancelable via Ctrl+C through cmd.Context()).
 	if !o.flagSkipBuild {
-		if err := o.buildDockerImages(project, serverImage, pwTsImage, pwNetImage); err != nil {
+		if err := o.buildDockerImages(ctx, project, serverImage, pwTsImage, pwNetImage, integrationTestsConfig); err != nil {
 			return fmt.Errorf("failed to build container images: %w", err)
 		}
 	} else {
@@ -154,59 +232,42 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("Skipping container image build step due to --skip-build")
 	}
 
-	// runTestCase handles per-test server lifecycle and logs
-	tests := []struct {
-		name        string
-		displayName string
-		fn          func(*testutil.BackgroundGameServer) error
-	}{
-		{"bots", "Run botclient tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runBotTests(project, server, serverImage)
-		}},
-		{"dashboard", "Run dashboard Playwright tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runDashboardTests(project, server, pwTsImage)
-		}},
-		{"system", "Run Playwright.NET system tests", func(server *testutil.BackgroundGameServer) error {
-			return o.runSystemTests(project, server, pwNetImage)
-		}},
-		// {"http-api", "Run HTTP API tests", func(s *testutil.BackgroundGameServer) error { return nil }}, // \todo migrate from Python script
-	}
+	// Apply --timeout to the test phase, derived from cmd.Context() so Ctrl+C
+	// still cancels.
+	testRunCtx, cancel := context.WithTimeout(ctx, o.flagTimeout)
+	defer cancel()
 
-	// Filter tests if --tests flag is specified
-	if o.flagTest != "" {
-		var filteredTests []struct {
-			name        string
-			displayName string
-			fn          func(*testutil.BackgroundGameServer) error
-		}
-		for _, p := range tests {
-			if p.name == o.flagTest {
-				filteredTests = append(filteredTests, p)
-				break
-			}
-		}
-		if len(filteredTests) == 0 {
-			var names []string
-			for _, t := range tests {
-				names = append(names, t.name)
-			}
-			return fmt.Errorf("unknown test '%s'. Available tests: %s", o.flagTest, strings.Join(names, ", "))
-		}
-		tests = filteredTests
+	// Build runtime context for test functions.
+	testCtx := integrationTestCtx{
+		ctx:                testRunCtx,
+		opts:               o,
+		project:            project,
+		serverImage:        serverImage,
+		playwrightTsImage:  pwTsImage,
+		playwrightNetImage: pwNetImage,
+		config:             integrationTestsConfig,
 	}
 
 	// Run all the active tests.
-	for _, p := range tests {
-		log.Info().Msg("")
-		log.Info().Msgf("%s %s: %s", styles.RenderBright("🔷"), styles.RenderTechnical(p.name), styles.RenderBright(p.displayName))
-		log.Info().Msg("")
-
-		if err := o.runTestCase(project, serverImage, p.displayName, p.fn); err != nil {
-			return fmt.Errorf("test '%s' failed: %w", p.displayName, err)
+	for _, t := range tests {
+		// Check if the timeout has been reached
+		if testRunCtx.Err() != nil {
+			return fmt.Errorf("test run timed out after %s", o.flagTimeout)
 		}
 
 		log.Info().Msg("")
-		log.Info().Msgf("%s Test %s successful", styles.RenderSuccess("✓"), styles.RenderTechnical(p.name))
+		log.Info().Msgf("%s %s: %s", styles.RenderBright("🔷"), styles.RenderTechnical(t.name), styles.RenderBright(t.displayName))
+		log.Info().Msg("")
+
+		runFn := t.run
+		if err := o.runTestCase(testRunCtx, project, serverImage, integrationTestsConfig, t.displayName, func(server *testutil.BackgroundGameServer) error {
+			return runFn(testCtx, server)
+		}); err != nil {
+			return fmt.Errorf("test '%s' failed: %w", t.displayName, err)
+		}
+
+		log.Info().Msg("")
+		log.Info().Msgf("%s Test %s successful", styles.RenderSuccess("✓"), styles.RenderTechnical(t.name))
 	}
 
 	log.Info().Msg("")
@@ -215,13 +276,19 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 }
 
 // runTestCase starts a background game server, runs the provided test function, and then stops the server.
-func (o *testIntegrationOpts) runTestCase(project *metaproj.MetaplayProject, serverImage, displayName string, fn func(*testutil.BackgroundGameServer) error) error {
-	// Create and start the background server for this test
-	server := testutil.NewGameServer(testutil.GameServerOptions{
+func (o *testIntegrationOpts) runTestCase(ctx context.Context, project *metaproj.MetaplayProject, serverImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig, displayName string, fn func(*testutil.BackgroundGameServer) error) error {
+	// Build server options with any custom configuration
+	serverOpts := testutil.GameServerOptions{
 		Image:         serverImage,
 		ContainerName: fmt.Sprintf("%s-test-server", project.Config.ProjectHumanID),
-	})
-	ctx := context.Background()
+	}
+	if integrationTestsConfig != nil && integrationTestsConfig.Server != nil {
+		serverOpts.ExtraArgs = integrationTestsConfig.Server.Args
+		serverOpts.ExtraEnv = integrationTestsConfig.Server.Env
+	}
+
+	// Create and start the background server for this test
+	server := testutil.NewGameServer(serverOpts)
 
 	log.Info().Msg("Starting background game server...")
 	if err := server.Start(ctx); err != nil {
@@ -252,33 +319,43 @@ func (o *testIntegrationOpts) runTestCase(project *metaproj.MetaplayProject, ser
 }
 
 // runBotTests runs the botclient against the already-running server.
-func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
-	ctx := context.Background()
+func (o *testIntegrationOpts) runBotTests(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string, integrationTestsConfig *metaproj.IntegrationTestsConfig) error {
+	// Build default env and merge any extra env vars
+	botEnv := map[string]string{
+		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
+	}
+	if integrationTestsConfig != nil && integrationTestsConfig.BotClient != nil {
+		maps.Copy(botEnv, integrationTestsConfig.BotClient.Env)
+	}
+
+	// Build default cmd and append any extra args
+	botCmd := []string{
+		"botclient",
+		"-LogLevel=Information",
+		// METAPLAY_OPTS (shared with game server)
+		"--Environment:EnableKeyboardInput=false",
+		"--Environment:ExitOnLogError=true",
+		// Bot-specific configuration
+		"--Bot:ServerHost=localhost",
+		"--Bot:ServerPort=9339",
+		"--Bot:EnableTls=false",
+		"--Bot:CdnBaseUrl=http://localhost:5552/",
+		"-ExitAfter=00:00:30",               // Run for 30 seconds (.NET TimeSpan format)
+		"-MaxBots=10",                       // Spawn up to 10 bots
+		"-SpawnRate=2",                      // Spawn 2 bots per second
+		"-ExpectedSessionDuration=00:00:10", // Each bot session lasts ~10 seconds (.NET TimeSpan format)
+	}
+	if integrationTestsConfig != nil && integrationTestsConfig.BotClient != nil {
+		botCmd = append(botCmd, integrationTestsConfig.BotClient.Args...)
+	}
 
 	botClientOpts := testutil.RunOnceContainerOptions{
 		Image:         imageName,
 		ContainerName: fmt.Sprintf("%s-test-botclient", project.Config.ProjectHumanID),
 		LogPrefix:     "[botclient] ",
 		Network:       fmt.Sprintf("container:%s", server.ContainerName()),
-		Env: map[string]string{
-			"METAPLAY_ENVIRONMENT_FAMILY": "Local",
-		},
-		Cmd: []string{
-			"botclient",
-			"-LogLevel=Information",
-			// METAPLAY_OPTS (shared with game server)
-			"--Environment:EnableKeyboardInput=false",
-			"--Environment:ExitOnLogError=true",
-			// Bot-specific configuration
-			"--Bot:ServerHost=localhost",
-			"--Bot:ServerPort=9339",
-			"--Bot:EnableTls=false",
-			"--Bot:CdnBaseUrl=http://localhost:5552/",
-			"-ExitAfter=00:00:30",               // Run for 30 seconds (.NET TimeSpan format)
-			"-MaxBots=10",                       // Spawn up to 10 bots
-			"-SpawnRate=2",                      // Spawn 2 bots per second
-			"-ExpectedSessionDuration=00:00:10", // Each bot session lasts ~10 seconds (.NET TimeSpan format)
-		},
+		Env:           botEnv,
+		Cmd:           botCmd,
 	}
 
 	botClient := testutil.NewRunOnceContainer(botClientOpts)
@@ -295,9 +372,7 @@ func (o *testIntegrationOpts) runBotTests(project *metaproj.MetaplayProject, ser
 }
 
 // runDashboardTests runs the Playwright TypeScript tests against the dashboard.
-func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
-	ctx := context.Background()
-
+func (o *testIntegrationOpts) runDashboardTests(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
 	// Create output directory for dashboard test results.
 	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "dashboard"))
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
@@ -342,9 +417,7 @@ func (o *testIntegrationOpts) runDashboardTests(project *metaproj.MetaplayProjec
 }
 
 // runSystemTests runs the Playwright .NET tests for system testing.
-func (o *testIntegrationOpts) runSystemTests(project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
-	ctx := context.Background()
-
+func (o *testIntegrationOpts) runSystemTests(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, imageName string) error {
 	// Create output directory for system test results.
 	resultsDir := filepath.ToSlash(filepath.Join(o.flagOutputDir, "system"))
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
@@ -465,12 +538,20 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 
 // buildDockerImages builds the Docker images used by integration tests. This includes
 // the server image, and additional testing images for Playwright.
-func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProject, serverImage, pwTsImage, pwNetImage string) error {
+// Note: Docker builds are not subject to the --timeout flag as cancelling them mid-build
+// is complex and unreliable. Builds are typically fast when cached.
+func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *metaproj.MetaplayProject, serverImage, pwTsImage, pwNetImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig) error {
 	// Determine build engine
 	// \todo allow specifying this with a flag?
 	buildEngine := "buildkit"
-	if dockerSupportsBuildx() {
+	if dockerSupportsBuildx(ctx) {
 		buildEngine = "buildx"
+	}
+
+	// Get extra docker build args from config
+	var extraBuildArgs []string
+	if integrationTestsConfig != nil && integrationTestsConfig.Docker != nil {
+		extraBuildArgs = integrationTestsConfig.Docker.BuildArgs
 	}
 
 	// Common build parameters
@@ -480,7 +561,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 		platforms:   []string{}, // Use architecture of host machine
 		commitID:    "test",
 		buildNumber: "test",
-		extraArgs:   []string{},
+		extraArgs:   extraBuildArgs,
 	}
 
 	// Build server image
@@ -488,7 +569,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	log.Info().Msg(styles.RenderBright("🔷 Build server image"))
 	serverParams := commonParams
 	serverParams.imageName = serverImage
-	if err := buildDockerImage(serverParams); err != nil {
+	if err := buildDockerImage(ctx, serverParams); err != nil {
 		return fmt.Errorf("failed to build server image: %w", err)
 	}
 
@@ -498,7 +579,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	pwTsParams := commonParams
 	pwTsParams.imageName = pwTsImage
 	pwTsParams.target = "playwright-ts-tests"
-	if err := buildDockerImage(pwTsParams); err != nil {
+	if err := buildDockerImage(ctx, pwTsParams); err != nil {
 		return fmt.Errorf("failed to build playwright-ts image: %w", err)
 	}
 
@@ -508,7 +589,7 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 	pwNetParams := commonParams
 	pwNetParams.imageName = pwNetImage
 	pwNetParams.target = "playwright-net-tests"
-	if err := buildDockerImage(pwNetParams); err != nil {
+	if err := buildDockerImage(ctx, pwNetParams); err != nil {
 		return fmt.Errorf("failed to build playwright-net image: %w", err)
 	}
 
@@ -516,9 +597,12 @@ func (o *testIntegrationOpts) buildDockerImages(project *metaproj.MetaplayProjec
 }
 
 // dockerSupportsBuildx returns true if docker buildx is available.
-func dockerSupportsBuildx() bool {
+func dockerSupportsBuildx(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	// Try `docker buildx version`
-	cmd := exec.Command("docker", "buildx", "version")
+	cmd := exec.CommandContext(ctx, "docker", "buildx", "version")
 	if err := cmd.Run(); err != nil {
 		return false
 	}

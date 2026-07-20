@@ -5,8 +5,7 @@
 package cmd
 
 import (
-	"fmt"
-
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -47,7 +46,7 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
-		return fmt.Errorf("project does not have a custom dashboard to run")
+		return clierrors.New("Project does not have a custom dashboard to run")
 	}
 
 	log.Info().Msg("")
@@ -55,7 +54,8 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check that required dashboard tools are installed and satisfy version requirements.
-	if err := checkDashboardToolVersions(project); err != nil {
+	ctx := cmd.Context()
+	if err := checkDashboardToolVersions(ctx, project); err != nil {
 		return err
 	}
 
@@ -63,14 +63,16 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 	dashboardPath := project.GetDashboardDir()
 
 	// Install dashboard dependencies
-	if err := execChildInteractive(dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
-		return fmt.Errorf("failed to build the LiveOps Dashboard: %s", err)
+	if err := execChildInteractive(ctx, dashboardPath, "pnpm", []string{"install"}, nil); err != nil {
+		return clierrors.Wrap(err, "Failed to install dashboard dependencies").
+			WithSuggestion("Try `metaplay dev clean-dashboard-artifacts` to remove stale build artifacts before reinstalling.")
 	}
 
 	// Run the dashboard project in dev mode
 	devArgs := append([]string{"dev"}, o.extraArgs...)
-	if err := execChildInteractive(dashboardPath, "pnpm", devArgs, nil); err != nil {
-		return fmt.Errorf("failed to run the LiveOps Dashboard: %s", err)
+	if err := execChildInteractive(ctx, dashboardPath, "pnpm", devArgs, nil); err != nil {
+		return clierrors.Wrap(err, "Failed to run the LiveOps Dashboard").
+			WithSuggestion("Try `metaplay dev clean-dashboard-artifacts` to remove stale build artifacts before reinstalling.")
 	}
 
 	// The dashboard terminated normally

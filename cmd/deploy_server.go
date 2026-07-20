@@ -6,13 +6,13 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -24,7 +24,6 @@ import (
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
-const metaplayGameServerPodLabelSelector = "app=metaplay-server"
 
 // Deploy a game server to the target environment with specified docker image version.
 type deployGameServerOpts struct {
@@ -133,7 +132,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
-	err = checkDockerAvailable()
+	err = checkDockerAvailable(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -179,13 +178,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
-	if o.argImageNameTag == "" {
+	switch o.argImageNameTag {
+	case "":
 		selectedImage, err := selectDockerImageInteractively("Select Image to Deploy", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageNameTag = selectedImage.RepoTag
-	} else if o.argImageNameTag == "latest-local" {
+	case "latest-local":
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
@@ -194,7 +194,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 		// If there are no images for this project, error out.
 		if len(localImages) == 0 {
-			return fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", project.Config.ProjectHumanID)
+			return clierrors.Newf("No Docker images matching project '%s' found locally", project.Config.ProjectHumanID).
+				WithSuggestion("Build an image first with 'metaplay build image'")
 		}
 
 		// Use the first entry (they are reverse sorted by creation time).
@@ -303,7 +304,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
 
 		// Fetch info from the portal.
-		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			return err
 		}
@@ -311,9 +312,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		// Environment type (prod, staging, development) must match that in the portal.
 		// Otherwise, the game server will be using wrong environment type-specific defaults.
 		if envConfig.Type != portalInfo.Type {
-			log.Error().Msgf("Local environment type '%s' does not match the one from portal '%s'", envConfig.Type, portalInfo.Type)
-			log.Info().Msgf("To update the metaplay-project.yaml environments, please run: %s", styles.RenderPrompt("metaplay update project-environments"))
-			os.Exit(1)
+			return clierrors.Newf("Environment type mismatch: local config has '%s', portal has '%s'", envConfig.Type, portalInfo.Type).
+				WithSuggestion("Run 'metaplay update project-environments' to sync with portal")
 		}
 	}
 
@@ -326,8 +326,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				"name":      "all",
 				"singleton": true,
 				"requests": map[string]any{
-					"cpu":    "1500m",
-					"memory": "3000M",
+					"cpu":    "1000m",
+					"memory": "2000M",
 				},
 			},
 		}
@@ -455,8 +455,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil {
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == rcommon.StatusUninstalling {
-			log.Error().Msgf("Helm release is in state 'uninstalling'; try again later or manually uninstall the server with %s", styles.RenderPrompt("metaplay remove server"))
-			return fmt.Errorf("unable to deploy server: existing Helm release is in state 'uninstalling'")
+			return clierrors.New("Cannot deploy: existing Helm release is in state 'uninstalling'").
+				WithSuggestion("Wait for the uninstall to complete, or manually remove with 'metaplay remove server'")
 		} else if releaseStatus.IsPending() {
 			log.Warn().Msgf("Helm release is in pending state '%s', previous release will be removed before deploying the new version", releaseStatus)
 			uninstallExistingRelease = true
@@ -476,13 +476,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			_, err := pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			return err
 		})
 	}
 
 	// If there's a pending release, uninstall it first.
 	if uninstallExistingRelease {
-		taskRunner.AddTask(fmt.Sprintf("Uninstall existing Helm release"), func(output *tui.TaskOutput) error {
+		taskRunner.AddTask("Uninstall existing Helm release", func(output *tui.TaskOutput) error {
 			output.SetHeaderLines([]string{
 				fmt.Sprintf("Release status: %s", existingRelease.Info.Status),
 			})
@@ -548,6 +549,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		validateJsonSchema = true
 	}
 
+	// Parse extra Helm arguments (--set, --set-string).
+	cliSetValues, err := helmutil.ParseHelmExtraArgs(o.extraArgs)
+	if err != nil {
+		return err
+	}
+
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
@@ -560,6 +567,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			useHelmChartVersion,
 			valuesFiles,
 			helmDefaultValues,
+			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
 			validateJsonSchema)
@@ -590,16 +598,67 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	// If there are no images for this project, error out.
 	if len(localImages) == 0 {
-		return nil, fmt.Errorf("no docker images matching project '%s' found locally; build an image first with 'metaplay build image'", projectHumanID)
+		return nil, clierrors.Newf("No Docker images matching project '%s' found locally", projectHumanID).
+			WithSuggestion("Build an image first with 'metaplay build image'")
 	}
 
+	// Precompute per-image columns and track max widths.
+	type imageColumns struct {
+		age, sdk, commit string
+	}
+	columns := make([]imageColumns, len(localImages))
+	maxTagLen := len("TAG")
+	maxAgeLen := len("AGE")
+	maxSdkLen := len("SDK")
+	maxCommitLen := len("COMMIT")
+	for i := range localImages {
+		img := &localImages[i]
+		col := imageColumns{age: humanize.Time(img.CreatedTime)}
+		if img.SdkVersion != "" {
+			col.sdk = img.SdkVersion
+		}
+		if img.CommitID != "" {
+			col.commit = img.CommitID
+			if len(col.commit) > 12 {
+				col.commit = col.commit[:12]
+			}
+		}
+		columns[i] = col
+		if len(img.RepoTag) > maxTagLen {
+			maxTagLen = len(img.RepoTag)
+		}
+		if len(col.age) > maxAgeLen {
+			maxAgeLen = len(col.age)
+		}
+		if len(col.sdk) > maxSdkLen {
+			maxSdkLen = len(col.sdk)
+		}
+		if len(col.commit) > maxCommitLen {
+			maxCommitLen = len(col.commit)
+		}
+	}
+
+	// Build a header row aligned with the list items.
+	// Note: the first gap is 1 space to match the single space between name and description in list items.
+	header := fmt.Sprintf("%-*s %-*s  %-*s  %-*s", maxTagLen, "TAG", maxAgeLen, "AGE", maxSdkLen, "SDK", maxCommitLen, "COMMIT")
+
 	// Let the user choose from the list of images.
-	selectedImage, err := tui.ChooseFromListDialog(
+	selectedImage, err := tui.ChooseFromListDialogWithHeader(
 		title,
+		header,
 		localImages,
 		func(img *envapi.MetaplayImageInfo) (string, string) {
-			description := humanize.Time(img.CreatedTime)
-			return img.RepoTag, description
+			i := -1
+			for j := range localImages {
+				if &localImages[j] == img {
+					i = j
+					break
+				}
+			}
+			col := columns[i]
+			name := fmt.Sprintf("%-*s", maxTagLen, img.RepoTag)
+			description := fmt.Sprintf("%-*s  %-*s  %-*s", maxAgeLen, col.age, maxSdkLen, col.sdk, maxCommitLen, col.commit)
+			return name, description
 		})
 	if err != nil {
 		return nil, err

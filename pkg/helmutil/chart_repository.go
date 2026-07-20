@@ -7,7 +7,7 @@ package helmutil
 import (
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/go-version"
@@ -131,11 +131,11 @@ func ResolveBestMatchingVersion(availableVersions []string, constraints version.
 		return "", fmt.Errorf("no matching Helm chart versions found")
 	}
 
-	// Sort the versions in descending order
-	sort.Sort(sort.Reverse(version.Collection(satisfyingVersions)))
-
 	// Return the highest version
-	return satisfyingVersions[0].String(), nil
+	best := slices.MaxFunc(satisfyingVersions, func(a, b *version.Version) int {
+		return a.Compare(b)
+	})
+	return best.String(), nil
 }
 
 // Find the best matching Helm chart version from a remote chart repository.

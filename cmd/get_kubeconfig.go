@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
@@ -129,13 +130,12 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	case "static":
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	default:
-		log.Error().Msg("Invalid credentials type; must be either \"static\" or \"dynamic\"")
-		os.Exit(1)
+		return clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
+			WithSuggestion("Use --type=static or --type=dynamic")
 	}
 
 	if err != nil {
-		log.Error().Msgf("Failed to get environment k8s config: %v", err)
-		os.Exit(1)
+		return clierrors.Wrap(err, "Failed to get environment kubeconfig")
 	}
 
 	// Write the kubeconfig payload to a file or stdout.

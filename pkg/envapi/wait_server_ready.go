@@ -16,14 +16,13 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-const metaplayGameServerChartName = "metaplay-gameserver"
 
 // \todo is there an official k8s type for this?
 type GameServerPodPhase string
@@ -35,6 +34,60 @@ const (
 	PhaseUnknown GameServerPodPhase = "Unknown"
 	PhaseFailed  GameServerPodPhase = "Failed"
 )
+
+// Metaplay wire protocol constants (from SDK WireProtocol.cs)
+const (
+	metaplayWireProtocolVersion       byte = 10
+	protocolStatusClusterRunning      byte = 3
+	protocolStatusClusterStarting     byte = 4
+	protocolStatusClusterShuttingDown byte = 5
+	protocolHeaderSize                     = 8
+)
+
+// protocolHeaderInfo holds the parsed fields of the Metaplay protocol header.
+type protocolHeaderInfo struct {
+	Magic    [4]byte
+	Version  byte
+	Status   byte
+	Reserved [2]byte
+}
+
+// buildHealthCheckPacket returns the 8-byte wire protocol HealthCheck request packet.
+// Wire packet header: [flags:1][payloadSize:3], where flags bits 0-2 = WirePacketType.
+// HealthCheck = 0x04, payload = 4-byte big-endian HealthCheckTypeBits (GlobalState = 0x01).
+func buildHealthCheckPacket() []byte {
+	return []byte{0x04, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01}
+}
+
+// parseProtocolHeader parses the 8-byte Metaplay protocol header from the given buffer.
+func parseProtocolHeader(data []byte) (protocolHeaderInfo, error) {
+	if len(data) < protocolHeaderSize {
+		return protocolHeaderInfo{}, fmt.Errorf("protocol header too short: got %d bytes, need %d", len(data), protocolHeaderSize)
+	}
+	var info protocolHeaderInfo
+	copy(info.Magic[:], data[0:4])
+	info.Version = data[4]
+	info.Status = data[5]
+	copy(info.Reserved[:], data[6:8])
+	return info, nil
+}
+
+// validateProtocolHeader checks that the protocol header indicates a healthy server.
+func validateProtocolHeader(info protocolHeaderInfo) error {
+	if info.Version != metaplayWireProtocolVersion {
+		return fmt.Errorf("unexpected protocol version: got %d, expected %d", info.Version, metaplayWireProtocolVersion)
+	}
+	switch info.Status {
+	case protocolStatusClusterRunning:
+		return nil
+	case protocolStatusClusterStarting:
+		return fmt.Errorf("server cluster is still starting (status=%d)", info.Status)
+	case protocolStatusClusterShuttingDown:
+		return fmt.Errorf("server cluster is shutting down (status=%d)", info.Status)
+	default:
+		return fmt.Errorf("unexpected protocol status: %d", info.Status)
+	}
+}
 
 type GameServerPodStatus struct {
 	Phase   GameServerPodPhase `json:"phase"`
@@ -141,7 +194,7 @@ func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, sha
 		shardPods := make([]*corev1.Pod, numExpectedReplicas)
 
 		// Check that all expected pods are found.
-		for shardNdx := 0; shardNdx < numExpectedReplicas; shardNdx++ {
+		for shardNdx := range numExpectedReplicas {
 			// Find matching pod with name '<shardSet>-<index>'
 			podName := fmt.Sprintf("%s-%d", shardSet.Name, shardNdx)
 			var foundPod *corev1.Pod = nil
@@ -226,7 +279,7 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 				Message: "Pod is Pending",
 			}
 		}
-		if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
+		if len(pod.Status.ContainerStatuses) == 0 {
 			return GameServerPodStatus{
 				Phase:   PhaseUnknown,
 				Message: "ContainerStatuses is empty",
@@ -299,7 +352,7 @@ func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 // Only works with the old gameserver CRs (for now anyway).
 // \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
 // \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (bool, []string, error) {
+func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, output *tui.TaskOutput) (bool, []string, error) {
 	// Must have either old or new operator CR.
 	newCR := gameServer.GameServerNewCR
 	oldCR := gameServer.GameServerOldCR
@@ -354,20 +407,19 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 				if status.Phase == PhaseFailed {
 					podLogs, err := fetchPodLogs(ctx, kubeCli, podName, "shard-server")
 					if err != nil {
-						log.Warn().Msgf("Failed to get logs from pod %s: %v", podName, err)
+						output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
 					} else {
-						// Format logs with each line prefixed by '> '
-						lines := strings.Split(podLogs, "\n")
-						var sb strings.Builder
-						for _, line := range lines {
-							sb.WriteString(fmt.Sprintf("[%s] %s\n", podName, line))
+						// Route pod logs through TaskOutput footer to avoid writing
+						// directly to stdout while Bubble Tea is managing the terminal.
+						// Footer lines are not subject to the log line cap.
+						logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
+						for line := range strings.SplitSeq(podLogs, "\n") {
+							logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
 						}
-						log.Info().Msgf("Logs from pod %s:\n%s", podName, sb.String())
+						logLines = append(logLines, fmt.Sprintf("Pod %s failed: %s", podName, status.Message))
+						output.SetFooterLines(logLines)
 					}
-
-					// Log info about failure & return the error
-					log.Info().Msgf("Pod %s failed: %s", podName, status.Message)
-					return false, nil, fmt.Errorf("pod %s failed to deploy (see above for logs and details)", podName)
+					return false, nil, fmt.Errorf("pod %s failed to deploy", podName)
 				}
 			} else {
 				// Pod not in our filtered list - try to fetch it directly to see if it exists
@@ -423,9 +475,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// Get status of the deployment.
 		// \todo handle edge clusters (for new CR only)
-		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer)
+		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer, output)
 		if err != nil {
-			return err
+			return clierrors.Wrap(err, "Game server failed to start").
+				WithSuggestion(fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID))
 		}
 
 		// Resolve status lines to show.
@@ -471,7 +524,7 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod logs: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	builder := &strings.Builder{}
 	_, err = io.Copy(builder, stream)
@@ -534,7 +587,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
 			allSuccess := true
-			for iter := 0; iter < numAttempts; iter++ {
+			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
 				err := attemptTLSConnection(hostname, port)
 				if err != nil {
@@ -560,7 +613,9 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 	}
 }
 
-// attemptTLSConnection performs a TLS handshake and waits for initial data.
+// attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
+// (client-speaks-first pattern to work behind TLS-terminating proxies), then
+// reads and validates the server's protocol header.
 func attemptTLSConnection(hostname string, port int) error {
 	address := fmt.Sprintf("%s:%d", hostname, port)
 	conn, err := tls.Dial("tcp", address, &tls.Config{
@@ -569,23 +624,48 @@ func attemptTLSConnection(hostname string, port int) error {
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
-	log.Debug().Msgf("TLS handshake completed, waiting to receive data from the server...")
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-	buffer := make([]byte, 1024)
-	n, err := conn.Read(buffer)
-	if err != nil {
-		return fmt.Errorf("error reading data from server: %v", err)
+	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
+	// proxies that use lazy upstream connections (client-speaks-first pattern).
+	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	healthCheckPacket := buildHealthCheckPacket()
+	if _, err := conn.Write(healthCheckPacket); err != nil {
+		return fmt.Errorf("failed to send HealthCheck packet: %v", err)
 	}
 
-	hexBytes := make([]string, n)
-	for i := 0; i < n; i++ {
+	// Read the protocol header from the server.
+	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buffer := make([]byte, protocolHeaderSize)
+	totalRead := 0
+	for totalRead < protocolHeaderSize {
+		n, err := conn.Read(buffer[totalRead:])
+		if err != nil {
+			return fmt.Errorf("error reading protocol header from server (got %d/%d bytes): %v", totalRead, protocolHeaderSize, err)
+		}
+		totalRead += n
+	}
+
+	// Log received bytes for debugging.
+	hexBytes := make([]string, totalRead)
+	for i := range totalRead {
 		hexBytes[i] = fmt.Sprintf("%02x", buffer[i])
 	}
+	log.Debug().Msgf("Received %d bytes from server: %s", totalRead, hexBytes)
 
-	log.Debug().Msgf("Received %d bytes from server: %s", n, hexBytes)
+	// Parse and validate the protocol header.
+	header, err := parseProtocolHeader(buffer[:totalRead])
+	if err != nil {
+		return fmt.Errorf("failed to parse protocol header: %v", err)
+	}
+	log.Debug().Msgf("Protocol header: version=%d, status=%d, magic=%x", header.Version, header.Status, header.Magic)
+
+	if err := validateProtocolHeader(header); err != nil {
+		return fmt.Errorf("protocol header validation failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -628,18 +708,20 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			if err != nil {
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
-				defer resp.Body.Close()
 				switch {
 				case resp.StatusCode >= 200 && resp.StatusCode < 300:
 					// Accept 2xx (Success) status codes.
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				case resp.StatusCode >= 300 && resp.StatusCode < 400:
 					// Accept 3xx (Redirection) status codes.
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
 					return nil
 				}
 				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
+				_ = resp.Body.Close()
 			}
 		}
 

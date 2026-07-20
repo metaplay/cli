@@ -59,11 +59,12 @@ func ChooseOrgAndProject(orgsAndProjects []portalapi.OrganizationWithProjects) (
 // Pluralize a word based on the count. This is a dumb version that only adds an
 // 's' suffix to the word so only works for simple cases.
 func pluralize(count int, unit string) string {
-	if count == 0 {
+	switch count {
+	case 0:
 		return fmt.Sprintf("no %ss", unit)
-	} else if count == 1 {
+	case 1:
 		return fmt.Sprintf("%d %s", count, unit)
-	} else {
+	default:
 		return fmt.Sprintf("%d %ss", count, unit)
 	}
 }

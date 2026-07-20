@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/rs/zerolog/log"
 )
 
@@ -92,10 +93,10 @@ func (args *PositionalArgs) ParseCommandLine(argv []string) error {
 			*argSpec.ValuePtr = argv[srcNdx]
 			srcNdx += 1
 		} else {
-			// If argument is reuqired, error out.
+			// If argument is required, error out.
 			if argSpec.IsRequired {
-				// \todo bad error message
-				return fmt.Errorf("Provided %d arguments, expecting %d", len(argv), len(args.Specs))
+				return clierrors.NewUsageErrorf("Missing required argument: %s", argSpec.Name).
+					WithDetails(argSpec.Description)
 			}
 		}
 	}
@@ -108,7 +109,8 @@ func (args *PositionalArgs) ParseCommandLine(argv []string) error {
 		if args.ExtraArgsPtr != nil {
 			*args.ExtraArgsPtr = argv[srcNdx:]
 		} else {
-			return fmt.Errorf("UNEXPECTED EXTRA ARGS PROVIDED: %v", argv[srcNdx:])
+			extraArgs := strings.Join(argv[srcNdx:], ", ")
+			return clierrors.NewUsageErrorf("Unexpected extra arguments: %s", extraArgs)
 		}
 	} else {
 		// No extra arguments on the command line. Store an empty array anyway (if extra args

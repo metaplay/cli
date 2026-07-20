@@ -29,3 +29,10 @@ dist/
 
 # Aider files and directories
 .aider*
+
+# Claude Code
+.claude/settings.local.json
+.claude/worktrees/
+
+# Python
+__pycache__/

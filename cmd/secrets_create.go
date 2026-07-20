@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -93,16 +94,16 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Resolve literal payload key-value pairs.
 	for _, pair := range o.flagLiteralValues {
 		// Split the literal pair into key and value
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("Invalid --from-literal format: '%s'. Expected 'key=value'.", pair)
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return clierrors.NewUsageErrorf("Invalid --from-literal format: '%s'", pair).
+				WithSuggestion("Expected 'key=value'")
 		}
-		key := parts[0]
-		value := parts[1]
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {
-			return fmt.Errorf("duplicate key detected: %s. All keys must be unique", key)
+			return clierrors.NewUsageErrorf("Duplicate key detected: '%s'", key).
+				WithSuggestion("All keys must be unique")
 		}
 
 		// Insert into the map
@@ -112,16 +113,16 @@ func (o *secretsCreateOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Resolve file entries.
 	for _, pair := range o.flagFileValues {
 		// Split the literal pair into key and value
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 {
-			return fmt.Errorf("invalid --from-file format: '%s'. Expected 'key=filepath'.", pair)
+		key, filePath, ok := strings.Cut(pair, "=")
+		if !ok {
+			return clierrors.NewUsageErrorf("Invalid --from-file format: '%s'", pair).
+				WithSuggestion("Expected 'key=filepath'")
 		}
-		key := parts[0]
-		filePath := parts[1]
 
 		// Check for duplicate keys
 		if _, exists := o.payloadKeyValuePairs[key]; exists {
-			return fmt.Errorf("duplicate key detected: %s. All keys must be unique", key)
+			return clierrors.NewUsageErrorf("Duplicate key detected: '%s'", key).
+				WithSuggestion("All keys must be unique")
 		}
 
 		// Read the file content

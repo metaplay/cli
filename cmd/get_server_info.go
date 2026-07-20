@@ -50,7 +50,7 @@ type deploymentImageInfo struct {
 	BuildNumber  string    `json:"build_number"`
 	CommitID     string    `json:"commit_id"`
 	SdkVersion   string    `json:"sdk_version"`
-	CreationTime time.Time `json:"creation_time,omitempty"`
+	CreationTime time.Time `json:"creation_time"`
 }
 
 func init() {
@@ -65,8 +65,6 @@ func init() {
 		Short:   "Get information about the game server deployment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is currently in preview and may change in future releases.
-
 			This command shows details about the game server deployment running in the cloud,
 			including information about the Helm release and the deployed container image.
 
@@ -190,7 +188,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	var portalInfo *portalapi.EnvironmentInfo
 	if authProviderName == "metaplay" {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
-		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			log.Debug().Err(err).Msg("Failed to fetch portal environment info")
 		}

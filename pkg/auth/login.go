@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/pkg/browser"
@@ -60,7 +61,9 @@ func findAvailableCallbackPort() (net.Listener, int, error) {
 			return listener, tryPort, nil
 		}
 	}
-	return nil, 0, fmt.Errorf("failed to find an available port in range 5000..5004")
+	return nil, 0, clierrors.New("Failed to start authentication callback server").
+		WithDetails("All ports in range 5000-5004 are in use").
+		WithSuggestion("Close applications using these ports, or check your firewall settings")
 }
 
 func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) error {
@@ -69,7 +72,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	// Construct redirect URI with the port.
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
@@ -87,8 +90,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	done := make(chan struct{})
 
 	// Create a new HTTP server.
-	var server *http.Server
-	server = &http.Server{
+	server := &http.Server{
 		Addr: listener.Addr().String(),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// OAuth2 callback handler
@@ -127,7 +129,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 					return
 				}
 
-				fmt.Fprintln(w, "Authentication successful! You can close this window.")
+				_, _ = fmt.Fprintln(w, "Authentication successful! You can close this window.")
 
 				// Signal that authentication is complete
 				close(done)
@@ -167,7 +169,8 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
 	case <-time.After(5 * time.Minute):
-		return fmt.Errorf("timeout during authentication")
+		return clierrors.New("Authentication timed out after 5 minutes").
+			WithSuggestion("Log in again")
 	}
 
 	// Shutdown the HTTP server gracefully
@@ -190,12 +193,15 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 	// Make the HTTP request to the Metaplay Auth server OAuth2 token endpoint with retry logic
 	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, params.Encode())
 	if err != nil {
-		return fmt.Errorf("failed to send request to token endpoint: %w", err)
+		return clierrors.Wrap(err, "Failed to authenticate with Metaplay").
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	// Check for HTTP errors.
 	if statusCode != http.StatusOK {
-		return fmt.Errorf("token endpoint returned an error: %d - %s", statusCode, string(body))
+		return clierrors.Newf("Authentication failed with status %d", statusCode).
+			WithDetails(string(body)).
+			WithSuggestion("Verify your client ID and secret are correct")
 	}
 
 	// Parse a TokenSet object from the response body JSON

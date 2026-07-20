@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -42,11 +43,9 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "collect-heap-dump [ENVIRONMENT] [POD] [flags]",
 		Aliases: []string{"heap-dump"},
-		Short:   "[preview] Collect a heap dump from a running server pod",
+		Short:   "Collect a heap dump from a running server pod",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Collect a heap dump from a running .NET server pod using dotnet-gcdump or dotnet-dump.
 
 			WARNING: This operation is very intrusive as it completely freezes the target process
@@ -91,7 +90,8 @@ func init() {
 func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate collection mode
 	if o.flagCollectMode != "gcdump" && o.flagCollectMode != "dump" {
-		return fmt.Errorf("invalid collection mode '%s': must be either 'gcdump' or 'dump'", o.flagCollectMode)
+		return clierrors.NewUsageErrorf("Invalid collection mode '%s'", o.flagCollectMode).
+			WithSuggestion("Use --mode=gcdump for managed heap or --mode=dump for full process dump")
 	}
 
 	// Set default output path if not specified
@@ -108,13 +108,16 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 	} else {
 		// Validate file extension based on mode
 		actualExtension := filepath.Ext(o.flagOutputPath)
-		if o.flagCollectMode == "gcdump" {
+		switch o.flagCollectMode {
+		case "gcdump":
 			if actualExtension != ".gcdump" {
-				return fmt.Errorf("invalid extension for gcdump mode: expected '.gcdump' but got '%s'", actualExtension)
+				return clierrors.NewUsageErrorf("Invalid file extension '%s' for gcdump mode", actualExtension).
+					WithSuggestion("Use .gcdump extension for gcdump mode, e.g., 'dump.gcdump'")
 			}
-		} else if o.flagCollectMode == "dump" {
+		case "dump":
 			if actualExtension != "" {
-				return fmt.Errorf("dump mode must not have a file extension, but got '%s'", actualExtension)
+				return clierrors.NewUsageErrorf("Invalid file extension '%s' for dump mode", actualExtension).
+					WithSuggestion("Use no extension for dump mode, e.g., 'core_250901_093000'")
 			}
 		}
 	}
@@ -183,7 +186,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 		// Ask for confirmation
 		fmt.Print("Are you sure you want to continue? [y/N] ")
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		if !strings.EqualFold(response, "y") && !strings.EqualFold(response, "yes") {
 			log.Info().Msg(styles.RenderError("❌ Operation canceled"))
 			return fmt.Errorf("heap dump collection cancelled by user")

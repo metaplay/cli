@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/metaplay/cli/pkg/envapi"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -30,6 +30,7 @@ type debugAdminRequestOpts struct {
 	flagBody        string
 	flagFile        string
 	flagContentType string
+	flagOutput      string
 }
 
 func init() {
@@ -38,16 +39,14 @@ func init() {
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
 	args.AddStringArgument(&o.argMethod, "METHOD", "HTTP method to use: GET, POST, DELETE, PUT.")
-	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg '/api/v1/status'.")
+	args.AddStringArgument(&o.argPath, "PATH", "Path for the admin API request, eg 'api/hello'.")
 
 	cmd := &cobra.Command{
 		Use:     "admin-request ENVIRONMENT METHOD PATH [flags]",
 		Aliases: []string{"admin"},
-		Short:   "[preview] Make HTTP requests to the game server admin API",
+		Short:   "Make HTTP requests to the game server admin API",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This is a preview feature and interface may change in the future.
-
 			Make HTTP requests to the game server admin API.
 
 			This command allows you to interact with the game server's admin API endpoint using
@@ -63,28 +62,32 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Get the server hello message.
-			metaplay debug admin-request nimbly GET /api/hello
+			metaplay debug admin-request nimbly GET api/hello
 
 			# Pipe JSON output to jq for colored rendering.
-			metaplay debug admin-request nimbly GET /api/hello | jq
+			metaplay debug admin-request nimbly GET api/hello | jq
 
 			# Send a POST request with request body from command line.
-			metaplay debug admin-request nimbly POST /api/some-endpoint --body '{"name":"test-resource"}'
+			metaplay debug admin-request nimbly POST api/some-endpoint --body '{"name":"test-resource"}'
 
 			# Send a POST request with request body containing json data from command line.
-			metaplay debug admin-request nimbly POST /api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
+			metaplay debug admin-request nimbly POST api/some-endpoint --content-type application/json --body '{"name":"test-resource"}'
 
 			# Send a PUT request with request payload from file.
-			metaplay debug admin-request nimbly PUT /api/some-endpoint --file update.json
+			metaplay debug admin-request nimbly PUT api/some-endpoint --file update.json
 
 			# Send a DELETE request.
-			metaplay debug admin-request nimbly DELETE /api/some-endpoint
+			metaplay debug admin-request nimbly DELETE api/some-endpoint
+
+			# Download a binary file (e.g., game config archive).
+			metaplay debug admin-request nimbly GET api/GameConfig/.../download -o gameconfig.mca
 		`),
 	}
 
 	cmd.Flags().StringVar(&o.flagBody, "body", "", "Raw content to use as the request body")
 	cmd.Flags().StringVar(&o.flagFile, "file", "", "Path to a file containing content to use as the request body")
 	cmd.Flags().StringVar(&o.flagContentType, "content-type", "", "Content-Type passed as header for the API request, e.g. application/json. If not specific, automatically determined based on the `file` or `body` parameter")
+	cmd.Flags().StringVarP(&o.flagOutput, "output", "o", "", "Save response to file (for binary/non-JSON downloads)")
 
 	debugCmd.AddCommand(cmd)
 }
@@ -101,6 +104,17 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 
 	if !validMethods[o.argMethod] {
 		return fmt.Errorf("invalid HTTP method: %s. Must be one of: GET, POST, DELETE, PUT", o.argMethod)
+	}
+
+	// Detect MSYS/Git-Bash path mangling: when a bash arg starts with '/', MSYS
+	// rewrites it to a Windows path like "C:/Program Files/Git/api/hello". No
+	// legitimate admin API path starts with a drive letter, so this is unambiguous.
+	if len(o.argPath) >= 3 && o.argPath[1] == ':' &&
+		(o.argPath[2] == '/' || o.argPath[2] == '\\') &&
+		((o.argPath[0] >= 'A' && o.argPath[0] <= 'Z') || (o.argPath[0] >= 'a' && o.argPath[0] <= 'z')) {
+		return clierrors.NewUsageErrorf("PATH argument looks like it was rewritten by MSYS/Git-Bash: %q", o.argPath).
+			WithSuggestion(fmt.Sprintf("Drop the leading slash — the CLI adds it automatically. For example:\n  metaplay debug admin-request %s %s api/<your-path>", o.argEnvironment, o.argMethod)).
+			WithDetails("MSYS/Git-Bash rewrites bash args starting with '/' into Windows paths. You can also prefix the invocation with MSYS_NO_PATHCONV=1 to disable this conversion.")
 	}
 
 	// Ensure path starts with a slash
@@ -140,23 +154,15 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-
-	// Get environment details for admin API hostname
-	envDetails, err := targetEnv.GetDetails()
-	if err != nil {
-		return err
-	}
-
-	// Create a client for the game server admin API
-	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
+	// Admin hostname follows the infra-modules convention: <humanID>-admin.<stackDomain>.
+	// Avoids a privileged StackAPI /v0/deployments call just to learn the public hostname.
+	adminAPIBaseURL := fmt.Sprintf("https://%s-admin.%s", envConfig.HumanID, envConfig.StackDomain)
 	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
 
 	// Prepare request body if needed
 	var requestBody any
 
-	var contentType string = o.flagContentType
+	var contentType = o.flagContentType
 
 	if o.flagBody != "" {
 		// Use raw body content
@@ -164,6 +170,8 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		// Detect if passed string is JSON, otherwise fallback to default resty behavior
 		if o.flagContentType == "" && IsJSON(o.flagBody) {
 			contentType = "application/json"
+		} else if o.flagContentType == "application/json" && !IsJSON(o.flagBody) {
+			log.Warn().Msg(styles.RenderWarning("⚠️ Content-Type is application/json but --body does not appear to be valid JSON"))
 		}
 	} else if o.flagFile != "" {
 		// Read content from file
@@ -201,7 +209,33 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msg("")
 
-	// Make the HTTP request based on the method
+	// Binary download mode: save raw response to file
+	if o.flagOutput != "" {
+		request := adminClient.Resty.R()
+		if contentType != "" {
+			request.SetHeader("Content-Type", contentType)
+		}
+		if requestBody != nil {
+			request.SetBody(requestBody)
+		}
+
+		response, err := request.Execute(o.argMethod, o.argPath)
+		if err != nil {
+			return fmt.Errorf("request failed: %v", err)
+		}
+		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
+			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
+		}
+
+		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
+			return fmt.Errorf("failed to write output file: %v", err)
+		}
+
+		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
+		return nil
+	}
+
+	// JSON mode: make the HTTP request and unmarshal response
 	var response any
 	var requestErr error
 
@@ -220,6 +254,12 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 
 	if requestErr != nil {
 		return fmt.Errorf("request failed: %v", requestErr)
+	}
+
+	// If no response body was returned, print something to acknowledge the result
+	if response == nil {
+		log.Info().Msg(styles.RenderSuccess("✅ Request successful!"))
+		return nil
 	}
 
 	// Format and display the response

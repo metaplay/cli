@@ -6,6 +6,7 @@ package helmutil
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"time"
@@ -24,9 +25,11 @@ import (
 
 // HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
 //
-// The values are resolved from valuesFiles, defaultValues, and requiredValues.
+// The values are resolved from valuesFiles, defaultValues, cliSetValues, and requiredValues.
 // Values from the files defined in valuesFiles are applied in order, the later overriding the earlier.
 // If a value is not defined in any values-file, the value from defaultValues is used.
+// Values from cliSetValues (corresponding to --set/--set-string flags) are then applied on top of
+// the file and default values, overriding them where keys overlap.
 //
 // The values from requiredValues are used as-is with the highest priority. Any attempt to override
 // a value defined in requiredValues with a different value results in an error. Overriding with
@@ -39,6 +42,7 @@ func HelmUpgradeOrInstall(
 	chartVersion string,
 	valuesFiles []string,
 	defaultValues map[string]any,
+	cliSetValues map[string]any,
 	requiredValues map[string]any,
 	timeout time.Duration,
 	validateValuesSchema bool,
@@ -133,7 +137,7 @@ func HelmUpgradeOrInstall(
 		if err != nil {
 			return nil, fmt.Errorf("failed to open values file: %w", err)
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		values, err := v2loader.LoadValues(file)
 		if err != nil {
@@ -146,6 +150,11 @@ func HelmUpgradeOrInstall(
 
 	// Resolve final configurable values map: use defaultValues as base to allow files to override any defaults.
 	finalValueMap := mergeValuesMaps(baseValues, filesValueMap)
+
+	// Apply CLI --set/--set-string overrides on top of file values.
+	if cliSetValues != nil {
+		finalValueMap = mergeValuesMaps(finalValueMap, cliSetValues)
+	}
 
 	// Apply and verify requiredValues are honored
 	if requiredValues != nil {
@@ -198,9 +207,7 @@ func HelmUpgradeOrInstall(
 func mergeValuesMaps(base, override map[string]any) map[string]any {
 	// Clone base.
 	combined := make(map[string]any, len(base))
-	for k, v := range base {
-		combined[k] = v
-	}
+	maps.Copy(combined, base)
 
 	// Merge all keys from override (recursively merge maps).
 	for k, v := range override {
@@ -285,11 +292,11 @@ func validateValueType(value any, path string) error {
 	switch v.Kind() {
 	case reflect.Slice:
 		// Check if it's []any
-		if t != reflect.TypeOf([]any{}) {
+		if t != reflect.TypeFor[[]any]() {
 			return fmt.Errorf("invalid array type at %s: expected []any, got %s", path, t)
 		}
 		// Recursively validate slice elements
-		for i := 0; i < v.Len(); i++ {
+		for i := range v.Len() {
 			elementPath := fmt.Sprintf("%s[%d]", path, i)
 			if err := validateValueType(v.Index(i).Interface(), elementPath); err != nil {
 				return err
@@ -297,7 +304,7 @@ func validateValueType(value any, path string) error {
 		}
 	case reflect.Map:
 		// Check if it's map[string]any
-		if t != reflect.TypeOf(map[string]any{}) {
+		if t != reflect.TypeFor[map[string]any]() {
 			return fmt.Errorf("invalid map type at %s: expected map[string]any, got %s", path, t)
 		}
 		// Recursively validate map values

@@ -5,8 +5,7 @@
 package cmd
 
 import (
-	"os"
-
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -50,11 +49,12 @@ func (o *buildServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *buildServerOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
-		log.Error().Msgf("Failed to find project: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	log.Info().Msg("")
@@ -62,7 +62,7 @@ func (o *buildServerOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
@@ -70,9 +70,9 @@ func (o *buildServerOpts) Run(cmd *cobra.Command) error {
 	serverPath := project.GetServerDir()
 
 	// Build the project.
-	if err := execChildTask(serverPath, "dotnet", []string{"build"}); err != nil {
-		log.Error().Msgf("Failed to build the game server .NET project: %s", err)
-		os.Exit(1)
+	if err := execChildTask(ctx, serverPath, "dotnet", []string{"build"}); err != nil {
+		return clierrors.Wrap(err, "Failed to build game server .NET project").
+			WithSuggestion("Check the build output above for details")
 	}
 
 	// Server built successfully.

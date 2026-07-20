@@ -86,7 +86,7 @@ func GetServerProcessInformation(ctx context.Context, kubeCli *envapi.KubeClient
 	// VmSize:   12345678 kB
 	// VmRSS:     1234567 kB
 	var vmRss int64
-	for _, line := range strings.Split(stdout, "\n") {
+	for line := range strings.SplitSeq(stdout, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 3 || fields[2] != "kB" {
 			continue
@@ -129,14 +129,14 @@ func validateUnixUsername(username string) error {
 
 	// Check first character
 	first := username[0]
-	if !((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_') {
+	if (first < 'a' || first > 'z') && (first < 'A' || first > 'Z') && first != '_' {
 		return fmt.Errorf("username must start with a letter or underscore")
 	}
 
 	// Check remaining characters
 	for i := 1; i < len(username); i++ {
 		c := username[i]
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
 			return fmt.Errorf("username can only contain letters, numbers, underscores, and hyphens")
 		}
 	}

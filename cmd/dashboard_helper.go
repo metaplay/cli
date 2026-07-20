@@ -6,27 +6,38 @@ package cmd
 
 import (
 	"bytes"
-	"errors"
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
 
 // Checks if Node.js is installed and verifies the version
-func checkNodeVersion(recommendedVersion *version.Version) error {
+func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'node --version' command
-	cmd := exec.Command("node", "--version")
+	cmd := exec.CommandContext(ctx, "node", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
-		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return clierrors.New("Node.js is not installed or not in PATH").
+			WithSuggestion("Install Node.js from https://nodejs.org/")
 	}
 
 	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
@@ -41,22 +52,20 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 
 	// Fail if version older than recommended.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
-	}
-
-	// If installed major version is more recent than expected, warn.
-	installedMajorVersion := installedVersion.Segments()[0]
-	requiredMajorVersion := recommendedVersion.Segments()[0]
-	if installedMajorVersion > requiredMajorVersion {
-		log.Warn().Msgf("Detected Node.js version %s is more recent than expected v%d.x.y; downgrade if you encounter any problems", installedVersion, requiredMajorVersion)
+		return clierrors.Newf("Node.js version %s or higher is required, but found %s", recommendedVersion, installedVersionStr).
+			WithSuggestion("Upgrade Node.js (e.g. via your version manager such as nvm, fnm, or volta)")
 	}
 
 	// Print the info.
 	badge := styles.RenderMuted(fmt.Sprintf("[minimum: %s]", recommendedVersion))
+	installedMajorVersion := installedVersion.Segments()[0]
 	installedMinorVersion := installedVersion.Segments()[1]
+	requiredMajorVersion := recommendedVersion.Segments()[0]
 	requiredMinorVersion := recommendedVersion.Segments()[1]
-	if installedMinorVersion > requiredMinorVersion {
-		badge = badge + " " + styles.RenderWarning("[minor version is more recent; downgrade if you encounter any problems]")
+	if installedMajorVersion > requiredMajorVersion {
+		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%s; downgrade if you encounter any problems]", recommendedVersion))
+	} else if installedMinorVersion > requiredMinorVersion {
+		badge = badge + " " + styles.RenderWarning("[warning: minor version is more recent; downgrade if you encounter any problems]")
 	}
 
 	log.Info().Msgf("%s Node.js detected: %s %s", styles.RenderSuccess("✓"), styles.RenderTechnical(installedVersion.String()), badge)
@@ -65,14 +74,22 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 }
 
 // Checks if pnpm is installed and verifies the version
-func checkPnpmVersion(recommendedVersion *version.Version) error {
+func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'pnpm --version' command
-	cmd := exec.Command("pnpm", "--version")
+	cmd := exec.CommandContext(ctx, "pnpm", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Run(); err != nil {
-		return errors.New("pnpm is not installed or not in PATH. Please install pnpm: https://pnpm.io/installation")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return clierrors.New("pnpm is not installed or not in PATH").
+			WithSuggestion("Install pnpm from https://pnpm.io/installation")
 	}
 
 	// Parse pnpm version
@@ -84,7 +101,8 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 
 	// Fail if installed version is older than required.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm!", recommendedVersion, installedVersion)
+		return clierrors.Newf("pnpm version %s or higher is required, but found %s", recommendedVersion, installedVersion).
+			WithSuggestion("Upgrade pnpm (e.g. 'pnpm self-update', or via corepack)")
 	}
 
 	// Grab versions.
@@ -95,7 +113,7 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 
 	// If installed major version is more recent than expected, fail.
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
+		return fmt.Errorf("detected pnpm version %s is too recent; expecting v%s", installedVersion, recommendedVersion)
 	}
 
 	// Print the info.
@@ -109,18 +127,76 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 	return nil
 }
 
-func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
+func checkDashboardToolVersions(ctx context.Context, project *metaproj.MetaplayProject) error {
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(project.VersionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(ctx, project.VersionMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(project.VersionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(ctx, project.VersionMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 
 	log.Info().Msg("")
+
+	return nil
+}
+
+// Cleans dashboard build artifacts including node_modules from project root, MetaplaySDK/Frontend and the project dashboard folder, and the dist folder of the project's dashboard.
+func cleanTemporaryDashboardFiles(projectRootPath string, sdkPath string, dashboardPath string) error {
+	log.Info().Msg("Cleaning up dashboard build artifacts...")
+	// Collect all node_modules folders to delete
+	var foldersToDelete []string
+
+	// project root node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(projectRootPath, "node_modules"))
+
+	// sdk frontend node_modules
+	if err := filepath.WalkDir(filepath.Join(sdkPath, "Frontend"), func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == "node_modules" {
+			foldersToDelete = append(foldersToDelete, path)
+			// Skip walking into this directory
+			return filepath.SkipDir
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to collect node_modules folders in MetaplaySDK/Frontend/: %w", err)
+	}
+
+	// dashboard node_modules
+	foldersToDelete = append(foldersToDelete, filepath.Join(dashboardPath, "node_modules"))
+
+	// Delete the collected node_modules folders
+	deletedCount := 0
+	for _, folder := range foldersToDelete {
+		log.Info().Msgf("Deleting node_modules folder: %s", folder)
+		// note: If the folder is a symbolic link, RemoveAll removes the link without deleting the contents.
+		if err := os.RemoveAll(folder); err != nil {
+			log.Warn().Msgf("Failed to delete folder %s: %s", folder, err)
+		} else {
+			deletedCount++
+		}
+	}
+
+	// Log the number of deleted folders
+	if deletedCount == 0 {
+		log.Info().Msg("No node_modules folders found")
+	} else {
+		log.Info().Msgf("Deleted %d node_modules folders", deletedCount)
+	}
+
+	// Remove custom dashboard dist/ if it exists.
+	distPath := fmt.Sprintf("%s/dist", dashboardPath)
+	if _, err := os.Stat(distPath); err == nil {
+		log.Info().Msg("Removing existing dist/ directory for a clean build...")
+		if err := os.RemoveAll(distPath); err != nil {
+			return fmt.Errorf("failed to remove existing dist/ directory: %w", err)
+		}
+	}
 
 	return nil
 }

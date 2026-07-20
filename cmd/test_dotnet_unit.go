@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -53,11 +54,12 @@ func init() {
 func (o *testDotnetUnitOpts) Prepare(cmd *cobra.Command, args []string) error { return nil }
 
 func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Resolve project
 	project, err := resolveProject()
 	if err != nil {
-		log.Error().Msgf("Failed to find project: %v", err)
-		os.Exit(1)
+		return err
 	}
 
 	log.Info().Msg("")
@@ -65,7 +67,7 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check for .NET SDK installation and required version (based on SDK version)
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
@@ -80,9 +82,8 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 	// Execute SDK tests one project at a time for clearer output
 	for _, projPath := range testProjects {
 		log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
-		if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
-			log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
-			os.Exit(1)
+		if err := execChildTask(ctx, projPath, "dotnet", []string{"test"}); err != nil {
+			return clierrors.Wrapf(err, "Unit tests failed in %s", projPath)
 		}
 	}
 
@@ -100,9 +101,8 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 		if st, err := os.Stat(projPath); err == nil && st.IsDir() {
 			log.Info().Msg("")
 			log.Info().Msg(styles.RenderBright(fmt.Sprintf("🔷 Run tests in %s", filepath.Base(projPath))))
-			if err := execChildTask(projPath, "dotnet", []string{"test"}); err != nil {
-				log.Error().Msgf("Unit tests failed in %s: %v", projPath, err)
-				os.Exit(1)
+			if err := execChildTask(ctx, projPath, "dotnet", []string{"test"}); err != nil {
+				return clierrors.Wrapf(err, "Unit tests failed in %s", projPath)
 			}
 		}
 	}

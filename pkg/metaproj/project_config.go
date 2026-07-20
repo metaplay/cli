@@ -23,6 +23,24 @@ type ProjectFeaturesConfig struct {
 	Dashboard DashboardFeatureConfig `yaml:"dashboard"`
 }
 
+// IntegrationTestsConfig configures integration test behavior ($.integrationTests in metaplay-project.yaml).
+type IntegrationTestsConfig struct {
+	Docker    *IntegrationTestDockerConfig    `yaml:"docker,omitempty"`
+	Server    *IntegrationTestContainerConfig `yaml:"server,omitempty"`
+	BotClient *IntegrationTestContainerConfig `yaml:"botClient,omitempty"`
+}
+
+// IntegrationTestDockerConfig configures docker build options for integration tests.
+type IntegrationTestDockerConfig struct {
+	BuildArgs []string `yaml:"buildArgs,omitempty"`
+}
+
+// IntegrationTestContainerConfig configures container runtime options for integration tests.
+type IntegrationTestContainerConfig struct {
+	Args []string          `yaml:"args,omitempty"`
+	Env  map[string]string `yaml:"env,omitempty"`
+}
+
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update ValidateProjectConfig().
 type ProjectConfig struct {
@@ -33,7 +51,7 @@ type ProjectConfig struct {
 	SharedCodeDir   string `yaml:"sharedCodeDir"`   // Relative path to the shared code directory
 	UnityProjectDir string `yaml:"unityProjectDir"` // Relative path to the Unity (client) project
 
-	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor), eg, '8.0' or '9.0'
+	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor); depends on the SDK version, eg, '10.0' (older SDKs use '8.0' or '9.0')
 
 	HelmChartRepository   string `yaml:"helmChartRepository"`   // Helm chart repository to use (defaults to 'https://charts.metaplay.dev')
 	ServerChartVersion    string `yaml:"serverChartVersion"`    // Version of the game server Helm chart to use (or 'latest-prerelease' for absolute latest)
@@ -42,6 +60,8 @@ type ProjectConfig struct {
 	AuthProviders map[string]*auth.AuthProviderConfig `yaml:"authProviders,omitempty"`
 
 	Features ProjectFeaturesConfig `yaml:"features"`
+
+	IntegrationTests *IntegrationTestsConfig `yaml:"integrationTests,omitempty"`
 
 	Environments []ProjectEnvironmentConfig `yaml:"environments"`
 }

@@ -7,7 +7,13 @@ package metahttp
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -21,6 +27,52 @@ type Client struct {
 	TokenSet *auth.TokenSet // Tokens to use to access the environment.
 	BaseURL  string         // Base URL of the target API (e.g. 'https://api.metaplay.io')
 	Resty    *resty.Client  // Resty client with authorization header configured.
+}
+
+// HTTPError is returned by Request (and its Get/Post/Put/Delete helpers) when
+// the server responds with a non-2xx status code. Callers can use errors.As to
+// detect HTTP errors and inspect the status code and parsed message for
+// discrimination and user-friendly messaging.
+type HTTPError struct {
+	StatusCode int    // HTTP status code returned by the server (e.g., 400, 404, 409, 500)
+	Method     string // HTTP method used for the request (e.g., "GET", "POST")
+	URL        string // Full request URL (base URL + path)
+	Body       []byte // Raw response body
+	Message    string // Parsed error message from the response body, or empty if none could be parsed
+}
+
+// Error implements the error interface.
+func (e *HTTPError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s %s failed with status %d: %s", e.Method, e.URL, e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("%s %s failed with status %d", e.Method, e.URL, e.StatusCode)
+}
+
+// parseHTTPErrorMessage extracts a user-readable error message from an HTTP
+// error response body. Returns the message plus a boolean indicating whether
+// the body parsed cleanly as the expected structured error shape
+// {"error": "..."} with a non-empty error field.
+//
+// Structured responses are produced by handlers that opt into the shared
+// error-response contract used by the Metaplay backend APIs. Opaque
+// responses (different JSON shape, plain text, HTML from a proxy, empty,
+// ...) fall back to the trimmed raw body so callers still have something
+// human-readable to display. The structured flag lets callers (in
+// particular metahttp.Request) decide whether the raw error body is
+// redundant with the typed error or whether it carries information the
+// user still needs to see in the default output.
+func parseHTTPErrorMessage(body []byte) (string, bool) {
+	if len(body) == 0 {
+		return "", false
+	}
+	var parsed struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != "" {
+		return parsed.Error, true
+	}
+	return strings.TrimSpace(string(body)), false
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
@@ -38,17 +90,110 @@ func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	}
 }
 
-// Download a file from the specified URL to the specified file path.
-// Note: The file gets created even if the request fails.
-func Download(c *Client, url string, filePath string) (*resty.Response, error) {
-	// Perform the request: download directly to a file.
-	response, err := c.Resty.R().SetOutput(filePath).Get(url)
+// Download a file from the specified URL to the specified file path. If
+// onProgress is non-nil it is called periodically with the number of bytes
+// downloaded so far and the total size (0 if unknown).
+//
+// Retries transient failures (connection errors before the first byte, or
+// stream interruptions mid-body such as unexpected EOF) with exponential
+// backoff. Local I/O failures and HTTP error statuses are not retried.
+func Download(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+	const maxAttempts = 4
+	backoff := 1 * time.Second
 
-	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, filePath, err)
+	var resp *resty.Response
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var streamErr error
+		resp, streamErr, lastErr = downloadOnce(c, url, filePath, onProgress)
+
+		// Non-retryable: success, HTTP error status, or local I/O failure.
+		if streamErr == nil {
+			return resp, lastErr
+		}
+
+		// Transient streaming/network error — retry unless we're out of attempts.
+		if attempt == maxAttempts {
+			return resp, fmt.Errorf("download from %s%s failed after %d attempts: %w", c.BaseURL, url, maxAttempts, streamErr)
+		}
+
+		log.Warn().Msgf("Download from %s%s interrupted (attempt %d/%d), retrying in %v: %v", c.BaseURL, url, attempt, maxAttempts, backoff, streamErr)
+		time.Sleep(backoff)
+		backoff *= 2
 	}
 
-	return response, nil
+	return resp, lastErr
+}
+
+// downloadOnce performs a single download attempt. Returns
+// (resp, streamErr, terminalErr):
+//   - streamErr != nil indicates a transient network/streaming failure the
+//     caller should retry. resp may be nil.
+//   - terminalErr is the final error to return to the caller and is never
+//     retried (covers local I/O failures; nil on success and on HTTP error
+//     statuses, where the caller inspects resp.StatusCode()).
+func downloadOnce(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error, error) {
+	// Use SetDoNotParseResponse to get raw response body for streaming.
+	resp, err := c.Resty.R().SetDoNotParseResponse(true).Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach %s%s: %w", c.BaseURL, url, err), nil
+	}
+
+	rawBody := resp.RawBody()
+	defer func() { _ = rawBody.Close() }()
+
+	// On HTTP error, return the response without a Go error so the caller can
+	// inspect resp.StatusCode() and produce a domain-specific error message.
+	if resp.IsError() {
+		return resp, nil, nil
+	}
+
+	// Create the output file (local error — not retryable).
+	outFile, err := os.Create(filePath)
+	if err != nil {
+		return resp, nil, fmt.Errorf("failed to create output file %s: %w", filePath, err)
+	}
+
+	// Determine total size from Content-Length header.
+	var total int64
+	if cl := resp.Header().Get("Content-Length"); cl != "" {
+		total, _ = strconv.ParseInt(cl, 10, 64)
+	}
+
+	// Stream response body to file with progress tracking.
+	pr := &progressReader{
+		reader:     rawBody,
+		total:      total,
+		onProgress: onProgress,
+	}
+
+	_, copyErr := io.Copy(outFile, pr)
+	_ = outFile.Close()
+	if copyErr != nil {
+		// Partial file is unusable; remove so the next attempt starts fresh.
+		_ = os.Remove(filePath)
+		return resp, fmt.Errorf("failed to write downloaded file %s: %w", filePath, copyErr), nil
+	}
+
+	return resp, nil, nil
+}
+
+// progressReader wraps an io.Reader and reports progress via a callback.
+type progressReader struct {
+	reader     io.Reader
+	downloaded int64
+	total      int64
+	onProgress func(downloaded, total int64)
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.reader.Read(p)
+	pr.downloaded += int64(n)
+	if pr.onProgress != nil {
+		pr.onProgress(pr.downloaded, pr.total)
+	}
+	return n, err
 }
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
@@ -81,11 +226,23 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		log.Panic().Msgf("HTTP request method '%s' not implemented", method)
 	}
 
-	log.Debug().Msgf("Raw request: %+v", response.Request.RawRequest)
-
 	// Handle request errors
 	if err != nil {
 		return result, fmt.Errorf("%s request to %s%s failed: %w", method, c.BaseURL, url, err)
+	}
+
+	// Log the raw request with sensitive headers redacted.
+	if log.Debug().Enabled() {
+		rawReq := response.Request.RawRequest
+		sanitizedHeaders := make(map[string][]string, len(rawReq.Header))
+		for k, v := range rawReq.Header {
+			if strings.EqualFold(k, "Authorization") {
+				sanitizedHeaders[k] = []string{"REDACTED"}
+			} else {
+				sanitizedHeaders[k] = v
+			}
+		}
+		log.Debug().Msgf("Raw request: %s %s, Headers: %v", rawReq.Method, rawReq.URL, sanitizedHeaders)
 	}
 
 	// Debug log the raw response.
@@ -93,11 +250,31 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 
 	// Check response status code
 	if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
-		// Print error details before return the error to keep the log more readable.
-		errorBody := string(response.Body())
+		errorBody := response.Body()
 		requestURL := fmt.Sprintf("%s%s", c.BaseURL, url)
-		log.Error().Msgf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, errorBody)
-		return result, fmt.Errorf("%s %s failed (see above for details)", method, requestURL)
+		parsedMessage, structured := parseHTTPErrorMessage(errorBody)
+
+		// If the body parses as the expected {"error": "..."} JSON shape,
+		// the caller has everything it needs in the typed *HTTPError to
+		// produce a clean user-facing error, so emit the raw log only at
+		// Debug level to avoid doubling the output. Otherwise the body is
+		// opaque (unknown format, HTML intercepted by a proxy, legacy
+		// endpoints, ...) and the user's only reliable diagnostic signal
+		// is the raw log, so keep it at Error level.
+		rawLogLine := fmt.Sprintf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
+		if structured {
+			log.Debug().Msg(rawLogLine)
+		} else {
+			log.Error().Msg(rawLogLine)
+		}
+
+		return result, &HTTPError{
+			StatusCode: response.StatusCode(),
+			Method:     method,
+			URL:        requestURL,
+			Body:       errorBody,
+			Message:    parsedMessage,
+		}
 	}
 
 	// If type TResult is just string, get the body of the HTTP response as plaintext
@@ -106,12 +283,18 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 	} else {
 		// For complex types, get the body as JSON and unmarshal into TResult.
 		rawBody := response.Body()
-		err = json.Unmarshal(rawBody, &result)
-		if err != nil {
-			log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
-			return result, err
+		if len(rawBody) == 0 {
+			// Empty body is only valid when TResponse is any (interface{}); all other types require a response body.
+			if reflect.TypeOf((*TResponse)(nil)).Elem().Kind() != reflect.Interface {
+				return result, fmt.Errorf("server returned an empty response body where JSON was expected")
+			}
+		} else {
+			err = json.Unmarshal(rawBody, &result)
+			if err != nil {
+				log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
+				return result, err
+			}
 		}
-
 	}
 
 	return result, nil

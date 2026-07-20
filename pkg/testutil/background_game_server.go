@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
+	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	dockercontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	dockercontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -25,9 +29,20 @@ type GameServerOptions struct {
 	PollInterval  time.Duration // how often to collect metrics
 	HistoryLimit  int           // max samples kept in memory (0 or <0 => unbounded)
 	Env           map[string]string
-	ExposedPorts  []string // optional override; defaults to []string{Port}
-	ContainerName string   // optional; useful in CI logs
-	Cmd           []string // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
+	ExposedPorts  []string          // optional override; defaults to []string{Port}
+	ContainerName string            // optional; useful in CI logs
+	Cmd           []string          // optional command/args to run inside the container (e.g. ["gameserver", "-LogLevel=Information"])
+	ExtraArgs     []string          // additional args to append to the default Cmd
+	ExtraEnv      map[string]string // additional env vars to merge with defaults (overrides on conflict)
+	Mounts        []string          // optional bind mounts in "host:container" format
+
+	// Persistent on-disk SQLite support (used by the database-resharding test, which needs the shard
+	// files to survive across multiple server invocations). When unset, the server uses the default
+	// stateless in-memory SQLite.
+	SqlitePersistDir      string // when non-empty, use on-disk SQLite stored in this (container) directory instead of in-memory
+	NumActiveShards       int    // when > 0, sets --Database:NumActiveShards (triggers resharding at startup against existing shard files)
+	DisableSigtermWait    bool   // when true, sets --Environment:WaitForSigtermBeforeExit=false so an HTTP graceful shutdown lets the process self-exit
+	DisableExitOnLogError bool   // when true, sets --Environment:ExitOnLogError=false so transient errors under heavy load don't terminate the server
 }
 
 // containerLogConsumer mirrors container logs to an io.Writer (e.g. os.Stdout).
@@ -49,7 +64,7 @@ func (c *containerLogConsumer) Write(p []byte) (int, error) {
 	if c == nil {
 		return len(p), nil
 	}
-	c.Accept(tc.Log{Content: append([]byte(nil), p...)})
+	c.Accept(tc.Log{Content: slices.Clone(p)})
 	return len(p), nil
 }
 
@@ -81,35 +96,72 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	opts.ExposedPorts = []string{"8585/tcp", "8888/tcp", "9090/tcp", "5550/tcp", "5560/tcp"}
 	opts.PollInterval = 2 * time.Second
 	opts.HistoryLimit = 10
-	opts.Env = map[string]string{
+
+	// Build default env and merge any extra env vars (extra overrides on conflict)
+	defaultEnv := map[string]string{
 		"ASPNETCORE_ENVIRONMENT":      "Development",
 		"METAPLAY_ENVIRONMENT_FAMILY": "Local",
 	}
-	opts.Cmd = []string{
+	maps.Copy(defaultEnv, opts.ExtraEnv)
+	opts.Env = defaultEnv
+
+	// Wait for SIGTERM before exiting by default; the resharding populate run disables this so that an
+	// HTTP graceful shutdown lets the server checkpoint SQLite and self-exit (rather than blocking).
+	waitForSigterm := "true"
+	if opts.DisableSigtermWait {
+		waitForSigterm = "false"
+	}
+
+	// Exit on logged errors by default; the resharding populate run disables this because on-disk SQLite
+	// under heavy bot load can log transient timeouts (e.g. "database being overloaded") that should not
+	// terminate the server.
+	exitOnLogError := "true"
+	if opts.DisableExitOnLogError {
+		exitOnLogError = "false"
+	}
+
+	// Build default cmd and append any extra args
+	defaultCmd := []string{
 		"gameserver",
 		"-LogLevel=Information",
 		// METAPLAY_OPTS (shared with BotClient)
 		"--Environment:EnableKeyboardInput=false",
-		"--Environment:ExitOnLogError=true",
+		"--Environment:ExitOnLogError=" + exitOnLogError,
 		// METAPLAY_SERVER_OPTS (server-specific)
 		"--Environment:EnableSystemHttpServer=true",
 		"--Environment:SystemHttpListenHost=0.0.0.0",
-		"--Environment:WaitForSigtermBeforeExit=true",
+		"--Environment:WaitForSigtermBeforeExit=" + waitForSigterm,
 		"--AdminApi:WebRootPath=wwwroot",
 		"--Database:Backend=Sqlite",
-		"--Database:SqliteInMemory=true",
-		"--Player:ForceFullDebugConfigForBots=false",
 	}
+
+	// Database storage: in-memory by default, or persistent on-disk when a shard directory is given.
+	// Build the DB flags explicitly (rather than relying on .NET "last wins" arg precedence).
+	if opts.SqlitePersistDir != "" {
+		defaultCmd = append(defaultCmd,
+			"--Database:SqliteInMemory=false",
+			"--Database:SqliteDirectory="+opts.SqlitePersistDir,
+		)
+	} else {
+		defaultCmd = append(defaultCmd, "--Database:SqliteInMemory=true")
+	}
+	if opts.NumActiveShards > 0 {
+		defaultCmd = append(defaultCmd, fmt.Sprintf("--Database:NumActiveShards=%d", opts.NumActiveShards))
+	}
+
+	defaultCmd = append(defaultCmd, "--Player:ForceFullDebugConfigForBots=false")
+	opts.Cmd = append(defaultCmd, opts.ExtraArgs...)
+
 	return &BackgroundGameServer{opts: opts}
 }
 
 // Start launches the server container, waits for readiness, and starts metrics collection.
 func (s *BackgroundGameServer) Start(ctx context.Context) error {
 	// Build port bindings: bind each exposed container port to 127.0.0.1 with a random host port.
-	portBindings := nat.PortMap{}
+	portBindings := network.PortMap{}
 	for _, p := range s.opts.ExposedPorts {
-		port := nat.Port(p)
-		portBindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}}
+		port := network.MustParsePort(p)
+		portBindings[port] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}
 	}
 
 	// Build container request
@@ -120,18 +172,19 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		Env:          s.opts.Env,
 		Cmd:          s.opts.Cmd,
 		WaitingFor: wait.ForHTTP("/isReady").
-			WithPort(nat.Port(s.opts.SystemPort)).
+			WithPort(s.opts.SystemPort).
 			WithStatusCodeMatcher(func(code int) bool { return code == 200 }).
 			WithStartupTimeout(2 * time.Minute),
 	}
 
-	// Bind ports on 127.0.0.1 with random host ports via HostConfigModifier
+	// Bind ports on 127.0.0.1 with random host ports via HostConfigModifier, and attach any bind mounts.
 	req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
 		if hc.PortBindings == nil {
-			hc.PortBindings = nat.PortMap{}
+			hc.PortBindings = network.PortMap{}
 		}
-		for port, bindings := range portBindings {
-			hc.PortBindings[port] = bindings
+		maps.Copy(hc.PortBindings, portBindings)
+		if len(s.opts.Mounts) > 0 {
+			hc.Binds = append(hc.Binds, s.opts.Mounts...)
 		}
 	}
 
@@ -193,7 +246,7 @@ func (s *BackgroundGameServer) Start(ctx context.Context) error {
 		_ = s.TerminateSilently(ctx)
 		return fmt.Errorf("get host: %w", err)
 	}
-	mapped, err := s.container.MappedPort(ctx, nat.Port(s.opts.SystemPort))
+	mapped, err := s.container.MappedPort(ctx, s.opts.SystemPort)
 	if err != nil {
 		_ = s.TerminateSilently(ctx)
 		if portMap, perr := s.container.Ports(ctx); perr == nil {
@@ -298,6 +351,63 @@ func (s *BackgroundGameServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// GracefulShutdown requests a clean shutdown via the system HTTP server's /gracefulShutdown endpoint,
+// waits for the server to flush its state and self-exit, and then tears down the container. This is the
+// shutdown path to use after populating an on-disk SQLite database, so that the shard files are
+// checkpointed and closed cleanly before they are read from the host. The server must have been started
+// with DisableSigtermWait=true, otherwise it would block waiting for SIGTERM after the graceful shutdown.
+func (s *BackgroundGameServer) GracefulShutdown(ctx context.Context) error {
+	// If we never resolved a base URL, fall back to a plain shutdown.
+	if s.baseURL == nil {
+		return s.Shutdown(ctx)
+	}
+
+	// Request graceful shutdown over HTTP. The endpoint just initiates shutdown and returns quickly,
+	// so bound the request with a short timeout in case the server is unresponsive.
+	shutdownURL := strings.TrimRight(s.baseURL.String(), "/") + "/gracefulShutdown"
+	log.Debug().Msgf("Requesting graceful shutdown: POST %s", shutdownURL)
+	postCtx, postCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer postCancel()
+	req, err := http.NewRequestWithContext(postCtx, http.MethodPost, shutdownURL, nil)
+	if err != nil {
+		log.Warn().Msgf("Failed to build graceful shutdown request: %v", err)
+	} else if resp, perr := http.DefaultClient.Do(req); perr != nil {
+		log.Warn().Msgf("Failed to POST graceful shutdown: %v", perr)
+	} else {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+
+	// Wait for the container to exit on its own (the server self-exits once shutdown completes).
+	log.Debug().Msg("Waiting for server container to exit after graceful shutdown...")
+	deadline := time.Now().Add(2 * time.Minute)
+	for s.container != nil {
+		state, serr := s.container.State(ctx)
+		if serr != nil {
+			// Container may already be gone; stop waiting and let Shutdown() finish cleanup.
+			log.Debug().Msgf("Failed to query container state while waiting for exit: %v", serr)
+			break
+		}
+		if !state.Running {
+			log.Debug().Msgf("Server container exited with code %d", state.ExitCode)
+			break
+		}
+		if time.Now().After(deadline) {
+			log.Warn().Msg("Timed out waiting for server to self-exit after graceful shutdown; forcing termination")
+			break
+		}
+		select {
+		case <-ctx.Done():
+			log.Debug().Msg("Context canceled while waiting for server exit")
+			return s.Shutdown(context.Background())
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+
+	// Tear down the (now exited, or stuck) container and background goroutines.
+	return s.Shutdown(ctx)
+}
+
 // drainAllLogs fetches the full log buffer once (non-follow) and routes it via the given consumer.
 func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *containerLogConsumer) error {
 	if s.container == nil {
@@ -307,7 +417,7 @@ func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *conta
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	// Pipe logs to the same consumer using io.Copy for simplicity and efficiency.
 	_, _ = io.Copy(consumer, r)
 	return nil
@@ -315,7 +425,7 @@ func (s *BackgroundGameServer) drainAllLogs(ctx context.Context, consumer *conta
 
 // TerminateSilently helps internal error paths to try to clean up without masking errors.
 func (s *BackgroundGameServer) TerminateSilently(ctx context.Context) error {
-	defer func() { recover() }() // best-effort
+	defer func() { _ = recover() }() // best-effort
 	_ = s.Shutdown(ctx)
 	return nil
 }
