@@ -6,7 +6,7 @@ package helmutil
 
 import (
 	clierrors "github.com/metaplay/cli/internal/errors"
-	"helm.sh/helm/v3/pkg/strvals"
+	"helm.sh/helm/v4/pkg/strvals"
 )
 
 // ParseHelmExtraArgs parses --set and --set-string flags from a raw args slice

@@ -8,8 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rs/zerolog/log"
-	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v4/pkg/action"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -34,7 +33,7 @@ func NewActionConfig(kubeconfigPayload string, namespace string) (*action.Config
 
 	// Initialize Helm action configuration
 	actionConfig := new(action.Configuration)
-	if err := actionConfig.Init(restGetter, namespace, "secret", log.Printf); err != nil {
+	if err := actionConfig.Init(restGetter, namespace, "secret"); err != nil {
 		return nil, fmt.Errorf("failed to initialize Helm configuration: %w", err)
 	}
 
