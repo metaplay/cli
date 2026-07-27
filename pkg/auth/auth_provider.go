@@ -8,12 +8,13 @@ import "github.com/metaplay/cli/pkg/common"
 
 // OAuth2 client configuration.
 type AuthProviderConfig struct {
-	Name             string `yaml:"name"`             // Name of the provider (used as sessionID as well).
-	ClientID         string `yaml:"clientId"`         // OAuth2 client ID.
-	AuthEndpoint     string `yaml:"authEndpoint"`     // Eg, "https://auth.metaplay.dev/oauth2/auth".
-	TokenEndpoint    string `yaml:"tokenEndpoint"`    // Eg, "https://auth.metaplay.dev/oauth2/token".
-	RevokeEndpoint   string `yaml:"revokeEndpoint"`   // Eg, "https://auth.metaplay.dev/oauth2/revoke".
-	UserInfoEndpoint string `yaml:"userInfoEndpoint"` // Eg, "https://portal.metaplay.dev/api/external/userinfo"
+	Name           string `yaml:"name"`           // Name of the provider (used as sessionID as well).
+	ClientID       string `yaml:"clientId"`       // OAuth2 client ID.
+	AuthEndpoint   string `yaml:"authEndpoint"`   // Eg, "https://auth.metaplay.dev/oauth2/auth".
+	TokenEndpoint  string `yaml:"tokenEndpoint"`  // Eg, "https://auth.metaplay.dev/oauth2/token".
+	RevokeEndpoint string `yaml:"revokeEndpoint"` // Eg, "https://auth.metaplay.dev/oauth2/revoke".
+	// Unused: the CLI now resolves user info from token claims (auth.ResolveUserInfo). Kept for config compatibility.
+	UserInfoEndpoint string `yaml:"userInfoEndpoint"` // Eg, "https://portal.metaplay.dev/api/external/userinfo".
 	Scopes           string `yaml:"scopes"`           // Eg, "openid profile email offline_access"
 	Audience         string `yaml:"audience"`         // Eg, "managed-gameservers"
 }
