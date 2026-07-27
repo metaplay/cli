@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
 
@@ -60,7 +61,13 @@ type DockerCredentials struct {
 }
 
 func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
-	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	var stackApiBaseURL string
+	if common.StackApiBaseURLOverride != "" {
+		stackApiBaseURL = common.StackApiBaseURLOverride
+		log.Info().Msgf("Using StackAPI base URL override %s (set via METAPLAYCLI_STACKAPI_BASEURL)", stackApiBaseURL)
+	} else {
+		stackApiBaseURL = fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	}
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
