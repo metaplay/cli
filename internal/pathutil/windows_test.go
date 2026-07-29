@@ -38,6 +38,28 @@ func TestForDisplay(t *testing.T) {
 			path:     `\\server\share\metaplay.exe`,
 			expected: `\\server\share\metaplay.exe`,
 		},
+		{
+			name:     "handles lower-case UNC prefixes",
+			path:     `\\?\unc\server\share\metaplay.exe`,
+			expected: `\\server\share\metaplay.exe`,
+		},
+		{
+			// Stripping this would yield something that reads as a relative path and is not
+			// usable anywhere, so it must be left as-is.
+			name:     "leaves volume GUID paths intact",
+			path:     `\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\metaplay.exe`,
+			expected: `\\?\Volume{b75e2c83-0000-0000-0000-602f00000000}\metaplay.exe`,
+		},
+		{
+			name:     "leaves GLOBALROOT paths intact",
+			path:     `\\?\GLOBALROOT\Device\HarddiskVolume1\metaplay.exe`,
+			expected: `\\?\GLOBALROOT\Device\HarddiskVolume1\metaplay.exe`,
+		},
+		{
+			name:     "leaves a bare prefix alone",
+			path:     `\\?\`,
+			expected: `\\?\`,
+		},
 	}
 
 	for _, tt := range tests {

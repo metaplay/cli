@@ -26,20 +26,30 @@ const manualDownloadSuggestion = "Check your network connection, or download a r
 // to go through the package manager to keep its bookkeeping in sync.
 const notWritableSuggestion = "If you installed the CLI with a package manager, update it with that instead; otherwise re-run from an elevated shell (Administrator or sudo)"
 
-// fileInUseSuggestion is shown when the swap is blocked by something other than permissions,
-// which in practice means a leftover file that another metaplay process still has open.
-const fileInUseSuggestion = "Make sure no other metaplay process is running, then try again"
+// fileInUseSuggestion is shown when a leftover file from an earlier update is held by another
+// process. Elevation cannot help: on Windows that file is the mapped image of a still-running
+// metaplay, and a mapped image cannot be deleted at any privilege level.
+const fileInUseSuggestion = "Close any other running metaplay process, then try again"
+
+// manualInstallSuggestion is the catch-all for a local failure that is neither a permission
+// wall nor a busy file, such as the executable having vanished from under us.
+const manualInstallSuggestion = "Download a release manually from https://github.com/metaplay/cli/releases"
 
 // replaceFailureError wraps a failure to replace the CLI binary, picking the hint from the
-// cause: only a permission wall warrants pointing at package managers or elevation. Anything
-// else keeps fallbackSuggestion, so the hint never misdescribes the problem.
+// cause so it never misdescribes the problem. Order matters: a busy leftover surfaces as
+// ERROR_ACCESS_DENIED on Windows, so it must be recognised before the permission check or it
+// would draw a useless "run elevated" hint.
 func replaceFailureError(err error, message, exe, fallbackSuggestion string) *clierrors.CLIError {
 	cliErr := clierrors.Wrap(err, message)
-	if errors.Is(err, fs.ErrPermission) {
+	switch {
+	case errors.Is(err, version.ErrLeftoverInUse):
+		return cliErr.WithSuggestion(fileInUseSuggestion)
+	case errors.Is(err, fs.ErrPermission):
 		return cliErr.WithSuggestion(notWritableSuggestion).
 			WithDetails(notWritableDetails(exe)...)
+	default:
+		return cliErr.WithSuggestion(fallbackSuggestion)
 	}
-	return cliErr.WithSuggestion(fallbackSuggestion)
 }
 
 // notWritableDetails lists the install location and the package manager update commands that
@@ -111,7 +121,7 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 
 	// Check that the binary can be replaced before downloading tens of MB that we could not apply.
 	if err := version.EnsureReplaceable(exe); err != nil {
-		return replaceFailureError(err, "Cannot replace the Metaplay CLI binary", exe, fileInUseSuggestion)
+		return replaceFailureError(err, "Cannot replace the Metaplay CLI binary", exe, manualInstallSuggestion)
 	}
 
 	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest))

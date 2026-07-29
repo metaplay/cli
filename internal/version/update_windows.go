@@ -7,9 +7,7 @@
 package version
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 
 	"github.com/metaplay/cli/internal/pathutil"
 	"golang.org/x/sys/windows"
@@ -29,7 +27,7 @@ func checkReplaceable(path string) error {
 		return err
 	}
 
-	// Share everything, so the probe never fails merely because the executable is running.
+	// Share everything so the probe cannot fail over a share-mode conflict with another handle.
 	handle, err := windows.CreateFile(
 		p,
 		windows.DELETE,
@@ -40,10 +38,9 @@ func checkReplaceable(path string) error {
 		0,
 	)
 	if err != nil {
-		if errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-			// Normalize to fs.ErrPermission so callers can render a permission-specific hint.
-			return fmt.Errorf("cannot replace %s: %w", pathutil.ForDisplay(path), fs.ErrPermission)
-		}
+		// The errno is wrapped as-is: syscall.Errno already satisfies errors.Is for
+		// fs.ErrPermission (ERROR_ACCESS_DENIED) and fs.ErrNotExist, and keeping it preserves
+		// which failure it actually was.
 		return fmt.Errorf("cannot replace %s: %w", pathutil.ForDisplay(path), err)
 	}
 	_ = windows.CloseHandle(handle)

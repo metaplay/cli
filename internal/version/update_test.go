@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,66 @@ func writeExe(t *testing.T, dir string) string {
 	exe := filepath.Join(dir, "metaplay.exe")
 	require.NoError(t, os.WriteFile(exe, []byte("binary"), 0o755))
 	return exe
+}
+
+// assertBlockedLeftover checks the contract both platforms must satisfy for a leftover that
+// cannot be removed. Getting this wrong is what made the CLI tell users to re-run elevated for
+// a file that no privilege level can delete, so it is asserted from both platform tests.
+func assertBlockedLeftover(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrLeftoverInUse, "a blocked leftover must be reported as in-use")
+	assert.NotErrorIs(t, err, fs.ErrPermission,
+		"a blocked leftover must not look like an unwritable install, or the hint tells the user to elevate")
+}
+
+func TestUpdateTempPathsMatchTheLibraryNaming(t *testing.T) {
+	// update.Apply builds its temp files as filepath.Join(Dir(target), "."+Base(target)+suffix).
+	// If these drift apart the cleanup silently stops matching anything, so pin the shape —
+	// including the extended-length form that GetExecutablePath returns on Windows.
+	tests := []struct {
+		name     string
+		exe      string
+		expected []string
+	}{
+		{
+			name: "plain path",
+			exe:  filepath.Join("install", "metaplay.exe"),
+			expected: []string{
+				filepath.Join("install", ".metaplay.exe.new"),
+				filepath.Join("install", ".metaplay.exe.old"),
+			},
+		},
+		{
+			name: "no extension",
+			exe:  filepath.Join("bin", "metaplay"),
+			expected: []string{
+				filepath.Join("bin", ".metaplay.new"),
+				filepath.Join("bin", ".metaplay.old"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, updateTempPaths(tt.exe))
+		})
+	}
+
+	// The library uses Dir+Base where this uses Split; they must agree on every input shape.
+	for _, exe := range []string{
+		filepath.Join("install", "metaplay.exe"),
+		`\\?\C:\ProgramData\chocolatey\lib\metaplay\tools\metaplay.exe`,
+		`\\?\UNC\server\share\tools\metaplay.exe`,
+		"/usr/local/bin/metaplay",
+		"metaplay.exe",
+	} {
+		dir, base := filepath.Dir(exe), filepath.Base(exe)
+		assert.Equal(t,
+			filepath.Join(dir, "."+base+".new"),
+			updateTempPaths(exe)[0],
+			"Split-based and Dir/Base-based construction must agree for %q", exe)
+	}
 }
 
 func TestEnsureReplaceableAcceptsWritableInstall(t *testing.T) {
@@ -35,24 +96,12 @@ func TestEnsureReplaceableAcceptsWritableInstall(t *testing.T) {
 	assert.Equal(t, "metaplay.exe", entries[0].Name())
 }
 
-func TestCheckReplaceableAcceptsRunningExecutable(t *testing.T) {
-	// Guards against the replaceability probe reporting a false negative for the executable
-	// of the running process, which is locked against writes on Windows but still renamable.
-	// Only meaningful on Windows, where checkReplaceable actually probes.
-	exe, err := os.Executable()
-	require.NoError(t, err)
-
-	assert.NoError(t, checkReplaceable(exe))
-}
-
 func TestEnsureReplaceableRemovesStaleUpdateFiles(t *testing.T) {
 	dir := t.TempDir()
 	exe := writeExe(t, dir)
 
-	stale := []string{
-		filepath.Join(dir, ".metaplay.exe.new"),
-		filepath.Join(dir, ".metaplay.exe.old"),
-	}
+	stale := updateTempPaths(exe)
+	require.Len(t, stale, 2)
 	for _, path := range stale {
 		require.NoError(t, os.WriteFile(path, []byte("leftover"), 0o644))
 	}
@@ -67,30 +116,34 @@ func TestEnsureReplaceableRemovesStaleUpdateFiles(t *testing.T) {
 func TestEnsureReplaceableRejectsMissingDirectory(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "does-not-exist", "metaplay.exe")
 
-	assert.Error(t, EnsureReplaceable(exe))
-}
+	err := EnsureReplaceable(exe)
 
-func TestRemoveStaleUpdateFilesReportsLockedLeftoverAsNonPermission(t *testing.T) {
-	// A leftover held open by another process must not be classified as a permission problem,
-	// or the caller renders an elevation hint that cannot help.
-	dir := t.TempDir()
-	exe := writeExe(t, dir)
-	stale := filepath.Join(dir, ".metaplay.exe.old")
-	require.NoError(t, os.WriteFile(stale, []byte("leftover"), 0o644))
-
-	// Holding our own handle is enough on Windows; on Unix an open file is still unlinkable,
-	// so there is nothing to assert there.
-	release, locked := lockFile(t, stale)
-	if !locked {
-		t.Skip("open files do not block removal on this platform")
-	}
-	defer release()
-
-	err := removeStaleUpdateFiles(exe)
 	require.Error(t, err)
-	assert.NotErrorIs(t, err, fs.ErrPermission)
+	// Must not be mistaken for a busy leftover: that would suggest closing other processes.
+	assert.NotErrorIs(t, err, ErrLeftoverInUse)
 }
 
 func TestRemoveStaleUpdateFilesIgnoresMissingFiles(t *testing.T) {
 	assert.NoError(t, removeStaleUpdateFiles(filepath.Join(t.TempDir(), "metaplay.exe")))
+}
+
+func TestRemoveStaleUpdateFilesDoesNotRepeatThePath(t *testing.T) {
+	// The message names the path once, via ForDisplay. Wrapping the whole *fs.PathError would
+	// print it a second time, prefixed with \\?\ on Windows.
+	dir := t.TempDir()
+	exe := writeExe(t, dir)
+	leftover := updateTempPaths(exe)[1]
+	require.NoError(t, os.WriteFile(leftover, []byte("leftover"), 0o644))
+
+	restore, blocked := blockDeletion(t, dir, exe, leftover)
+	if !blocked {
+		t.Skip("cannot make a file undeletable in this environment")
+	}
+	defer restore()
+
+	err := removeStaleUpdateFiles(exe)
+	require.Error(t, err)
+	assertBlockedLeftover(t, err)
+	assert.Equal(t, 1, strings.Count(err.Error(), filepath.Base(leftover)),
+		"the leftover path should appear exactly once in %q", err.Error())
 }
