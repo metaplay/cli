@@ -66,3 +66,9 @@ jobs:
 
       - name: Run unit tests
         run: go test ./...
+
+      # Report the self-update tests individually. Several of them need an ACL the runner may not
+      # be able to express, in which case they skip — and a skip is invisible without -v, so this
+      # job would look like it covered them when it did not.
+      - name: Report self-update test results
+        run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'
