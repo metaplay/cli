@@ -68,7 +68,7 @@ func CheckVersion(ctx context.Context, stderrLogger *zerolog.Logger) {
 		// install): this runs on every command for prerelease builds, so it would otherwise
 		// re-download the whole archive each time only to fail at the swap. Checked before
 		// announcing the update so a skip stays quiet.
-		if err := CheckWritable(exe); err != nil {
+		if err := EnsureReplaceable(exe); err != nil {
 			log.Debug().Msgf("Auto-update skipped: %v", err)
 			return
 		}

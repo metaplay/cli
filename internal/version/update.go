@@ -24,14 +24,18 @@ import (
 // executable while swapping the binary.
 var updateTempSuffixes = []string{".new", ".old"}
 
-// CheckWritable verifies that the executable at exePath can actually be replaced in place,
-// so that an unwritable install (a package-manager-managed or system-wide location) fails
-// fast instead of only after a download of tens of MB.
+// EnsureReplaceable clears anything blocking an in-place update of the executable at exePath
+// and verifies that the swap can actually happen, so an unwritable install (a
+// package-manager-managed or system-wide location) fails fast rather than after a download of
+// tens of MB. It removes files, so it is not a read-only check.
 //
 // It probes what update.Apply does: create a file in the install directory, then rename over
 // the target. It deliberately never opens the target for writing — on Windows a running
 // executable is locked against writes but can still be renamed, which is how the swap works.
-func CheckWritable(exePath string) error {
+//
+// Permission failures wrap fs.ErrPermission, so callers can tell them apart from a leftover
+// that some other process is holding open.
+func EnsureReplaceable(exePath string) error {
 	// Clear leftovers from an interrupted earlier update first: Apply opens .<name>.new with
 	// O_TRUNC and fails outright if that file exists but is not writable by the current user
 	// (eg, left behind by a run with elevated privileges).
@@ -105,10 +109,10 @@ func DownloadAndApply(ctx context.Context, tag, exePath string) error {
 		return fmt.Errorf("failed to extract the binary from %s: %w", url, err)
 	}
 
-	// Best-effort cleanup of leftovers from an interrupted earlier update; CheckWritable does
-	// this too, but Apply must not trip over them when called without a pre-flight check.
+	// Best-effort cleanup of leftovers from an interrupted earlier update; EnsureReplaceable
+	// does this too, but Apply must not trip over them when called without a pre-flight check.
 	if err := removeStaleUpdateFiles(exePath); err != nil {
-		log.Debug().Msgf("%v", err)
+		log.Debug().Msg(err.Error())
 	}
 
 	// Atomically replace the running executable (rename-with-rollback; Windows-safe).

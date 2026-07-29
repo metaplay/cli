@@ -26,6 +26,22 @@ const manualDownloadSuggestion = "Check your network connection, or download a r
 // to go through the package manager to keep its bookkeeping in sync.
 const notWritableSuggestion = "If you installed the CLI with a package manager, update it with that instead; otherwise re-run from an elevated shell (Administrator or sudo)"
 
+// fileInUseSuggestion is shown when the swap is blocked by something other than permissions,
+// which in practice means a leftover file that another metaplay process still has open.
+const fileInUseSuggestion = "Make sure no other metaplay process is running, then try again"
+
+// replaceFailureError wraps a failure to replace the CLI binary, picking the hint from the
+// cause: only a permission wall warrants pointing at package managers or elevation. Anything
+// else keeps fallbackSuggestion, so the hint never misdescribes the problem.
+func replaceFailureError(err error, message, exe, fallbackSuggestion string) *clierrors.CLIError {
+	cliErr := clierrors.Wrap(err, message)
+	if errors.Is(err, fs.ErrPermission) {
+		return cliErr.WithSuggestion(notWritableSuggestion).
+			WithDetails(notWritableDetails(exe)...)
+	}
+	return cliErr.WithSuggestion(fallbackSuggestion)
+}
+
 // notWritableDetails lists the install location and the package manager update commands that
 // apply on this platform.
 func notWritableDetails(exe string) []string {
@@ -94,24 +110,16 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that the binary can be replaced before downloading tens of MB that we could not apply.
-	if err := version.CheckWritable(exe); err != nil {
-		return clierrors.Wrap(err, "Cannot replace the Metaplay CLI binary").
-			WithSuggestion(notWritableSuggestion).
-			WithDetails(notWritableDetails(exe)...)
+	if err := version.EnsureReplaceable(exe); err != nil {
+		return replaceFailureError(err, "Cannot replace the Metaplay CLI binary", exe, fileInUseSuggestion)
 	}
 
 	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest))
 
+	// The swap can still hit a permission wall that the pre-flight check could not see, so the
+	// network hint only applies when the failure is not about permissions.
 	if err := version.DownloadAndApply(ctx, latest, exe); err != nil {
-		cliErr := clierrors.Wrap(err, "Failed to update the Metaplay CLI binary")
-
-		// The swap can still hit a permission wall that the pre-flight check cannot see, in
-		// which case the network-oriented hint would be actively misleading.
-		if errors.Is(err, fs.ErrPermission) {
-			return cliErr.WithSuggestion(notWritableSuggestion).
-				WithDetails(notWritableDetails(exe)...)
-		}
-		return cliErr.WithSuggestion(manualDownloadSuggestion)
+		return replaceFailureError(err, "Failed to update the Metaplay CLI binary", exe, manualDownloadSuggestion)
 	}
 
 	log.Info().Msg("")
