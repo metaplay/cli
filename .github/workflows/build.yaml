@@ -45,3 +45,30 @@ jobs:
 
       - name: Run unit tests
         run: go test ./...
+
+  # The self-update path is Windows-specific: the binary swap, the ACL probe in
+  # internal/version/update_windows.go and the path handling in internal/pathutil/windows.go are
+  # all guarded by //go:build windows, so the Linux job above never compiles them.
+  test-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          show-progress: false # suppress the noisy progress status output
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26'
+
+      - name: Run unit tests
+        run: go test ./...
+
+      # Report the self-update tests individually. Several of them need an ACL the runner may not
+      # be able to express, in which case they skip — and a skip is invisible without -v, so this
+      # job would look like it covered them when it did not.
+      - name: Report self-update test results
+        run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'

@@ -11,6 +11,11 @@ import (
 	"path/filepath"
 )
 
+// ForDisplay returns the path unchanged; only Windows needs prefix cleanup.
+func ForDisplay(path string) string {
+	return path
+}
+
 // GetExecutablePath returns the path of the executable file with all symlinks resolved.
 func GetExecutablePath() (string, error) {
 	exe, err := os.Executable()
