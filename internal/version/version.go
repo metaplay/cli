@@ -59,15 +59,23 @@ func CheckVersion(ctx context.Context, stderrLogger *zerolog.Logger) {
 
 	// Auto-update prerelease builds (except in CI).
 	if usePrerelease && !envutil.IsCI() {
-		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
-			styles.RenderError(AppVersion),
-			styles.RenderSuccess(latest),
-		)
 		exe, err := pathutil.GetExecutablePath()
 		if err != nil {
 			log.Debug().Msgf("Auto-update failed: could not determine executable path: %v", err)
 			return
 		}
+		// Skip the download when the binary cannot be replaced (eg, a package-manager-managed
+		// install): this runs on every command for prerelease builds, so it would otherwise
+		// re-download the whole archive each time only to fail at the swap. Checked before
+		// announcing the update so a skip stays quiet.
+		if err := CheckWritable(exe); err != nil {
+			log.Debug().Msgf("Auto-update skipped: %v", err)
+			return
+		}
+		stderrLogger.Info().Msgf("Auto-updating CLI from %s to %s...",
+			styles.RenderError(AppVersion),
+			styles.RenderSuccess(latest),
+		)
 		// Bound the background download: it runs on every command for prerelease builds, so a
 		// stalled connection must not hang the command indefinitely. Ctrl+C still interrupts via
 		// the command context; the timeout is generous enough for a large archive on a slow link.

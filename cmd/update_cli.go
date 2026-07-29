@@ -5,6 +5,10 @@
 package cmd
 
 import (
+	"errors"
+	"io/fs"
+	"runtime"
+
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/pathutil"
 	"github.com/metaplay/cli/internal/version"
@@ -16,6 +20,24 @@ import (
 // manualDownloadSuggestion is shown when an update fails for a reason the user can work
 // around by fetching a release themselves.
 const manualDownloadSuggestion = "Check your network connection, or download a release manually from https://github.com/metaplay/cli/releases"
+
+// notWritableSuggestion is shown when the CLI cannot replace its own binary. Package manager
+// installs live in directories that only root/Administrator may write to, so the update has
+// to go through the package manager to keep its bookkeeping in sync.
+const notWritableSuggestion = "If you installed the CLI with a package manager, update it with that instead; otherwise re-run from an elevated shell (Administrator or sudo)"
+
+// notWritableDetails lists the install location and the package manager update commands that
+// apply on this platform.
+func notWritableDetails(exe string) []string {
+	details := []string{"Installed at: " + pathutil.ForDisplay(exe)}
+	if runtime.GOOS == "windows" {
+		return append(details,
+			"Chocolatey install: choco upgrade metaplay",
+			"Scoop install: scoop update metaplay",
+		)
+	}
+	return append(details, "Homebrew install: brew upgrade metaplay")
+}
 
 type updateCliOpts struct {
 	flagPrerelease bool
@@ -63,8 +85,6 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest))
-
 	// Calling vendored implementation of `GetExecutablePath()` due to a bug in `selfupdate.GetExecutablePath()`
 	// that uses `filepath.EvalSymlinks()` known to be broken on Windows.
 	// A PR has been made for the `go-selfupdate` library: https://github.com/creativeprojects/go-selfupdate/pull/46
@@ -73,9 +93,25 @@ func (o *updateCliOpts) Run(cmd *cobra.Command) error {
 		return clierrors.Wrap(err, "Could not determine the Metaplay CLI executable path")
 	}
 
+	// Check that the binary can be replaced before downloading tens of MB that we could not apply.
+	if err := version.CheckWritable(exe); err != nil {
+		return clierrors.Wrap(err, "Cannot replace the Metaplay CLI binary").
+			WithSuggestion(notWritableSuggestion).
+			WithDetails(notWritableDetails(exe)...)
+	}
+
+	log.Info().Msgf("Downloading Metaplay CLI version %s...", styles.RenderTechnical(latest))
+
 	if err := version.DownloadAndApply(ctx, latest, exe); err != nil {
-		return clierrors.Wrap(err, "Failed to update the Metaplay CLI binary").
-			WithSuggestion(manualDownloadSuggestion)
+		cliErr := clierrors.Wrap(err, "Failed to update the Metaplay CLI binary")
+
+		// The swap can still hit a permission wall that the pre-flight check cannot see, in
+		// which case the network-oriented hint would be actively misleading.
+		if errors.Is(err, fs.ErrPermission) {
+			return cliErr.WithSuggestion(notWritableSuggestion).
+				WithDetails(notWritableDetails(exe)...)
+		}
+		return cliErr.WithSuggestion(manualDownloadSuggestion)
 	}
 
 	log.Info().Msg("")
