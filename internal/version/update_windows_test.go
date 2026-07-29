@@ -7,60 +7,119 @@
 package version
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// chocolateyLikeRights is every right except delete (D) and delete-child (DC): files may be
-// created in the directory but existing ones may not be removed or renamed. This is the shape
-// of C:\ProgramData\chocolatey\lib, which is the install layout this whole check exists for.
-const chocolateyLikeRights = `:(OI)(CI)(RD,WD,AD,REA,WEA,X,RA,WA,S)`
+// These tests reproduce the ACL shape of C:\ProgramData\chocolatey\lib, where files may be
+// created but existing ones may not be replaced.
+//
+// Deny ACEs are used rather than a restricted grant: CI runs as an elevated administrator, and
+// a grant-only restriction leaves the Administrators ACE in place so the restriction does not
+// bite. Deny ACEs are evaluated ahead of allows for every SID in the token. Even so, each setup
+// verifies the denial actually took effect and skips if it did not — a test of a permission
+// failure that silently starts passing is worse than one that is absent.
 
-// restrictDirectory applies chocolateyLikeRights to dir and registers a cleanup that restores
-// full control. Reports false if icacls is unavailable or the filesystem ignores ACLs.
-func restrictDirectory(t *testing.T, dir string) bool {
+// icaclsUser returns the account name to write ACEs for.
+func icaclsUser(t *testing.T) (string, bool) {
 	t.Helper()
-
 	user := os.Getenv("USERNAME")
 	if user == "" {
 		t.Log("USERNAME is not set, cannot construct an ACL")
+		return "", false
+	}
+	return user, true
+}
+
+// denyRights adds a deny ACE for the current user on path and registers its removal, which must
+// happen before t.TempDir()'s cleanup or the tree cannot be deleted. Cleanups run in reverse
+// registration order, so registering here is correct.
+func denyRights(t *testing.T, path, rights string) bool {
+	t.Helper()
+
+	user, ok := icaclsUser(t)
+	if !ok {
 		return false
 	}
 
-	out, err := exec.Command("icacls", dir, "/inheritance:r", "/grant", user+chocolateyLikeRights).CombinedOutput()
-	if err != nil {
-		t.Logf("icacls failed: %v: %s", err, out)
+	if out, err := exec.Command("icacls", path, "/deny", user+":("+rights+")").CombinedOutput(); err != nil {
+		t.Logf("icacls /deny %s on %s failed: %v: %s", rights, path, err, out)
 		return false
 	}
 
-	// Must run before t.TempDir()'s own cleanup — cleanups run in reverse registration order —
-	// or the restricted tree cannot be removed and teardown fails with a confusing error.
 	t.Cleanup(func() {
-		if out, err := exec.Command("icacls", dir, "/grant", user+":(OI)(CI)F", "/t", "/c").CombinedOutput(); err != nil {
-			t.Errorf("failed to restore ACLs on %s, temp tree may leak: %v: %s", dir, err, out)
+		// The probe below deliberately tries to delete files, so the target may be gone.
+		if _, statErr := os.Lstat(path); errors.Is(statErr, fs.ErrNotExist) {
+			return
+		}
+		if out, err := exec.Command("icacls", path, "/remove:d", user).CombinedOutput(); err != nil {
+			t.Errorf("failed to drop the deny ACE on %s, temp tree may leak: %v: %s", path, err, out)
 		}
 	})
 	return true
 }
 
-// blockDeletion makes leftover undeletable while keeping exe replaceable, so the leftover path
-// can be exercised without tripping the earlier replaceability check.
-func blockDeletion(t *testing.T, dir, exe, _ string) (func(), bool) {
+// deletionIsBlocked reports whether the deny ACEs actually prevent deletion here, by trying it
+// on a throwaway file rather than on the file the test cares about. The caller must already have
+// denied delete-child on dir: without that, the parent's rights permit deleting any file in it
+// regardless of the file's own DACL, and a per-file deny proves nothing.
+func deletionIsBlocked(t *testing.T, dir string) bool {
 	t.Helper()
 
-	if !restrictDirectory(t, dir) {
+	canary := filepath.Join(dir, "canary")
+	require.NoError(t, os.WriteFile(canary, []byte("canary"), 0o644))
+
+	if !denyRights(t, canary, "D") {
+		return false
+	}
+	if err := os.Remove(canary); err == nil {
+		t.Log("deny ACEs do not prevent deletion in this environment")
+		return false
+	}
+	return true
+}
+
+// makeUnreplaceable denies deletion of exe and delete-child on dir, so the executable cannot be
+// renamed out of the way while the directory still accepts new files.
+func makeUnreplaceable(t *testing.T, dir, exe string) bool {
+	t.Helper()
+
+	// Applied to the directory itself, not inherited, so files created in it stay deletable.
+	if !denyRights(t, dir, "DC") || !denyRights(t, exe, "D") {
+		return false
+	}
+	if err := checkReplaceable(exe); err == nil {
+		t.Log("the executable is still replaceable despite the deny ACEs")
+		return false
+	}
+	return true
+}
+
+// blockDeletion makes leftover undeletable while keeping exe replaceable, so the leftover path
+// can be exercised without tripping the earlier replaceability check.
+func blockDeletion(t *testing.T, dir, exe, leftover string) (func(), bool) {
+	t.Helper()
+
+	// Deny delete-child on the directory first, or the parent's rights alone would allow removing
+	// the leftover. The executable keeps its inherited DELETE, so it stays replaceable.
+	if !denyRights(t, dir, "DC") {
 		return func() {}, false
 	}
-
-	// Grant DELETE on the executable only, so checkReplaceable still passes for it.
-	user := os.Getenv("USERNAME")
-	if out, err := exec.Command("icacls", exe, "/grant", user+":(D,WDAC)").CombinedOutput(); err != nil {
-		t.Logf("icacls on the executable failed: %v: %s", err, out)
+	if !deletionIsBlocked(t, dir) {
+		return func() {}, false
+	}
+	if !denyRights(t, leftover, "D") {
+		return func() {}, false
+	}
+	if err := checkReplaceable(exe); err != nil {
+		t.Logf("the executable became unreplaceable, which is not the case under test: %v", err)
 		return func() {}, false
 	}
 	return func() {}, true
@@ -78,12 +137,11 @@ func TestCheckReplaceableAcceptsRunningExecutable(t *testing.T) {
 
 func TestCheckReplaceableRejectsUnreplaceableBinary(t *testing.T) {
 	dir := t.TempDir()
-	if !restrictDirectory(t, dir) {
-		t.Skip("cannot construct a restrictive ACL in this environment")
-	}
-
-	// Created after the ACL change so it inherits the restricted rights.
 	exe := writeExe(t, dir)
+
+	if !makeUnreplaceable(t, dir, exe) {
+		t.Skip("cannot make a binary unreplaceable in this environment")
+	}
 
 	err := checkReplaceable(exe)
 	require.Error(t, err)
