@@ -260,7 +260,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 
 		runFn := t.run
-		if err := o.runTestCase(testRunCtx, project, serverImage, integrationTestsConfig, t.displayName, func(server *testutil.BackgroundGameServer) error {
+		if err := o.runTestCase(testRunCtx, project, serverImage, integrationTestsConfig, func(server *testutil.BackgroundGameServer) error {
 			return runFn(testCtx, server)
 		}); err != nil {
 			return fmt.Errorf("test '%s' failed: %w", t.displayName, err)
@@ -276,7 +276,7 @@ func (o *testIntegrationOpts) Run(cmd *cobra.Command) error {
 }
 
 // runTestCase starts a background game server, runs the provided test function, and then stops the server.
-func (o *testIntegrationOpts) runTestCase(ctx context.Context, project *metaproj.MetaplayProject, serverImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig, displayName string, fn func(*testutil.BackgroundGameServer) error) error {
+func (o *testIntegrationOpts) runTestCase(ctx context.Context, project *metaproj.MetaplayProject, serverImage string, integrationTestsConfig *metaproj.IntegrationTestsConfig, fn func(*testutil.BackgroundGameServer) error) error {
 	// Build server options with any custom configuration
 	serverOpts := testutil.GameServerOptions{
 		Image:         serverImage,
@@ -305,9 +305,7 @@ func (o *testIntegrationOpts) runTestCase(ctx context.Context, project *metaproj
 
 	// Optional: run network debug checks
 	if o.flagDebugNetwork {
-		if err := o.debugNetworkConnectivity(ctx, project, server, serverImage); err != nil {
-			return fmt.Errorf("network connectivity test failed: %w", err)
-		}
+		o.debugNetworkConnectivity(ctx, project, server, serverImage)
 	}
 
 	// Execute the test function
@@ -462,7 +460,7 @@ func (o *testIntegrationOpts) runSystemTests(ctx context.Context, project *metap
 
 // debugNetworkConnectivity runs network tests to help diagnose connectivity issues to the game server container.
 // These tests are run in containers to simulate the same networking as the other test containers will use.
-func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, serverImage string) error {
+func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, project *metaproj.MetaplayProject, server *testutil.BackgroundGameServer, serverImage string) {
 	// Test 1: Check if we can resolve localhost from within the botclient container network
 	log.Info().Msg("Test 1: DNS resolution test")
 	dnsTestOpts := testutil.RunOnceContainerOptions{
@@ -532,8 +530,6 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 	} else {
 		log.Info().Msg("Process test completed - check logs for gameserver process")
 	}
-
-	return nil
 }
 
 // buildDockerImages builds the Docker images used by integration tests. This includes

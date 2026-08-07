@@ -1,10 +1,15 @@
 version: "2"
 
-# Use the standard linter set (errcheck, govet, ineffassign, staticcheck, unused).
-linters:
-  default: standard
+# The default linter set (errcheck, govet, ineffassign, staticcheck, unused)
+# is unchanged. This file exists to enforce gofmt: CI runs golangci-lint
+# rather than 'make lint', so nothing was catching formatting drift.
+formatters:
+  enable:
+    - gofmt
 
-# Report every issue; don't truncate the output so CI surfaces all problems.
 issues:
+  # Report every occurrence. The defaults (50 per linter, 3 per distinct
+  # message) silently truncate, which reads as "that's all of them" when
+  # it isn't -- the gofmt check hid a file on its first run.
   max-issues-per-linter: 0
   max-same-issues: 0

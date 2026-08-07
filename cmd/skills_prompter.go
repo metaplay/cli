@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -116,7 +117,7 @@ func (p *tuiPrompter) AskTargets(scope skills.Scope, groups []skills.AgentDirGro
 			return g.Path + "/", "— " + strings.Join(g.Tools, ", ")
 		},
 		func(g *skills.AgentDirGroup) bool {
-			return containsStr(defaults, g.Rep.ID)
+			return slices.Contains(defaults, g.Rep.ID)
 		},
 	)
 	if err != nil {

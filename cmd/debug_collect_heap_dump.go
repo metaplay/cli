@@ -198,10 +198,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	runner := tui.NewTaskRunner()
 
 	// Collect and retrieve heap dump using task runner
-	err = o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
-	if err != nil {
-		return err
-	}
+	o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
 
 	// Run the tasks
 	if err := runner.Run(); err != nil {
@@ -214,7 +211,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 }
 
 // Helper function to collect and retrieve heap dump using task runner
-func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) error {
+func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) {
 	// Set healthz probe to success mode
 	runner.AddTask("Disable health checks", func(output *tui.TaskOutput) error {
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
@@ -294,24 +291,18 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		}
 		return nil
 	})
-
-	return nil
 }
 
 // formatDuration converts a duration in seconds to a human-readable string
 func formatDuration(seconds int) string {
-	d := time.Duration(seconds) * time.Second
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
+	h, m, s := seconds/3600, seconds/60%60, seconds%60
 
-	if h > 0 {
+	switch {
+	case h > 0:
 		return fmt.Sprintf("%dh %dm %ds", h, m, s)
-	} else if m > 0 {
+	case m > 0:
 		return fmt.Sprintf("%dm %ds", m, s)
-	} else {
+	default:
 		return fmt.Sprintf("%ds", s)
 	}
 }

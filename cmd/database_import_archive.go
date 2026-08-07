@@ -295,7 +295,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 	log.Debug().Msg("Apply schema to all shards")
 	for _, targetShard := range dbShards {
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
-		err := o.importDatabaseSchema(ctx, schemaFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importSQLFromZip(ctx, "schema", schemaFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to apply schema to shard %d: %v", targetShard.ShardIndex, err)
 		}
@@ -308,7 +308,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 		targetShard := dbShards[i]
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Start shard data import")
 
-		err := o.importDatabaseShardData(ctx, shardFile, kubeCli, podName, debugContainerName, targetShard)
+		err := o.importSQLFromZip(ctx, "shard", shardFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
 			return fmt.Errorf("failed to import shard %d data: %v", targetShard.ShardIndex, err)
 		}
@@ -405,25 +405,25 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	return zipReader, &metadata, schemaFile, shardFiles, nil
 }
 
-// Helper function to import database schema to a single shard
-func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, schemaFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
-	// Open schema file from zip
-	schemaReader, err := schemaFile.Open()
+// importSQLFromZip streams one SQL entry out of the archive into mariadb on the
+// target shard, running the client inside the debug container so the data never
+// lands on local disk. kind ("schema" or "shard") only selects wording for the
+// logs and errors; the two flows are otherwise identical.
+func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind string, file *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
+	reader, err := file.Open()
 	if err != nil {
-		return fmt.Errorf("failed to open schema file %s: %v", schemaFile.Name, err)
+		return fmt.Errorf("failed to open %s file %s: %v", kind, file.Name, err)
 	}
-	defer func() { _ = schemaReader.Close() }()
+	defer func() { _ = reader.Close() }()
 
-	// Build mariadb import command for schema
 	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
 		targetShard.ReadWriteHost, // Use primary host for writes
 		targetShard.UserId,
 		targetShard.Password,
 		targetShard.DatabaseName)
 
-	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msg("Executing schema import command")
+	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msgf("Executing %s import command", kind)
 
-	// Execute mariadb import command and stream schema directly
 	req := kubeCli.Clientset.CoreV1().
 		RESTClient().
 		Post().
@@ -441,66 +441,15 @@ func (o *databaseImportArchiveOpts) importDatabaseSchema(ctx context.Context, sc
 		}, scheme.ParameterCodec)
 
 	ioStreams := IOStreams{
-		In:     schemaReader, // Stream schema directly from zip
+		In:     reader, // Stream the SQL straight from the zip entry
 		Out:    os.Stdout,
 		ErrOut: os.Stderr,
 	}
 
-	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
-	if err != nil {
-		return fmt.Errorf("schema import failed: %v", err)
+	if err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false); err != nil {
+		return fmt.Errorf("%s import failed: %v", kind, err)
 	}
-	log.Debug().Str("schema_file", schemaFile.Name).Msg("Schema imported successfully")
-
-	return nil
-}
-
-// Helper function to import shard data by streaming compressed data to remote execution
-func (o *databaseImportArchiveOpts) importDatabaseShardData(ctx context.Context, shardFile *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
-	// Open shard file from zip
-	shardReader, err := shardFile.Open()
-	if err != nil {
-		return fmt.Errorf("failed to open shard file %s: %v", shardFile.Name, err)
-	}
-	defer func() { _ = shardReader.Close() }()
-
-	// Build mariadb import command for uncompressed SQL
-	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
-		targetShard.ReadWriteHost, // Use primary host for writes
-		targetShard.UserId,
-		targetShard.Password,
-		targetShard.DatabaseName)
-
-	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msg("Executing mariadb import command")
-
-	// Execute mariadb import command and stream uncompressed SQL data directly
-	req := kubeCli.Clientset.CoreV1().
-		RESTClient().
-		Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(kubeCli.Namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: debugContainerName,
-			Command:   []string{"/bin/sh", "-c", importCmd},
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, scheme.ParameterCodec)
-
-	ioStreams := IOStreams{
-		In:     shardReader, // Stream uncompressed SQL data directly from zip
-		Out:    os.Stdout,
-		ErrOut: os.Stderr,
-	}
-
-	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
-	if err != nil {
-		return fmt.Errorf("database import failed: %v", err)
-	}
-	log.Debug().Str("shard_file", shardFile.Name).Msg("Shard imported successfully")
+	log.Debug().Str(kind+"_file", file.Name).Msgf("%s imported successfully", kind)
 
 	return nil
 }

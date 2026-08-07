@@ -221,7 +221,7 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 		// Validate SDK version.
 		// \todo Enforce version when using --sdk-source?
-		_, err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
+		err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
 		if err != nil {
 			return err
 		}
@@ -454,25 +454,25 @@ func ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client,
 }
 
 // Parse an SDK version and validate that it's compatible with this CLI version.
-func parseAndValidateSdkVersion(versionStr string) (*version.Version, error) {
+func parseAndValidateSdkVersion(versionStr string) error {
 	// Validate the selected SDK version.
 	vsn, err := version.NewVersion(versionStr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid SDK version string '%s': %w", versionStr, err)
+		return fmt.Errorf("invalid SDK version string '%s': %w", versionStr, err)
 	}
 
 	// Check that the SDK version is the minimum supported by the CLI.
 	if vsn.LessThan(metaproj.OldestSupportedSdkVersion) {
-		return nil, clierrors.Newf("SDK version %s is too old", versionStr).
+		return clierrors.Newf("SDK version %s is too old", versionStr).
 			WithDetails(fmt.Sprintf("Minimum supported version is %s", metaproj.OldestSupportedSdkVersion)).
 			WithSuggestion("Update Metaplay SDK to a more recent version (or use the legacy AuthCLI if you must use an older version)")
 	}
 
 	// Must not be newer than the latest supported version.
 	if vsn.GreaterThan(latestSupportedSdkVersion) {
-		return nil, clierrors.Newf("SDK version %s is not supported by this CLI version", versionStr).
+		return clierrors.Newf("SDK version %s is not supported by this CLI version", versionStr).
 			WithSuggestion("Upgrade the CLI with 'metaplay update cli'")
 	}
 
-	return vsn, nil
+	return nil
 }

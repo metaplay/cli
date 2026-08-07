@@ -111,7 +111,7 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Ensure that the SDK version is valid and supported.
-	_, err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
+	err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
 	if err != nil {
 		return err
 	}
@@ -178,7 +178,7 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 
 	// Download and extract the SDK.
 	// Pass the parent directory since the extractor creates MetaplaySDK/ within it
-	if _, err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo); err != nil {
+	if err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo); err != nil {
 		return err
 	}
 

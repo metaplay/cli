@@ -216,10 +216,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	var helmInfo *helmReleaseInfo
 	var imageInfo *deploymentImageInfo
 	if existingRelease != nil {
-		helmInfo, err = o.getHelmReleaseInfo(existingRelease)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get Helm release info: %w", err)
-		}
+		helmInfo = o.getHelmReleaseInfo(existingRelease)
 
 		imageInfo, err = o.getImageInfo(ctx, targetEnv, existingRelease)
 		if err != nil {
@@ -236,7 +233,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 }
 
 // Extract the Helm release information from a release object into a simpler info class.
-func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*helmReleaseInfo, error) {
+func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) *helmReleaseInfo {
 	helmInfo := &helmReleaseInfo{
 		Name:         releaseInfo.Name,
 		Status:       releaseInfo.Info.Status.String(),
@@ -250,7 +247,7 @@ func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*h
 		helmInfo.ChartVersion = releaseInfo.Chart.Metadata.Version
 	}
 
-	return helmInfo, nil
+	return helmInfo
 }
 
 // Extract information about the docker image used in the game server deployment.
