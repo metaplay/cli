@@ -205,10 +205,10 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 
 // DatabaseArchiveMetadata contains information about the database export
 type DatabaseArchiveMetadata struct {
-	Version      int       `json:"version"`
-	Environment  string    `json:"environment"`
-	DatabaseName string    `json:"database_name"`
-	NumShards    int       `json:"num_shards"`
+	Version      int    `json:"version"`
+	Environment  string `json:"environment"`
+	DatabaseName string `json:"database_name"`
+	NumShards    int    `json:"num_shards"`
 	// MasterVersion is the database schema master version captured at export time (from the MetaInfo
 	// table). It is omitted for archives where it could not be determined (e.g. older archives or a
 	// fresh database). Shown by 'import-archive' so the user can keep the deployed server's version in sync.

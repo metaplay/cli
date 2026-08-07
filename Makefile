@@ -25,6 +25,7 @@ clean:
 fix:
 	go mod tidy
 	go fix ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) fmt
 	go build -o dist/metaplay$(BIN_SUFFIX) .
 
 test:
