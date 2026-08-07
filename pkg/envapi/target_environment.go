@@ -295,7 +295,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		Clusters: []KubeConfigCluster{
 			{
 				Cluster: KubeConfigClusterData{
-					CertificateAuthorityData: base64.StdEncoding.EncodeToString(credentials.Spec.Cluster.CertificateAuthorityData[:]),
+					CertificateAuthorityData: base64.StdEncoding.EncodeToString(credentials.Spec.Cluster.CertificateAuthorityData),
 					Server:                   credentials.Spec.Cluster.Server,
 				},
 				Name: credentials.Spec.Cluster.Server,
@@ -336,7 +336,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	if err != nil {
 		return "", err
 	}
-	dump := string(kubeConfig[:])
+	dump := string(kubeConfig)
 	return dump, nil
 }
 
