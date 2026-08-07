@@ -622,7 +622,7 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
 
 	// Resolve final docker build invocation
-	dockerArgs := append(
+	dockerArgs := slices.Concat(
 		buildEngineArgs,
 		[]string{
 			"--pull",
@@ -636,7 +636,7 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", params.project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", params.buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", params.commitID),
-		}...,
+		},
 	)
 
 	// If target platform is specified, set it explicitly.
