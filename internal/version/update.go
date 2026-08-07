@@ -95,8 +95,8 @@ func removeStaleUpdateFiles(exePath string) error {
 		case err == nil:
 			log.Debug().Msgf("Removed %s left over from an earlier update", path)
 		case !errors.Is(err, fs.ErrNotExist):
-			// %v, not %w, on the errno: keeping it out of the chain is the whole point
-			// of ErrLeftoverInUse, and assertBlockedLeftover pins that contract.
+			//nolint:errorlint // %v on purpose. Keeping the errno out of the chain is
+			// the point of ErrLeftoverInUse; assertBlockedLeftover pins that.
 			errs = append(errs, fmt.Errorf("%w: %s: %v",
 				ErrLeftoverInUse, pathutil.ForDisplay(path), unwrapPathError(err)))
 		}

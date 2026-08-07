@@ -84,6 +84,21 @@ return clierrors.Wrap(err, "Failed to connect to Docker").
 - Use `WithDetails()` for extra context (valid values, available options, etc.)
 - Keep messages concise and capitalize the first word
 
+### Error Wrapping
+
+Wrap causes with `%w`, never `%v` or `%s`, so `errors.Is`/`errors.AsType` can see
+through them. CI enforces this via `errorlint`. A handful of sites deliberately
+flatten the cause and carry a `//nolint:errorlint` explaining why — read
+`internal/version/update.go` first, where flattening is load-bearing and a test pins it.
+
+Review `golangci-lint --fix` output hunk by hunk; never take it on trust. Its errorlint
+fixer has dropped a condition while rewriting a type assertion, loosened tests from
+"this exact error" to "somewhere in the chain", and broken a documented `%v` contract.
+
+When adding a `%w`, check whether the wrapped error can be a `*CLIError`. If it can,
+`displayError` starts printing that error's message instead of the outer one, and
+usage help stops being shown.
+
 ### Interactive Mode
 The CLI auto-detects CI environments and disables interactive mode when:
 - No terminal is available
