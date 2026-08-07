@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"os"
-	"slices"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -192,12 +191,6 @@ func flagScopeToScope(flag string) *skillspkg.Scope {
 		return &s
 	}
 	return nil
-}
-
-// containsStr is shared with skills_prompter.go (defined here for now to
-// avoid an extra file). Linear scan; targets are tiny.
-func containsStr(slice []string, s string) bool {
-	return slices.Contains(slice, s)
 }
 
 func reportInstallActions(actions []skillspkg.InstallAction) {

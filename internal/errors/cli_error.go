@@ -122,15 +122,13 @@ func WrapUsageError(cause error, message string) *CLIError {
 
 // IsUsageError checks if an error is a usage error (should show usage help).
 func IsUsageError(err error) bool {
-	if cliErr, ok := errors.AsType[*CLIError](err); ok {
-		return cliErr.IsUsageError()
-	}
-	return false
+	cliErr, ok := AsCLIError(err)
+	return ok && cliErr.IsUsageError()
 }
 
 // GetExitCode returns the appropriate exit code for an error.
 func GetExitCode(err error) int {
-	if cliErr, ok := errors.AsType[*CLIError](err); ok {
+	if cliErr, ok := AsCLIError(err); ok {
 		return int(cliErr.Code)
 	}
 	return int(ExitRuntime) // Default to runtime error
