@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -90,11 +91,7 @@ func TestResumableFileCopyWithSimulatedFailures(t *testing.T) {
 	expectedMD5Str := hex.EncodeToString(expectedMD5[:])
 
 	// Create temp directory for test
-	tmpDir, err := os.MkdirTemp("", "file_copy_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	destPath := filepath.Join(tmpDir, "test_output.bin")
 
@@ -123,6 +120,7 @@ func TestResumableFileCopyWithSimulatedFailures(t *testing.T) {
 
 		// Open file in appropriate mode
 		var destFile *os.File
+		var err error
 		if state.bytesTransferred > 0 {
 			destFile, err = os.OpenFile(destPath, os.O_WRONLY|os.O_APPEND, 0644)
 			if err != nil {
@@ -196,11 +194,7 @@ func TestProgressCalculation(t *testing.T) {
 
 func TestAppendModeFileWriting(t *testing.T) {
 	// Test that append mode correctly continues from previous write
-	tmpDir, err := os.MkdirTemp("", "append_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	destPath := filepath.Join(tmpDir, "append_test.bin")
 
@@ -228,18 +222,14 @@ func TestAppendModeFileWriting(t *testing.T) {
 		t.Fatalf("Failed to read file: %v", err)
 	}
 
-	expected := append(firstHalf, secondHalf...)
+	expected := slices.Concat(firstHalf, secondHalf)
 	if !bytes.Equal(content, expected) {
 		t.Errorf("Content mismatch:\nExpected: %s\nGot: %s", expected, content)
 	}
 }
 
 func TestMD5Calculation(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "md5_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	testPath := filepath.Join(tmpDir, "test.bin")
 	testData := []byte("Hello, World!")

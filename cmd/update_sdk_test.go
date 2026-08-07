@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
@@ -122,7 +124,7 @@ func TestGetUniqueMajorVersions(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := getUniqueMajorVersions(tc.versions)
-			if !intSliceEqual(result, tc.expected) {
+			if !slices.Equal(result, tc.expected) {
 				t.Errorf("getUniqueMajorVersions() = %v, expected %v", result, tc.expected)
 			}
 		})
@@ -181,7 +183,7 @@ func TestSortVersionOptions(t *testing.T) {
 				result[i] = opt.label
 			}
 
-			if !stringSliceEqual(result, tc.expected) {
+			if !slices.Equal(result, tc.expected) {
 				t.Errorf("sortVersionOptions() = %v, expected %v", result, tc.expected)
 			}
 		})
@@ -232,7 +234,7 @@ func TestSortVersionInfos(t *testing.T) {
 				result[i] = v.Version
 			}
 
-			if !stringSliceEqual(result, tc.expected) {
+			if !slices.Equal(result, tc.expected) {
 				t.Errorf("sortVersionInfos() = %v, expected %v", result, tc.expected)
 			}
 		})
@@ -563,7 +565,7 @@ func TestResolveTargetVersion(t *testing.T) {
 			if tc.expected == "" {
 				if err == nil {
 					t.Errorf("resolveTargetVersion() expected error containing %q, got nil", tc.errorContains)
-				} else if tc.errorContains != "" && !containsSubstring(err.Error(), tc.errorContains) {
+				} else if tc.errorContains != "" && !strings.Contains(err.Error(), tc.errorContains) {
 					t.Errorf("resolveTargetVersion() error = %q, expected to contain %q", err.Error(), tc.errorContains)
 				}
 			} else {
@@ -577,44 +579,4 @@ func TestResolveTargetVersion(t *testing.T) {
 			}
 		})
 	}
-}
-
-// Helper functions for test assertions
-
-func intSliceEqual(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func stringSliceEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && findSubstring(s, substr)))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

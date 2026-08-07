@@ -343,7 +343,7 @@ func (p *Plan) WaitForWritable(ctx context.Context, collapseDirectories bool) er
 
 		if len(stillReadOnlySet) == 0 {
 			// All writable — clear the footer and return.
-			for range len(footer) {
+			for range footer {
 				fmt.Fprintf(os.Stderr, "\033[2K\n")
 			}
 			// Move back up past the blank lines we just wrote.

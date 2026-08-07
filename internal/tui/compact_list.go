@@ -496,10 +496,7 @@ func ChooseFromListDialogMultiline[TItem any](
 	rowsPerItem := 1 + maxDescLines
 	delegate := compactMultilineDelegate{rowsPerItem: rowsPerItem}
 	// Bubble list height: rowsPerItem*N + spacing*(N-1) + slack.
-	listHeight := rowsPerItem*len(items) + delegate.Spacing()*(len(items)-1) + 2
-	if listHeight > 30 {
-		listHeight = 30
-	}
+	listHeight := min(rowsPerItem*len(items)+delegate.Spacing()*(len(items)-1)+2, 30)
 	l := list.New(listItems, delegate, 0, listHeight)
 	l.SetShowTitle(false)
 	l.SetFilteringEnabled(false)

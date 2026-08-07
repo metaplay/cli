@@ -221,10 +221,10 @@ func TestBuilderChaining(t *testing.T) {
 }
 
 func TestWrapContextErrors(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	deadlineCtx, deadlineCancel := context.WithTimeout(context.Background(), 0)
+	deadlineCtx, deadlineCancel := context.WithTimeout(t.Context(), 0)
 	defer deadlineCancel()
 	// Force the deadline to expire
 	<-deadlineCtx.Done()

@@ -285,7 +285,7 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		rawBody := response.Body()
 		if len(rawBody) == 0 {
 			// Empty body is only valid when TResponse is any (interface{}); all other types require a response body.
-			if reflect.TypeOf((*TResponse)(nil)).Elem().Kind() != reflect.Interface {
+			if reflect.TypeFor[TResponse]().Kind() != reflect.Interface {
 				return result, fmt.Errorf("server returned an empty response body where JSON was expected")
 			}
 		} else {

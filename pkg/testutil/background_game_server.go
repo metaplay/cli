@@ -150,7 +150,7 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	}
 
 	defaultCmd = append(defaultCmd, "--Player:ForceFullDebugConfigForBots=false")
-	opts.Cmd = append(defaultCmd, opts.ExtraArgs...)
+	opts.Cmd = slices.Concat(defaultCmd, opts.ExtraArgs)
 
 	return &BackgroundGameServer{opts: opts}
 }
