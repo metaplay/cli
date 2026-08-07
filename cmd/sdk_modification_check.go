@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,18 +85,18 @@ func buildGitignoreMatcherForDir(rootDir string) *gitignoreMatcher {
 	matcher := &gitignoreMatcher{}
 
 	// Walk the directory tree to find all .gitignore files. The callback handles
-	// per-entry errors itself (returning nil to continue), so Walk never returns a
-	// non-nil error here; gitignore matching is best-effort, so discard it.
-	_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	// per-entry errors itself (returning nil to continue), so WalkDir never returns
+	// a non-nil error here; gitignore matching is best-effort, so discard it.
+	_ = filepath.WalkDir(rootDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // Continue on errors
 		}
 
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
 
-		if info.Name() == ".gitignore" {
+		if entry.Name() == ".gitignore" {
 			// Read the file content and use NewGitIgnoreFromReader
 			// This avoids issues with NewGitIgnore's base path handling
 			content, err := os.ReadFile(path)
@@ -520,13 +521,13 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	var patchBuf bytes.Buffer
 
 	// Walk the local SDK directory - detect and generate diff in one pass
-	err = filepath.Walk(sdkRootDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(sdkRootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip directories
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -38,18 +39,18 @@ func isDirectory(path string) bool {
 // Hidden directories (starting with a dot) are skipped.
 func findSubDirectory(name, rootPath string, predicateFunc func(path string, relPath string) (bool, error)) (string, error) {
 	var foundPath string
-	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip non-directories.
-		if !info.IsDir() {
+		if !entry.IsDir() {
 			return nil
 		}
 
 		// Skip dot directories (eg, .git).
-		if strings.HasPrefix(info.Name(), ".") {
+		if strings.HasPrefix(entry.Name(), ".") {
 			// log.Debug().Msgf("Skip directory: %s", path)
 			return filepath.SkipDir
 		}
