@@ -1,15 +1,21 @@
 version: "2"
 
-# The default linter set (errcheck, govet, ineffassign, staticcheck, unused)
-# is unchanged. This file exists to enforce gofmt: CI runs golangci-lint
-# rather than 'make lint', so nothing was catching formatting drift.
+linters:
+  # Standard set (errcheck, govet, ineffassign, staticcheck, unused), plus:
+  enable:
+    # '%v' on an error flattens it to text, so errors.Is/AsType can no longer
+    # see it. Deliberate exceptions carry a //nolint:errorlint saying why.
+    - errorlint
+
 formatters:
+  # CI runs golangci-lint, not 'make lint', so this file is what catches drift.
+  # Note this enforces 'gofmt -s', stricter than a plain gofmt-on-save; run
+  # 'make fix' to apply it.
   enable:
     - gofmt
 
 issues:
-  # Report every occurrence. The defaults (50 per linter, 3 per distinct
-  # message) silently truncate, which reads as "that's all of them" when
-  # it isn't -- the gofmt check hid a file on its first run.
+  # By default only 50 issues per linter and 3 per message are shown. That
+  # truncates silently, which reads as "that's all of them". Show everything.
   max-issues-per-linter: 0
   max-same-issues: 0

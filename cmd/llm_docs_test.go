@@ -136,6 +136,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 		if !strings.Contains(cliErr.Message, "read file") {
 			t.Errorf("message missing action: %q", cliErr.Message)
 		}
+		//nolint:errorlint // Wants this exact error, not merely one in its chain.
 		if cliErr.Cause != cause {
 			t.Errorf("cause not preserved, got %v", cliErr.Cause)
 		}
