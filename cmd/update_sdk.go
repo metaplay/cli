@@ -303,7 +303,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Validate the target SDK version is supported
-	if _, err := parseAndValidateSdkVersion(targetVersion.Version); err != nil {
+	if err := parseAndValidateSdkVersion(targetVersion.Version); err != nil {
 		return err
 	}
 
@@ -321,7 +321,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	// Download and extract new SDK
 	log.Info().Msgf("  Downloading and extracting SDK %s...", styles.RenderTechnical(targetVersion.Version))
 	parentDir := filepath.Dir(sdkRootDirAbs)
-	if _, err := downloadAndExtractSdk(tokenSet, parentDir, targetVersion); err != nil {
+	if err := downloadAndExtractSdk(tokenSet, parentDir, targetVersion); err != nil {
 		return fmt.Errorf("failed to download and extract SDK: %w", err)
 	}
 

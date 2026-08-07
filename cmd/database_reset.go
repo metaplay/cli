@@ -208,10 +208,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Str("environment", o.argEnvironment).Msg("Starting database reset process")
 
 	// Get table names from all shards once at the beginning
-	allShardTables, err := o.getAllShardTables(cmd.Context(), kubeCli, podName, "debug", shards)
-	if err != nil {
-		return fmt.Errorf("failed to get table information from shards: %w", err)
-	}
+	allShardTables := o.getAllShardTables(cmd.Context(), kubeCli, podName, "debug", shards)
 
 	// Check if database is already empty
 	totalTables := 0
@@ -238,7 +235,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 }
 
 // getAllShardTables gets table names from all shards once and returns a map of shard index to table names
-func (o *databaseResetOpts) getAllShardTables(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) (map[int][]string, error) {
+func (o *databaseResetOpts) getAllShardTables(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig) map[int][]string {
 	allShardTables := make(map[int][]string)
 
 	for _, shard := range shards {
@@ -254,7 +251,7 @@ func (o *databaseResetOpts) getAllShardTables(ctx context.Context, kubeCli *enva
 		log.Debug().Int("shard_index", shard.ShardIndex).Int("table_count", len(tables)).Msg("Retrieved table names from shard")
 	}
 
-	return allShardTables, nil
+	return allShardTables
 }
 
 // Reset the database in the target environment. Uses the same sequence as the game server

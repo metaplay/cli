@@ -216,7 +216,7 @@ func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.
 
 // Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
 // Downloads the version specified by versionInfo.
-func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo) (*metaproj.MetaplayVersionMetadata, error) {
+func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo) error {
 	// Download the SDK archive to temp directory.
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
@@ -227,7 +227,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	// Download the specific version
 	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
+		return fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
 	log.Debug().Msgf("Downloaded SDK version '%s' (ID: %s)", versionInfo.Version, versionInfo.ID)
 	defer func() { _ = os.Remove(sdkZipPath) }()
@@ -235,16 +235,16 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	// Validate the SDK archive file.
 	sdkMetadata, err := validateSdkZipFile(sdkZipPath)
 	if err != nil {
-		return nil, fmt.Errorf("invalid Metaplay SDK archive: %v", err)
+		return fmt.Errorf("invalid Metaplay SDK archive: %v", err)
 	}
 	log.Debug().Msgf("Use downloaded SDK archive: %s (v%s)", sdkZipPath, sdkMetadata.SdkVersion)
 
 	// Extract SDK into target directory.
 	if err := extractSdkFromZip(targetProjectPath, sdkZipPath); err != nil {
-		return nil, fmt.Errorf("failed to extract SDK archive: %w", err)
+		return fmt.Errorf("failed to extract SDK archive: %w", err)
 	}
 
-	return sdkMetadata, nil
+	return nil
 }
 
 func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.MetaplayVersionMetadata, error) {
