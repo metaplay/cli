@@ -1,8 +1,16 @@
 name: Build CLI
 
+# 'pull_request' also gates PRs from forks: a fork's push lands on the fork, so a
+# bare 'push' trigger never runs them here. 'push' is narrowed to the long-lived
+# branches so PR branches don't build twice; for a branch with no PR yet, use
+# workflow_dispatch.
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
+      - dev
 
 run-name: Build from ${{ github.head_ref || github.ref_name }}
 
