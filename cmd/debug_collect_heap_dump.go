@@ -295,18 +295,14 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 // formatDuration converts a duration in seconds to a human-readable string
 func formatDuration(seconds int) string {
-	d := time.Duration(seconds) * time.Second
-	h := d / time.Hour
-	d -= h * time.Hour
-	m := d / time.Minute
-	d -= m * time.Minute
-	s := d / time.Second
+	h, m, s := seconds/3600, seconds/60%60, seconds%60
 
-	if h > 0 {
+	switch {
+	case h > 0:
 		return fmt.Sprintf("%dh %dm %ds", h, m, s)
-	} else if m > 0 {
+	case m > 0:
 		return fmt.Sprintf("%dm %ds", m, s)
-	} else {
+	default:
 		return fmt.Sprintf("%ds", s)
 	}
 }
