@@ -12,7 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -144,8 +144,8 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 	}
 
 	// Sort the shard sets by name to ensure consistent order in output.
-	sort.Slice(ownedSets, func(i, j int) bool {
-		return ownedSets[i].Name < ownedSets[j].Name
+	slices.SortFunc(ownedSets, func(a, b appsv1.StatefulSet) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	log.Debug().Msgf("Found %d matching StatefulSets", len(ownedSets))
@@ -684,7 +684,7 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
 		default:
 			// Create a new request with headers
-			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				output.AppendLinef("Error creating request for %s: %v. Retrying...", url, err)
 				break
