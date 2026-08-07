@@ -325,9 +325,9 @@ func checkCommand(ctx context.Context, command string, args ...string) error {
 		}
 		trimmed := strings.TrimSpace(stderr.String())
 		if trimmed != "" {
-			return fmt.Errorf("%v: %s", err, truncateForLog(trimmed, 500))
+			return fmt.Errorf("%w: %s", err, truncateForLog(trimmed, 500))
 		}
-		return fmt.Errorf("command failed: %v", err)
+		return fmt.Errorf("command failed: %w", err)
 	}
 	return nil
 }

@@ -83,7 +83,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	// Generate a random state for login.
 	state, err := generateRandomString(16)
 	if err != nil {
-		return fmt.Errorf("failed to generate random state: %v", err)
+		return fmt.Errorf("failed to generate random state: %w", err)
 	}
 
 	// Create a channel to signal server shutdown.

@@ -177,7 +177,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		// Read content from file
 		fileContent, err := os.ReadFile(o.flagFile)
 		if err != nil {
-			return fmt.Errorf("failed to read file %s: %v", o.flagFile, err)
+			return fmt.Errorf("failed to read file %s: %w", o.flagFile, err)
 		}
 		requestBody = fileContent
 
@@ -221,14 +221,14 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 
 		response, err := request.Execute(o.argMethod, o.argPath)
 		if err != nil {
-			return fmt.Errorf("request failed: %v", err)
+			return fmt.Errorf("request failed: %w", err)
 		}
 		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
 			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
 		}
 
 		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
-			return fmt.Errorf("failed to write output file: %v", err)
+			return fmt.Errorf("failed to write output file: %w", err)
 		}
 
 		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
@@ -253,7 +253,7 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 
 	if requestErr != nil {
-		return fmt.Errorf("request failed: %v", requestErr)
+		return fmt.Errorf("request failed: %w", requestErr)
 	}
 
 	// If no response body was returned, print something to acknowledge the result

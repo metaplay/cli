@@ -55,7 +55,7 @@ func GetExecutablePath() (string, error) {
 
 	file, err := os.Open(exe)
 	if err != nil {
-		return "", fmt.Errorf("failed to open the executable file: %v", err)
+		return "", fmt.Errorf("failed to open the executable file: %w", err)
 	}
 	defer func() { _ = file.Close() }()
 
@@ -72,7 +72,7 @@ func GetExecutablePath() (string, error) {
 	buf := make([]uint16, bufSize)
 	n, err := windows.GetFinalPathNameByHandle(handle, &buf[0], uint32(len(buf)), 0)
 	if err != nil {
-		return "", fmt.Errorf("failed to get the final path name by handle: %v", err)
+		return "", fmt.Errorf("failed to get the final path name by handle: %w", err)
 	}
 
 	// Convert the buffer to a string

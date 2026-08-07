@@ -218,7 +218,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 			"curl localhost:8585/setOverride/healthz?mode=Success",
 		)
 		if err != nil {
-			return fmt.Errorf("failed to set healthz probe mode: %v", err)
+			return fmt.Errorf("failed to set healthz probe mode: %w", err)
 		}
 		return nil
 	})
@@ -243,7 +243,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
 		dumpDuration = time.Since(startTime)
 		if err != nil {
-			return fmt.Errorf("failed to collect heap dump: %v", err)
+			return fmt.Errorf("failed to collect heap dump: %w", err)
 		}
 
 		// Calculate and log dump rate
@@ -259,7 +259,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
 		)
 		if err != nil {
-			return fmt.Errorf("failed to reset healthz probe mode: %v", err)
+			return fmt.Errorf("failed to reset healthz probe mode: %w", err)
 		}
 		return nil
 	})
@@ -287,7 +287,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		}
 
 		if copyErr != nil {
-			return fmt.Errorf("failed to copy heap dump: %v", copyErr)
+			return fmt.Errorf("failed to copy heap dump: %w", copyErr)
 		}
 		return nil
 	})

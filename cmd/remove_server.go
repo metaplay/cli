@@ -88,7 +88,7 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 	// Resolve all deployed game server Helm releases.
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, metaplayGameServerChartName)
 	if err != nil {
-		return fmt.Errorf("failed to resolve existing Helm releases: %v", err)
+		return fmt.Errorf("failed to resolve existing Helm releases: %w", err)
 	}
 
 	// If no releases found, exit.
@@ -112,7 +112,7 @@ func (o *removeGameServerOpts) Run(cmd *cobra.Command) error {
 			})
 			err := helmutil.UninstallRelease(actionConfig, release)
 			if err != nil {
-				return fmt.Errorf("failed to uninstall Helm release %s: %v", release.Name, err)
+				return fmt.Errorf("failed to uninstall Helm release %s: %w", release.Name, err)
 			}
 			return nil
 		})

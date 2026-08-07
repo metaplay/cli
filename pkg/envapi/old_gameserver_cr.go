@@ -65,13 +65,13 @@ func getGameServerOldCR(ctx context.Context, kubeCli *KubeClient) (*OldGameServe
 	// Convert unstructured object to JSON
 	gameServerJSON, err := unstructuredObj.MarshalJSON()
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal OldGameServerCR to JSON: %v", err)
+		return nil, fmt.Errorf("failed to marshal OldGameServerCR to JSON: %w", err)
 	}
 
 	// Parse JSON into structured Go struct
 	var gameServerCR OldGameServerCR
 	if err := json.Unmarshal(gameServerJSON, &gameServerCR); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal OldGameServerCR: %v", err)
+		return nil, fmt.Errorf("failed to unmarshal OldGameServerCR: %w", err)
 	}
 
 	// Output parsed OldGameServerCR struct

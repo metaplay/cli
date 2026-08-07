@@ -126,7 +126,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	if o.flagHelmChartLocalPath != "" {
 		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath)
 		if err != nil {
-			return fmt.Errorf("invalid --helm-chart-path: %v", err)
+			return fmt.Errorf("invalid --helm-chart-path: %w", err)
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
@@ -141,7 +141,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			// Parse Helm chart semver range.
 			chartVersionConstraints, err = version.NewConstraint(helmChartVersion)
 			if err != nil {
-				return fmt.Errorf("invalid Helm chart version: %v", err)
+				return fmt.Errorf("invalid Helm chart version: %w", err)
 			}
 			log.Debug().Msgf("Accepted Helm chart semver constraints: %v", chartVersionConstraints)
 		}
@@ -215,7 +215,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Determine if there's an existing release deployed.

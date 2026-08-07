@@ -103,7 +103,7 @@ func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 	if o.flagFormat == "json" {
 		secretsJSON, err := json.MarshalIndent(secrets, "", "  ")
 		if err != nil {
-			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)
+			return fmt.Errorf("failed to marshal secrets as JSON: %w", err)
 		}
 
 		log.Info().Msgf("%s", string(secretsJSON))

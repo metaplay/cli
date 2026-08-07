@@ -141,7 +141,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	// cluster round-trips.
 	zipReader, metadata, schemaFile, shardFiles, err := o.openAndValidateZipFile()
 	if err != nil {
-		return fmt.Errorf("failed to validate zip file: %v", err)
+		return fmt.Errorf("failed to validate zip file: %w", err)
 	}
 	defer func() { _ = zipReader.Close() }()
 	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
@@ -165,13 +165,13 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm to check for active deployments
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Check for a game server is deployed - dangerous to import if there is a deployment
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
 	if err != nil {
-		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+		return fmt.Errorf("failed to check for existing Helm releases: %w", err)
 	}
 	hasGameServer := len(helmReleases) > 0
 
@@ -297,7 +297,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Str("database_name", targetShard.DatabaseName).Msg("Apply schema to shard")
 		err := o.importSQLFromZip(ctx, "schema", schemaFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
-			return fmt.Errorf("failed to apply schema to shard %d: %v", targetShard.ShardIndex, err)
+			return fmt.Errorf("failed to apply schema to shard %d: %w", targetShard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Schema applied to shard")
 	}
@@ -310,7 +310,7 @@ func (o *databaseImportArchiveOpts) importDatabaseContents(ctx context.Context, 
 
 		err := o.importSQLFromZip(ctx, "shard", shardFile, kubeCli, podName, debugContainerName, targetShard)
 		if err != nil {
-			return fmt.Errorf("failed to import shard %d data: %v", targetShard.ShardIndex, err)
+			return fmt.Errorf("failed to import shard %d data: %w", targetShard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", targetShard.ShardIndex).Msg("Shard data import completed")
 	}
@@ -342,7 +342,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	// Open zip file
 	zipReader, err := zip.OpenReader(o.argInputFile)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("failed to open zip file: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open zip file: %w", err)
 	}
 
 	// Find and read metadata file, schema file, and shard files
@@ -377,7 +377,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	metadataReader, err := metadataFile.Open()
 	if err != nil {
 		_ = zipReader.Close()
-		return nil, nil, nil, nil, fmt.Errorf("failed to open metadata file: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open metadata file: %w", err)
 	}
 	defer func() { _ = metadataReader.Close() }()
 
@@ -385,7 +385,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	metadataBytes, err := io.ReadAll(metadataReader)
 	if err != nil {
 		_ = zipReader.Close()
-		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata: %w", err)
 	}
 
 	// Parse archive metadata.
@@ -393,7 +393,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 	err = json.Unmarshal(metadataBytes, &metadata)
 	if err != nil {
 		_ = zipReader.Close()
-		return nil, nil, nil, nil, fmt.Errorf("failed to parse metadata: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to parse metadata: %w", err)
 	}
 
 	// Check version compatibility
@@ -412,7 +412,7 @@ func (o *databaseImportArchiveOpts) openAndValidateZipFile() (*zip.ReadCloser, *
 func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind string, file *zip.File, kubeCli *envapi.KubeClient, podName, debugContainerName string, targetShard kubeutil.DatabaseShardConfig) error {
 	reader, err := file.Open()
 	if err != nil {
-		return fmt.Errorf("failed to open %s file %s: %v", kind, file.Name, err)
+		return fmt.Errorf("failed to open %s file %s: %w", kind, file.Name, err)
 	}
 	defer func() { _ = reader.Close() }()
 
@@ -447,7 +447,7 @@ func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind s
 	}
 
 	if err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false); err != nil {
-		return fmt.Errorf("%s import failed: %v", kind, err)
+		return fmt.Errorf("%s import failed: %w", kind, err)
 	}
 	log.Debug().Str(kind+"_file", file.Name).Msgf("%s imported successfully", kind)
 

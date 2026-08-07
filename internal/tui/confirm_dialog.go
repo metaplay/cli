@@ -73,7 +73,7 @@ func DoConfirmDialog(ctx context.Context, title string, body string, question st
 	p := tea.NewProgram(newConfirmDialog(ctx, title, body, question))
 	m, err := p.Run()
 	if err != nil {
-		return false, fmt.Errorf("failed to run confirmation dialog: %v", err)
+		return false, fmt.Errorf("failed to run confirmation dialog: %w", err)
 	}
 
 	return m.(confirmDialog).choice, nil

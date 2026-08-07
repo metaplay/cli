@@ -113,7 +113,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read project config file: %v", err)
+		return fmt.Errorf("failed to read project config file: %w", err)
 	}
 
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
@@ -124,13 +124,13 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 	// Find the 'environments' node -- should be an array but can also be null
 	envsPath, err := yaml.PathString("$.environments")
 	if err != nil {
-		return fmt.Errorf("failed to create environments path: %v", err)
+		return fmt.Errorf("failed to create environments path: %w", err)
 	}
 
 	// Get the environments node
 	envsNode, err := envsPath.FilterFile(root)
 	if err != nil {
-		return fmt.Errorf("failed to find 'environments' in metaplay-project.yaml: %v", err)
+		return fmt.Errorf("failed to find 'environments' in metaplay-project.yaml: %w", err)
 	}
 
 	// Handle the case where environments exists but is null/empty (e.g., "environments:" with no value).
@@ -147,12 +147,12 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 		// Replace the null node with an empty sequence
 		if err := envsPath.ReplaceWithReader(root, strings.NewReader("[]")); err != nil {
-			return fmt.Errorf("failed to replace null 'environments' with empty sequence: %v", err)
+			return fmt.Errorf("failed to replace null 'environments' with empty sequence: %w", err)
 		}
 		// Re-fetch the environments node after replacement
 		envsNode, err = envsPath.FilterFile(root)
 		if err != nil {
-			return fmt.Errorf("failed to find node 'environments' after replacement: %v", err)
+			return fmt.Errorf("failed to find node 'environments' after replacement: %w", err)
 		}
 		// Ensure block-style output (not flow-style like [a, b, c]) and reset indentation
 		if seqNode, ok := envsNode.(*ast.SequenceNode); ok {
@@ -266,7 +266,7 @@ func (o *updateProjectEnvironmentsOpts) updateProjectConfigEnvironments(project 
 
 	// Write the updated YAML back to the file
 	if err := os.WriteFile(projectConfigFilePath, []byte(root.String()), 0644); err != nil {
-		return fmt.Errorf("failed to write updated config: %v", err)
+		return fmt.Errorf("failed to write updated config: %w", err)
 	}
 
 	log.Info().Msg("")

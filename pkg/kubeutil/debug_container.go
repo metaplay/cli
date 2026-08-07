@@ -35,7 +35,7 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	// Resolve target pod.
 	pod, err := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to get target pod %s: %v", podName, err)
+		return "", nil, fmt.Errorf("failed to get target pod %s: %w", podName, err)
 	}
 
 	// Verify target container exists
@@ -215,7 +215,7 @@ func waitForContainerReady(ctx context.Context, kubeCli *envapi.KubeClient, podN
 	})
 
 	if err != nil {
-		return fmt.Errorf("error waiting for container: %v", err)
+		return fmt.Errorf("error waiting for container: %w", err)
 	}
 
 	return nil

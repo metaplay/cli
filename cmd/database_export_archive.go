@@ -121,13 +121,13 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm to check for active deployments
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Check for any active game server Helm deployments - refuse to export if found
 	helmReleases, err := helmutil.HelmListReleases(actionConfig, "metaplay-gameserver")
 	if err != nil {
-		return fmt.Errorf("failed to check for existing Helm releases: %v", err)
+		return fmt.Errorf("failed to check for existing Helm releases: %w", err)
 	}
 	hasGameServer := len(helmReleases) > 0
 
@@ -224,7 +224,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	log.Debug().Str("zip_file", o.argOutputFile).Msg("Creating output zip file")
 	zipFile, err := os.Create(o.argOutputFile)
 	if err != nil {
-		return fmt.Errorf("failed to create zip file: %v", err)
+		return fmt.Errorf("failed to create zip file: %w", err)
 	}
 	defer func() { _ = zipFile.Close() }()
 
@@ -243,14 +243,14 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	log.Debug().Msg("Writing metadata to zip file")
 	err = o.writeMetadataToZip(zipWriter, shards, masterVersion)
 	if err != nil {
-		return fmt.Errorf("failed to write metadata: %v", err)
+		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
 	// Extract schema from shard #0 first
 	log.Debug().Msg("Extracting database schema from shard #0")
 	schemaContent, err := o.extractDatabaseSchema(ctx, kubeCli, podName, debugContainerName, shards[0])
 	if err != nil {
-		return fmt.Errorf("failed to extract schema: %v", err)
+		return fmt.Errorf("failed to extract schema: %w", err)
 	}
 
 	// Apply schema fixups
@@ -259,7 +259,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 	// Write schema to zip file
 	err = o.writeSchemaToZip(zipWriter, schemaContent)
 	if err != nil {
-		return fmt.Errorf("failed to write schema to zip: %v", err)
+		return fmt.Errorf("failed to write schema to zip: %w", err)
 	}
 
 	// Export data from each shard
@@ -267,7 +267,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseContents(ctx context.Context, 
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard data export")
 		shardFileName, err := o.exportDatabaseShardData(ctx, zipWriter, kubeCli, podName, debugContainerName, shard)
 		if err != nil {
-			return fmt.Errorf("failed to export shard %d data: %v", shard.ShardIndex, err)
+			return fmt.Errorf("failed to export shard %d data: %w", shard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("shard_file", shardFileName).Msg("Shard data export completed")
 	}
@@ -298,7 +298,7 @@ func (o *databaseExportArchiveOpts) writeMetadataToZip(zipWriter *zip.Writer, sh
 	// Create metadata JSON in memory
 	metadataBytes, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %v", err)
+		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
 	// Write metadata file to zip
@@ -313,10 +313,10 @@ func (o *databaseExportArchiveOpts) writeMetadataToZip(zipWriter *zip.Writer, sh
 	// Write metadata file to zip
 	metadataWriter, err := zipWriter.CreateHeader(metadataHeader)
 	if err != nil {
-		return fmt.Errorf("failed to create metadata writer: %v", err)
+		return fmt.Errorf("failed to create metadata writer: %w", err)
 	}
 	if _, err := metadataWriter.Write(metadataBytes); err != nil {
-		return fmt.Errorf("failed to write metadata content: %v", err)
+		return fmt.Errorf("failed to write metadata content: %w", err)
 	}
 
 	return nil
@@ -361,7 +361,7 @@ func (o *databaseExportArchiveOpts) extractDatabaseSchema(ctx context.Context, k
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
 		log.Error().Err(err).Msg("Schema extraction failed - aborting export")
-		return "", fmt.Errorf("CRITICAL: schema extraction failed: %v", err)
+		return "", fmt.Errorf("CRITICAL: schema extraction failed: %w", err)
 	}
 
 	schemaContent := schemaBuffer.String()
@@ -420,13 +420,13 @@ func (o *databaseExportArchiveOpts) writeSchemaToZip(zipWriter *zip.Writer, sche
 	// Create zip writer for schema file
 	schemaWriter, err := zipWriter.CreateHeader(schemaHeader)
 	if err != nil {
-		return fmt.Errorf("failed to create schema writer: %v", err)
+		return fmt.Errorf("failed to create schema writer: %w", err)
 	}
 
 	// Write schema content to zip
 	_, err = schemaWriter.Write([]byte(schemaContent))
 	if err != nil {
-		return fmt.Errorf("failed to write schema content: %v", err)
+		return fmt.Errorf("failed to write schema content: %w", err)
 	}
 
 	log.Debug().Msg("Schema written to schema.sql in zip archive")
@@ -456,7 +456,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseShardData(ctx context.Context,
 	// Create zip writer for this file - stream directly without buffering
 	shardFileWriter, err := zipWriter.CreateHeader(shardHeader)
 	if err != nil {
-		return "", fmt.Errorf("failed to create zip writer: %v", err)
+		return "", fmt.Errorf("failed to create zip writer: %w", err)
 	}
 
 	// Execute mariadb-dump command and stream output directly to zip
@@ -484,7 +484,7 @@ func (o *databaseExportArchiveOpts) exportDatabaseShardData(ctx context.Context,
 
 	err = execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return "", fmt.Errorf("shard %d data export failed: %v", shard.ShardIndex, err)
+		return "", fmt.Errorf("shard %d data export failed: %w", shard.ShardIndex, err)
 	}
 	log.Debug().Str("file", shardFileName).Msg("Shard data streamed directly to zip archive")
 

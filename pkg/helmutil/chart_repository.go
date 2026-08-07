@@ -44,7 +44,7 @@ func ValidateLocalHelmChart(helmChartLocalPath string) error {
 	var chart HelmChart
 	err = yaml.Unmarshal(chartBytes, &chart)
 	if err != nil {
-		return fmt.Errorf("failed to parse Chart.yaml: %v", err)
+		return fmt.Errorf("failed to parse Chart.yaml: %w", err)
 	}
 
 	// Chart name must be 'metaplay-gameserver'.
@@ -147,14 +147,14 @@ func ResolveBestMatchingHelmVersion(helmChartRepo, chartName string, legacyVersi
 	helmChartRepo = strings.TrimSuffix(helmChartRepo, "/")
 	availableChartVersions, err := FetchHelmChartVersions(helmChartRepo, chartName, legacyVersionCutoff)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch Helm chart versions from the repository: %v", err)
+		return "", fmt.Errorf("failed to fetch Helm chart versions from the repository: %w", err)
 	}
 	log.Debug().Msgf("Available Helm chart versions in repository: %v", strings.Join(availableChartVersions, ", "))
 
 	// Find the best version match that is the latest one from the versions satisfying the requested version(s).
 	useChartVersion, err := ResolveBestMatchingVersion(availableChartVersions, versionConstraints)
 	if err != nil {
-		return "", fmt.Errorf("failed to find a matching Helm chart version: %v", err)
+		return "", fmt.Errorf("failed to find a matching Helm chart version: %w", err)
 	}
 
 	return useChartVersion, nil

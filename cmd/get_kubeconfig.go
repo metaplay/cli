@@ -143,7 +143,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		log.Debug().Msgf("Write kubeconfig to file %s", o.flagOutput)
 		err = os.WriteFile(o.flagOutput, []byte(kubeconfigPayload), 0600)
 		if err != nil {
-			return fmt.Errorf("failed to write kubeconfig to file: %v", err)
+			return fmt.Errorf("failed to write kubeconfig to file: %w", err)
 		}
 		log.Info().Msgf("Wrote kubeconfig to %s", o.flagOutput)
 	} else {

@@ -228,13 +228,13 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to read project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to read project config file: %w", err)
 	}
 
 	// Parse the YAML to AST
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to parse project config file: %w", err)
 	}
 
 	// Update features.dashboard with new values.
