@@ -13,11 +13,7 @@ import (
 
 func TestGitignoreMatching(t *testing.T) {
 	// Create a temporary directory structure that mimics MetaplaySDK
-	tmpDir, err := os.MkdirTemp("", "sdk-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	// Create .gitignore at root with patterns similar to MetaplaySDK
 	gitignoreContent := `# Build results
@@ -101,11 +97,7 @@ node_modules/
 
 func TestGitignoreNestedFiles(t *testing.T) {
 	// Create a temporary directory with nested .gitignore files
-	tmpDir, err := os.MkdirTemp("", "sdk-nested-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	// Root .gitignore
 	rootGitignore := `bin/
@@ -165,11 +157,7 @@ temp/
 
 func TestGitignoreEmptyDirectory(t *testing.T) {
 	// Create a temporary directory with no .gitignore files
-	tmpDir, err := os.MkdirTemp("", "sdk-no-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
+	tmpDir := t.TempDir()
 
 	matcher := buildGitignoreMatcherForDir(tmpDir)
 

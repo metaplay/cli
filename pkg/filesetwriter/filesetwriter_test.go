@@ -1118,7 +1118,7 @@ func TestWaitForWritableNoReadOnlyFiles(t *testing.T) {
 	}
 
 	// No read-only files → should return nil immediately.
-	if err := p.WaitForWritable(context.Background(), false); err != nil {
+	if err := p.WaitForWritable(t.Context(), false); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 }
@@ -1135,7 +1135,7 @@ func TestWaitForWritableNonInteractiveErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := p.WaitForWritable(context.Background(), false)
+	err := p.WaitForWritable(t.Context(), false)
 	if err == nil {
 		t.Fatal("expected error for read-only files in non-interactive mode")
 	}
@@ -1157,7 +1157,7 @@ func TestWaitForWritableContextCancelled(t *testing.T) {
 	}
 
 	// Cancel context immediately so the wait loop exits.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := p.WaitForWritable(ctx, false)

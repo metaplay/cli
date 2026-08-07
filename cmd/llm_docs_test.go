@@ -5,7 +5,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -277,7 +276,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 func TestBearerCredentials(t *testing.T) {
 	t.Run("empty token returns no metadata", func(t *testing.T) {
 		c := bearerCredentials{}
-		md, err := c.GetRequestMetadata(context.Background())
+		md, err := c.GetRequestMetadata(t.Context())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -288,7 +287,7 @@ func TestBearerCredentials(t *testing.T) {
 
 	t.Run("non-empty token sets bearer header", func(t *testing.T) {
 		c := bearerCredentials{token: "abc123"}
-		md, err := c.GetRequestMetadata(context.Background())
+		md, err := c.GetRequestMetadata(t.Context())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
