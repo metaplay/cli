@@ -51,8 +51,8 @@ func TestRequest_HTTPError_400ParsedMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusBadRequest {
@@ -78,8 +78,8 @@ func TestRequest_HTTPError_404(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/missing")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusNotFound {
@@ -99,8 +99,8 @@ func TestRequest_HTTPError_409(t *testing.T) {
 
 	type response struct{}
 	_, err := PostJSON[response](newTestClient(server.URL), "/snapshots", map[string]any{"shardIndex": 0})
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusConflict {
@@ -123,8 +123,8 @@ func TestRequest_HTTPError_500_NonJSONBody(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/boom")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusInternalServerError {
@@ -144,8 +144,8 @@ func TestRequest_HTTPError_EmptyBody(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/nothing")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusBadGateway {

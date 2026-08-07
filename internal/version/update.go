@@ -105,8 +105,7 @@ func removeStaleUpdateFiles(exePath string) error {
 // unwrapPathError reduces an *fs.PathError to its cause, so a message that already names the
 // path via ForDisplay does not also print the raw \\?\-prefixed one the PathError carries.
 func unwrapPathError(err error) error {
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
+	if pathErr, ok := errors.AsType[*fs.PathError](err); ok {
 		return pathErr.Err
 	}
 	return err
