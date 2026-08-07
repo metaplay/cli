@@ -35,8 +35,8 @@ func TestWrap(t *testing.T) {
 	if err.Error() != "operation failed" {
 		t.Errorf("expected 'operation failed', got '%s'", err.Error())
 	}
-	//nolint:errorlint // Wants this exact error, not merely one in its chain.
-	// errors.Is here would test Unwrap by calling Unwrap.
+	//nolint:errorlint // Wants this exact error, not merely one in its chain:
+	// errors.Is would also pass if Cause held something that wraps it.
 	if err.Cause != cause {
 		t.Error("expected cause to be set")
 	}
@@ -49,8 +49,8 @@ func TestWrapf(t *testing.T) {
 	if err.Error() != "failed to connect to server" {
 		t.Errorf("expected formatted message, got '%s'", err.Error())
 	}
-	//nolint:errorlint // Wants this exact error, not merely one in its chain.
-	// errors.Is here would test Unwrap by calling Unwrap.
+	//nolint:errorlint // Wants this exact error, not merely one in its chain:
+	// errors.Is would also pass if Cause held something that wraps it.
 	if err.Cause != cause {
 		t.Error("expected cause to be set")
 	}
@@ -108,8 +108,8 @@ func TestWithDetails(t *testing.T) {
 func TestWithCause(t *testing.T) {
 	cause := fmt.Errorf("io error")
 	err := New("read failed").WithCause(cause)
-	//nolint:errorlint // Wants this exact error, not merely one in its chain.
-	// errors.Is here would test Unwrap by calling Unwrap.
+	//nolint:errorlint // Wants this exact error, not merely one in its chain:
+	// errors.Is would also pass if Cause held something that wraps it.
 	if err.Cause != cause {
 		t.Error("expected cause to be set via WithCause")
 	}
@@ -145,8 +145,8 @@ func TestWrapUsageError(t *testing.T) {
 	if !err.IsUsageError() {
 		t.Error("expected IsUsageError to be true")
 	}
-	//nolint:errorlint // Wants this exact error, not merely one in its chain.
-	// errors.Is here would test Unwrap by calling Unwrap.
+	//nolint:errorlint // Wants this exact error, not merely one in its chain:
+	// errors.Is would also pass if Cause held something that wraps it.
 	if err.Cause != cause {
 		t.Error("expected cause to be set")
 	}
@@ -219,8 +219,8 @@ func TestBuilderChaining(t *testing.T) {
 	if err.Message != "problem" {
 		t.Errorf("expected 'problem', got '%s'", err.Message)
 	}
-	//nolint:errorlint // Wants this exact error, not merely one in its chain.
-	// errors.Is here would test Unwrap by calling Unwrap.
+	//nolint:errorlint // Wants this exact error, not merely one in its chain:
+	// errors.Is would also pass if Cause held something that wraps it.
 	if err.Cause != cause {
 		t.Error("expected cause to be set")
 	}

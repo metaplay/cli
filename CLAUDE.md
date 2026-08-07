@@ -91,9 +91,14 @@ through them. CI enforces this via `errorlint`. A handful of sites deliberately
 flatten the cause and carry a `//nolint:errorlint` explaining why — read
 `internal/version/update.go` first, where flattening is load-bearing and a test pins it.
 
-Review `golangci-lint --fix` output hunk by hunk; never take it on trust. Its errorlint
-fixer has dropped a condition while rewriting a type assertion, loosened tests from
-"this exact error" to "somewhere in the chain", and broken a documented `%v` contract.
+`errorlint` only checks `fmt.Errorf`. It cannot see the format strings of
+`clierrors.Newf`/`Wrapf`/`NewUsageErrorf`, so a `%v` on an error there passes CI
+silently. Those need the same care by hand.
+
+Review `golangci-lint run --fix` output hunk by hunk; never take it on trust. Its
+errorlint fixer has dropped a condition while rewriting a type assertion, loosened tests
+from "this exact error" to "somewhere in the chain", and broken a documented `%v`
+contract.
 
 When adding a `%w`, check whether the wrapped error can be a `*CLIError`. If it can,
 `displayError` starts printing that error's message instead of the outer one, and
