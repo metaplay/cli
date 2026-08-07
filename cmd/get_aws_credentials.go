@@ -108,7 +108,7 @@ func (o *getAWSCredentialsOpts) Run(cmd *cobra.Command) error {
 	case "json":
 		output, err := json.MarshalIndent(credentials, "", "  ")
 		if err != nil {
-			return fmt.Errorf("failed to marshal credentials to JSON: %v", err)
+			return fmt.Errorf("failed to marshal credentials to JSON: %w", err)
 		}
 		fmt.Println(string(output))
 	case "text":

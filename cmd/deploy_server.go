@@ -142,7 +142,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if o.flagHelmChartLocalPath != "" {
 		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath)
 		if err != nil {
-			return fmt.Errorf("invalid --helm-chart-path: %v", err)
+			return fmt.Errorf("invalid --helm-chart-path: %w", err)
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
@@ -157,7 +157,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			// Parse Helm chart semver range.
 			chartVersionConstraints, err = version.NewConstraint(helmChartVersion)
 			if err != nil {
-				return fmt.Errorf("invalid Helm chart version: %v", err)
+				return fmt.Errorf("invalid Helm chart version: %w", err)
 			}
 			log.Debug().Msgf("Accepted Helm chart semver constraints: %v", chartVersionConstraints)
 		}
@@ -172,7 +172,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Get docker credentials.
 	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
 	if err != nil {
-		return fmt.Errorf("failed to get docker credentials: %v", err)
+		return fmt.Errorf("failed to get docker credentials: %w", err)
 	}
 	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
@@ -260,7 +260,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Determine if there's an existing release deployed.
@@ -278,7 +278,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		// Parse the new chart version.
 		newVersion, err := semver.NewVersion(useHelmChartVersion)
 		if err != nil {
-			return fmt.Errorf("failed to parse Helm chart version '%s': %v", useHelmChartVersion, err)
+			return fmt.Errorf("failed to parse Helm chart version '%s': %w", useHelmChartVersion, err)
 		}
 
 		// Parse existing chart version.
@@ -489,7 +489,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			})
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			if err != nil {
-				return fmt.Errorf("failed to uninstall Helm release %s: %v", existingRelease.Name, err)
+				return fmt.Errorf("failed to uninstall Helm release %s: %w", existingRelease.Name, err)
 			}
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
 			return nil

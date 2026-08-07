@@ -47,7 +47,7 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 	// Parse installed Node version
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse Node.js version from '%s': %s", installedVersionStr, err)
+		return fmt.Errorf("failed to parse Node.js version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if version older than recommended.
@@ -96,7 +96,7 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 	installedVersionStr := strings.TrimSpace(out.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse pnpm version from '%s': %v", installedVersionStr, err)
+		return fmt.Errorf("failed to parse pnpm version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if installed version is older than required.

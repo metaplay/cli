@@ -65,7 +65,7 @@ func GetServerProcessInformation(ctx context.Context, kubeCli *envapi.KubeClient
 
 	// Validate that the username follows Unix/Linux username conventions
 	if err := validateUnixUsername(username); err != nil {
-		return nil, fmt.Errorf("invalid username '%s': %v", username, err)
+		return nil, fmt.Errorf("invalid username '%s': %w", username, err)
 	}
 	log.Debug().Msgf("Game server is running as user: %s", username)
 

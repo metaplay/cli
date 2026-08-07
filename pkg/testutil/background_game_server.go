@@ -447,7 +447,7 @@ func removeDockerContainerByName(ctx context.Context, name string) error {
 	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker rm -f %s failed: %v, output: %s", name, err, string(output))
+		return fmt.Errorf("docker rm -f %s failed: %w, output: %s", name, err, string(output))
 	}
 	return nil
 }

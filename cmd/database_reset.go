@@ -120,14 +120,14 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	// Get kubeconfig to access the environment for Helm operations
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	if err != nil {
-		return fmt.Errorf("failed to get kubeconfig: %v", err)
+		return fmt.Errorf("failed to get kubeconfig: %w", err)
 	}
 	log.Debug().Msg("Resolved kubeconfig to access environment")
 
 	// Configure Helm to check for active deployments
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Check for any active game server Helm deployments - refuse to reset if found
@@ -263,7 +263,7 @@ func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *
 	log.Info().Msg("Phase 0: Mark reset in progress...")
 	err := o.markResetInProgress(ctx, kubeCli, podName, debugContainerName, shards[0])
 	if err != nil {
-		return fmt.Errorf("failed to mark reset in progress: %v", err)
+		return fmt.Errorf("failed to mark reset in progress: %w", err)
 	}
 
 	// Phase 1: Drop all tables except MetaInfo in all shards
@@ -273,7 +273,7 @@ func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *
 		tables := allShardTables[shard.ShardIndex]
 		err := o.resetShardPhase1(ctx, kubeCli, podName, debugContainerName, shard, tables)
 		if err != nil {
-			return fmt.Errorf("failed to reset shard %d phase 1: %v", shard.ShardIndex, err)
+			return fmt.Errorf("failed to reset shard %d phase 1: %w", shard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Msg("Shard reset phase 1 completed")
 	}
@@ -286,7 +286,7 @@ func (o *databaseResetOpts) resetDatabaseContents(ctx context.Context, kubeCli *
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("database_name", shard.DatabaseName).Msg("Starting shard reset phase 2")
 		err := o.resetShardPhase2(ctx, kubeCli, podName, debugContainerName, shard)
 		if err != nil {
-			return fmt.Errorf("failed to reset shard %d phase 2: %v", shard.ShardIndex, err)
+			return fmt.Errorf("failed to reset shard %d phase 2: %w", shard.ShardIndex, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Msg("Shard reset phase 2 completed")
 	}
@@ -310,7 +310,7 @@ func (o *databaseResetOpts) markResetInProgress(ctx context.Context, kubeCli *en
 	err := o.executeSQLCommand(ctx, kubeCli, podName, debugContainerName, mainShard, sqlCmd)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to mark reset in progress (table may not exist yet)")
-		return fmt.Errorf("failed to mark reset in progress: %v", err)
+		return fmt.Errorf("failed to mark reset in progress: %w", err)
 	}
 	log.Debug().Msg("Marked reset in progress")
 
@@ -334,7 +334,7 @@ func (o *databaseResetOpts) resetShardPhase1(ctx context.Context, kubeCli *envap
 		sqlCmd := fmt.Sprintf("DROP TABLE IF EXISTS `%s`;", table)
 		err := o.executeSQLCommand(ctx, kubeCli, podName, debugContainerName, shard, sqlCmd)
 		if err != nil {
-			return fmt.Errorf("failed to drop table %s: %v", table, err)
+			return fmt.Errorf("failed to drop table %s: %w", table, err)
 		}
 		log.Debug().Int("shard_index", shard.ShardIndex).Str("table", table).Msg("Dropped table")
 	}
@@ -349,7 +349,7 @@ func (o *databaseResetOpts) resetShardPhase2(ctx context.Context, kubeCli *envap
 	sqlCmd := "DROP TABLE IF EXISTS `MetaInfo`;"
 	err := o.executeSQLCommand(ctx, kubeCli, podName, debugContainerName, shard, sqlCmd)
 	if err != nil {
-		return fmt.Errorf("failed to drop MetaInfo table: %v", err)
+		return fmt.Errorf("failed to drop MetaInfo table: %w", err)
 	}
 
 	log.Debug().Int("shard_index", shard.ShardIndex).Msg("Dropped MetaInfo table")
@@ -363,7 +363,7 @@ func (o *databaseResetOpts) getTableNames(ctx context.Context, kubeCli *envapi.K
 	// Execute the command and capture output
 	output, err := o.executeSQLCommandWithOutput(ctx, kubeCli, podName, debugContainerName, shard, sqlCmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute SHOW TABLES: %v", err)
+		return nil, fmt.Errorf("failed to execute SHOW TABLES: %w", err)
 	}
 
 	// Parse the output to extract table names
@@ -420,7 +420,7 @@ func (o *databaseResetOpts) executeSQLCommand(ctx context.Context, kubeCli *enva
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return fmt.Errorf("SQL command execution failed: %v", err)
+		return fmt.Errorf("SQL command execution failed: %w", err)
 	}
 
 	return nil
@@ -464,7 +464,7 @@ func (o *databaseResetOpts) executeSQLCommandWithOutput(ctx context.Context, kub
 
 	err := execRemoteKubernetesCommand(ctx, kubeCli.RestConfig, req.URL(), ioStreams, false, false)
 	if err != nil {
-		return "", fmt.Errorf("SQL command execution failed: %v", err)
+		return "", fmt.Errorf("SQL command execution failed: %w", err)
 	}
 
 	return outputBuffer.String(), nil

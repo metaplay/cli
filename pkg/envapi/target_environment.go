@@ -365,7 +365,7 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS credentials: %v", err)
+		return nil, fmt.Errorf("failed to get AWS credentials: %w", err)
 	}
 
 	log.Debug().Msg("Create AWS config")

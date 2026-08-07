@@ -157,13 +157,13 @@ func LoadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	// Apply defaults to project config.
 	err = ApplyProjectConfigDefaults(&projectConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply defaults to metaplay-project.yaml: %v", err)
+		return nil, fmt.Errorf("failed to apply defaults to metaplay-project.yaml: %w", err)
 	}
 
 	// Validate the project config.
 	err = ValidateProjectConfig(projectDir, &projectConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate metaplay-project.yaml: %v", err)
+		return nil, fmt.Errorf("failed to validate metaplay-project.yaml: %w", err)
 	}
 
 	return &projectConfig, nil
@@ -333,7 +333,7 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			}
 			parsedURL, err := url.Parse(endpoint)
 			if err != nil {
-				return fmt.Errorf("authProviders[%s].%s is not a valid URL: %v", name, endpointName, err)
+				return fmt.Errorf("authProviders[%s].%s is not a valid URL: %w", name, endpointName, err)
 			}
 			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 				return fmt.Errorf("authProviders[%s].%s must use http or https scheme", name, endpointName)
@@ -539,7 +539,7 @@ func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error)
 		}
 
 		// Generic error when we don't know what went wrong.
-		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %v", readVersionErr)
+		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %w", readVersionErr)
 	}
 
 	// Parse and validate the 'version.yaml' contents.

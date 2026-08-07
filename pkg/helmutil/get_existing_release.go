@@ -23,7 +23,7 @@ func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*
 	// Find all releases of the chart deployed in the environment.
 	releases, err := HelmListReleases(actionConfig, chartName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve existing Helm releases: %v", err)
+		return nil, fmt.Errorf("failed to resolve existing Helm releases: %w", err)
 	}
 
 	// Handle no found releases.
