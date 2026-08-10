@@ -36,7 +36,7 @@ require (
 	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.45.0
 	google.golang.org/grpc v1.83.0
-	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
+	google.golang.org/protobuf v1.36.12-0.20260810121128-40223a3a698d
 	gopkg.in/yaml.v3 v3.0.1
 	helm.sh/helm/v3 v3.19.4
 	k8s.io/api v0.36.3
