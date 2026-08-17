@@ -81,9 +81,8 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Run the 'pnpm --version' command
 	cmd := exec.CommandContext(ctx, "pnpm", "--version")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -93,7 +92,7 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 	}
 
 	// Parse pnpm version
-	installedVersionStr := strings.TrimSpace(out.String())
+	installedVersionStr := strings.TrimSpace(stdout.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
 		return fmt.Errorf("failed to parse pnpm version from '%s': %w", installedVersionStr, err)
