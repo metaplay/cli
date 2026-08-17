@@ -103,11 +103,11 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 		return nil
 	}
 
-	// Fetch user info from portal.
-	log.Debug().Msgf("Fetch user info...")
-	userInfo, err := auth.FetchUserInfo(authProvider, tokenSet)
+	// Resolve user info from the token claims.
+	log.Debug().Msgf("Resolve user info from token claims...")
+	userInfo, err := auth.ResolveUserInfo(tokenSet)
 	if err != nil {
-		log.Panic().Msgf("Failed to fetch user info: %v", err)
+		return err
 	}
 
 	// Output based on format
