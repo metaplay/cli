@@ -636,15 +636,16 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	}, nil
 }
 
-// countBinaryFiles returns the number of binary files in the modifications list.
-func countBinaryFiles(modifications []ModifiedFile) int {
-	count := 0
+// binaryModifiedFiles returns the binary files in the modifications list.
+// These cannot be included in the patch and must be restored manually.
+func binaryModifiedFiles(modifications []ModifiedFile) []ModifiedFile {
+	var binaries []ModifiedFile
 	for _, m := range modifications {
 		if m.IsBinary {
-			count++
+			binaries = append(binaries, m)
 		}
 	}
-	return count
+	return binaries
 }
 
 // printModifiedFilesList prints the list of modified files to the log.

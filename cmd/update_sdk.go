@@ -200,10 +200,17 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 
 		// Warn about binary files that cannot be included in the patch
-		binaryCount := countBinaryFiles(modifications)
-		if binaryCount > 0 {
-			log.Info().Msg(styles.RenderWarning(fmt.Sprintf("WARNING: %d binary file(s) cannot be included in the patch and WILL BE LOST!", binaryCount)))
-			log.Info().Msg("         You must manually back up and restore these files.")
+		binaryFiles := binaryModifiedFiles(modifications)
+		if len(binaryFiles) > 0 {
+			log.Info().Msg(styles.RenderWarning(fmt.Sprintf("WARNING: %d binary file(s) cannot be included in the patch and WILL BE LOST!", len(binaryFiles))))
+			log.Info().Msg("         You must manually back up and restore these files:")
+			const maxBinariesToShow = 10
+			for _, m := range binaryFiles[:min(len(binaryFiles), maxBinariesToShow)] {
+				log.Info().Msgf("           [%s] %s", m.ModType, m.RelativePath)
+			}
+			if len(binaryFiles) > maxBinariesToShow {
+				log.Info().Msgf("           ... and %d more binary file(s)", len(binaryFiles)-maxBinariesToShow)
+			}
 			log.Info().Msg("")
 		}
 
