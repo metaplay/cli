@@ -1,0 +1,38 @@
+// This file is part of a Metaplay Unreal project.
+
+using Metaplay.Core;
+using Metaplay.Core.Client;
+using System;
+
+namespace {{.GameName}}.Bridge
+{
+    /// <summary>
+    /// The environment config provider of the game's bridge host: a single,
+    /// always-offline environment (empty <see cref="EnvironmentConfig.ConnectionEndpointConfig.ServerHost"/>,
+    /// the SDK's offline-mode marker), so the bridge's <c>Metaplay_Init</c> and
+    /// <c>Metaplay_Connect</c> run the full client stack against the in-process offline
+    /// server without any backend. Replace or extend this when connecting the game to
+    /// real environments.
+    /// </summary>
+    public class OfflineEnvironmentConfigProvider : IEnvironmentConfigProvider
+    {
+        static readonly EnvironmentConfig OfflineEnvironment = new()
+        {
+            Id = "offline",
+            DisplayName = "Offline Mode",
+            ConnectionEndpointConfig = new()
+            {
+                ServerHost = "",
+                ServerPort = 0,
+                BackupGateways = Array.Empty<ServerGatewaySpec>(),
+            },
+            ClientLoggingConfig = new() { LogLevel = LogLevel.Information },
+        };
+
+        public void InitializeSingleton()
+        {
+        }
+
+        public EnvironmentConfig GetCurrent() => OfflineEnvironment;
+    }
+}

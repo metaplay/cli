@@ -1,0 +1,26 @@
+// This file is part of a Metaplay Unreal project.
+
+using UnrealBuildTool;
+
+public class {{.GameName}} : ModuleRules
+{
+    public {{.GameName}}(ReadOnlyTargetRules Target) : base(Target)
+    {
+        PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+
+        // The MetaplayUnreal plugin's runtime API (the bridge library loader, the
+        // Blueprint library and the mirror USTRUCTs in Public/).
+        PrivateDependencyModuleNames.AddRange(new string[] { "MetaplayUnreal" });
+
+        // Stage the offline game config archive as a loose (non-pak) file at its
+        // project Content path: the bridge's offline server loads SharedGameConfig.mpa
+        // with plain file IO, which cannot read inside paks.
+        string gameConfigArchive = System.IO.Path.Combine(ModuleDirectory, "..", "..", "Content", "SharedGameConfig.mpa");
+        if (System.IO.File.Exists(gameConfigArchive))
+        {
+            RuntimeDependencies.Add(gameConfigArchive, StagedFileType.NonUFS);
+        }
+    }
+}

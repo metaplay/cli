@@ -1,0 +1,31 @@
+{
+	"FileVersion": 3,
+	"EngineAssociation": "{{.EngineVersion}}",
+	"Category": "Games",
+	"Description": "{{.GameName}}: a Metaplay game running its shared game logic through the MetaplayUnreal plugin.",
+	"Modules": [
+		{
+			"Name": "{{.GameName}}",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "{{.GameName}}Editor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "MetaplayUnreal",
+			"Enabled": true
+		}
+	],
+	"AdditionalPluginDirectories": [
+		"{{.SdkRelFromProject}}/Unreal"
+	],
+	"TargetPlatforms": [
+		"Linux",
+		"Win64"
+	]
+}

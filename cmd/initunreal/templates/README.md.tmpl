@@ -1,0 +1,38 @@
+# {{.GameName}}
+
+An Unreal project wired to the Metaplay SDK through the [MetaplayUnreal] plugin. All
+gameplay lives in C# (SharedCode/, compiled through GameLogic/), reached from Unreal
+through the bridge's commands, queries and events (Bridge/).
+
+[MetaplayUnreal]: {{.SdkRelFromProject}}/Unreal/MetaplayUnreal/README.md
+
+## Layout
+
+- `{{.GameName}}.uproject` - the Unreal project (the MetaplayUnreal plugin is
+  discovered through AdditionalPluginDirectories from the SDK checkout at
+  `{{.SdkRelFromProject}}`).
+- `MetaplayBridge.json` - the bridge declaration consumed by the pre-build step.
+- `Bridge/` - the game's bridge host .NET project: the game logic, the game's bridge
+  module and the environment provider, published as the NativeAOT bridge library.
+- `GameLogic/` + `SharedCode/` - the shared game logic (a minimal clicker) and its
+  csproj wrapper (the serializer identity of the game graph).
+- `Source/` - the Unreal modules (runtime + editor).
+
+## Building
+
+Build the .NET side (bridge host, prebuilt serializer, USTRUCT mirror header and the
+NativeAOT bridge library, staged for the plugin):
+
+```bash
+metaplay build unreal-bridge
+```
+
+Then open `{{.GameName}}.uproject` in Unreal Editor ({{.EngineVersion}}) and build as
+usual: the plugin's pre-build steps run the same bridge build automatically when the
+Unreal build system regenerates a target's makefile.
+
+The project defaults to the SDK's offline mode (in-process server, no backend needed).
+The offline game config archive is loaded from `Content/SharedGameConfig.mpa`.
+
+See the SDK's Unreal documentation for details:
+`{{.SdkRelFromProject}}/Unreal/MetaplayUnreal/BridgeBuild/README.md`

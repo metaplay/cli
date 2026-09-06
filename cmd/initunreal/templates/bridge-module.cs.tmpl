@@ -1,0 +1,137 @@
+// This file is part of a Metaplay Unreal project.
+
+using Game.Logic;
+using Metaplay.Client.Native;
+using Metaplay.Core;
+using Metaplay.Core.Model;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace {{.GameName}}.Bridge
+{
+    /// <summary>
+    /// The view model DTOs of the game's bridge module. They follow the bridge's
+    /// plain-type conventions: <see cref="EntityId"/> as string, <see cref="MetaTime"/>
+    /// as milliseconds since epoch.
+    /// </summary>
+    public sealed class {{.GameName}}BridgeDtos
+    {
+        /// <summary> Argument of the <c>ClickMany</c> command: how many clicks to perform in one action. </summary>
+        public sealed class ClickManyArgs
+        {
+            public int Count { get; set; }
+        }
+
+        /// <summary> Result of a command that executes a player action: the action's result name. </summary>
+        public sealed class ActionResultDto
+        {
+            public string ActionResult { get; set; }
+        }
+
+        /// <summary> The player view returned by the <c>GetPlayerView</c> query. </summary>
+        public sealed class PlayerViewDto
+        {
+            public string PlayerId { get; set; }
+            public int NumClicks { get; set; }
+            public bool AutoClickerPurchased { get; set; }
+            public long ServerTimeMs { get; set; }
+            public long AutoClickerEndsAtMs { get; set; }
+        }
+
+        /// <summary> Payload of the <c>Clicked</c> event. </summary>
+        public sealed class ClickedEventDto
+        {
+            public int NumClicks { get; set; }
+        }
+    }
+
+    /// <summary>
+    /// The source-generated <see cref="JsonSerializerContext"/> for the game's bridge
+    /// module: every argument, result and event payload type that crosses the bridge
+    /// ABI is (de)serialized through this context, with the bridge's web defaults
+    /// (camelCase property names).
+    /// </summary>
+    [JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
+    [JsonSerializable(typeof({{.GameName}}BridgeDtos.ClickManyArgs))]
+    [JsonSerializable(typeof({{.GameName}}BridgeDtos.ActionResultDto))]
+    [JsonSerializable(typeof({{.GameName}}BridgeDtos.PlayerViewDto))]
+    [JsonSerializable(typeof({{.GameName}}BridgeDtos.ClickedEventDto))]
+    internal partial class {{.GameName}}BridgeJsonContext : JsonSerializerContext
+    {
+    }
+
+    /// <summary>
+    /// The game's bridge module: the clicker's commands (Click, ClickMany,
+    /// BuyAutoClicker), its player-view query and its Clicked event, driving real
+    /// player actions through the session. This is the surface the MetaplayUnreal
+    /// plugin's Blueprint API round-trips against and what the MirrorGen-generated
+    /// USTRUCT header mirrors.
+    /// </summary>
+    public sealed class {{.GameName}}BridgeModule : MetaplayBridgeModule
+    {
+        public const string ClickCommandName = "Click";
+        public const string ClickManyCommandName = "ClickMany";
+        public const string BuyAutoClickerCommandName = "BuyAutoClicker";
+        public const string GetPlayerViewQueryName = "GetPlayerView";
+        public const string ClickedEventName = "Clicked";
+
+        public override void Register(IBridgeRegistryBuilder registry)
+        {
+            registry.RegisterCommand(
+                ClickCommandName,
+                {{.GameName}}BridgeJsonContext.Default.ActionResultDto,
+                context =>
+                {
+                    MetaActionResult result = ExecuteClick(context);
+                    context.Events.Publish(ClickedEventName, new {{.GameName}}BridgeDtos.ClickedEventDto { NumClicks = GetPlayerModel(context).NumClicks }, {{.GameName}}BridgeJsonContext.Default.ClickedEventDto);
+                    context.Events.MarkStateChanged();
+                    return new {{.GameName}}BridgeDtos.ActionResultDto { ActionResult = result.Name };
+                });
+
+            registry.RegisterCommand(
+                ClickManyCommandName,
+                {{.GameName}}BridgeJsonContext.Default.ClickManyArgs,
+                {{.GameName}}BridgeJsonContext.Default.ActionResultDto,
+                (args, context) =>
+                {
+                    MetaActionResult result = MetaActionResult.Success;
+                    for (int ndx = 0; ndx < args.Count; ndx++)
+                        result = ExecuteClick(context);
+                    return new {{.GameName}}BridgeDtos.ActionResultDto { ActionResult = result.Name };
+                });
+
+            registry.RegisterCommand(
+                BuyAutoClickerCommandName,
+                {{.GameName}}BridgeJsonContext.Default.ActionResultDto,
+                context => new {{.GameName}}BridgeDtos.ActionResultDto { ActionResult = context.Session.PlayerContext.ExecuteAction(new PlayerPurchaseAutoClicker()).Name });
+
+            registry.RegisterQuery(
+                GetPlayerViewQueryName,
+                {{.GameName}}BridgeJsonContext.Default.PlayerViewDto,
+                context =>
+                {
+                    PlayerModel player = GetPlayerModel(context);
+                    return new {{.GameName}}BridgeDtos.PlayerViewDto
+                    {
+                        PlayerId = player.PlayerId.ToString(),
+                        NumClicks = player.NumClicks,
+                        AutoClickerPurchased = player.AutoClickerPurchased,
+                        ServerTimeMs = player.CurrentTime.MillisecondsSinceEpoch,
+                        AutoClickerEndsAtMs = player.AutoClickEndsAt.MillisecondsSinceEpoch,
+                    };
+                });
+
+            registry.RegisterEvent(ClickedEventName, {{.GameName}}BridgeJsonContext.Default.ClickedEventDto);
+        }
+
+        static MetaActionResult ExecuteClick(BridgeCommandContext context)
+        {
+            return context.Session.PlayerContext.ExecuteAction(new PlayerClickButton());
+        }
+
+        static PlayerModel GetPlayerModel(BridgeCommandContext context)
+        {
+            return (PlayerModel)context.Session.PlayerContext.Model;
+        }
+    }
+}
