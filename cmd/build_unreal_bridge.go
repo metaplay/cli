@@ -46,6 +46,10 @@ func init() {
 			same steps on all host platforms. The MetaplayUnreal plugin can run this command
 			through its PreBuildSteps instead of the shell script.
 
+			Note: unlike the shell script, this command resolves the MetaplayBridge.json
+			configuration before skipping inapplicable target types (Server, Program), so
+			a broken bridge declaration fails loudly regardless of the target being built.
+
 			The project declares its bridge project in MetaplayBridge.json next to the
 			.uproject; see MetaplaySDK/Unreal/MetaplayUnreal/BridgeBuild/README.md for all
 			options. The Metaplay SDK root is resolved from the bridge project's import of

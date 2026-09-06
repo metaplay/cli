@@ -39,7 +39,10 @@ func init() {
 
 			The project declares its bridge project in MetaplayBridge.json next to the
 			.uproject; the serializer name, dotnet configuration, and serializer directory
-			default to the values declared there and in the bridge .csproj.
+			default to the values declared there and in the bridge .csproj. Note that
+			--dotnet-config here means the .NET build configuration (Debug/Release), not
+			the Unreal target configuration that 'metaplay build unreal-bridge' takes via
+			its --config flag.
 
 			Related commands:
 			- 'metaplay build unreal-bridge' runs the full chain (serializer, mirror
@@ -50,6 +53,9 @@ func init() {
 			# Build the bridge host and generate its serializer:
 			MyUnrealProject$ metaplay build serializer
 
+			# Build with the Debug dotnet configuration:
+			MyUnrealProject$ metaplay build serializer --dotnet-config Debug
+
 			# Regenerate the serializer from an already-built bridge host assembly:
 			MyUnrealProject$ metaplay build serializer --skip-build
 		`),
@@ -57,7 +63,7 @@ func init() {
 
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagProjectDir, "project-dir", ".", "Unreal project directory where MetaplayBridge.json is located")
-	flags.StringVar(&o.flagDotnetConfig, "config", "", "dotnet configuration to build the bridge host with (default: the MetaplayBridge.json Configuration, or Release)")
+	flags.StringVar(&o.flagDotnetConfig, "dotnet-config", "", "dotnet configuration to build the bridge host with (default: the MetaplayBridge.json Configuration, or Release)")
 	flags.StringVar(&o.flagSdkRoot, "sdk-root", "", "Path to the Metaplay SDK root (MetaplaySDK directory; default: resolve from the bridge project, METAPLAY_SDK_ROOT, or metaplay-project.yaml)")
 	flags.BoolVar(&o.flagSkipBuild, "skip-build", false, "Skip building the bridge host assembly and generate the serializer from the existing build output")
 

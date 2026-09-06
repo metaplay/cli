@@ -111,10 +111,11 @@ func resolveSdkRootFromProjectConfig(dir string) (string, error) {
 				if !filepath.IsAbs(sdkRoot) {
 					sdkRoot = filepath.Join(absDir, filepath.FromSlash(sdkRootDir))
 				}
-				if err := ValidateSdkRoot(sdkRoot); err == nil {
+				validateErr := ValidateSdkRoot(sdkRoot)
+				if validateErr == nil {
 					return sdkRoot, nil
 				}
-				return "", fmt.Errorf("sdkRootDir '%s' in %s does not point to a valid MetaplaySDK root", sdkRootDir, configPath)
+				return "", fmt.Errorf("sdkRootDir '%s' in %s does not point to a valid MetaplaySDK root: %w", sdkRootDir, configPath, validateErr)
 			}
 		}
 		parent := filepath.Dir(absDir)

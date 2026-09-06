@@ -77,6 +77,30 @@ func TestResolveSdkRootFromProjectConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid sdkRootDir surfaces the validation reason", func(t *testing.T) {
+		root := t.TempDir()
+		projectDir := filepath.Join(root, "game", "Unreal")
+		if err := os.MkdirAll(projectDir, 0755); err != nil {
+			t.Fatalf("failed to create dirs: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "metaplay-project.yaml"), []byte("sdkRootDir: NoSuchSdkDir\n"), 0644); err != nil {
+			t.Fatalf("failed to write config: %v", err)
+		}
+
+		_, err := resolveSdkRootFromProjectConfig(projectDir)
+		if err == nil {
+			t.Fatal("expected an error for an invalid sdkRootDir")
+		}
+		if !strings.Contains(err.Error(), "does not point to a valid MetaplaySDK root") {
+			t.Errorf("error lacks the sdkRootDir context: %v", err)
+		}
+		// The specific validation failure (what is missing under the directory) must
+		// be included, not just a generic statement.
+		if !strings.Contains(err.Error(), "the SDK tools were not found under") {
+			t.Errorf("error lacks the underlying validation reason: %v", err)
+		}
+	})
+
 	t.Run("no config anywhere", func(t *testing.T) {
 		if _, err := resolveSdkRootFromProjectConfig(t.TempDir()); err == nil {
 			t.Error("expected an error when no metaplay-project.yaml exists upwards")

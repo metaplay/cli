@@ -50,14 +50,20 @@ func checkDotnetSdkVersionAtLeast10(ctx context.Context, dotnetCmd string) error
 	}
 
 	cmd := exec.CommandContext(ctx, dotnetCmd, "--version")
-	var out bytes.Buffer
+	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
-		return clierrors.New("failed to determine the .NET SDK version (dotnet --version failed)").
+		versionErr := clierrors.New("failed to determine the .NET SDK version (dotnet --version failed)")
+		if detail := strings.TrimSpace(errOut.String()); detail != "" {
+			versionErr = versionErr.WithDetails(detail)
+		}
+		return versionErr.
 			WithSuggestion(getDotnetInstallInstructions())
 	}
 
+	// Parse the version from stdout only: stderr can carry first-run noise
+	// (telemetry, workload warnings) that has nothing to do with the version.
 	versionStr := strings.TrimSpace(out.String())
 	major, err := strconv.Atoi(strings.SplitN(versionStr, ".", 2)[0])
 	if err != nil {
