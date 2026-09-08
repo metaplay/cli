@@ -1,0 +1,12 @@
+[/Script/MetaplayUnreal.MetaplaySettings]
+EnvironmentId="offline"
+; Load the game-carrying NativeAOT bridge published by 'metaplay build unreal-bridge'
+; (editor iteration loads it directly from the publish output; packaged builds load the
+; staged copy from Binaries/ThirdParty/MetaplayBridge).
+BridgeLoadMode=NativeAot
+SerializerInitMode=Packaged
+bAutoInitialize=True
+SerializerAssemblyName="Metaplay.Generated.{{.GameName}}"
+; The library path is for THIS host platform ({{.HostRid}}); repoint it when iterating
+; on another host OS.
+NativeAotLibraryPath="Bridge/bin/Release/net10.0/{{.HostRid}}/publish/{{.GameName}}.Bridge{{.HostLibExt}}"

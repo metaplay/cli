@@ -1,0 +1,75 @@
+// This file is part of a Metaplay Unreal project.
+
+using Metaplay.Core;
+using Metaplay.Core.Config;
+using Metaplay.Core.Model;
+using Metaplay.Core.Player;
+using System.Runtime.Serialization;
+
+namespace Game.Logic
+{
+    /// <summary>
+    /// Class for storing the state and updating the logic for a single player: a
+    /// minimal clicker with a purchaseable auto-clicker.
+    /// </summary>
+    [MetaSerializableDerived(1)]
+    [SupportedSchemaVersions(1, 1)]
+    public class PlayerModel :
+        PlayerModelBase<
+            PlayerModel,
+            PlayerStatisticsCore
+            >
+    {
+        public const int TicksPerSecond = 10;
+        protected override int GetTicksPerSecond() => TicksPerSecond;
+
+        [IgnoreDataMember] public IPlayerModelServerListener ServerListener { get; set; } = EmptyPlayerModelServerListener.Instance;
+        [IgnoreDataMember] public IPlayerModelClientListener ClientListener { get; set; } = EmptyPlayerModelClientListener.Instance;
+
+        // Player profile
+        [MetaMember(100)] public sealed override EntityId           PlayerId    { get; set; }
+        [MetaMember(101), NoChecksum] public sealed override string PlayerName  { get; set; }
+        [MetaMember(102)] public sealed override int                PlayerLevel { get; set; }
+
+        // Game-specific state
+        [MetaMember(200)] public int      NumClicks   { get; set; } = 0;  // Number of times the button has been clicked
+
+        // Auto-clicker feature (purchaseable)
+        public const int AutoClickerCost = 20;
+        public static readonly MetaDuration AutoClickInterval = MetaDuration.FromSeconds(2);
+        [MetaMember(201)] public bool     AutoClickerPurchased { get; set; } = false;
+        [MetaMember(202)] public MetaTime AutoClickStartedAt { get; set; }
+        [MetaMember(203)] public MetaTime AutoClickEndsAt { get; set; }
+
+        protected override void GameInitializeNewPlayerModel(MetaTime now, ISharedGameConfig gameConfig, EntityId playerId, string name)
+        {
+            // Setup initial state for new player
+            PlayerId    = playerId;
+            PlayerName  = name;
+
+            // Initialize auto-click timer
+            AutoClickStartedAt = now;
+            AutoClickEndsAt = now + AutoClickInterval;
+        }
+
+        protected override void GameTick(IChecksumContext checksumCtx)
+        {
+            base.GameTick(checksumCtx);
+
+            // Only run auto-clicker if purchased
+            if (!AutoClickerPurchased)
+                return;
+
+            // Check if auto-click timer has elapsed
+            if (CurrentTime >= AutoClickEndsAt)
+            {
+                NumClicks += 1;
+                Log.Info("Auto-click produced: NumClicks={NumClicks}!", NumClicks);
+
+                // Reset timer
+                AutoClickStartedAt = CurrentTime;
+                AutoClickEndsAt = CurrentTime + AutoClickInterval;
+            }
+        }
+    }
+}

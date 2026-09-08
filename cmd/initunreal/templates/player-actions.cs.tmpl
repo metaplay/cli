@@ -1,0 +1,83 @@
+// This file is part of a Metaplay Unreal project.
+
+using Metaplay.Core;
+using Metaplay.Core.Model;
+using Metaplay.Core.Player;
+
+namespace Game.Logic
+{
+    /// <summary>
+    /// Game-specific player action class, which attaches all game-specific actions to <see cref="PlayerModel"/>.
+    /// </summary>
+    public abstract class PlayerAction : PlayerActionCore<PlayerModel>
+    {
+    }
+
+    /// <summary>
+    /// Registry for game-specific ActionCodes, used by the individual PlayerAction classes.
+    /// </summary>
+    public static class ActionCodes
+    {
+        public const int PlayerClickButton = 5000;
+        public const int PlayerPurchaseAutoClicker = 5001;
+    }
+
+    /// <summary>
+    /// Game-specific results returned from <see cref="PlayerActionCore.Execute(PlayerModel, bool)"/>.
+    /// </summary>
+    public static class ActionResult
+    {
+        // Shadow success result
+        public static readonly MetaActionResult Success          = MetaActionResult.Success;
+
+        // Game-specific results
+        public static readonly MetaActionResult UnknownError     = new MetaActionResult(nameof(UnknownError));
+        public static readonly MetaActionResult NotEnoughClicks  = new MetaActionResult(nameof(NotEnoughClicks));
+        public static readonly MetaActionResult AlreadyPurchased = new MetaActionResult(nameof(AlreadyPurchased));
+    }
+
+    // Game-specific example action: bump PlayerModel.NumClicks, triggered by button tap
+
+    [ModelAction(ActionCodes.PlayerClickButton)]
+    public class PlayerClickButton : PlayerAction
+    {
+        public PlayerClickButton() { }
+
+        public override MetaActionResult Execute(PlayerModel player, bool commit)
+        {
+            if (commit)
+            {
+                player.NumClicks += 1;
+                player.Log.Info("Button clicked: NumClicks={NumClicks}!", player.NumClicks);
+            }
+
+            return ActionResult.Success;
+        }
+    }
+
+    [ModelAction(ActionCodes.PlayerPurchaseAutoClicker)]
+    public class PlayerPurchaseAutoClicker : PlayerAction
+    {
+        public PlayerPurchaseAutoClicker() { }
+
+        public override MetaActionResult Execute(PlayerModel player, bool commit)
+        {
+            if (player.AutoClickerPurchased)
+                return ActionResult.AlreadyPurchased;
+
+            if (player.NumClicks < PlayerModel.AutoClickerCost)
+                return ActionResult.NotEnoughClicks;
+
+            if (commit)
+            {
+                player.NumClicks -= PlayerModel.AutoClickerCost;
+                player.AutoClickerPurchased = true;
+                player.AutoClickStartedAt = player.CurrentTime;
+                player.AutoClickEndsAt = player.CurrentTime + PlayerModel.AutoClickInterval;
+                player.Log.Info("Auto-clicker purchased! NumClicks={NumClicks}", player.NumClicks);
+            }
+
+            return ActionResult.Success;
+        }
+    }
+}

@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The game-carrying bridge host project of {{.GameName}}: the game's shared logic
+       (GameLogic, compiling SharedCode/) + the game's bridge module + the offline
+       environment provider, published as one NativeAOT shared library whose native
+       exports are the Metaplay.Client.Native C ABI (Metaplay_*). The MetaplayUnreal
+       plugin loads this library through its NativeAOT loader.
+
+       All the publish plumbing (the shared ABI re-export forwarders, the NativeAOT and
+       trimmer configuration, the serializer reference, the post-publish artifact
+       staging) comes from the plugin's shared bridge host recipe. The metaplay CLI
+       (metaplay build unreal-bridge) or the plugin's pre-build step builds, generates
+       and publishes it. -->
+
+  <PropertyGroup>
+    <RootNamespace>{{.GameName}}.Bridge</RootNamespace>
+    <AssemblyName>{{.GameName}}.Bridge</AssemblyName>
+    <!-- The serializer name: Metaplay.Generated.{{.GameName}}, matching the project settings. -->
+    <MetaplaySerializerName>{{.GameName}}</MetaplaySerializerName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The game's shared logic as its own assembly (serializer identity, see
+         GameLogic.csproj). Built runtime-only here like the rest of the bridge graph,
+         so the Metaplay.Client reference dedupes into one build instance. -->
+    <ProjectReference Include="..\GameLogic\GameLogic.csproj"
+                      AdditionalProperties="MetaplayRuntimeOnly=true"
+                      SetTargetFramework="TargetFramework=net10.0" />
+  </ItemGroup>
+
+  <!-- The Metaplay analyzers (the integration-type source generator). Projects under
+       MetaplaySDK get them from its Directory.Build.targets; this project is outside
+       the SDK tree and attaches the SDK's prebuilt analyzers directly (the same
+       mechanism as MetaplaySDK/Backend/Metaplay.Analyzers.targets), so the
+       source-generated integration metadata lands in this assembly. -->
+  <ItemGroup>
+    <Analyzer Include="{{.SdkRelFromBridge}}/Client/PrebuiltAnalyzers/Metaplay.CodeAnalyzers.dll" />
+    <Analyzer Include="{{.SdkRelFromBridge}}/Client/PrebuiltAnalyzers/Metaplay.CodeAnalyzers.Shared.dll" />
+    <!-- Not an analyzer itself, but must be included as one so Roslyn's isolated analyzer
+         assembly context can resolve it as a dependency of Metaplay.CodeAnalyzers.Shared. -->
+    <Analyzer Include="{{.SdkRelFromBridge}}/Client/PrebuiltAnalyzers/Metaplay.Attributes.dll" />
+  </ItemGroup>
+
+  <Import Project="{{.SdkRelFromBridge}}/Unreal/MetaplayUnreal/BridgeBuild/MetaplayUnreal.BridgeHost.props" />
+
+  <!-- Keep the game logic assembly alive in the native image: the client discovers its
+       game types (PlayerModel, actions, the integration metadata) at runtime, invisible
+       to the trimmer's static analysis. -->
+  <ItemGroup Condition="'$(PublishAot)' == 'true'">
+    <TrimmerRootAssembly Include="GameLogic" />
+  </ItemGroup>
+
+</Project>

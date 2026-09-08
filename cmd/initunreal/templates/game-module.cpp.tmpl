@@ -1,0 +1,17 @@
+// This file is part of a Metaplay Unreal project.
+
+// Implementation module of the game: it exists so the project has a rules module and
+// the MetaplayUnreal plugin (enabled in the .uproject, discovered through
+// AdditionalPluginDirectories) compiles into its targets.
+//
+// The MirrorGen-generated MetaplayBridgeModels.h sits in this module's Public
+// directory: UHT scans the module's headers there and processes it into registered
+// USTRUCTs WITHOUT this module's sources including it (the pre-build step generates
+// the header; include it from your own code when you want typed access to the bridge
+// view models). It is deliberately NOT #included from here: a module source that
+// includes a generated USTRUCT header races UHT's background run on the first (clean)
+// build, before UBT's dependency scan knows about the include.
+
+#include "Modules/ModuleManager.h"
+
+IMPLEMENT_PRIMARY_GAME_MODULE(FDefaultGameModuleImpl, {{.GameName}}, "{{.GameName}}");

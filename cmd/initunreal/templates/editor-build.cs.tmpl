@@ -1,0 +1,15 @@
+// This file is part of a Metaplay Unreal project.
+
+using UnrealBuildTool;
+
+public class {{.GameName}}Editor : ModuleRules
+{
+    public {{.GameName}}Editor(ReadOnlyTargetRules Target) : base(Target)
+    {
+        PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine" });
+
+        PrivateDependencyModuleNames.AddRange(new string[] { "MetaplayUnreal", "UnrealEd" });
+    }
+}

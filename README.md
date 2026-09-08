@@ -72,6 +72,26 @@ MyProject$ metaplay init project
 
 This will link your local project to the [Metaplay Portal](https://portal.metaplay.dev), donwload and extract the SDK, add the game-specific backend project, and add some samples on how to get started.
 
+For Unreal games, you can instead scaffold a new Unreal project wired to the MetaplayUnreal plugin (bridge host project, game logic shell, plugin reference) from a local SDK checkout:
+
+```bash
+MyGame$ metaplay init unreal --game-name MyGame --sdk-root /path/to/MetaplaySDK
+```
+
+### Build the Unreal Bridge (.NET side)
+
+Unreal projects consuming the MetaplayUnreal plugin build their .NET side (the bridge host assembly, the prebuilt serializer, the USTRUCT mirror header and the NativeAOT bridge library) with:
+
+```bash
+MyUnrealProject$ metaplay build unreal-bridge
+```
+
+This is the same pipeline the plugin's pre-build step runs, implemented natively so it works on Linux, macOS and Windows. To iterate on the serializer only:
+
+```bash
+MyUnrealProject$ metaplay build serializer
+```
+
 ### Build and Deploy Server to Cloud
 
 You must run the steps in the same directory as your `metaplay-project.yaml` project config file

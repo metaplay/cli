@@ -1,0 +1,14 @@
+// This file is part of a Metaplay Unreal project.
+
+using UnrealBuildTool;
+
+public class {{.GameName}}EditorTarget : TargetRules
+{
+    public {{.GameName}}EditorTarget(TargetInfo Target) : base(Target)
+    {
+        Type = TargetType.Editor;
+        DefaultBuildSettings = BuildSettingsVersion.Latest;
+        IncludeOrderVersion = EngineIncludeOrderVersion.Latest;
+        ExtraModuleNames.Add("{{.GameName}}");
+    }
+}
