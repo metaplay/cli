@@ -128,14 +128,14 @@ func waitForContainerReady(ctx context.Context, kubeCli *envapi.KubeClient, podN
 	// reducing network traffic and processing overhead.
 	fieldSelector := fields.OneTermEqualSelector("metadata.name", podName).String()
 	// Create a ListWatch that combines both list and watch operations.
-	// ListFunc gets the initial state, and WatchFunc streams subsequent changes.
+	// The list call gets the initial state, and the watch call streams subsequent changes.
 	// Both use the field selector to filter for our specific pod.
 	lw := &cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 			options.FieldSelector = fieldSelector
 			return kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).List(ctx, options)
 		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
 			options.FieldSelector = fieldSelector
 			return kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Watch(ctx, options)
 		},
