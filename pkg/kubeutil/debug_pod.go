@@ -115,11 +115,11 @@ func waitForPodReady(ctx context.Context, kubeCli *envapi.KubeClient, podName st
 
 	// Create a ListWatch for the pod
 	listWatch := &cache.ListWatch{
-		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+		ListWithContextFunc: func(ctx context.Context, options metav1.ListOptions) (runtime.Object, error) {
 			options.FieldSelector = fieldSelector
 			return kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).List(ctx, options)
 		},
-		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+		WatchFuncWithContext: func(ctx context.Context, options metav1.ListOptions) (watch.Interface, error) {
 			options.FieldSelector = fieldSelector
 			return kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Watch(ctx, options)
 		},
