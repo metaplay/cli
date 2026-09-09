@@ -428,6 +428,11 @@ func ensureContractAccepted(ctx context.Context, portalClient *portalapi.Client,
 
 	// If auto-agree not specified, confirm the user for agreement to contract.
 	if !autoAgree {
+		if !tui.IsInteractiveMode() {
+			return clierrors.Newf("Agreement to the Metaplay %s is required", contractState.Name).
+				WithSuggestion("Use --auto-agree to accept it when running in non-interactive mode")
+		}
+
 		contractURL := fmt.Sprintf("%s/contracts/%s", common.PortalBaseURL, contractState.ID)
 		choice, err := tui.DoConfirmDialog(
 			ctx,

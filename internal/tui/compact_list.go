@@ -231,6 +231,9 @@ func chooseFromListWithSubtitle(title string, subtitle string, items []list.Item
 	list.SetShowHelp(false)
 
 	// Create and run model
+	if err := requireInteractiveMode("selection dialog"); err != nil {
+		return -1, err
+	}
 	model := newCompactListModel(title, list)
 	model.subtitle = subtitle
 	program := tea.NewProgram(model)
@@ -367,6 +370,9 @@ func ChooseMultipleFromListDialogWithDefaults[TItem any](
 	l.SetShowHelp(false)
 
 	// Create and run model.
+	if err := requireInteractiveMode("multi-select dialog"); err != nil {
+		return nil, err
+	}
 	model := newMultiSelectModel(title, footer, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
@@ -503,6 +509,9 @@ func ChooseFromListDialogMultiline[TItem any](
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 
+	if err := requireInteractiveMode("selection dialog"); err != nil {
+		return nil, err
+	}
 	model := newCompactListMultilineModel(title, l)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
