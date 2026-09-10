@@ -14,18 +14,21 @@ import (
 
 // Model for the confirmation dialog
 type confirmDialog struct {
-	title    string
-	body     string
-	question string
-	choice   bool
-	quitting bool
+	title      string
+	body       string
+	question   string
+	defaultYes bool
+	choice     bool
+	canceled   bool
+	quitting   bool
 }
 
-func newConfirmDialog(_ context.Context, title string, body string, question string) confirmDialog {
+func newConfirmDialog(_ context.Context, title string, body string, question string, defaultYes bool) confirmDialog {
 	return confirmDialog{
-		title:    title,
-		body:     body,
-		question: question,
+		title:      title,
+		body:       body,
+		question:   question,
+		defaultYes: defaultYes,
 	}
 }
 
@@ -37,12 +40,20 @@ func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "y", "Y", "enter":
+		case "y", "Y":
 			m.choice = true
 			m.quitting = true
 			return m, tea.Quit
-		case "n", "N", "q", "ctrl+c":
+		case "n", "N":
 			m.choice = false
+			m.quitting = true
+			return m, tea.Quit
+		case "q", "ctrl+c":
+			m.canceled = true
+			m.quitting = true
+			return m, tea.Quit
+		case "enter":
+			m.choice = m.defaultYes
 			m.quitting = true
 			return m, tea.Quit
 		}
@@ -62,24 +73,46 @@ func (m confirmDialog) View() tea.View {
 
 	// Show question until answered
 	if !m.quitting {
-		content += m.question + styles.RenderPrompt(" [Y/n]") + "\n"
+		choices := " [y/N]"
+		if m.defaultYes {
+			choices = " [Y/n]"
+		}
+		content += m.question + styles.RenderPrompt(choices) + "\n"
 	}
 
 	return tea.NewView(content)
 }
 
-// Show the user a confirm dialog and wait for a yes/no answer.
+// Show the user a confirm dialog and wait for a yes/no answer. Defaults to 'yes'.
 func DoConfirmDialog(ctx context.Context, title string, body string, question string) (bool, error) {
-	p := tea.NewProgram(newConfirmDialog(ctx, title, body, question))
+	return runConfirmDialog(ctx, title, body, question, true)
+}
+
+// Show the user a one-line confirm question and wait for a yes/no answer. Defaults to 'yes'.
+func DoConfirmQuestion(ctx context.Context, question string) (bool, error) {
+	return runConfirmDialog(ctx, "", "", question, true)
+}
+
+// Show the user a one-line confirm question and wait for a yes/no answer. Defaults to 'no'.
+func DoConfirmQuestionDefaultNo(ctx context.Context, question string) (bool, error) {
+	return runConfirmDialog(ctx, "", "", question, false)
+}
+
+func runConfirmDialog(ctx context.Context, title string, body string, question string, defaultYes bool) (bool, error) {
+	if err := requireInteractiveMode("confirmation dialog"); err != nil {
+		return false, err
+	}
+
+	p := tea.NewProgram(newConfirmDialog(ctx, title, body, question, defaultYes))
 	m, err := p.Run()
 	if err != nil {
 		return false, fmt.Errorf("failed to run confirmation dialog: %w", err)
 	}
 
-	return m.(confirmDialog).choice, nil
-}
+	finalM := m.(confirmDialog)
+	if finalM.canceled {
+		return false, fmt.Errorf("confirmation canceled")
+	}
 
-// Show the user a one-line confirm question and wait for a yes/no answer.
-func DoConfirmQuestion(ctx context.Context, question string) (bool, error) {
-	return DoConfirmDialog(ctx, "", "", question)
+	return finalM.choice, nil
 }
