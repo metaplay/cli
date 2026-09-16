@@ -92,8 +92,8 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 	if err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to resolve auth provider: %v", err)
 	} else if !authProvider.IsBuiltinMetaplayAuth() && !isOverrideTarget {
-		stderrLogger.Info().Msgf(styles.RenderMuted("llm-docs: auth token withheld (session belongs to auth provider '%s', and %s is a Metaplay service)"), authProvider.GetSessionID(), target)
-	} else if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
+		stderrLogger.Info().Msgf(styles.RenderMuted("llm-docs: auth token withheld (session belongs to auth provider '%s', and %s is a Metaplay service)"), authProvider.Name, target)
+	} else if sessionState, err := auth.LoadSessionState(authProvider); err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to load session: %v", err)
 	} else if sessionState != nil {
 		accessToken = sessionState.TokenSet.AccessToken

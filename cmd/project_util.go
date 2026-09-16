@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -138,11 +139,27 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 			WithSuggestion("Use the default 'metaplay' provider, or add custom providers to metaplay-project.yaml")
 	}
 
-	// Find the matching provider (by ID or name).
+	// An exact id match wins.
+	if provider, found := project.Config.AuthProviders[providerName]; found {
+		return provider, nil
+	}
+
+	// Otherwise fall back to the display name, but only when it identifies exactly one
+	// provider. Ranging over the map and taking the first hit would resolve a duplicated
+	// name differently from run to run, because Go randomizes map iteration order.
+	nameMatches := []string{}
 	for providerID, provider := range project.Config.AuthProviders {
-		if providerID == providerName || provider.Name == providerName {
-			return provider, nil
+		if provider.Name == providerName {
+			nameMatches = append(nameMatches, providerID)
 		}
+	}
+	sort.Strings(nameMatches)
+	if len(nameMatches) == 1 {
+		return project.Config.AuthProviders[nameMatches[0]], nil
+	} else if len(nameMatches) > 1 {
+		return nil, clierrors.Newf("Auth provider name '%s' is ambiguous", providerName).
+			WithDetails(fmt.Sprintf("Providers %v all use this name", nameMatches)).
+			WithSuggestion("Name the provider by its id in metaplay-project.yaml instead")
 	}
 
 	// Provider not found, return an error.
@@ -150,6 +167,7 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 	for providerID := range project.Config.AuthProviders {
 		existingAuthProviders = append(existingAuthProviders, providerID)
 	}
+	sort.Strings(existingAuthProviders)
 	return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
 		WithDetails(fmt.Sprintf("Available providers: %v", existingAuthProviders))
 }

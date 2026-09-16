@@ -87,7 +87,7 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Load session state.
-	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())
+	sessionState, err := auth.LoadSessionState(authProvider)
 	if err != nil {
 		return err
 	}

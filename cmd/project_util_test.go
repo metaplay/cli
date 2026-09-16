@@ -129,3 +129,83 @@ func TestGetAuthProvider_NamedProviderWithoutProject(t *testing.T) {
 		t.Error("expected a suggestion telling the user how to proceed")
 	}
 }
+
+// A provider file's name is free text, so it must not be able to claim the session of
+// a provider defined in metaplay-project.yaml. The two sessions stay separate.
+func TestGetAuthProvider_FileProviderSessionIsNamespaced(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "auth-provider.yaml")
+	if err := os.WriteFile(filePath, []byte("name: Corp SSO\n"+
+		"clientId: file-client-id\n"+
+		"authEndpoint: https://auth.selfhosted.example.com/oauth2/auth\n"+
+		"tokenEndpoint: https://auth.selfhosted.example.com/oauth2/token\n"+
+		"revokeEndpoint: https://auth.selfhosted.example.com/oauth2/revoke\n"+
+		"userInfoEndpoint: https://portal.selfhosted.example.com/api/external/userinfo\n"), 0600); err != nil {
+		t.Fatalf("failed to write provider file: %v", err)
+	}
+	t.Setenv(auth.AuthProviderFileEnvVar, filePath)
+
+	project := &metaproj.MetaplayProject{
+		Config: metaproj.ProjectConfig{
+			AuthProviders: map[string]*auth.AuthProviderConfig{
+				"corp": {Name: "Corp SSO", ClientID: "project-client-id", TokenEndpoint: "https://sso.corp.example.com/oauth2/token"},
+			},
+		},
+	}
+
+	fromFile, err := getAuthProvider(project, "")
+	if err != nil {
+		t.Fatalf("getAuthProvider returned an error: %v", err)
+	}
+	fromProject, err := getAuthProvider(project, "corp")
+	if err != nil {
+		t.Fatalf("getAuthProvider returned an error: %v", err)
+	}
+
+	// Both are named "Corp SSO", but they are different platforms.
+	if fromFile.GetSessionID() == fromProject.GetSessionID() {
+		t.Errorf("both providers use session ID %q, so one would overwrite the other", fromFile.GetSessionID())
+	}
+	if fromFile.Fingerprint() == fromProject.Fingerprint() {
+		t.Error("different platforms produced the same fingerprint")
+	}
+}
+
+// Two project providers sharing a display name used to resolve at random, because Go
+// randomizes map iteration order. Naming the id stays exact; the name is now an error.
+func TestGetAuthProvider_AmbiguousDisplayName(t *testing.T) {
+	t.Setenv(auth.AuthProviderFileEnvVar, "")
+
+	project := &metaproj.MetaplayProject{
+		Config: metaproj.ProjectConfig{
+			AuthProviders: map[string]*auth.AuthProviderConfig{
+				"corp-eu": {Name: "Corp SSO", TokenEndpoint: "https://eu.corp.example.com/oauth2/token"},
+				"corp-us": {Name: "Corp SSO", TokenEndpoint: "https://us.corp.example.com/oauth2/token"},
+			},
+		},
+	}
+
+	// The ambiguous display name is refused, and names both candidates.
+	_, err := getAuthProvider(project, "Corp SSO")
+	if err == nil {
+		t.Fatal("expected an error for an ambiguous provider name")
+	}
+	cliErr, ok := clierrors.AsCLIError(err)
+	if !ok {
+		t.Fatalf("error %v is not a CLIError", err)
+	}
+	details := strings.Join(cliErr.Details, " ")
+	if !strings.Contains(details, "corp-eu") || !strings.Contains(details, "corp-us") {
+		t.Errorf("details %q do not name both candidates", details)
+	}
+
+	// Naming the id is still exact, and stable across runs.
+	for range 20 {
+		provider, err := getAuthProvider(project, "corp-eu")
+		if err != nil {
+			t.Fatalf("getAuthProvider returned an error: %v", err)
+		}
+		if provider.TokenEndpoint != "https://eu.corp.example.com/oauth2/token" {
+			t.Fatalf("TokenEndpoint = %q, want the EU provider", provider.TokenEndpoint)
+		}
+	}
+}

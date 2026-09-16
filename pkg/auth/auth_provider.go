@@ -6,6 +6,8 @@ package auth
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -31,6 +33,11 @@ const AuthProviderFileEnvVar = "METAPLAYCLI_AUTH_PROVIDER_FILE"
 // OAuth2 scopes requested when a provider does not name its own.
 const defaultAuthScopes = "openid profile email offline_access"
 
+// Sessions of a provider loaded from AuthProviderFileEnvVar are namespaced with this
+// prefix. The name in such a file is free text chosen by whoever wrote it, and would
+// otherwise be able to claim the session of a provider defined in metaplay-project.yaml.
+const fileAuthProviderSessionPrefix = "file:"
+
 // OAuth2 client configuration.
 type AuthProviderConfig struct {
 	Name             string `yaml:"name"`             // Name of the provider (used as sessionID as well).
@@ -41,10 +48,27 @@ type AuthProviderConfig struct {
 	UserInfoEndpoint string `yaml:"userInfoEndpoint"` // Eg, "https://portal.metaplay.dev/api/external/userinfo"
 	Scopes           string `yaml:"scopes"`           // Eg, "openid profile email offline_access"
 	Audience         string `yaml:"audience"`         // Eg, "managed-gameservers"
+
+	// Set when this provider came from AuthProviderFileEnvVar rather than from the
+	// built-in definition or metaplay-project.yaml. Unexported, so YAML decoding of a
+	// provider file cannot set it.
+	loadedFromFile bool
 }
 
 func (provider *AuthProviderConfig) GetSessionID() string {
+	if provider.loadedFromFile {
+		return fileAuthProviderSessionPrefix + provider.Name
+	}
 	return provider.Name
+}
+
+// Fingerprint identifies the platform and client that a session's tokens were minted
+// for. The token endpoint is what issues tokens and the client ID is who they were
+// issued to, so together they pin the audience. Stored alongside a session so tokens
+// from one platform are never handed to another that happens to share a session key.
+func (provider *AuthProviderConfig) Fingerprint() string {
+	sum := sha256.Sum256([]byte(provider.ClientID + "\n" + provider.TokenEndpoint))
+	return hex.EncodeToString(sum[:8])
 }
 
 // IsBuiltinMetaplayAuth reports whether this is the built-in Metaplay Auth provider,
@@ -53,7 +77,7 @@ func (provider *AuthProviderConfig) GetSessionID() string {
 // that platform as their audience and must not be presented to Metaplay-operated
 // services. A file-based provider cannot claim this name (validation rejects it).
 func (provider *AuthProviderConfig) IsBuiltinMetaplayAuth() bool {
-	return provider.Name == metaplayAuthProviderName
+	return !provider.loadedFromFile && provider.Name == metaplayAuthProviderName
 }
 
 // NewDefaultAuthProvider resolves the auth provider used when a project does not
@@ -123,6 +147,7 @@ func parseAuthProviderConfig(contents []byte) (*AuthProviderConfig, error) {
 		return nil, err
 	}
 
+	provider.loadedFromFile = true
 	return &provider, nil
 }
 
