@@ -22,7 +22,7 @@ func init() {
 	o := authLoginOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to the built-in 'metaplay' provider, unless METAPLAYCLI_AUTH_PROVIDER_FILE names another.")
 
 	cmd := &cobra.Command{
 		Use:   "login [AUTH_PROVIDER]",
@@ -30,7 +30,9 @@ func init() {
 		Long: renderLong(&o, `
 			Login to your authentication provider using the browser.
 
-			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			The auth provider defaults to the built-in 'metaplay' provider, or to the platform named by
+			METAPLAYCLI_AUTH_PROVIDER_FILE when that is set. Naming 'metaplay' explicitly always selects
+			the built-in provider. If you have multiple auth providers configured in your
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
 

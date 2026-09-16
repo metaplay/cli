@@ -120,12 +120,18 @@ var rootCmd = &cobra.Command{
 		}
 
 		// Log about which auth provider the session will come from. Say it out loud
-		// whenever the portal is overridden: signing in to Metaplay Auth while
-		// talking to another portal yields tokens that portal will not accept.
+		// whenever the provider and the portal disagree, in either direction: tokens
+		// minted by one platform's auth server are not accepted by the other's portal,
+		// and sending them there exposes them to a platform that is not their audience.
 		if authProviderFile := os.Getenv(auth.AuthProviderFileEnvVar); authProviderFile != "" {
 			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider file: %s"), authProviderFile)
+			if isDefaultPortal {
+				stderrLogger.Warn().Msgf("%s Auth provider file is set, but the portal is still %s; set %s to the matching platform's portal",
+					styles.RenderWarning("⚠️"), common.DefaultPortalBaseURL, common.PortalBaseURLEnvVar)
+			}
 		} else if !isDefaultPortal {
-			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider: Metaplay Auth (set %s to sign in to a different platform)"), auth.AuthProviderFileEnvVar)
+			stderrLogger.Warn().Msgf("%s Portal is overridden, but the auth provider is still Metaplay Auth; set %s to sign in to the matching platform",
+				styles.RenderWarning("⚠️"), auth.AuthProviderFileEnvVar)
 		}
 
 		// Check for new CLI version available.

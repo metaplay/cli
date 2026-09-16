@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -46,6 +47,15 @@ func (provider *AuthProviderConfig) GetSessionID() string {
 	return provider.Name
 }
 
+// IsBuiltinMetaplayAuth reports whether this is the built-in Metaplay Auth provider,
+// as opposed to one loaded from AuthProviderFileEnvVar or named by the project. A
+// session from any other provider belongs to a different platform: its tokens name
+// that platform as their audience and must not be presented to Metaplay-operated
+// services. A file-based provider cannot claim this name (validation rejects it).
+func (provider *AuthProviderConfig) IsBuiltinMetaplayAuth() bool {
+	return provider.Name == metaplayAuthProviderName
+}
+
 // NewDefaultAuthProvider resolves the auth provider used when a project does not
 // name one of its own: Metaplay Auth, or the provider described by the file named
 // in METAPLAYCLI_AUTH_PROVIDER_FILE when that is set, which is how a platform
@@ -53,15 +63,17 @@ func (provider *AuthProviderConfig) GetSessionID() string {
 func NewDefaultAuthProvider() (*AuthProviderConfig, error) {
 	providerFilePath := os.Getenv(AuthProviderFileEnvVar)
 	if providerFilePath == "" {
-		return newMetaplayAuthProvider(), nil
+		return NewMetaplayAuthProvider(), nil
 	}
 
 	log.Debug().Msgf("Loading auth provider from %s=%s", AuthProviderFileEnvVar, providerFilePath)
 	return loadAuthProviderConfigFile(providerFilePath)
 }
 
-// The auth provider for Metaplay's managed platform.
-func newMetaplayAuthProvider() *AuthProviderConfig {
+// NewMetaplayAuthProvider returns the auth provider for Metaplay's managed platform.
+// It is exported so callers can reach the built-in provider explicitly, regardless of
+// what AuthProviderFileEnvVar points the default at.
+func NewMetaplayAuthProvider() *AuthProviderConfig {
 	return &AuthProviderConfig{
 		Name:             metaplayAuthProviderName,
 		ClientID:         "c16ea663-ced3-46c6-8f85-38c9681fe1f0",
@@ -146,6 +158,14 @@ func validateAuthProviderConfig(provider *AuthProviderConfig) error {
 		parsed, err := url.Parse(endpoint.value)
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			problems = append(problems, fmt.Sprintf("field '%s' ('%s') is not an http(s) URL", endpoint.fieldName, endpoint.value))
+			continue
+		}
+		// Cleartext is only ever acceptable when the traffic does not leave the
+		// machine. Everything these endpoints carry is a secret: the authorization
+		// code exchange, every refresh, the revoke call, and the bearer token sent
+		// to userInfoEndpoint.
+		if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+			problems = append(problems, fmt.Sprintf("field '%s' ('%s') must use https; plain http is allowed only for loopback hosts (localhost, *.localhost, 127.0.0.1, ::1)", endpoint.fieldName, endpoint.value))
 		}
 	}
 
@@ -154,4 +174,16 @@ func validateAuthProviderConfig(provider *AuthProviderConfig) error {
 	}
 
 	return nil
+}
+
+// isLoopbackHost reports whether a URL host names the local machine, so traffic to
+// it never reaches the network. Per RFC 6761 the whole '.localhost' TLD resolves to
+// loopback, which is what local platform setups use (e.g. 'auth.metaplay-dev.localhost').
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

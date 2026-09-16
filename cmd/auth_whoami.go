@@ -26,7 +26,7 @@ func init() {
 	o := authWhoamiOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to the built-in 'metaplay' provider, unless METAPLAYCLI_AUTH_PROVIDER_FILE names another.")
 
 	cmd := &cobra.Command{
 		Use:   "whoami [AUTH_PROVIDER]",
@@ -37,7 +37,9 @@ func init() {
 			By default, displays the information in a human-readable text format.
 			Use --format=json to get the complete user information in JSON format.
 
-			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			The auth provider defaults to the built-in 'metaplay' provider, or to the platform named by
+			METAPLAYCLI_AUTH_PROVIDER_FILE when that is set. Naming 'metaplay' explicitly always selects
+			the built-in provider. If you have multiple auth providers configured in your
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
 

@@ -98,14 +98,37 @@ func findProjectDirectory() (string, error) {
 	}
 }
 
+// Name that always resolves to the built-in Metaplay Auth provider, as opposed to
+// the empty name, which resolves to whatever the default provider currently is.
+const builtinAuthProviderName = "metaplay"
+
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
-	if providerName == "" || providerName == "metaplay" {
+	switch providerName {
+	case "":
+		// No provider named: use the default, which METAPLAYCLI_AUTH_PROVIDER_FILE
+		// redirects to a platform other than the managed one.
 		log.Debug().Msgf("Resolving the default auth provider")
 		return auth.NewDefaultAuthProvider()
-	} else {
+	case builtinAuthProviderName:
+		// Naming 'metaplay' asks for the built-in provider specifically, and must keep
+		// meaning that while METAPLAYCLI_AUTH_PROVIDER_FILE points the default elsewhere.
+		// Otherwise an existing Metaplay Auth session could not be inspected or logged
+		// out of, and its refresh token would be stranded in the config file.
+		log.Debug().Msgf("Resolving the built-in Metaplay Auth provider")
+		return auth.NewMetaplayAuthProvider(), nil
+	default:
 		log.Debug().Msgf("Resolving auth provider '%s'", providerName)
+	}
+
+	// Any other name can only come from the project, so there has to be one. Commands
+	// reach here with a nil project when run outside a project directory, because
+	// tryResolveProject() reports "no project found" as (nil, nil).
+	if project == nil {
+		return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
+			WithDetails("Custom auth providers are defined in metaplay-project.yaml, and no project was found").
+			WithSuggestion(fmt.Sprintf("Run this in your project directory (or pass --project=<path>), or name the built-in '%s' provider", builtinAuthProviderName))
 	}
 
 	// If have a project, return its auth provider.

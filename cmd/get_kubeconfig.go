@@ -29,7 +29,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to the built-in 'metaplay' provider, unless METAPLAYCLI_AUTH_PROVIDER_FILE names another.")
 
 	cmd := &cobra.Command{
 		Use:   "kubeconfig ENVIRONMENT [AUTH_PROVIDER] [flags]",
@@ -48,7 +48,9 @@ func init() {
 
 			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
 
-			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
+			The auth provider defaults to the built-in 'metaplay' provider, or to the platform named by
+			METAPLAYCLI_AUTH_PROVIDER_FILE when that is set. Naming 'metaplay' explicitly always selects
+			the built-in provider. If you have multiple auth providers configured in your
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
 
@@ -92,12 +94,9 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve auth provider.
-	authProviderName := o.argAuthProvider
-	if authProviderName == "" {
-		authProviderName = "metaplay"
-	}
-	authProvider, err := getAuthProvider(project, authProviderName)
+	// Resolve auth provider. An empty name resolves to the default provider, which
+	// METAPLAYCLI_AUTH_PROVIDER_FILE can point at a platform other than the managed one.
+	authProvider, err := getAuthProvider(project, o.argAuthProvider)
 	if err != nil {
 		return err
 	}

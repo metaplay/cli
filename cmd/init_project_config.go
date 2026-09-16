@@ -137,8 +137,9 @@ func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Always use Metaplay Auth for project initialization.
-	authProvider, err := getAuthProvider(project, "metaplay")
+	// Project initialization talks to the portal, so it uses the default provider:
+	// Metaplay Auth, or the platform named by METAPLAYCLI_AUTH_PROVIDER_FILE.
+	authProvider, err := getAuthProvider(project, "")
 	if err != nil {
 		return err
 	}

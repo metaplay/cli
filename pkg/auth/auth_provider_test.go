@@ -237,6 +237,74 @@ tokenEndpint: https://auth.example.com/oauth2/token
 			wantErrPart: "tokenEndpint",
 		},
 		{
+			name: "plain http to a remote host",
+			yamlData: `
+name: Self-hosted
+clientId: client-id
+authEndpoint: https://auth.example.com/oauth2/auth
+tokenEndpoint: http://auth.example.com/oauth2/token
+revokeEndpoint: https://auth.example.com/oauth2/revoke
+userInfoEndpoint: https://portal.example.com/api/external/userinfo
+`,
+			wantErrPart: "tokenEndpoint",
+		},
+		{
+			name: "plain http to a remote host names https",
+			yamlData: `
+name: Self-hosted
+clientId: client-id
+authEndpoint: http://auth.example.com/oauth2/auth
+tokenEndpoint: https://auth.example.com/oauth2/token
+revokeEndpoint: https://auth.example.com/oauth2/revoke
+userInfoEndpoint: https://portal.example.com/api/external/userinfo
+`,
+			wantErrPart: "must use https",
+		},
+		{
+			name: "plain http to localhost is allowed",
+			yamlData: `
+name: Local
+clientId: client-id
+authEndpoint: http://localhost:4444/oauth2/auth
+tokenEndpoint: http://127.0.0.1:4444/oauth2/token
+revokeEndpoint: http://[::1]:4444/oauth2/revoke
+userInfoEndpoint: http://LOCALHOST:3000/api/external/userinfo
+`,
+			check: func(t *testing.T, provider *AuthProviderConfig) {
+				if provider.Name != "Local" {
+					t.Errorf("Name = %q, want %q", provider.Name, "Local")
+				}
+			},
+		},
+		{
+			name: "plain http to a .localhost subdomain is allowed",
+			yamlData: `
+name: Tilt
+clientId: client-id
+authEndpoint: http://auth.metaplay-dev.localhost/oauth2/auth
+tokenEndpoint: http://auth.metaplay-dev.localhost/oauth2/token
+revokeEndpoint: http://auth.metaplay-dev.localhost/oauth2/revoke
+userInfoEndpoint: http://portal.metaplay-dev.localhost/api/external/userinfo
+`,
+			check: func(t *testing.T, provider *AuthProviderConfig) {
+				if provider.Name != "Tilt" {
+					t.Errorf("Name = %q, want %q", provider.Name, "Tilt")
+				}
+			},
+		},
+		{
+			name: "host ending in localhost without a dot is not loopback",
+			yamlData: `
+name: Sneaky
+clientId: client-id
+authEndpoint: http://notlocalhost/oauth2/auth
+tokenEndpoint: https://auth.example.com/oauth2/token
+revokeEndpoint: https://auth.example.com/oauth2/revoke
+userInfoEndpoint: https://portal.example.com/api/external/userinfo
+`,
+			wantErrPart: "must use https",
+		},
+		{
 			name:        "malformed yaml",
 			yamlData:    "name: [unterminated\n",
 			wantErrPart: "YAML",
