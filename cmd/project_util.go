@@ -102,8 +102,8 @@ func findProjectDirectory() (string, error) {
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
 	if providerName == "" || providerName == "metaplay" {
-		log.Debug().Msgf("Using built-in provider 'metaplay'")
-		return auth.NewMetaplayAuthProvider(), nil
+		log.Debug().Msgf("Resolving the default auth provider")
+		return auth.NewDefaultAuthProvider()
 	} else {
 		log.Debug().Msgf("Resolving auth provider '%s'", providerName)
 	}
@@ -238,9 +238,12 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		return envConfig, tokenSet, nil
 	}
 
-	// If no metaplay-project.yaml can be located, we know we are using Metaplay auth provider.
+	// If no metaplay-project.yaml can be located, we know we are using the default auth provider.
 	// \todo store in project config instead?
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Ensure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)

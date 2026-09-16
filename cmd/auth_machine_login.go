@@ -37,6 +37,10 @@ func init() {
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
 
+			To sign in to a Metaplay platform of your own rather than the managed one, set
+			METAPLAYCLI_AUTH_PROVIDER_FILE to a YAML file describing its OAuth2 endpoints. The
+			CLI README documents the file's fields.
+
 			{Arguments}
 		`),
 		Run: runCommand(&o),

@@ -75,8 +75,10 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 	// a failed refresh would delete the session, and a best-effort metadata
 	// read must never have that side effect.
 	var accessToken string
-	authProvider := auth.NewMetaplayAuthProvider()
-	if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to resolve auth provider: %v", err)
+	} else if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to load session: %v", err)
 	} else if sessionState != nil {
 		accessToken = sessionState.TokenSet.AccessToken

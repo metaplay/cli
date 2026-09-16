@@ -20,6 +20,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
@@ -113,8 +114,18 @@ var rootCmd = &cobra.Command{
 		stderrLogger.Info().Msgf(styles.RenderMuted("Metaplay CLI %s, %s"), version.AppVersion, modeStr)
 
 		// Log about non-default portal being used.
-		if common.PortalBaseURL != common.DefaultPortalBaseURL {
+		isDefaultPortal := common.PortalBaseURL == common.DefaultPortalBaseURL
+		if !isDefaultPortal {
 			stderrLogger.Info().Msgf(styles.RenderMuted("Portal base URL: %s"), common.PortalBaseURL)
+		}
+
+		// Log about which auth provider the session will come from. Say it out loud
+		// whenever the portal is overridden: signing in to Metaplay Auth while
+		// talking to another portal yields tokens that portal will not accept.
+		if authProviderFile := os.Getenv(auth.AuthProviderFileEnvVar); authProviderFile != "" {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider file: %s"), authProviderFile)
+		} else if !isDefaultPortal {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider: Metaplay Auth (set %s to sign in to a different platform)"), auth.AuthProviderFileEnvVar)
 		}
 
 		// Check for new CLI version available.

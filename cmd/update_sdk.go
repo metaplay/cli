@@ -131,7 +131,10 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Authenticate
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
 	if err != nil {
 		return err
