@@ -164,6 +164,8 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 ### Development
 
+If you develop the CLI or the Metaplay platform, see [DEVELOPMENT.md](DEVELOPMENT.md) for building and testing the CLI, and for running it against a local or test environment.
+
 #### Development Build
 
 We continuously create development builds from the `metaplay/cli` repository `main` branch. These builds are tagged with a `-dev.N` suffix (e.g., `1.2.4-dev.1`) and published as draft releases. You can find the latest development build on the main [releases page](https://github.com/metaplay/cli/releases). The development builds are primarily intended for testing purposes and should generally not be used.
@@ -182,63 +184,6 @@ metaplay update cli --prerelease
 ```
 
 This also works with locally built `dev` version to upgrade it to the prerelease channel.
-
-#### Build Locally
-
-There is a simple `Makefile` which produces the CLI binary as `dist/metaplay` (or `dist/metaplay.exe` on Windows):
-
-```bash
-cli$ make
-```
-
-You can add the `dist/` directory to your `PATH` to enable running the locally built CLI binary from any directory.
-
-#### Run Locally
-
-While developing the CLI itself, it's often most convenient to run the CLI without building it. You can run it on a project with the `-p` flag, e.g.:
-
-```bash
-cli$ go run . -p ../MyProject debug shell
-```
-
-When working on Windows, you can avoid the network confirm dialog from being asked each with the following:
-
-```bash
-cli$ go build . && cli.exe auth login
-```
-
-#### Unit Tests
-
-To run all unit tests:
-
-```bash
-cli$ go test ./...
-```
-
-#### Platform Tests
-
-Most of the testing of the CLI is done using Metaplay's internal platform tests. The CLI does very little in isolation so there's not much that can be tested without the surrounding components.
-
-## Publishing and CI
-
-There are two types of releases published:
-
-* Pre-release versions (with `-dev.X` suffix), done for each commit to `main`.
-* Official releases (with no suffix), done for each version tag (e.g., `1.2.3`).
-
-### Steps to Publish
-
-1. Merge all relevant PRs into `main`.
-
-2. Wait for the pre-release version (e.g., `v1.2.3-dev.4`) to get published.
-
-3. Run the Metaplay internal [platform tests](https://github.com/metaplay/sdk/actions/workflows/platform-tests-new.yaml).
-
-    The latest CLI pre-release version is also covered by the platform tests.
-
-4. Tag the latest `main` (which was tested in the previous step) with the version number, e.g., `1.2.3` and push the tag.
-
-    This triggers the release process, which publishes the official release. It takes about 30min to publish.
 
 ## License
 
