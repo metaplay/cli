@@ -52,6 +52,25 @@ A binary built from source without release version stamping (`make`, `go build`,
 - It reads the agent skill content from `pkg/skills/data` in the source tree instead of the copy embedded in the binary, so skill edits take effect without rebuilding. If the source directory is not found, it falls back to the embedded copy.
 - `metaplay skills install` overwrites the skill wrappers it manages regardless of their version stamp, as if `--force` was given.
 
+## Published Development Builds
+
+We continuously create development builds from the `metaplay/cli` repository `main` branch. These builds are tagged with a `-dev.N` suffix (e.g., `1.2.4-dev.1`) and published as draft releases. You can find the latest development build on the main [releases page](https://github.com/metaplay/cli/releases). The development builds are primarily intended for testing purposes and should generally not be used.
+
+### Update Channels
+
+The CLI has two update channels:
+
+- **GA channel** — used by official releases (e.g., `1.2.3`). Shows an update banner when a newer GA release is available.
+- **Prerelease channel** — prerelease builds (e.g., `1.2.3-dev.5`). Automatically updates to the latest prerelease on every run (except in CI environments).
+
+To switch a GA build to the prerelease channel, run:
+
+```bash
+metaplay update cli --prerelease
+```
+
+This also works with locally built `dev` version to upgrade it to the prerelease channel.
+
 ## Running Against a Custom Platform
 
 By default, the CLI signs in with Metaplay Auth and uses the managed Metaplay portal at `https://portal.metaplay.dev`. These environment variables point it at another Metaplay platform:
