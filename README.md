@@ -158,34 +158,6 @@ The CLI supports storing multiple sessions at the same time. This can be useful 
 
 The authentication provider is determined from the `metaplay-project.yaml` and thus any authentication operations are dependent on the project in the context of which the CLI is run.
 
-#### Pointing the CLI at Your Own Platform
-
-By default the CLI signs in to Metaplay Auth and resolves projects and environments through the Metaplay portal at `https://portal.metaplay.dev`, both part of the managed Metaplay platform. If you run a Metaplay platform of your own, point the CLI at your own portal and your own OAuth2 provider with two environment variables:
-
-```bash
-export METAPLAYCLI_PORTAL_BASEURL=https://portal.example.com
-export METAPLAYCLI_AUTH_PROVIDER_FILE=~/.config/metaplay/example-platform.yaml
-```
-
-The auth provider file describes the OAuth2 endpoints to sign in against:
-
-```yaml
-name: Example Platform          # Also the name the session is stored under
-clientId: 11111111-2222-3333-4444-555555555555
-authEndpoint: https://auth.example.com/oauth2/auth
-tokenEndpoint: https://auth.example.com/oauth2/token
-revokeEndpoint: https://auth.example.com/oauth2/revoke
-userInfoEndpoint: https://portal.example.com/api/external/userinfo
-scopes: openid profile email offline_access   # Optional, this is the default
-audience: ''                                  # Optional, empty unless your provider needs one
-```
-
-The first six fields are required, and unknown fields are rejected rather than ignored, so a misspelling is reported instead of silently sending you somewhere else. The `name` is also the key the session is stored under: pick anything except `Metaplay Auth`, which is reserved, and your own platform's session then sits alongside your Metaplay Auth session rather than replacing it. Unset `METAPLAYCLI_AUTH_PROVIDER_FILE` to go back to Metaplay Auth.
-
-Both `metaplay auth login` and `metaplay auth machine-login` then sign in to that provider. The OAuth2 client must allow the redirect URIs `http://localhost:5000/callback` through `http://localhost:5004/callback` — the browser login binds the highest of those ports that is free.
-
-This replaces the default `metaplay` auth provider. An environment in `metaplay-project.yaml` that names its own `authProvider` keeps using that one, as described above.
-
 ### Support & Feature Requests
 
 If you have a paid support contract with Metaplay, you can open a ticket on the [Metaplay portal's support page](https://portal.metaplay.dev/orgs/metaplay/support).

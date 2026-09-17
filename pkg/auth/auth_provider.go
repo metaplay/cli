@@ -25,9 +25,8 @@ import (
 // provider loaded from a file is not allowed to claim it.
 const metaplayAuthProviderName = "Metaplay Auth"
 
-// AuthProviderFileEnvVar names a YAML file describing the auth provider to use
-// in place of the built-in one. This is how the CLI is pointed at a Metaplay
-// platform other than the managed one.
+// AuthProviderFileEnvVar names a YAML file with an AuthProviderConfig to use in place of
+// Metaplay Auth. Internal dev tool for targeting a non-managed platform, see DEVELOPMENT.md.
 const AuthProviderFileEnvVar = "METAPLAYCLI_AUTH_PROVIDER_FILE"
 
 // OAuth2 scopes requested when a provider does not name its own.

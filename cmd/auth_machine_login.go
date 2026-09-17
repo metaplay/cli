@@ -25,7 +25,7 @@ func init() {
 	o := authMachineLoginOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to the built-in 'metaplay' provider, unless METAPLAYCLI_AUTH_PROVIDER_FILE names another.")
+	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
 
 	cmd := &cobra.Command{
 		Use:   "machine-login [AUTH_PROVIDER] [flags]",
@@ -33,15 +33,9 @@ func init() {
 		Long: renderLong(&o, `
 			Sign in to the target authentication provider using a machine account.
 
-			The auth provider defaults to the built-in 'metaplay' provider, or to the platform named by
-			METAPLAYCLI_AUTH_PROVIDER_FILE when that is set. Naming 'metaplay' explicitly always selects
-			the built-in provider. If you have multiple auth providers configured in your
+			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
-
-			To sign in to a Metaplay platform of your own rather than the managed one, set
-			METAPLAYCLI_AUTH_PROVIDER_FILE to a YAML file describing its OAuth2 endpoints. The
-			CLI README documents the file's fields.
 
 			{Arguments}
 		`),

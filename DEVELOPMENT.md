@@ -54,20 +54,61 @@ A binary built from source without release version stamping (`make`, `go build`,
 
 ## Running Against a Custom Platform
 
-By default, the CLI signs in with Metaplay Auth and uses the managed Metaplay portal at `https://portal.metaplay.dev`. This environment variable points it at another portal:
+By default, the CLI signs in with Metaplay Auth and uses the managed Metaplay portal at `https://portal.metaplay.dev`. These environment variables point it at another Metaplay platform:
 
 | Variable | Description |
 |---|---|
-| `METAPLAYCLI_PORTAL_BASEURL` | Base URL of the portal to use instead of `https://portal.metaplay.dev`. The CLI prints the overridden URL at startup. |
+| `METAPLAYCLI_PORTAL_BASEURL` | Base URL of the portal to use instead of `https://portal.metaplay.dev`. |
+| `METAPLAYCLI_AUTH_PROVIDER_FILE` | Path to a YAML file describing the OAuth2 provider to sign in with instead of Metaplay Auth. See [Auth Provider File](#auth-provider-file). |
 
-Setting it to `http://portal.metaplay-dev.localhost` targets the local Tilt setup. The CLI then signs in with the Tilt setup's auth server instead of Metaplay Auth, and stores that session separately from the Metaplay Auth session. With any other URL, the CLI still signs in with Metaplay Auth.
+Set both to the same platform, because a portal does not accept tokens issued by another platform's auth server. The CLI prints the overridden values at startup, and warns when only one of the two is set.
+
+### Auth Provider File
+
+Example for the local Tilt setup:
+
+```yaml
+name: Metaplay Auth (tilt)
+clientId: c16ea663-ced3-46c6-8f85-38c9681fe1f0
+authEndpoint: http://auth.metaplay-dev.localhost/oauth2/auth
+tokenEndpoint: http://auth.metaplay-dev.localhost/oauth2/token
+revokeEndpoint: http://auth.metaplay-dev.localhost/oauth2/revoke
+userInfoEndpoint: http://portal.metaplay-dev.localhost/api/external/userinfo
+```
 
 ```bash
 export METAPLAYCLI_PORTAL_BASEURL=http://portal.metaplay-dev.localhost
+export METAPLAYCLI_AUTH_PROVIDER_FILE=~/metaplay-tilt-auth.yaml
 metaplay auth login
 ```
 
-Kubeconfigs generated with `metaplay get kubeconfig` run the CLI to fetch credentials whenever `kubectl` needs them, so run `kubectl` with the same variable set.
+The file has the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | Yes | Name of the provider. `Metaplay Auth` is reserved for the built-in provider. |
+| `clientId` | Yes | OAuth2 client ID. |
+| `authEndpoint` | Yes | OAuth2 authorization endpoint. |
+| `tokenEndpoint` | Yes | OAuth2 token endpoint. |
+| `revokeEndpoint` | Yes | OAuth2 token revocation endpoint. |
+| `userInfoEndpoint` | Yes | Endpoint returning the signed-in user's information, usually the portal's `/api/external/userinfo`. |
+| `scopes` | No | Space-separated OAuth2 scopes. Defaults to `openid profile email offline_access`. |
+| `audience` | No | OAuth2 audience, if the provider requires one. |
+
+The file is validated when the CLI loads it:
+
+- Unknown fields are rejected, so a misspelled field name is an error.
+- Endpoints must use `https`. Plain `http` is allowed only for loopback hosts: `localhost`, `*.localhost`, `127.0.0.1`, and `::1`.
+
+The OAuth2 client must allow the redirect URIs `http://localhost:5000/callback` through `http://localhost:5004/callback`. The browser login uses the highest free port in that range.
+
+While the variable is set:
+
+- The provider from the file replaces Metaplay Auth as the default. The `auth` commands, and all commands that use the portal or target an environment, sign in with it.
+- Environments whose `authProvider` in `metaplay-project.yaml` names a provider defined in the project keep using that provider.
+- The session is stored separately from the Metaplay Auth session, so switching between platforms does not sign you out of either. To manage the Metaplay Auth session while the variable is set, name the built-in provider explicitly, e.g., `metaplay auth logout metaplay`.
+- If you change the file's `clientId` or `tokenEndpoint` but keep its `name`, the stored session is rejected because it was issued by a different provider. Run `metaplay auth logout` to remove it.
+- Kubeconfigs generated with `metaplay get kubeconfig` run the CLI to fetch credentials whenever `kubectl` needs them, so run `kubectl` with the same variables set.
 
 ## LLM Docs Service
 
@@ -77,6 +118,8 @@ These environment variables point `metaplay llm-docs` at another instance of the
 |---|---|
 | `METAPLAYCLI_LLM_DOCS_ADDR` | gRPC address (`host:port`) to use instead of `llm-docs-grpc.platform.metaplay.dev:443`. Addresses on `localhost`, `127.0.0.1`, or `::1` use plaintext automatically. |
 | `METAPLAYCLI_LLM_DOCS_INSECURE` | Set to `1` to use plaintext for any address. The auth token is then never sent. |
+
+When `METAPLAYCLI_AUTH_PROVIDER_FILE` is set, the session's token is sent only to a service named with `METAPLAYCLI_LLM_DOCS_ADDR`, never to the default Metaplay-hosted one.
 
 ## Debugging Aids
 
