@@ -164,26 +164,7 @@ If you have a paid support contract with Metaplay, you can open a ticket on the 
 
 ### Development
 
-If you develop the CLI or the Metaplay platform, see [DEVELOPMENT.md](DEVELOPMENT.md) for building and testing the CLI, and for running it against a local or test environment.
-
-#### Development Build
-
-We continuously create development builds from the `metaplay/cli` repository `main` branch. These builds are tagged with a `-dev.N` suffix (e.g., `1.2.4-dev.1`) and published as draft releases. You can find the latest development build on the main [releases page](https://github.com/metaplay/cli/releases). The development builds are primarily intended for testing purposes and should generally not be used.
-
-#### Update Channels
-
-The CLI has two update channels:
-
-- **GA channel** — used by official releases (e.g., `1.2.3`). Shows an update banner when a newer GA release is available.
-- **Prerelease channel** — prerelease builds (e.g., `1.2.3-dev.5`). Automatically updates to the latest prerelease on every run (except in CI environments).
-
-To switch a GA build to the prerelease channel, run:
-
-```bash
-metaplay update cli --prerelease
-```
-
-This also works with locally built `dev` version to upgrade it to the prerelease channel.
+If you develop the CLI or the Metaplay platform, see [DEVELOPMENT.md](DEVELOPMENT.md) for building and testing the CLI, for development builds and update channels, and for running it against a local or test environment.
 
 ## License
 
