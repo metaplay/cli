@@ -92,9 +92,12 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Resolve auth provider. An empty name resolves to the default provider, which
-	// METAPLAYCLI_AUTH_PROVIDER_FILE can point at a platform other than the managed one.
-	authProvider, err := getAuthProvider(project, o.argAuthProvider)
+	// Resolve auth provider.
+	authProviderName := o.argAuthProvider
+	if authProviderName == "" {
+		authProviderName = "metaplay"
+	}
+	authProvider, err := getAuthProvider(project, authProviderName)
 	if err != nil {
 		return err
 	}

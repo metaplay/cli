@@ -34,43 +34,27 @@ func setProviderFile(t *testing.T) {
 	t.Setenv(auth.AuthProviderFileEnvVar, filePath)
 }
 
-// The empty name follows METAPLAYCLI_AUTH_PROVIDER_FILE, so a self-hosted platform
-// is reached without naming it on every command.
-func TestGetAuthProvider_EmptyNameFollowsProviderFile(t *testing.T) {
+// The empty name and 'metaplay' both follow METAPLAYCLI_AUTH_PROVIDER_FILE: the file
+// replaces Metaplay Auth, so every call site naming 'metaplay' reaches it unchanged.
+func TestGetAuthProvider_DefaultNamesFollowProviderFile(t *testing.T) {
 	setProviderFile(t)
 
-	provider, err := getAuthProvider(nil, "")
-	if err != nil {
-		t.Fatalf("getAuthProvider returned an error: %v", err)
-	}
-	if provider.Name != "Example Platform" {
-		t.Errorf("Name = %q, want the provider file's platform", provider.Name)
+	for _, name := range []string{"", "metaplay"} {
+		provider, err := getAuthProvider(nil, name)
+		if err != nil {
+			t.Fatalf("getAuthProvider(%q) returned an error: %v", name, err)
+		}
+		if provider.Name != "Example Platform" {
+			t.Errorf("getAuthProvider(%q) = %q, want the provider file's platform", name, provider.Name)
+		}
 	}
 }
 
-// Naming 'metaplay' must reach the built-in provider even while the environment
-// variable points the default elsewhere: otherwise the Metaplay Auth session could
-// not be inspected or logged out of, and its refresh token would be stranded.
-func TestGetAuthProvider_BuiltinNameIgnoresProviderFile(t *testing.T) {
-	setProviderFile(t)
-
-	provider, err := getAuthProvider(nil, builtinAuthProviderName)
-	if err != nil {
-		t.Fatalf("getAuthProvider returned an error: %v", err)
-	}
-	if !provider.IsBuiltinMetaplayAuth() {
-		t.Errorf("Name = %q, want the built-in Metaplay Auth provider", provider.Name)
-	}
-	if provider.AuthEndpoint != "https://auth.metaplay.dev/oauth2/auth" {
-		t.Errorf("AuthEndpoint = %q, want Metaplay's", provider.AuthEndpoint)
-	}
-}
-
-// Without the environment variable both spellings mean the same thing.
+// Without the environment variable both spellings mean the built-in provider.
 func TestGetAuthProvider_DefaultsToBuiltinWithoutProviderFile(t *testing.T) {
 	t.Setenv(auth.AuthProviderFileEnvVar, "")
 
-	for _, name := range []string{"", builtinAuthProviderName} {
+	for _, name := range []string{"", "metaplay"} {
 		provider, err := getAuthProvider(nil, name)
 		if err != nil {
 			t.Fatalf("getAuthProvider(%q) returned an error: %v", name, err)

@@ -104,9 +104,9 @@ The OAuth2 client must allow the redirect URIs `http://localhost:5000/callback` 
 
 While the variable is set:
 
-- The provider from the file replaces Metaplay Auth as the default. The `auth` commands, and all commands that use the portal or target an environment, sign in with it.
+- The provider from the file replaces Metaplay Auth as the default, and the provider name `metaplay` refers to it. The `auth` commands, and all commands that use the portal or target an environment, sign in with it.
 - Environments whose `authProvider` in `metaplay-project.yaml` names a provider defined in the project keep using that provider.
-- The session is stored separately from the Metaplay Auth session, so switching between platforms does not sign you out of either. To manage the Metaplay Auth session while the variable is set, name the built-in provider explicitly, e.g., `metaplay auth logout metaplay`.
+- The session is stored separately from the Metaplay Auth session, so switching between platforms does not sign you out of either. To manage the Metaplay Auth session, unset both variables for that command, e.g., `METAPLAYCLI_AUTH_PROVIDER_FILE= METAPLAYCLI_PORTAL_BASEURL= metaplay auth logout` in bash.
 - If you change the file's `clientId` or `tokenEndpoint` but keep its `name`, the stored session is rejected because it was issued by a different provider. Run `metaplay auth logout` to remove it.
 - Kubeconfigs generated with `metaplay get kubeconfig` run the CLI to fetch credentials whenever `kubectl` needs them, so run `kubectl` with the same variables set.
 

@@ -94,8 +94,7 @@ func NewDefaultAuthProvider() (*AuthProviderConfig, error) {
 }
 
 // NewMetaplayAuthProvider returns the auth provider for Metaplay's managed platform.
-// It is exported so callers can reach the built-in provider explicitly, regardless of
-// what AuthProviderFileEnvVar points the default at.
+// Commands should call NewDefaultAuthProvider instead, which honors AuthProviderFileEnvVar.
 func NewMetaplayAuthProvider() *AuthProviderConfig {
 	return &AuthProviderConfig{
 		Name:             metaplayAuthProviderName,
