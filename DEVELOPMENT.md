@@ -103,6 +103,18 @@ These environment variables point `metaplay llm-docs` at another instance of the
 |---|---|
 | `METAPLAYCLI_DEBUG_COPY_RANDOM_FAIL` | Set to `1` to inject random failures into file downloads from debug containers, to test the retry and resume logic. Used by `metaplay debug collect-heap-dump` and `metaplay debug collect-cpu-profile`. |
 
+## Recording the README GIF
+
+`images/cli-build.gif` is recorded with [VHS](https://github.com/charmbracelet/vhs) in Docker, using the latest CLI release and the SDK's `Samples/Idler` project. The recording files are in `images/cli-build/`. You need Docker, `gh`, and an SDK checkout.
+
+To re-record, run this in bash (Git Bash on Windows):
+
+```bash
+cli$ bash images/cli-build/record.sh path/to/sdk
+```
+
+The first run takes several minutes to warm the Docker build cache. Each run leaves a `lovely-wombats-build:<timestamp>-<commit>` image, which you can remove with `docker image rm`.
+
 ## Publishing and CI
 
 There are two types of releases published:
