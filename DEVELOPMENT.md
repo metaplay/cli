@@ -101,8 +101,6 @@ export METAPLAYCLI_AUTH_PROVIDER_FILE=~/metaplay-tilt-auth.yaml
 metaplay auth login
 ```
 
-These endpoints are served over TLS with the platform's own CA, which must be in your system trust store before the CLI can reach them. Bringing the platform up installs it.
-
 The file has the following fields:
 
 | Field | Required | Description |
