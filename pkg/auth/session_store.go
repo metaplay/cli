@@ -392,14 +392,14 @@ func LoadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
 		return nil, nil
 	}
 
-	// Refuse a session that a different platform minted. Sessions are keyed by the
-	// provider's name, so two providers sharing a name would otherwise present one
-	// platform's tokens to the other.
+	// Refuse a stored session whose fingerprint names a different provider. Sessions are
+	// keyed by name, so two providers sharing one would otherwise present a platform's
+	// tokens to the other. Catches only what the fingerprint covers; see Fingerprint.
 	if !sessionBelongsToProvider(sessionState, authProvider) {
 		return nil, clierrors.Newf("Stored session '%s' belongs to a different auth provider", sessionID).
 			WithCause(ErrSessionProviderMismatch).
 			WithDetails("Its tokens were issued by another platform, so they are not valid here").
-			WithSuggestion(fmt.Sprintf("Sign in again with 'metaplay auth login', or rename one of the providers so they no longer share the name '%s'", authProvider.Name))
+			WithSuggestion(fmt.Sprintf("Run '%s' to sign in again, or rename one of the providers so they no longer share the name '%s'", authProvider.LoginCommand(), authProvider.Name))
 	}
 
 	// Get encryption key (read-only, do not create if missing).

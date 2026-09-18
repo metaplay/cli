@@ -80,7 +80,7 @@ By default, the CLI signs in with Metaplay Auth and uses the managed Metaplay po
 | `METAPLAYCLI_PORTAL_BASEURL` | Base URL of the portal to use instead of `https://portal.metaplay.dev`. |
 | `METAPLAYCLI_AUTH_PROVIDER_FILE` | Path to a YAML file describing the OAuth2 provider to sign in with instead of Metaplay Auth. See [Auth Provider File](#auth-provider-file). |
 
-Set both to the same platform, because a portal does not accept tokens issued by another platform's auth server. The CLI prints the overridden values at startup, and warns when only one of the two is set.
+Set both to the same platform, because a portal does not accept tokens issued by another platform's auth server. The CLI prints the overridden values at startup, and warns when the provider file is set while the portal is still the default — the combination that sends a token to a platform it was not issued for.
 
 ### Auth Provider File
 
@@ -89,17 +89,19 @@ Example for the local Tilt setup:
 ```yaml
 name: Metaplay Auth (tilt)
 clientId: c16ea663-ced3-46c6-8f85-38c9681fe1f0
-authEndpoint: http://auth.metaplay-dev.localhost/oauth2/auth
-tokenEndpoint: http://auth.metaplay-dev.localhost/oauth2/token
-revokeEndpoint: http://auth.metaplay-dev.localhost/oauth2/revoke
-userInfoEndpoint: http://portal.metaplay-dev.localhost/api/external/userinfo
+authEndpoint: https://auth.metaplay.localhost/oauth2/auth
+tokenEndpoint: https://auth.metaplay.localhost/oauth2/token
+revokeEndpoint: https://auth.metaplay.localhost/oauth2/revoke
+userInfoEndpoint: https://portal.metaplay.localhost/api/external/userinfo
 ```
 
 ```bash
-export METAPLAYCLI_PORTAL_BASEURL=http://portal.metaplay-dev.localhost
+export METAPLAYCLI_PORTAL_BASEURL=https://portal.metaplay.localhost
 export METAPLAYCLI_AUTH_PROVIDER_FILE=~/metaplay-tilt-auth.yaml
 metaplay auth login
 ```
+
+These endpoints are served over TLS with the platform's own CA, which must be in your system trust store before the CLI can reach them. Bringing the platform up installs it.
 
 The file has the following fields:
 

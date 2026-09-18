@@ -281,10 +281,10 @@ userInfoEndpoint: http://LOCALHOST:3000/api/external/userinfo
 			yamlData: `
 name: Tilt
 clientId: client-id
-authEndpoint: http://auth.metaplay-dev.localhost/oauth2/auth
-tokenEndpoint: http://auth.metaplay-dev.localhost/oauth2/token
-revokeEndpoint: http://auth.metaplay-dev.localhost/oauth2/revoke
-userInfoEndpoint: http://portal.metaplay-dev.localhost/api/external/userinfo
+authEndpoint: http://auth.example.localhost/oauth2/auth
+tokenEndpoint: http://auth.example.localhost/oauth2/token
+revokeEndpoint: http://auth.example.localhost/oauth2/revoke
+userInfoEndpoint: http://portal.example.localhost/api/external/userinfo
 `,
 			check: func(t *testing.T, provider *AuthProviderConfig) {
 				if provider.Name != "Tilt" {

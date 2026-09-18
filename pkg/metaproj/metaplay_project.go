@@ -241,6 +241,13 @@ func validateHelmChartVersion(fieldName string, chartVersion string) error {
 
 // Apply any defaults to the project config which are not required to be specified.
 func ApplyProjectConfigDefaults(config *ProjectConfig) error {
+	// Tell each auth provider the key it is filed under. The key identifies a provider,
+	// but the map value cannot see it, so errors raised in pkg/auth would otherwise have
+	// only the display name — which does not reliably resolve back to this provider.
+	for key, authProviderCfg := range config.AuthProviders {
+		authProviderCfg.SetProjectKey(key)
+	}
+
 	for ndx, envConfig := range config.Environments {
 		// Default value for hosting type depending on stack domain.
 		if envConfig.HostingType == "" {

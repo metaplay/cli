@@ -6,6 +6,7 @@ package auth
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -46,6 +47,13 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 	// Get current session (including credentials).
 	sessionState, err := LoadSessionState(authProvider)
 	if err != nil {
+		// A provider mismatch already names the command that resolves it. Wrapping
+		// buries that: displayError prints only the outermost suggestion, and a bare
+		// 'metaplay auth login' signs in to the default provider rather than the one
+		// asked for, so following the hint changes nothing.
+		if errors.Is(err, ErrSessionProviderMismatch) {
+			return nil, err
+		}
 		return nil, clierrors.Wrap(err, "Failed to load stored credentials").
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/go-version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"gopkg.in/yaml.v3"
 )
@@ -628,5 +629,36 @@ integrationTests:
 			}
 			tc.validate(t, &config)
 		})
+	}
+}
+
+// The authProviders key identifies a provider, but the map value cannot see it.
+// Stamping it on load lets an error raised in pkg/auth name the argument that
+// resolves back to this provider.
+func TestApplyProjectConfigDefaults_StampsAuthProviderKeys(t *testing.T) {
+	config := &ProjectConfig{
+		AuthProviders: map[string]*auth.AuthProviderConfig{
+			"corp": {Name: "Corp SSO", ClientID: "corp-client"},
+			"alt":  {Name: "Corp SSO", ClientID: "alt-client"},
+		},
+	}
+
+	if err := ApplyProjectConfigDefaults(config); err != nil {
+		t.Fatalf("ApplyProjectConfigDefaults returned an error: %v", err)
+	}
+
+	// Both share a display name, so only the key tells them apart.
+	if got := config.AuthProviders["corp"].LoginCommand(); got != "metaplay auth login corp" {
+		t.Errorf("LoginCommand() = %q, want it to name the key 'corp'", got)
+	}
+	if got := config.AuthProviders["alt"].LoginCommand(); got != "metaplay auth login alt" {
+		t.Errorf("LoginCommand() = %q, want it to name the key 'alt'", got)
+	}
+}
+
+// A nil map is the common case for a project that defines no providers of its own.
+func TestApplyProjectConfigDefaults_NoAuthProviders(t *testing.T) {
+	if err := ApplyProjectConfigDefaults(&ProjectConfig{}); err != nil {
+		t.Fatalf("ApplyProjectConfigDefaults returned an error: %v", err)
 	}
 }
