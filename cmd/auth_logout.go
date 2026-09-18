@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"errors"
+
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -73,8 +75,19 @@ func (o *authLogoutOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Check if we're logged in.
-	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())
+	sessionState, err := auth.LoadSessionState(authProvider)
 	if err != nil {
+		// A session minted by another provider cannot be revoked here, and revoking it
+		// against this provider would be meaningless. Clearing it locally must still
+		// work, or a name collision leaves the session impossible to get rid of.
+		if errors.Is(err, auth.ErrSessionProviderMismatch) {
+			log.Warn().Msgf("%s Stored session was issued by a different auth provider; removing it locally without revoking", styles.RenderWarning("⚠️"))
+			if err := auth.DeleteSessionState(authProvider); err != nil {
+				return err
+			}
+			log.Info().Msg(styles.RenderSuccess("✅ Local session removed."))
+			return nil
+		}
 		return err
 	}
 
@@ -85,7 +98,7 @@ func (o *authLogoutOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Revoke tokens server-side and delete the local session state.
-	err = auth.RevokeAndDeleteSession(authProvider, authProvider.GetSessionID())
+	err = auth.RevokeAndDeleteSession(authProvider)
 	if err != nil {
 		return err
 	}

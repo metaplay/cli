@@ -88,8 +88,11 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 	targetSdkDirAbs := abs
 	parentDir := filepath.Dir(targetSdkDirAbs)
 
-	// Ensure the user is logged in (Metaplay auth provider).
-	authProvider := auth.NewMetaplayAuthProvider()
+	// Ensure the user is logged in (default auth provider).
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err

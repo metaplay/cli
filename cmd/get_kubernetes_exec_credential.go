@@ -61,8 +61,12 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 	} else {
-		// If no metaplay-project.yaml was found, assume Metaplay Auth provider is being used.
-		tokenSet, err = tui.RequireLoggedIn(cmd.Context(), auth.NewMetaplayAuthProvider())
+		// If no metaplay-project.yaml was found, assume the default auth provider is being used.
+		authProvider, err := auth.NewDefaultAuthProvider()
+		if err != nil {
+			return err
+		}
+		tokenSet, err = tui.RequireLoggedIn(cmd.Context(), authProvider)
 		if err != nil {
 			return err
 		}

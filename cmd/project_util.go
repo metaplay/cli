@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -101,11 +102,22 @@ func findProjectDirectory() (string, error) {
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
+	// 'metaplay' and the empty name both mean the default provider: Metaplay Auth,
+	// or the provider METAPLAYCLI_AUTH_PROVIDER_FILE replaces it with.
 	if providerName == "" || providerName == "metaplay" {
-		log.Debug().Msgf("Using built-in provider 'metaplay'")
-		return auth.NewMetaplayAuthProvider(), nil
+		log.Debug().Msgf("Resolving the default auth provider")
+		return auth.NewDefaultAuthProvider()
 	} else {
 		log.Debug().Msgf("Resolving auth provider '%s'", providerName)
+	}
+
+	// Any other name can only come from the project, so there has to be one. Commands
+	// reach here with a nil project when run outside a project directory, because
+	// tryResolveProject() reports "no project found" as (nil, nil).
+	if project == nil {
+		return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
+			WithDetails("Custom auth providers are defined in metaplay-project.yaml, and no project was found").
+			WithSuggestion("Run this in your project directory (or pass --project=<path>), or use the default 'metaplay' provider")
 	}
 
 	// If have a project, return its auth provider.
@@ -115,11 +127,27 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 			WithSuggestion("Use the default 'metaplay' provider, or add custom providers to metaplay-project.yaml")
 	}
 
-	// Find the matching provider (by ID or name).
+	// An exact id match wins.
+	if provider, found := project.Config.AuthProviders[providerName]; found {
+		return provider, nil
+	}
+
+	// Otherwise fall back to the display name, but only when it identifies exactly one
+	// provider. Ranging over the map and taking the first hit would resolve a duplicated
+	// name differently from run to run, because Go randomizes map iteration order.
+	nameMatches := []string{}
 	for providerID, provider := range project.Config.AuthProviders {
-		if providerID == providerName || provider.Name == providerName {
-			return provider, nil
+		if provider.Name == providerName {
+			nameMatches = append(nameMatches, providerID)
 		}
+	}
+	sort.Strings(nameMatches)
+	if len(nameMatches) == 1 {
+		return project.Config.AuthProviders[nameMatches[0]], nil
+	} else if len(nameMatches) > 1 {
+		return nil, clierrors.Newf("Auth provider name '%s' is ambiguous", providerName).
+			WithDetails(fmt.Sprintf("Providers %v all use this name", nameMatches)).
+			WithSuggestion("Name the provider by its id in metaplay-project.yaml instead")
 	}
 
 	// Provider not found, return an error.
@@ -127,6 +155,7 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 	for providerID := range project.Config.AuthProviders {
 		existingAuthProviders = append(existingAuthProviders, providerID)
 	}
+	sort.Strings(existingAuthProviders)
 	return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
 		WithDetails(fmt.Sprintf("Available providers: %v", existingAuthProviders))
 }
@@ -238,9 +267,12 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		return envConfig, tokenSet, nil
 	}
 
-	// If no metaplay-project.yaml can be located, we know we are using Metaplay auth provider.
+	// If no metaplay-project.yaml can be located, we know we are using the default auth provider.
 	// \todo store in project config instead?
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Ensure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)

@@ -70,13 +70,30 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		}
 	}
 
-	// Auth + user identity from the persisted Metaplay session (if any).
+	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
+	isOverrideTarget := target != ""
+	if target == "" {
+		target = defaultLLMDocsTarget
+	}
+
+	// Auth + user identity from the persisted session (if any).
 	// We deliberately use LoadSessionState (not LoadAndRefreshTokenSet) here:
 	// a failed refresh would delete the session, and a best-effort metadata
 	// read must never have that side effect.
+	//
+	// A session from a provider other than the built-in one belongs to a different
+	// platform, and the default target is operated by Metaplay: presenting that
+	// session there would hand a foreign platform's credential (and the identity
+	// derived from it) to a service that is not its audience. Such a session is
+	// used only when the caller has pointed at a different llm-docs service of
+	// their own with METAPLAYCLI_LLM_DOCS_ADDR.
 	var accessToken string
-	authProvider := auth.NewMetaplayAuthProvider()
-	if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to resolve auth provider: %v", err)
+	} else if !authProvider.IsBuiltinMetaplayAuth() && !isOverrideTarget {
+		stderrLogger.Info().Msgf(styles.RenderMuted("llm-docs: auth token withheld (session belongs to auth provider '%s', and %s is a Metaplay service)"), authProvider.Name, target)
+	} else if sessionState, err := auth.LoadSessionState(authProvider); err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to load session: %v", err)
 	} else if sessionState != nil {
 		accessToken = sessionState.TokenSet.AccessToken
@@ -89,11 +106,6 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		}
 	}
 
-	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
-	isOverrideTarget := target != ""
-	if target == "" {
-		target = defaultLLMDocsTarget
-	}
 	insecureForced := isTruthy(os.Getenv("METAPLAYCLI_LLM_DOCS_INSECURE"))
 	useInsecure := insecureForced || isLoopbackTarget(target)
 

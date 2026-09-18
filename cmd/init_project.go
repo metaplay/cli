@@ -159,7 +159,10 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 	// Use default auth provider.
 	// \todo ability to customize or disable provider?
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 
 	// Make sure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)

@@ -20,6 +20,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
@@ -112,9 +113,35 @@ var rootCmd = &cobra.Command{
 		// Show CLI version & whether in interactive mode
 		stderrLogger.Info().Msgf(styles.RenderMuted("Metaplay CLI %s, %s"), version.AppVersion, modeStr)
 
-		// Log about non-default portal being used.
-		if common.PortalBaseURL != common.DefaultPortalBaseURL {
+		// Log about non-default portal being used. Trailing slashes are trimmed before
+		// comparing, because reading 'https://portal.metaplay.dev/' as an override
+		// would silence the warning below for the one case that needs it.
+		isDefaultPortal := strings.TrimRight(common.PortalBaseURL, "/") == strings.TrimRight(common.DefaultPortalBaseURL, "/")
+		if !isDefaultPortal {
 			stderrLogger.Info().Msgf(styles.RenderMuted("Portal base URL: %s"), common.PortalBaseURL)
+		}
+
+		// Log about which auth provider the session will come from. Only one direction
+		// warns. A provider file with the default portal has no valid use: the portal
+		// rejects another platform's tokens, so the command is about to send one to a
+		// service that is not its audience.
+		//
+		// The reverse is a supported setup — a local portal in front of Metaplay Auth,
+		// which pkg/common/config.go documents — so it is muted like the portal line
+		// above. Warning on it taught developers to ignore the direction that is real.
+		//
+		// It says *default* provider because that is all the variables determine. An
+		// environment naming its own authProvider uses that instead, and nothing here
+		// can know.
+		if authProviderFile := os.Getenv(auth.AuthProviderFileEnvVar); authProviderFile != "" {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider file: %s"), authProviderFile)
+			if isDefaultPortal {
+				stderrLogger.Warn().Msgf("%s Auth provider file is set, but the portal is still %s; set %s to the matching platform's portal",
+					styles.RenderWarning("⚠️"), common.DefaultPortalBaseURL, common.PortalBaseURLEnvVar)
+			}
+		} else if !isDefaultPortal {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Default auth provider: Metaplay Auth (set %s to sign in to another platform)"),
+				auth.AuthProviderFileEnvVar)
 		}
 
 		// Check for new CLI version available.
