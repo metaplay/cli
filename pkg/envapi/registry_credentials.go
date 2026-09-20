@@ -148,7 +148,8 @@ func (target *TargetEnvironment) ResolveImagePushTarget() (*ImagePushTarget, err
 			return nil, clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
 				WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal.")
 		}
-		return nil, err
+		return nil, clierrors.Wrap(err, "Failed to read the environment's details").
+			WithSuggestion("Check that you have access to this environment, and that its stack is reachable.")
 	}
 	if envDetails.Deployment.EcrRepo == "" {
 		return nil, clierrors.New("The environment has no image repository").
@@ -158,7 +159,8 @@ func (target *TargetEnvironment) ResolveImagePushTarget() (*ImagePushTarget, err
 
 	dockerCredentials, err := target.GetDockerCredentials(envDetails)
 	if err != nil {
-		return nil, err
+		return nil, clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
+			WithSuggestion("Check that you have access to this environment.")
 	}
 	return &ImagePushTarget{
 		Repository:  envDetails.Deployment.EcrRepo,

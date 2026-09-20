@@ -266,3 +266,31 @@ func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
 		t.Errorf("error = %q, want it to name the environment rather than the request that failed", err)
 	}
 }
+
+// The fallback's other leg: a stack that issues no credential but whose
+// environment does name a repository proceeds to the older path rather than
+// refusing. Only the branch is asserted here — where it leads needs a cloud
+// registry, which no test should reach — but the branch is the part that can
+// be got wrong, and getting it wrong turns every push on an older stack into a
+// refusal.
+func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/registry") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		details := DeploymentSecret{}
+		details.Deployment.EcrRepo = "123456789.dkr.ecr.eu-west-1.amazonaws.com/an-environment"
+		_ = json.NewEncoder(w).Encode(details)
+	}))
+
+	_, err := env.ResolveImagePushTarget()
+
+	// It gets as far as asking for credentials, which is where a test without a
+	// cloud account stops. What must NOT happen is the refusal that belongs to
+	// an environment naming no repository at all.
+	if err != nil && strings.Contains(err.Error(), "no image repository") {
+		t.Errorf("error = %q, want it to have taken the older path rather than refusing", err)
+	}
+}
