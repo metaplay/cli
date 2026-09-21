@@ -17,14 +17,11 @@ import (
 	"github.com/metaplay/cli/pkg/metahttp"
 )
 
-// Where a stack's image repository is, and how the CLI finds out.
-//
-// A stack either serves its own registry or it does not, and the CLI has no
-// other way to tell: it asks, and a 404 means this stack still keeps its images
-// in a cloud registry the old path reaches. That makes the difference between
-// "not served" and "failed" load-bearing — treating a failure as "not served"
-// would send the caller down the fallback and report whatever that fails with,
-// which has nothing to do with what went wrong.
+// Where a stack's image repository is, and how the CLI finds out: it asks, and
+// a 404 means this stack still keeps its images in a cloud registry the older
+// path reaches. That makes "not served" and "failed" load-bearing to tell
+// apart — treating a failure as "not served" takes the fallback and reports
+// whatever that fails with instead.
 
 func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
 	t.Helper()
@@ -35,9 +32,8 @@ func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
 	client := metahttp.NewJSONClient(tokenSet, server.URL)
 
 	// The shared client retries 5xx with a backoff, which is right against a
-	// real stack and pure waiting here: what these tests pin is how a status
-	// maps to an error, and retrying it three times first says nothing extra
-	// while adding ten seconds to the package's test run.
+	// real stack and ten seconds of pure waiting here: these tests only pin how
+	// a status maps to an error.
 	client.Resty.SetRetryCount(0)
 
 	return &TargetEnvironment{
@@ -86,9 +82,8 @@ func TestGetRegistryCredentials_ReportsWhereImagesGoAndHowToAuthenticate(t *test
 	}
 }
 
-// The push target joins the two halves the stack deliberately keeps apart. The
-// stack carries host and repository separately so one shape holds registries
-// that are laid out differently; a client that pushes has to join them, and
+// The stack carries host and repository separately so one shape holds
+// registries laid out differently. A client that pushes has to join them, and
 // this is the only place that does.
 func TestGetRegistryCredentials_PushTargetIsHostQualified(t *testing.T) {
 	env, _ := serveRegistryCredentials(t, RegistryCredentials{
@@ -110,8 +105,7 @@ func TestGetRegistryCredentials_PushTargetIsHostQualified(t *testing.T) {
 }
 
 // A stack that does not serve this endpoint keeps its images somewhere the
-// older path reaches. That is not an error, and the caller has to be able to
-// tell it apart from one.
+// older path reaches. That is not an error, and must not read as one.
 func TestGetRegistryCredentials_NotServedIsNotAFailure(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -124,9 +118,9 @@ func TestGetRegistryCredentials_NotServedIsNotAFailure(t *testing.T) {
 	}
 }
 
-// Everything else is a failure and must stay one. A stack whose registry
+// Everything else is a failure and must stay one: a stack whose registry
 // endpoint is broken would otherwise be reported as whatever the fallback
-// happens to fail with, which names neither the endpoint nor the stack.
+// happens to fail with.
 func TestGetRegistryCredentials_OtherFailuresAreNotMistakenForNotServed(t *testing.T) {
 	for _, status := range []int{
 		http.StatusUnauthorized,
@@ -150,9 +144,9 @@ func TestGetRegistryCredentials_OtherFailuresAreNotMistakenForNotServed(t *testi
 	}
 }
 
-// A stack answering 200 with nothing useful is a stack that cannot be pushed
-// to. Saying so here names the endpoint; letting it through produces a docker
-// error about an empty reference somewhere much further down.
+// A stack answering 200 with nothing useful cannot be pushed to. Saying so here
+// names the endpoint; letting it through produces a docker error about an empty
+// reference much further down.
 func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
 	incomplete := map[string]struct {
 		credentials RegistryCredentials
@@ -162,9 +156,8 @@ func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
 		"no repository":    {RegistryCredentials{RegistryHost: "registry.example.com", Username: "u", Password: "p"}, "repository"},
 		"no username":      {RegistryCredentials{RegistryHost: "registry.example.com", Repository: "env/gameserver", Password: "p"}, "username"},
 		"no password":      {RegistryCredentials{RegistryHost: "registry.example.com", Repository: "env/gameserver", Username: "u"}, "password"},
-		// Several missing at once. The message must name the same one every
-		// run: an error that varies is one nobody can search for, and finding
-		// it by ranging a map is how that happens.
+		// Several missing at once. The message must name the same field every
+		// run — an error that varies is one nobody can search for.
 		"nothing at all": {RegistryCredentials{}, "registry host"},
 	}
 	for name, tc := range incomplete {
@@ -182,10 +175,10 @@ func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
 	}
 }
 
-// An answer whose fields are all present but do not join into a name any
-// registry client parses is refused the same way an incomplete one is. A
-// scheme on the host is how that happens in practice, and it is invisible
-// until docker rejects the reference several steps later.
+// Fields that are all present but do not join into a name any registry client
+// parses are refused the same way an incomplete answer is. A scheme on the host
+// is how that happens, and it stays invisible until docker rejects the
+// reference several steps later.
 func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
 	env, _ := serveRegistryCredentials(t, RegistryCredentials{
 		RegistryHost: "https://registry.example-stack.example.com",
@@ -207,12 +200,10 @@ func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
 }
 
 // Where the stack issues a credential, that is the whole answer: nothing else
-// is consulted, and in particular nothing cloud-shaped is fetched.
-//
-// The second half is the point. Asking for the environment's cloud description
-// first and deciding after is the shape of the problem this replaces — a push
-// that failed before it reached any registry, because that description only
-// exists for a cloud-provisioned environment.
+// is consulted, and in particular nothing cloud-shaped is fetched. That second
+// half is the point — asking for the environment's cloud description first is
+// what made pushes fail before they reached any registry, since only a
+// cloud-provisioned environment has one.
 func TestResolveImagePushTarget_UsesWhatTheStackIssued(t *testing.T) {
 	var asked []string
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -248,10 +239,10 @@ func TestResolveImagePushTarget_UsesWhatTheStackIssued(t *testing.T) {
 	}
 }
 
-// A stack that issues no credential and whose environment names no repository
-// either cannot be pushed to at all. Saying that names both halves of why;
-// reaching for cloud credentials anyway would report whatever that failed with,
-// which names neither.
+// A stack that issues no credential, and an environment that names no
+// repository either, cannot be pushed to at all. Saying that names both halves
+// of why; reaching for cloud credentials anyway would report something that
+// names neither.
 func TestResolveImagePushTarget_NoCredentialAndNoRepositoryIsRefusedClearly(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/registry") {
@@ -275,11 +266,9 @@ func TestResolveImagePushTarget_NoCredentialAndNoRepositoryIsRefusedClearly(t *t
 }
 
 // A 404 has two meanings and they must not be confused. An environment that is
-// not on this stack gets one from a check that runs before the registry
-// endpoint is reached, so it arrives looking exactly like a stack that has no
-// such endpoint. Following the fallback and reporting what *that* failed with
-// would send the reader after an environment description that was never the
-// problem.
+// not on this stack gets one before the registry endpoint is even reached, so
+// it looks exactly like a stack that has no such endpoint; following the
+// fallback would report a missing description that was never the problem.
 func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Both requests answer 404, which is what an unknown environment gets
@@ -302,10 +291,9 @@ func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
 
 // The fallback's other leg: a stack that issues no credential but whose
 // environment does name a repository proceeds to the older path rather than
-// refusing. Only the branch is asserted here — where it leads needs a cloud
-// registry, which no test should reach — but the branch is the part that can
-// be got wrong, and getting it wrong turns every push on an older stack into a
-// refusal.
+// refusing. Only the branch is asserted — where it leads needs a cloud
+// registry no test should reach — but getting the branch wrong turns every
+// push on an older stack into a refusal.
 func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
 	var asked []string
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -322,10 +310,8 @@ func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t 
 
 	_, err := env.ResolveImagePushTarget()
 
-	// It gets as far as asking the stack for cloud credentials, which is where
-	// a test without a cloud account stops — the stack here answers that with
-	// an environment description, which is not a credential, so the older path
-	// ends in an error rather than reaching any cloud service. Asserting the
+	// The older path gets as far as asking the stack for cloud credentials,
+	// which is where a test without a cloud account stops. Asserting that the
 	// request was made is what pins the branch: a refusal or a silent success
 	// would both leave it unasked.
 	if !slices.ContainsFunc(asked, func(path string) bool { return strings.HasSuffix(path, "/aws") }) {

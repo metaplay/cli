@@ -94,9 +94,8 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Resolve where the image goes and what authenticates the push. Which
-	// registry that is depends on the stack, and asking it is the only way to
-	// know.
+	// Resolve where the image goes and what authenticates the push; which
+	// registry that is depends on the stack.
 	pushTarget, err := targetEnv.ResolveImagePushTarget()
 	if err != nil {
 		return err

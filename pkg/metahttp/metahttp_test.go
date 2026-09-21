@@ -215,10 +215,9 @@ func TestParseHTTPErrorMessage(t *testing.T) {
 	}
 }
 
-// A status the caller asked about is still an error it has to handle, but not
-// one the user is shown a failed-request line for: the caller is about to
-// recover from it, and a red line about a request the CLI went on to recover
-// from is noise nobody can act on.
+// An expected status is still an error the caller has to handle, but not one
+// the user is shown a failed-request line for: the caller is about to recover
+// from it.
 func TestRequestExpecting_ExpectedStatusIsReturnedButNotLoggedAsAFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// An opaque body, which is what an unrouted path answers with and what

@@ -56,11 +56,9 @@ type AWSCredentials struct {
 type DockerCredentials struct {
 	Username string
 	Password string
-	// RegistryURL identifies the registry, but not in one shape: ECR reports
-	// its proxy endpoint scheme and all ('https://<id>.dkr.ecr...'), while a
-	// stack that issues its own credentials names a bare host. Consumers must
-	// not assume either — in particular it is not a registry name a container
-	// registry client will parse.
+	// The registry, in one of two shapes: ECR's proxy endpoint, scheme and all
+	// ('https://<id>.dkr.ecr...'), or the bare host a stack that issues its own
+	// credentials reports. Not a name a registry client will parse.
 	RegistryURL string
 }
 

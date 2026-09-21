@@ -16,24 +16,20 @@ import (
 	"github.com/metaplay/cli/pkg/metahttp"
 )
 
-// ErrRegistryCredentialsNotServed reports that this stack does not issue
-// credentials for a registry of its own, so the caller should reach the
-// environment's images the way it did before.
+// ErrRegistryCredentialsNotServed reports that this stack issues no registry
+// credentials of its own, so the caller should reach the environment's images
+// the way it did before.
 //
-// A stack says so by not serving the endpoint at all. That is the whole of the
-// discovery mechanism, and it is deliberate: an endpoint answering with an
-// empty body would be indistinguishable from one that failed, and a client
-// cannot tell "this stack keeps images elsewhere" from "this stack is broken"
-// by reading a 200.
+// A stack says so by not serving the endpoint at all: answering 200 with an
+// empty body would be indistinguishable from a stack that is simply broken.
 var ErrRegistryCredentialsNotServed = errors.New("this stack does not issue image registry credentials")
 
 // RegistryCredentials is where an environment's images live, and what to
 // present to push or pull them.
 //
-// Host and repository arrive separately because that is how the stack holds
-// them: one shape covers registries laid out differently, and a joined field
-// beside them would be redundant state that can disagree with its parts.
-// PushTarget is the only place the two are joined.
+// Host and repository stay separate because that is how the stack holds them,
+// and one shape then covers registries laid out differently. PushTarget is the
+// only place the two are joined.
 type RegistryCredentials struct {
 	RegistryHost string `json:"registry_host"`
 	Repository   string `json:"repository"`
@@ -58,22 +54,19 @@ func (c *RegistryCredentials) DockerCredentials() *DockerCredentials {
 // GetRegistryCredentials asks the stack for a credential to this environment's
 // image repository.
 //
-// The credential is short-lived and nothing stores it — not here, not on the
-// stack, and not in the docker credential store, which this CLI never writes
-// to. It is handed to the docker daemon inline for the one push that needs it.
+// The credential is short-lived and nothing stores it — not here, and not in
+// the docker credential store, which this CLI never writes to. It is handed to
+// the docker daemon inline for the one push that needs it.
 //
-// Which repository it reaches is the stack's decision, not this caller's: the
-// answer names the repository, and asking for another one would be refused
-// anyway. That is why nothing here sends a repository.
+// The stack decides which repository the credential reaches, so nothing here
+// sends one.
 func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials, error) {
 	path := fmt.Sprintf("/v0/credentials/%s/registry", target.HumanID)
 	log.Debug().Msgf("Get image registry credentials from %s%s", target.StackApiClient.BaseURL, path)
 
-	// The 404 is expected here — it is how a stack says it keeps its images
-	// elsewhere — so it must not be logged as a failed request. Every push
-	// against such a stack takes this path and recovers from it, and a red line
-	// about a request the CLI went on to recover from is noise the user cannot
-	// act on.
+	// A 404 is expected here: it is how a stack says it keeps its images
+	// elsewhere. Every push against such a stack takes this path and recovers
+	// from it, so it must not be logged as a failed request.
 	credentials, err := metahttp.PostExpecting[RegistryCredentials](target.StackApiClient, path, nil, "", http.StatusNotFound)
 	if err != nil {
 		if isHTTPNotFound(err) {
@@ -83,10 +76,9 @@ func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials,
 			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
 	}
 
-	// Checked here rather than where the push fails. A missing field surfaces
+	// Checked here rather than where the push fails: a missing field surfaces
 	// much further down as a docker error about a malformed reference or a
-	// rejected login, and neither names the stack or the endpoint that left it
-	// out.
+	// rejected login, naming neither the stack nor this endpoint.
 	for _, missing := range []struct{ field, value string }{
 		{"registry host", credentials.RegistryHost},
 		{"repository", credentials.Repository},
@@ -101,10 +93,8 @@ func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials,
 	}
 
 	// The two halves are joined here and nowhere else, so this is where a host
-	// or repository no registry client will parse has to be caught — a scheme
-	// on the host is how that happens in practice. Letting it through surfaces
-	// as a docker error about a malformed reference, which names neither the
-	// stack nor the endpoint that produced it.
+	// or repository no registry client will parse has to be caught. A scheme on
+	// the host is how that happens in practice.
 	if _, err := name.NewRegistry(credentials.RegistryHost, name.StrictValidation); err != nil {
 		return nil, unusableRegistryCredential(err, "registry host", credentials.RegistryHost)
 	}
@@ -136,24 +126,19 @@ type ImagePushTarget struct {
 	Credentials *DockerCredentials
 }
 
-// ResolveImagePushTarget answers where this environment's images go.
+// ResolveImagePushTarget answers where this environment's images go: whatever
+// the stack issues a credential for, and for a stack that issues none, the
+// cloud registry the older path reaches.
 //
-// One code path for every kind of stack, with one fallback: a stack that does
-// not issue its own registry credentials keeps its images in a cloud registry,
-// and the older path reaches those.
+// Nothing cloud-shaped is fetched before that fallback is taken. Asking first
+// and deciding after is what made every push depend on a description only a
+// cloud-provisioned environment has.
 //
-// Nothing cloud-shaped is fetched until that fallback is taken. Asking first
-// and deciding after would make every push depend on a description only a
-// cloud-provisioned environment has — which is the shape of the problem this
-// replaces, where a push failed before it reached any registry at all.
-//
-// A 404 does not only mean "this stack has no such endpoint". It is also what
-// an unknown environment gets, from a check that runs before the endpoint is
-// reached — so a mistyped name on a stack that *does* serve its own registry
-// arrives here indistinguishable from an old stack. What separates them is the
-// second request: an environment that exists on an old stack has a description,
-// and one that does not exist has neither. So the two 404s are told apart by
-// what happens next rather than by guessing at the first one.
+// The 404 that selects the fallback is also what an unknown environment gets,
+// from a check that runs before the endpoint is reached. The two are told
+// apart by what the second request finds — an environment on an older stack
+// has a description, one that does not exist has neither — rather than by
+// guessing at the first 404.
 func (target *TargetEnvironment) ResolveImagePushTarget() (*ImagePushTarget, error) {
 	credentials, err := target.GetRegistryCredentials()
 	switch {
@@ -171,9 +156,9 @@ func (target *TargetEnvironment) ResolveImagePushTarget() (*ImagePushTarget, err
 	envDetails, err := target.GetDetails()
 	if err != nil {
 		if isHTTPNotFound(err) {
-			// Neither request found anything, so the environment is not on this
-			// stack at all. Reporting the deployments request would send the
-			// reader after a description that was never the problem.
+			// Neither request found anything: the environment is not on this
+			// stack at all. Reporting the deployments request would point the
+			// reader at a description that was never the problem.
 			return nil, clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
 				WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal")
 		}
