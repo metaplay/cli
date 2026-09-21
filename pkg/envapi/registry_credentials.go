@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog/log"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -68,14 +69,18 @@ func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials,
 	path := fmt.Sprintf("/v0/credentials/%s/registry", target.HumanID)
 	log.Debug().Msgf("Get image registry credentials from %s%s", target.StackApiClient.BaseURL, path)
 
-	credentials, err := metahttp.Post[RegistryCredentials](target.StackApiClient, path, nil, "")
+	// The 404 is expected here — it is how a stack says it keeps its images
+	// elsewhere — so it must not be logged as a failed request. Every push
+	// against such a stack takes this path and recovers from it, and a red line
+	// about a request the CLI went on to recover from is noise the user cannot
+	// act on.
+	credentials, err := metahttp.PostExpecting[RegistryCredentials](target.StackApiClient, path, nil, "", http.StatusNotFound)
 	if err != nil {
-		var httpErr *metahttp.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+		if isHTTPNotFound(err) {
 			return nil, ErrRegistryCredentialsNotServed
 		}
 		return nil, clierrors.Wrap(err, "Failed to get the environment's image registry credentials").
-			WithSuggestion("Check that you have access to this environment, and that its stack is reachable.")
+			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
 	}
 
 	// Checked here rather than where the push fails. A missing field surfaces
@@ -88,15 +93,40 @@ func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials,
 		{"username", credentials.Username},
 		{"password", credentials.Password},
 	} {
-		field, value := missing.field, missing.value
-		if value == "" {
-			return nil, clierrors.Newf("The environment's registry credential names no %s", field).
+		if missing.value == "" {
+			return nil, clierrors.Newf("The environment's registry credential names no %s", missing.field).
 				WithDetails("The stack answered successfully but left the field out, so there is nothing to push to.").
-				WithSuggestion("Report this to whoever operates the stack; nothing can be done from here.")
+				WithSuggestion("Report this to whoever operates the stack; nothing can be done from here")
 		}
 	}
 
+	// The two halves are joined here and nowhere else, so this is where a host
+	// or repository no registry client will parse has to be caught — a scheme
+	// on the host is how that happens in practice. Letting it through surfaces
+	// as a docker error about a malformed reference, which names neither the
+	// stack nor the endpoint that produced it.
+	if _, err := name.NewRegistry(credentials.RegistryHost, name.StrictValidation); err != nil {
+		return nil, unusableRegistryCredential(err, "registry host", credentials.RegistryHost)
+	}
+	if _, err := name.NewRepository(credentials.PushTarget(), name.StrictValidation); err != nil {
+		return nil, unusableRegistryCredential(err, "repository", credentials.PushTarget())
+	}
+
 	return &credentials, nil
+}
+
+// unusableRegistryCredential reports a field the stack filled in with something
+// no registry client accepts, naming the field and what it held.
+func unusableRegistryCredential(cause error, field, value string) error {
+	return clierrors.Wrapf(cause, "The environment's registry credential names a %s that cannot be pushed to: '%s'", field, value).
+		WithDetails("The stack answered successfully, but what it answered is not a name a docker registry accepts.").
+		WithSuggestion("Report this to whoever operates the stack; nothing can be done from here")
+}
+
+// isHTTPNotFound reports whether err carries a 404 from the StackAPI.
+func isHTTPNotFound(err error) bool {
+	httpErr, ok := errors.AsType[*metahttp.HTTPError](err)
+	return ok && httpErr.StatusCode == http.StatusNotFound
 }
 
 // ImagePushTarget is where an image goes and what authenticates the push.
@@ -140,27 +170,26 @@ func (target *TargetEnvironment) ResolveImagePushTarget() (*ImagePushTarget, err
 
 	envDetails, err := target.GetDetails()
 	if err != nil {
-		var httpErr *metahttp.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+		if isHTTPNotFound(err) {
 			// Neither request found anything, so the environment is not on this
 			// stack at all. Reporting the deployments request would send the
 			// reader after a description that was never the problem.
 			return nil, clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
-				WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal.")
+				WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal")
 		}
 		return nil, clierrors.Wrap(err, "Failed to read the environment's details").
-			WithSuggestion("Check that you have access to this environment, and that its stack is reachable.")
+			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
 	}
 	if envDetails.Deployment.EcrRepo == "" {
 		return nil, clierrors.New("The environment has no image repository").
 			WithDetails("Its stack issues no registry credentials, and the environment names no repository of its own.").
-			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date.")
+			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
 	}
 
 	dockerCredentials, err := target.GetDockerCredentials(envDetails)
 	if err != nil {
 		return nil, clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
-			WithSuggestion("Check that you have access to this environment.")
+			WithSuggestion("Check that you have access to this environment")
 	}
 	return &ImagePushTarget{
 		Repository:  envDetails.Deployment.EcrRepo,

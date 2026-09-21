@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -31,11 +32,19 @@ func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
 	t.Cleanup(server.Close)
 
 	tokenSet := &auth.TokenSet{}
+	client := metahttp.NewJSONClient(tokenSet, server.URL)
+
+	// The shared client retries 5xx with a backoff, which is right against a
+	// real stack and pure waiting here: what these tests pin is how a status
+	// maps to an error, and retrying it three times first says nothing extra
+	// while adding ten seconds to the package's test run.
+	client.Resty.SetRetryCount(0)
+
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
 		StackApiBaseURL: server.URL,
 		HumanID:         "lovely-wombats-build-nimbly",
-		StackApiClient:  metahttp.NewJSONClient(tokenSet, server.URL),
+		StackApiClient:  client,
 	}
 }
 
@@ -173,6 +182,30 @@ func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
 	}
 }
 
+// An answer whose fields are all present but do not join into a name any
+// registry client parses is refused the same way an incomplete one is. A
+// scheme on the host is how that happens in practice, and it is invisible
+// until docker rejects the reference several steps later.
+func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
+	env, _ := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "https://registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+	})
+
+	_, err := env.GetRegistryCredentials()
+	if err == nil {
+		t.Fatal("expected an error naming the field that cannot be pushed to")
+	}
+	if !strings.Contains(err.Error(), "https://registry.example-stack.example.com") {
+		t.Errorf("error = %q, want it to name the host it could not parse", err)
+	}
+	if !strings.Contains(err.Error(), "registry host") {
+		t.Errorf("error = %q, want it to name which field was unusable", err)
+	}
+}
+
 // Where the stack issues a credential, that is the whole answer: nothing else
 // is consulted, and in particular nothing cloud-shaped is fetched.
 //
@@ -274,7 +307,9 @@ func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
 // be got wrong, and getting it wrong turns every push on an older stack into a
 // refusal.
 func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
+	var asked []string
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
 		if strings.Contains(r.URL.Path, "/registry") {
 			http.NotFound(w, r)
 			return
@@ -287,9 +322,18 @@ func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t 
 
 	_, err := env.ResolveImagePushTarget()
 
-	// It gets as far as asking for credentials, which is where a test without a
-	// cloud account stops. What must NOT happen is the refusal that belongs to
-	// an environment naming no repository at all.
+	// It gets as far as asking the stack for cloud credentials, which is where
+	// a test without a cloud account stops — the stack here answers that with
+	// an environment description, which is not a credential, so the older path
+	// ends in an error rather than reaching any cloud service. Asserting the
+	// request was made is what pins the branch: a refusal or a silent success
+	// would both leave it unasked.
+	if !slices.ContainsFunc(asked, func(path string) bool { return strings.HasSuffix(path, "/aws") }) {
+		t.Errorf("requested %v, want the older path's cloud credentials request", asked)
+	}
+
+	// What must NOT happen is the refusal that belongs to an environment naming
+	// no repository at all.
 	if err != nil && strings.Contains(err.Error(), "no image repository") {
 		t.Errorf("error = %q, want it to have taken the older path rather than refusing", err)
 	}

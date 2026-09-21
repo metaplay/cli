@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -198,6 +199,15 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
+	return RequestExpecting[TResponse](c, method, url, body, contentType)
+}
+
+// RequestExpecting is Request, told which non-2xx statuses the caller handles
+// itself. Those are still returned as an *HTTPError, but without the
+// Error-level log of the raw response body: the caller is not reporting them
+// as a failure, and a red line about a request the CLI went on to recover from
+// is noise the user cannot act on.
+func RequestExpecting[TResponse any](c *Client, method string, url string, body any, contentType string, expectedStatuses ...int) (TResponse, error) {
 	var result TResponse
 
 	// Perform the request
@@ -260,9 +270,11 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		// Debug level to avoid doubling the output. Otherwise the body is
 		// opaque (unknown format, HTML intercepted by a proxy, legacy
 		// endpoints, ...) and the user's only reliable diagnostic signal
-		// is the raw log, so keep it at Error level.
+		// is the raw log, so keep it at Error level. A status the caller
+		// asked for is not a failure at all, so it is logged the same quiet
+		// way whatever its body looks like.
 		rawLogLine := fmt.Sprintf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
-		if structured {
+		if structured || slices.Contains(expectedStatuses, response.StatusCode()) {
 			log.Debug().Msg(rawLogLine)
 		} else {
 			log.Error().Msg(rawLogLine)
@@ -310,6 +322,12 @@ func Get[TResponse any](c *Client, url string) (TResponse, error) {
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
 func Post[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPost, url, body, contentType)
+}
+
+// Make a HTTP POST like Post, naming the non-2xx statuses the caller handles
+// itself so they are not logged as failures. See RequestExpecting.
+func PostExpecting[TResponse any](c *Client, url string, body any, contentType string, expectedStatuses ...int) (TResponse, error) {
+	return RequestExpecting[TResponse](c, http.MethodPost, url, body, contentType, expectedStatuses...)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.

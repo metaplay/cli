@@ -5,10 +5,15 @@
 package metahttp
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/metaplay/cli/pkg/auth"
 )
@@ -207,5 +212,58 @@ func TestParseHTTPErrorMessage(t *testing.T) {
 				t.Errorf("structured: got %v, want %v", gotStructured, tc.wantStructured)
 			}
 		})
+	}
+}
+
+// A status the caller asked about is still an error it has to handle, but not
+// one the user is shown a failed-request line for: the caller is about to
+// recover from it, and a red line about a request the CLI went on to recover
+// from is noise nobody can act on.
+func TestRequestExpecting_ExpectedStatusIsReturnedButNotLoggedAsAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An opaque body, which is what an unrouted path answers with and what
+		// would otherwise be logged at Error level.
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	var logged bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	_, err := PostExpecting[map[string]any](newTestClient(server.URL), "/v0/whatever", nil, "", http.StatusNotFound)
+
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
+		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
+	}
+	if httpErr.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", httpErr.StatusCode, http.StatusNotFound)
+	}
+	if strings.Contains(logged.String(), `"level":"error"`) {
+		t.Errorf("logged %s, want the expected status not reported as a failure", logged.String())
+	}
+}
+
+// Every other status keeps the Error-level line: it is the user's only
+// diagnostic when the body is opaque.
+func TestRequestExpecting_AnUnexpectedStatusIsStillLoggedAsAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	var logged bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	_, err := PostExpecting[map[string]any](newTestClient(server.URL), "/v0/whatever", nil, "", http.StatusNotFound)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(logged.String(), `"level":"error"`) {
+		t.Errorf("logged %s, want the unexpected status reported as a failure", logged.String())
 	}
 }
