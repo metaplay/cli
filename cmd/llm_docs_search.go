@@ -30,10 +30,8 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "search QUERY --keywords KEYWORDS",
-		Short: "[preview] Submit an end-user search and fetch relevant documentation (machine use only)",
+		Short: "Submit an end-user search and fetch relevant documentation (machine use only)",
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Submit an end-user search, plus pre-extracted keywords, to the
 			llm-docs service and print the response.
 

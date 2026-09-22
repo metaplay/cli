@@ -41,7 +41,7 @@ const (
 
 var llmDocsCmd = &cobra.Command{
 	Use:   "llm-docs",
-	Short: "[preview] Query the Metaplay LLM-friendly documentation service (machine use only)",
+	Short: "Query the Metaplay LLM-friendly documentation service (machine use only)",
 }
 
 func init() {

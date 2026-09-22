@@ -38,10 +38,8 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "ripgrep PATTERN [flags]",
-		Short: "[preview] Run a ripgrep search against the llm-docs payload (machine use only)",
+		Short: "Run a ripgrep search against the llm-docs payload (machine use only)",
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Run a ripgrep search against the llm-docs payload and print the raw
 			text response. Intended for machine consumption (e.g. AI coding
 			agents); the output format is not stable for human-driven workflows.
