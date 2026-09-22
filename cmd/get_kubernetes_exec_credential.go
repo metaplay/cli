@@ -5,8 +5,6 @@
 package cmd
 
 import (
-	"strings"
-
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -72,9 +70,10 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// \todo Fix stack domain hack
-	stackDomain := strings.Replace(strings.Replace(o.argStackAPIBaseURL, "https://infra.", "", 1), "/stackapi", "", 1)
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, stackDomain, o.argEnvironmentHumanID)
+	// The kubeconfig hands us the StackAPI base URL directly, so use it as it
+	// arrived. Reducing it to a stack domain only to have the constructor
+	// rebuild the same URL made the two spellings able to disagree.
+	targetEnv := envapi.NewTargetEnvironmentAtStackAPI(tokenSet, o.argStackAPIBaseURL, o.argEnvironmentHumanID)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()
