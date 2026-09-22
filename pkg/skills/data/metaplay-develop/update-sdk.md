@@ -7,10 +7,6 @@ description: Upgrade the Metaplay SDK in a project to a newer version. Use when 
 
 A guided workflow for moving a project from its current Metaplay SDK release to a newer one. The CLI handles the file swap; this skill is about choosing the right target, applying the per-release migration guide, and verifying the result.
 
-## Up-front notice
-
-Tell the user: **this is a preview workflow** — behavior is stable enough for everyday use, but they should carefully review the changes made.
-
 ## Phase 0 — Verify source control
 
 The SDK directory is wiped and reinstalled in Phase 2. Without a clean source-controlled tree, local SDK edits — especially binary files, which the modification-patch cannot capture — can be lost with no way to recover.
