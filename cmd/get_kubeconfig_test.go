@@ -13,41 +13,40 @@ import (
 )
 
 var (
-	personsTokens = &auth.TokenSet{AccessToken: "an-access-token", RefreshToken: "a-refresh-token"}
+	humanTokens   = &auth.TokenSet{AccessToken: "an-access-token", RefreshToken: "a-refresh-token"}
 	machineTokens = &auth.TokenSet{AccessToken: "an-access-token"}
 )
 
-// A person gets a dynamic kubeconfig unless they ask otherwise, and a machine
-// user a static one: a dynamic kubeconfig refreshes its credential with the
-// session's refresh token, which a machine user does not hold.
-func TestKubeconfigCredentialsType_DefaultsByWhoIsAsking(t *testing.T) {
-	for name, tc := range map[string]struct {
-		tokens *auth.TokenSet
-		flag   string
-		want   string
+func TestWantsDynamicKubeconfig(t *testing.T) {
+	tests := []struct {
+		name            string
+		tokens          *auth.TokenSet
+		credentialsType string
+		wantDynamic     bool
 	}{
-		"a person, by default":         {personsTokens, "", "dynamic"},
-		"a person asking for static":   {personsTokens, "static", "static"},
-		"a machine user, by default":   {machineTokens, "", "static"},
-		"a machine user asking static": {machineTokens, "static", "static"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := kubeconfigCredentialsType(tc.flag, tc.tokens)
+		{"human user by default", humanTokens, "", true},
+		{"human user asking for dynamic", humanTokens, "dynamic", true},
+		{"human user asking for static", humanTokens, "static", false},
+		{"machine user by default", machineTokens, "", false},
+		{"machine user asking for static", machineTokens, "static", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			isDynamic, err := wantsDynamicKubeconfig(test.credentialsType, test.tokens)
 			if err != nil {
-				t.Fatalf("kubeconfigCredentialsType: %v", err)
+				t.Fatalf("wantsDynamicKubeconfig: %v", err)
 			}
-			if got != tc.want {
-				t.Errorf("got %q, want %q", got, tc.want)
+			if isDynamic != test.wantDynamic {
+				t.Errorf("isDynamic = %v, want %v", isDynamic, test.wantDynamic)
 			}
 		})
 	}
 }
 
-// Asked for one anyway, a machine user is told why not and what to use: a
-// dynamic kubeconfig would work until the access token expired and then fail
-// on every request, with nothing saying why.
-func TestKubeconfigCredentialsType_RefusesADynamicKubeconfigToAMachineUser(t *testing.T) {
-	_, err := kubeconfigCredentialsType("dynamic", machineTokens)
+// A dynamic kubeconfig would work for a machine user until its access token
+// expired, and then fail on every request with nothing saying why.
+func TestWantsDynamicKubeconfig_RefusesAMachineUser(t *testing.T) {
+	_, err := wantsDynamicKubeconfig("dynamic", machineTokens)
 	if err == nil {
 		t.Fatal("a machine user was given a dynamic kubeconfig")
 	}
@@ -60,8 +59,8 @@ func TestKubeconfigCredentialsType_RefusesADynamicKubeconfigToAMachineUser(t *te
 	}
 }
 
-func TestKubeconfigCredentialsType_RefusesAnUnknownType(t *testing.T) {
-	if _, err := kubeconfigCredentialsType("yaml", personsTokens); err == nil {
+func TestWantsDynamicKubeconfig_RefusesAnUnknownType(t *testing.T) {
+	if _, err := wantsDynamicKubeconfig("yaml", humanTokens); err == nil {
 		t.Error("an unknown credentials type was accepted")
 	}
 }

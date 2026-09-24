@@ -8,11 +8,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 	"github.com/zalando/go-keyring"
 	clientauthenticationv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 
@@ -21,33 +26,31 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 )
 
-// The plugin a dynamic kubeconfig runs. One pointing at the Kubernetes API
-// proxy passes --proxy and no StackAPI, which it never asks; any other passes
-// the StackAPI it asks for a Kubernetes credential, as every kubeconfig written
-// before the proxy does.
-func TestGetKubernetesExecCredential_NeedsAStackAPIOnlyWithoutTheProxy(t *testing.T) {
-	for name, tc := range map[string]struct {
+func TestGetKubernetesExecCredential_NeedsAStackAPIOnlyWithoutProxy(t *testing.T) {
+	tests := []struct {
+		name  string
 		opts  getKubernetesExecCredentialOpts
 		valid bool
 	}{
-		"a StackAPI": {getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", argStackAPIBaseURL: "https://infra.stack.example.com/stackapi"}, true},
-		"the proxy":  {getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}, true},
-		"neither":    {getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids"}, false},
-	} {
-		t.Run(name, func(t *testing.T) {
-			err := tc.opts.Prepare(nil, nil)
-			if tc.valid && err != nil {
+		{"with STACK_API", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", argStackAPIBaseURL: "https://infra.stack.example.com/stackapi"}, true},
+		{"with --proxy", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}, true},
+		{"with neither", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids"}, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.opts.Prepare(nil, nil)
+			if test.valid && err != nil {
 				t.Errorf("refused: %v", err)
 			}
-			if !tc.valid && err == nil {
+			if !test.valid && err == nil {
 				t.Error("accepted")
 			}
 		})
 	}
 }
 
-// accessTokenExpiringAt is an access token whose exp claim is expiresAt. The
-// CLI never checks its signature.
+// accessTokenExpiringAt returns an access token whose exp claim is expiresAt.
+// The CLI never checks its signature.
 func accessTokenExpiringAt(t *testing.T, subject string, expiresAt time.Time) string {
 	t.Helper()
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -60,10 +63,10 @@ func accessTokenExpiringAt(t *testing.T, subject string, expiresAt time.Time) st
 	return token
 }
 
-// signedInProvider is a provider with a person's session stored, whose access
-// token expires at expiresAt. Its token endpoint answers a refresh with a token
-// expiring at refreshedExpiresAt.
-func signedInProvider(t *testing.T, expiresAt, refreshedExpiresAt time.Time) *auth.AuthProviderConfig {
+// useAuthProvider points the CLI at an auth provider with no session stored,
+// whose token endpoint answers a refresh with a token expiring at
+// refreshedExpiresAt.
+func useAuthProvider(t *testing.T, refreshedExpiresAt time.Time) *auth.AuthProviderConfig {
 	t.Helper()
 	keyring.MockInit()
 	home := t.TempDir()
@@ -80,7 +83,28 @@ func signedInProvider(t *testing.T, expiresAt, refreshedExpiresAt time.Time) *au
 	}))
 	t.Cleanup(endpoint.Close)
 
-	provider := &auth.AuthProviderConfig{Name: "Test Auth", ClientID: "test-client-id", TokenEndpoint: endpoint.URL}
+	providerFile := filepath.Join(t.TempDir(), "provider.yaml")
+	providerYAML := "name: Test Auth\nclientId: test-client-id\n" +
+		"authEndpoint: " + endpoint.URL + "/oauth2/auth\n" +
+		"tokenEndpoint: " + endpoint.URL + "/oauth2/token\n" +
+		"revokeEndpoint: " + endpoint.URL + "/oauth2/revoke\n" +
+		"userInfoEndpoint: " + endpoint.URL + "/userinfo\n"
+	if err := os.WriteFile(providerFile, []byte(providerYAML), 0600); err != nil {
+		t.Fatalf("failed to write the provider file: %v", err)
+	}
+	t.Setenv(auth.AuthProviderFileEnvVar, providerFile)
+
+	provider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		t.Fatalf("NewDefaultAuthProvider: %v", err)
+	}
+	return provider
+}
+
+// logIn stores a human user's session with provider, whose access token
+// expires at expiresAt.
+func logIn(t *testing.T, provider *auth.AuthProviderConfig, expiresAt time.Time) {
+	t.Helper()
 	tokenSet := &auth.TokenSet{
 		AccessToken:  accessTokenExpiringAt(t, "stored", expiresAt),
 		RefreshToken: "a-refresh-token",
@@ -89,31 +113,65 @@ func signedInProvider(t *testing.T, expiresAt, refreshedExpiresAt time.Time) *au
 	if err := auth.SaveSessionState(provider, auth.UserTypeHuman, tokenSet); err != nil {
 		t.Fatalf("failed to store a session: %v", err)
 	}
-	return provider
 }
 
-func decodeExecCredential(t *testing.T, payload string) *clientauthenticationv1beta1.ExecCredentialStatus {
+// runProxyPlugin runs the plugin the way kubectl does for a kubeconfig pointing
+// at the Kubernetes API proxy, outside any project, and returns its stdout.
+func runProxyPlugin(t *testing.T) (string, error) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+
+	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatalf("failed to create stdout: %v", err)
+	}
+	defer func() { _ = stdout.Close() }()
+	// As initLogger sets it up without --verbose, which kubectl never passes.
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&coloredLineConsoleWriter{Out: stdout}).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	o := getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}
+	runErr := o.Run(&cobra.Command{})
+
+	printed, err := os.ReadFile(stdout.Name())
+	if err != nil {
+		t.Fatalf("failed to read stdout: %v", err)
+	}
+	return string(printed), runErr
+}
+
+// decodeExecCredential decodes the plugin's stdout, which must be the exec
+// credential and nothing else.
+func decodeExecCredential(t *testing.T, stdout string) *clientauthenticationv1beta1.ExecCredentialStatus {
 	t.Helper()
 	var credential clientauthenticationv1beta1.ExecCredential
-	if err := json.Unmarshal([]byte(payload), &credential); err != nil || credential.Status == nil {
-		t.Fatalf("not an exec credential: %v\n%s", err, payload)
+	decoder := json.NewDecoder(strings.NewReader(stdout))
+	if err := decoder.Decode(&credential); err != nil || credential.Status == nil {
+		t.Fatalf("stdout is not an exec credential: %v\n%s", err, stdout)
+	}
+	if rest := strings.TrimSpace(stdout[decoder.InputOffset():]); rest != "" {
+		t.Errorf("stdout carries more than the exec credential: %q", rest)
+	}
+	if credential.APIVersion != "client.authentication.k8s.io/v1beta1" || credential.Kind != "ExecCredential" {
+		t.Errorf("apiVersion %q, kind %q", credential.APIVersion, credential.Kind)
 	}
 	return credential.Status
 }
 
-// A token that would reach its reported expiry within the skew is refreshed
-// before it is handed to kubectl, and kubectl is told the refreshed token's
-// expiry, a skew early.
-func TestProxyExecCredential_RefreshesATokenWithinTheSkewOfItsExpiry(t *testing.T) {
+// A token expiring within the skew is refreshed before it is handed to kubectl,
+// and kubectl is told the refreshed token expires a skew early.
+func TestGetKubernetesExecCredential_ProxyRefreshesATokenExpiringWithinTheSkew(t *testing.T) {
 	refreshedExpiresAt := time.Now().Add(time.Hour).Truncate(time.Second)
-	provider := signedInProvider(t, time.Now().Add(30*time.Second), refreshedExpiresAt)
+	provider := useAuthProvider(t, refreshedExpiresAt)
+	logIn(t, provider, time.Now().Add(30*time.Second))
 
-	payload, err := proxyExecCredential(provider)
+	stdout, err := runProxyPlugin(t)
 	if err != nil {
-		t.Fatalf("proxyExecCredential: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 
-	status := decodeExecCredential(t, payload)
+	status := decodeExecCredential(t, stdout)
 	if status.Token != accessTokenExpiringAt(t, "refreshed", refreshedExpiresAt) {
 		t.Errorf("kubectl was handed the stored token, which expires within the skew")
 	}
@@ -122,33 +180,33 @@ func TestProxyExecCredential_RefreshesATokenWithinTheSkewOfItsExpiry(t *testing.
 	}
 }
 
-// One with longer left is handed on as it is.
-func TestProxyExecCredential_HandsOnATokenWithLongerLeft(t *testing.T) {
+func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing.T) {
 	expiresAt := time.Now().Add(10 * time.Minute).Truncate(time.Second)
-	provider := signedInProvider(t, expiresAt, time.Now().Add(time.Hour))
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	logIn(t, provider, expiresAt)
 
-	payload, err := proxyExecCredential(provider)
+	stdout, err := runProxyPlugin(t)
 	if err != nil {
-		t.Fatalf("proxyExecCredential: %v", err)
+		t.Fatalf("Run: %v", err)
 	}
 
-	status := decodeExecCredential(t, payload)
+	status := decodeExecCredential(t, stdout)
 	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
 		t.Errorf("kubectl was handed another token than the stored one")
 	}
+	if want := expiresAt.Add(-envapi.ProxyExecCredentialSkew); status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(want) {
+		t.Errorf("expirationTimestamp = %v, want %v", status.ExpirationTimestamp, want)
+	}
 }
 
-// With no session, kubectl is told how to get one: it runs the plugin with no
-// terminal, so the plugin cannot log in itself.
-func TestProxyExecCredential_SaysHowToLogInWithoutASession(t *testing.T) {
-	keyring.MockInit()
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+// kubectl runs the plugin without a terminal, so it cannot log in, and says
+// how to instead.
+func TestGetKubernetesExecCredential_ProxySaysHowToLogInWithoutASession(t *testing.T) {
+	useAuthProvider(t, time.Now().Add(time.Hour))
 
-	_, err := proxyExecCredential(&auth.AuthProviderConfig{Name: "Test Auth", ClientID: "test-client-id"})
+	stdout, err := runProxyPlugin(t)
 	if err == nil {
-		t.Fatal("answered with no session")
+		t.Fatalf("answered with no session: %s", stdout)
 	}
 	cliErr, ok := clierrors.AsCLIError(err)
 	if !ok {

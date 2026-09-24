@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/zalando/go-keyring"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 func TestMergeRefreshedTokenSet(t *testing.T) {
@@ -102,6 +105,26 @@ func providerAt(t *testing.T, handler http.HandlerFunc) *AuthProviderConfig {
 		ClientID:      "test-client-id",
 		TokenEndpoint: endpoint.URL,
 	}
+}
+
+// refreshingProvider is a provider whose token endpoint answers every refresh
+// with a token good for an hour, and counts how often it was asked.
+func refreshingProvider(t *testing.T) (*AuthProviderConfig, *atomic.Int32) {
+	t.Helper()
+	var refreshes atomic.Int32
+	return providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		if err := r.ParseForm(); err != nil || r.Form.Get("grant_type") != "refresh_token" {
+			http.Error(w, "not a refresh", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenSet{
+			AccessToken:  accessTokenExpiringAt(t, "refreshed", time.Now().Add(time.Hour)),
+			RefreshToken: "the-next-refresh-token",
+			TokenType:    "bearer",
+		})
+	}), &refreshes
 }
 
 // rotatingProvider is a provider whose token endpoint rotates the refresh
@@ -233,5 +256,91 @@ func TestLoadAndRefreshTokenSet_KeepsTheSessionUnlessTheGrantIsRefused(t *testin
 				t.Errorf("session kept = %v, want %v", kept, test.wantKept)
 			}
 		})
+	}
+}
+
+// A token that expires sooner than it must stay valid is refreshed now, and the
+// refreshed one is what the session keeps.
+func TestLoadAndRefreshTokenSetValidFor_RefreshesATokenExpiringSooner(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+
+	if refreshes.Load() != 1 {
+		t.Errorf("refreshed %d times, want once", refreshes.Load())
+	}
+	if got := subjectOf(t, tokenSet); got != "refreshed" {
+		t.Errorf("answered with the %s token, want the refreshed one", got)
+	}
+	stored, err := LoadSessionState(provider)
+	if err != nil || stored == nil {
+		t.Fatalf("the session is gone: %v", err)
+	}
+	if got := subjectOf(t, stored.TokenSet); got != "refreshed" {
+		t.Errorf("the session keeps the %s token, want the refreshed one", got)
+	}
+}
+
+// One valid for longer is left alone: refreshing on every invocation would
+// spend a refresh token each time kubectl asks.
+func TestLoadAndRefreshTokenSetValidFor_KeepsATokenValidForLonger(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(5*time.Minute))
+
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+
+	if refreshes.Load() != 0 {
+		t.Errorf("refreshed %d times, want none", refreshes.Load())
+	}
+	if got := subjectOf(t, tokenSet); got != "stored" {
+		t.Errorf("answered with the %s token, want the stored one", got)
+	}
+}
+
+// The control: everything else refreshes once a token has expired, and not a
+// moment before, as it always has.
+func TestLoadAndRefreshTokenSet_StillWaitsForATokenToExpire(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	if _, err := LoadAndRefreshTokenSet(provider); err != nil {
+		t.Fatalf("LoadAndRefreshTokenSet: %v", err)
+	}
+
+	if refreshes.Load() != 0 {
+		t.Errorf("refreshed %d times, want none", refreshes.Load())
+	}
+}
+
+// A machine user holds no refresh token, so a token that expires too soon
+// cannot be replaced. Refused, saying how to get another.
+func TestLoadAndRefreshTokenSetValidFor_RefusesAMachineTokenItCannotRefresh(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeMachine, time.Now().Add(30*time.Second))
+
+	_, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err == nil {
+		t.Fatal("answered with a machine token expiring too soon")
+	}
+	if refreshes.Load() != 0 {
+		t.Errorf("tried to refresh a session with no refresh token")
+	}
+	cliErr, ok := clierrors.AsCLIError(err)
+	if !ok {
+		t.Fatalf("error is not a CLIError: %v", err)
+	}
+	// Not yet expired, and not reported as if it had.
+	if !strings.Contains(cliErr.Message, "expires within") {
+		t.Errorf("message = %q, want it to say the token expires too soon", cliErr.Message)
+	}
+	if !strings.Contains(cliErr.Suggestion, "machine-login") {
+		t.Errorf("suggestion = %q, want it to say how to get another token", cliErr.Suggestion)
 	}
 }

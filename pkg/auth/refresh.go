@@ -18,8 +18,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Get the expires-at of the access token of the tokenSet.
-func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
+// AccessTokenExpiresAt returns when the access token of the tokenSet expires.
+func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	// Parse the token without validation
 	token, _, err := jwt.NewParser().ParseUnverified(tokenSet.AccessToken, jwt.MapClaims{})
 	if err != nil {
@@ -39,26 +39,18 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("failed to parse claims")
 }
 
-// AccessTokenExpiresAt returns when the access token of the tokenSet expires,
-// read from its own exp claim.
-func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
-	return getAccessTokenExpiresAt(tokenSet)
-}
-
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
 // fails, return an error.
 // \todo Forget the tokens if the refresh fails (due to keys already used)
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
-	return LoadAndRefreshTokenSetWithin(authProvider, 0)
+	return LoadAndRefreshTokenSetValidFor(authProvider, 0)
 }
 
-// LoadAndRefreshTokenSetWithin is LoadAndRefreshTokenSet for a caller that
-// hands the token on and tells its recipient the token expires margin earlier
-// than it does, as a kubectl credential plugin does. It refreshes on that same
-// boundary: a token expiring within margin is refreshed now, rather than
-// handed on with less life left than its recipient was promised.
-func LoadAndRefreshTokenSetWithin(authProvider *AuthProviderConfig, margin time.Duration) (*TokenSet, error) {
+// LoadAndRefreshTokenSetValidFor is LoadAndRefreshTokenSet, but also refreshes
+// tokens that expire within validFor, for a caller handing the token on to
+// something that will hold it that long.
+func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor time.Duration) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
 	// presenting the refresh token again, which revokes the session.
@@ -90,15 +82,14 @@ func LoadAndRefreshTokenSetWithin(authProvider *AuthProviderConfig, margin time.
 
 	// Resolve when access token expires.
 	tokenSet := sessionState.TokenSet
-	expiresAt, err := getAccessTokenExpiresAt(tokenSet)
+	expiresAt, err := AccessTokenExpiresAt(tokenSet)
 	if err != nil {
 		return nil, clierrors.Wrap(err, "Failed to parse access token expiration").
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
-	// Compare expiration time with the current time, brought forward by the
-	// margin.
-	isExpired := time.Now().Add(margin).After(expiresAt)
+	// Compare expiration time with the current time, plus the validity needed.
+	isExpired := time.Now().Add(validFor).After(expiresAt)
 
 	// Refresh the tokenSet (if we have a refresh token -- machine users do not).
 	if isExpired {
@@ -115,8 +106,8 @@ func LoadAndRefreshTokenSetWithin(authProvider *AuthProviderConfig, margin time.
 			if err != nil {
 				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
 			}
-		} else if margin > 0 && time.Now().Before(expiresAt) {
-			return nil, clierrors.Newf("Access token expires within %v and cannot be refreshed", margin).
+		} else if time.Now().Before(expiresAt) {
+			return nil, clierrors.Newf("Access token expires within %v and cannot be refreshed", validFor).
 				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		} else {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
