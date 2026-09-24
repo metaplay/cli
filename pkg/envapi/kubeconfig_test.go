@@ -15,8 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metaplay/cli/pkg/auth"
 	clientauthenticationv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
+
+	"github.com/metaplay/cli/pkg/auth"
 )
 
 const (
@@ -194,14 +195,18 @@ func TestGetKubeConfigWithExecCredential_CarriesTheProxysCertificateAuthority(t 
 // A kubeconfig the CLI cannot find a server in is not one it can write a
 // dynamic kubeconfig from.
 func TestGetKubeConfigWithExecCredential_RefusesAKubeconfigNamingNoServer(t *testing.T) {
-	for name, served := range map[string]string{
-		"not a kubeconfig":   "{not yaml",
-		"no current context": "apiVersion: v1\nkind: Config\nclusters: []\n",
-		"no server":          strings.Replace(servedKubeconfig(clusterServer, "", "t"), "    server: "+clusterServer+"\n", "", 1),
-	} {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name   string
+		served string
+	}{
+		{"not a kubeconfig", "{not yaml"},
+		{"no current context", "apiVersion: v1\nkind: Config\nclusters: []\n"},
+		{"no server", strings.Replace(servedKubeconfig(clusterServer, "", "t"), "    server: "+clusterServer+"\n", "", 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			stack := newFakeStackAPI(t)
-			stack.kubeconfig = served
+			stack.kubeconfig = test.served
 
 			if _, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser); err == nil {
 				t.Error("wrote a dynamic kubeconfig from one naming no server")

@@ -41,10 +41,11 @@ func init() {
 }
 
 func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
-	// Every kubeconfig written before the proxy passes the StackAPI it asks,
-	// and one pointing at the proxy asks StackAPI nothing.
+	// Kubeconfigs pointing at the Kubernetes API proxy pass --proxy, and all
+	// others pass the StackAPI to ask for credentials.
 	if !o.flagProxy && o.argStackAPIBaseURL == "" {
-		return clierrors.NewUsageError("A StackAPI base URL is required without --proxy")
+		return clierrors.NewUsageError("A StackAPI base URL is required without --proxy").
+			WithSuggestion("Get a new kubeconfig with 'metaplay get kubeconfig'")
 	}
 	return nil
 }
@@ -98,15 +99,11 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// runForProxy answers a kubeconfig pointing at the Kubernetes API proxy, which
-// takes the CLI's own access token: that token, refreshed first when it would
-// expire within the credential's skew, and reported to expire that much early.
-// StackAPI is not asked for anything, so a refresh is one request to the auth
-// provider and none to the stack.
+// runForProxy prints the credential for a kubeconfig pointing at the Kubernetes
+// API proxy: the CLI's own access token, without asking StackAPI for anything.
 func (o *getKubernetesExecCredentialOpts) runForProxy() error {
-	// Try to resolve the project & auth provider. As for the credential
-	// StackAPI mints, an environment using a custom auth provider resolves it
-	// from the metaplay-project.yaml, so kubectl must run where that is found.
+	// Try to resolve the project & auth provider. As above, a custom auth
+	// provider can only be resolved from the metaplay-project.yaml.
 	project, err := tryResolveProject()
 	if err != nil {
 		return err
@@ -124,29 +121,25 @@ func (o *getKubernetesExecCredentialOpts) runForProxy() error {
 		return err
 	}
 
-	credential, err := proxyExecCredential(authProvider)
+	// kubectl runs the plugin without a terminal, so a missing session cannot
+	// be logged in to here.
+	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, envapi.ProxyExecCredentialSkew)
+	if err != nil {
+		return err
+	}
+	if tokenSet == nil {
+		return clierrors.New("Not logged in").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
+	}
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return err
+	}
+
+	credential, err := envapi.NewProxyExecCredential(tokenSet.AccessToken, expiresAt)
 	if err != nil {
 		return err
 	}
 	log.Info().Msg(credential)
 	return nil
-}
-
-// proxyExecCredential is the exec credential for the Kubernetes API proxy from
-// the session with authProvider. kubectl runs the plugin with no terminal to
-// ask on, so a missing session is reported rather than logged in to.
-func proxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
-	tokenSet, err := auth.LoadAndRefreshTokenSetWithin(authProvider, envapi.ProxyExecCredentialSkew)
-	if err != nil {
-		return "", err
-	}
-	if tokenSet == nil {
-		return "", clierrors.New("Not logged in").
-			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
-	}
-	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
-	if err != nil {
-		return "", err
-	}
-	return envapi.NewProxyExecCredential(tokenSet.AccessToken, expiresAt)
 }

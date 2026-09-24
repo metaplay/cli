@@ -283,18 +283,13 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 	return &credentials, err
 }
 
-// ProxyExecCredentialSkew is how much earlier than its access token expires a
-// credential for the Kubernetes API proxy reports expiring, and how long before
-// the token's expiry the CLI refreshes it for one. kubectl caches a credential
-// until the expiry it reports, so reporting the token's own would have it
-// present the token after its last second; and the CLI refreshes on this same
-// boundary, or a credential reported to expire early would be answered with a
-// token nearer its end than the report promised.
+// ProxyExecCredentialSkew is how much earlier than its access token an exec
+// credential for the Kubernetes API proxy reports expiring, so that kubectl
+// never presents an expired token. The CLI refreshes on the same boundary.
 const ProxyExecCredentialSkew = time.Minute
 
-// NewProxyExecCredential is the exec credential a kubeconfig pointing at the
-// Kubernetes API proxy is answered with: the CLI's own access token, which the
-// proxy takes, reported to expire ProxyExecCredentialSkew before it does.
+// NewProxyExecCredential returns the exec credential for a kubeconfig pointing
+// at the Kubernetes API proxy: the CLI's own access token.
 func NewProxyExecCredential(accessToken string, expiresAt time.Time) (string, error) {
 	expiry := metav1.NewTime(expiresAt.Add(-ProxyExecCredentialSkew))
 	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
@@ -309,15 +304,9 @@ func NewProxyExecCredential(accessToken string, expiresAt time.Time) (string, er
 
 // GetKubeConfigWithExecCredential returns a kubeconfig that runs the CLI for a
 // credential each time kubectl needs one. userID names its user, and is not
-// used otherwise.
-//
-// Where the Kubernetes API is reached depends on the stack, and the kubeconfig
-// the environment answers with already says: a stack serving the Kubernetes API
-// proxy names StackAPI's own route in it, and any other names the cluster. So
-// that is what is asked for, once, and nothing else. Behind the proxy the CLI
-// answers kubectl with its own access token and StackAPI is asked for nothing
-// more; elsewhere, the kubeconfig is the one the CLI has always written, whose
-// credential comes from StackAPI on every refresh.
+// used otherwise. A stack serving the Kubernetes API proxy names a server under
+// StackAPI in its kubeconfig, and the CLI then answers kubectl with its own
+// access token. Otherwise the CLI asks StackAPI for a credential.
 func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
 	log.Debug().Msgf("Getting the environment's kubeconfig from %s to find its Kubernetes API", target.StackApiBaseURL)
 	served, err := target.GetKubeConfigWithEmbeddedCredentials()
@@ -382,9 +371,7 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 
 // kubeconfigCluster returns the server and certificate authority a kubeconfig's
 // current context names. An absent certificate authority is not an error: a
-// server whose certificate chains to a publicly trusted root needs none, and
-// kubectl falls through to the system trust store when a kubeconfig carries
-// none.
+// server with a publicly trusted certificate needs none.
 func kubeconfigCluster(payload string) (string, []byte, error) {
 	config, err := clientcmd.Load([]byte(payload))
 	if err != nil {
