@@ -115,11 +115,11 @@ func logIn(t *testing.T, provider *auth.AuthProviderConfig, expiresAt time.Time)
 	}
 }
 
-// runProxyPlugin runs the plugin the way kubectl does for a kubeconfig pointing
-// at the Kubernetes API proxy, outside any project, and returns its stdout.
-func runProxyPlugin(t *testing.T) (string, error) {
+// runProxyPlugin runs the plugin in dir the way kubectl does for a kubeconfig
+// pointing at the Kubernetes API proxy, and returns its stdout.
+func runProxyPlugin(t *testing.T, dir string) (string, error) {
 	t.Helper()
-	t.Chdir(t.TempDir())
+	t.Chdir(dir)
 
 	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
 	if err != nil {
@@ -166,7 +166,7 @@ func TestGetKubernetesExecCredential_ProxyRefreshesATokenExpiringWithinTheSkew(t
 	provider := useAuthProvider(t, refreshedExpiresAt)
 	logIn(t, provider, time.Now().Add(30*time.Second))
 
-	stdout, err := runProxyPlugin(t)
+	stdout, err := runProxyPlugin(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing
 	provider := useAuthProvider(t, time.Now().Add(time.Hour))
 	logIn(t, provider, expiresAt)
 
-	stdout, err := runProxyPlugin(t)
+	stdout, err := runProxyPlugin(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing
 func TestGetKubernetesExecCredential_ProxySaysHowToLogInWithoutASession(t *testing.T) {
 	useAuthProvider(t, time.Now().Add(time.Hour))
 
-	stdout, err := runProxyPlugin(t)
+	stdout, err := runProxyPlugin(t, t.TempDir())
 	if err == nil {
 		t.Fatalf("answered with no session: %s", stdout)
 	}
@@ -214,5 +214,28 @@ func TestGetKubernetesExecCredential_ProxySaysHowToLogInWithoutASession(t *testi
 	}
 	if !strings.Contains(cliErr.Suggestion, "metaplay auth login") {
 		t.Errorf("suggestion = %q, want it to say how to log in", cliErr.Suggestion)
+	}
+}
+
+// kubectl runs the plugin wherever the user is, which may be inside a project
+// that does not know the environment. The proxy's credential does not depend on
+// the project, so it is not resolved.
+func TestGetKubernetesExecCredential_ProxyIgnoresTheProjectItRunsIn(t *testing.T) {
+	expiresAt := time.Now().Add(10 * time.Minute).Truncate(time.Second)
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	logIn(t, provider, expiresAt)
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "metaplay-project.yaml"), []byte("projectID: another-project\n"), 0600); err != nil {
+		t.Fatalf("failed to write the project: %v", err)
+	}
+
+	stdout, err := runProxyPlugin(t, projectDir)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	status := decodeExecCredential(t, stdout)
+	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
+		t.Errorf("kubectl was handed another token than the stored one")
 	}
 }

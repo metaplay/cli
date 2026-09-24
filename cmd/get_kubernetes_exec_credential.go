@@ -102,41 +102,15 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 // runForProxy prints the credential for a kubeconfig pointing at the Kubernetes
 // API proxy: the CLI's own access token, without asking StackAPI for anything.
 func (o *getKubernetesExecCredentialOpts) runForProxy() error {
-	// Try to resolve the project & auth provider. As above, a custom auth
-	// provider can only be resolved from the metaplay-project.yaml.
-	project, err := tryResolveProject()
-	if err != nil {
-		return err
-	}
-	providerName := ""
-	if project != nil {
-		envConfig, err := project.Config.FindEnvironmentConfig(o.argEnvironmentHumanID)
-		if err != nil {
-			return err
-		}
-		providerName = envConfig.AuthProvider
-	}
-	authProvider, err := getAuthProvider(project, providerName)
+	// A stack serves the proxy only for environments using the default auth
+	// provider, so there is no need to resolve the project to find one, and
+	// kubectl can run anywhere.
+	authProvider, err := auth.NewDefaultAuthProvider()
 	if err != nil {
 		return err
 	}
 
-	// kubectl runs the plugin without a terminal, so a missing session cannot
-	// be logged in to here.
-	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, envapi.ProxyExecCredentialSkew)
-	if err != nil {
-		return err
-	}
-	if tokenSet == nil {
-		return clierrors.New("Not logged in").
-			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
-	}
-	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
-	if err != nil {
-		return err
-	}
-
-	credential, err := envapi.NewProxyExecCredential(tokenSet.AccessToken, expiresAt)
+	credential, err := envapi.NewProxyExecCredential(authProvider)
 	if err != nil {
 		return err
 	}

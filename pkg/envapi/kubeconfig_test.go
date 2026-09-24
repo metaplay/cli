@@ -6,16 +6,12 @@ package envapi
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	clientauthenticationv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 
 	"github.com/metaplay/cli/pkg/auth"
 )
@@ -31,8 +27,9 @@ const (
 // kubeconfig when asked for one, and with an exec credential when asked for
 // that. It remembers what it was asked.
 type fakeStackAPI struct {
-	server     *httptest.Server
-	kubeconfig string // the kubeconfig a request asking for no particular type gets
+	server           *httptest.Server
+	kubeconfig       string // the kubeconfig a request asking for no particular type gets
+	clusterAuthority string // the certificate authority an exec credential names
 
 	mu       sync.Mutex
 	requests []string
@@ -44,7 +41,7 @@ func newFakeStackAPI(t *testing.T) *fakeStackAPI {
 	fake.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.mu.Lock()
 		fake.requests = append(fake.requests, r.Method+" "+r.URL.RequestURI())
-		kubeconfig := fake.kubeconfig
+		kubeconfig, authority := fake.kubeconfig, fake.clusterAuthority
 		fake.mu.Unlock()
 
 		if r.URL.Path != "/stackapi/v0/credentials/"+kubeconfigEnvironment+"/k8s" {
@@ -61,7 +58,7 @@ func newFakeStackAPI(t *testing.T) *fakeStackAPI {
 			_, _ = fmt.Fprintf(w, `{"apiVersion":"client.authentication.k8s.io/v1beta1","kind":"ExecCredential",`+
 				`"spec":{"cluster":{"server":%q,"certificateAuthorityData":%q}},`+
 				`"status":{"expirationTimestamp":"2026-09-24T13:00:00Z","token":"a-service-account-token"}}`,
-				clusterServer, base64.StdEncoding.EncodeToString([]byte(clusterAuthority)))
+				clusterServer, base64.StdEncoding.EncodeToString([]byte(authority)))
 		default:
 			http.Error(w, "invalid type", http.StatusBadRequest)
 		}
@@ -81,7 +78,13 @@ func (f *fakeStackAPI) asked() []string {
 }
 
 func (f *fakeStackAPI) target() *TargetEnvironment {
-	return NewTargetEnvironmentAtStackAPI(&auth.TokenSet{AccessToken: "the-callers-access-token"}, f.baseURL(), kubeconfigEnvironment)
+	return f.targetAt(f.baseURL())
+}
+
+// targetAt is the environment as the CLI reaches it at stackAPIBaseURL, which
+// may spell the fake's address otherwise.
+func (f *fakeStackAPI) targetAt(stackAPIBaseURL string) *TargetEnvironment {
+	return NewTargetEnvironmentAtStackAPI(&auth.TokenSet{AccessToken: "the-callers-access-token"}, stackAPIBaseURL, kubeconfigEnvironment)
 }
 
 // servedKubeconfig is a kubeconfig as a stack writes one: one cluster, one user
@@ -102,7 +105,7 @@ func servedKubeconfig(server, authority, token string) string {
 // dynamicKubeconfig is what the CLI emits: the server and authority it was
 // given, and a user whose credential comes from running the CLI with pluginArgs.
 func dynamicKubeconfig(server, authority string, pluginArgs ...string) string {
-	authorityLine := ""
+	authorityLine := "        certificate-authority-data: \"\"\n"
 	if authority != "" {
 		authorityLine = "        certificate-authority-data: " + base64.StdEncoding.EncodeToString([]byte(authority)) + "\n"
 	}
@@ -126,21 +129,33 @@ func dynamicKubeconfig(server, authority string, pluginArgs ...string) string {
 // Pinned as the bytes an older CLI wrote, so that nobody with such a stack
 // sees their kubeconfig change.
 func TestGetKubeConfigWithExecCredential_IsUnchangedWhereTheStackServesNoProxy(t *testing.T) {
-	stack := newFakeStackAPI(t)
-	stack.kubeconfig = servedKubeconfig(clusterServer, clusterAuthority, "a-service-account-token")
-
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
-	if err != nil {
-		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
+	tests := []struct {
+		name      string
+		authority string
+	}{
+		{"with a cluster authority", clusterAuthority},
+		{"with no cluster authority", ""},
 	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stack := newFakeStackAPI(t)
+			stack.kubeconfig = servedKubeconfig(clusterServer, test.authority, "a-service-account-token")
+			stack.clusterAuthority = test.authority
 
-	want := dynamicKubeconfig(clusterServer, clusterAuthority,
-		"get", "kubernetes-execcredential", kubeconfigEnvironment, stack.baseURL())
-	if kubeconfig != want {
-		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
-	}
-	if asked := stack.asked(); len(asked) != 1 {
-		t.Errorf("asked StackAPI %d times, want once: %v", len(asked), asked)
+			kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+			if err != nil {
+				t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
+			}
+
+			want := dynamicKubeconfig(clusterServer, test.authority,
+				"get", "kubernetes-execcredential", kubeconfigEnvironment, stack.baseURL())
+			if kubeconfig != want {
+				t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
+			}
+			if asked := stack.asked(); len(asked) != 1 {
+				t.Errorf("asked StackAPI %d times, want once: %v", len(asked), asked)
+			}
+		})
 	}
 }
 
@@ -215,36 +230,47 @@ func TestGetKubeConfigWithExecCredential_RefusesAKubeconfigNamingNoServer(t *tes
 	}
 }
 
-// What the plugin answers kubectl with under a proxy kubeconfig: the CLI's own
-// access token, and an expiry a minute before the token's. kubectl caches a
-// credential until the expiry it is told, and one it was told a token lasts to
-// its last second is one it presents after that second has passed.
-func TestNewProxyExecCredential_ReportsTheTokenAMinuteEarly(t *testing.T) {
-	expiresAt := time.Date(2026, 9, 24, 13, 0, 0, 0, time.UTC)
+// A stack naming StackAPI somewhere other than where the CLI reached it is
+// refused, rather than taken for a cluster and written a plugin the proxy will
+// not accept, or trusted with the CLI's access token.
+func TestGetKubeConfigWithExecCredential_RefusesStackAPIElsewhere(t *testing.T) {
+	stack := newFakeStackAPI(t)
+	tests := []struct {
+		name   string
+		origin string
+	}{
+		{"on another host", "https://infra.elsewhere.example.com"},
+		{"over another scheme", strings.Replace(stack.server.URL, "http://", "https://", 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stack.kubeconfig = servedKubeconfig(test.origin+"/stackapi/tenant/v1/"+kubeconfigEnvironment+"/k8s", "", "a-proxy-credential")
 
-	payload, err := NewProxyExecCredential("the-callers-access-token", expiresAt)
+			_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+			if err == nil {
+				t.Fatal("wrote a dynamic kubeconfig for StackAPI elsewhere")
+			}
+			if !strings.Contains(err.Error(), test.origin) {
+				t.Errorf("error = %q, want it to name %s", err, test.origin)
+			}
+		})
+	}
+}
+
+// Host names are case-insensitive, so one spelled otherwise is the same host.
+func TestGetKubeConfigWithExecCredential_TakesTheProxyOnTheSameHostSpelledOtherwise(t *testing.T) {
+	stack := newFakeStackAPI(t)
+	reachedAt := strings.Replace(stack.baseURL(), "127.0.0.1", "localhost", 1)
+	proxyServer := strings.Replace(reachedAt, "localhost", "LocalHost", 1) + "/tenant/v1/" + kubeconfigEnvironment + "/k8s"
+	stack.kubeconfig = servedKubeconfig(proxyServer, "", "a-proxy-credential")
+
+	kubeconfig, err := stack.targetAt(reachedAt).GetKubeConfigWithExecCredential(kubeconfigUser)
 	if err != nil {
-		t.Fatalf("NewProxyExecCredential: %v", err)
+		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
 
-	var credential clientauthenticationv1beta1.ExecCredential
-	if err := json.Unmarshal([]byte(payload), &credential); err != nil {
-		t.Fatalf("not an exec credential: %v\n%s", err, payload)
-	}
-	if credential.APIVersion != "client.authentication.k8s.io/v1beta1" || credential.Kind != "ExecCredential" {
-		t.Errorf("apiVersion %q, kind %q", credential.APIVersion, credential.Kind)
-	}
-	if credential.Status == nil {
-		t.Fatalf("no status: %s", payload)
-	}
-	if credential.Status.Token != "the-callers-access-token" {
-		t.Errorf("token = %q", credential.Status.Token)
-	}
-	if credential.Status.ExpirationTimestamp == nil ||
-		!credential.Status.ExpirationTimestamp.Time.Equal(expiresAt.Add(-ProxyExecCredentialSkew)) {
-		t.Errorf("expirationTimestamp = %v, want %v", credential.Status.ExpirationTimestamp, expiresAt.Add(-ProxyExecCredentialSkew))
-	}
-	if ProxyExecCredentialSkew != time.Minute {
-		t.Errorf("skew = %v, want a minute", ProxyExecCredentialSkew)
+	want := dynamicKubeconfig(proxyServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy")
+	if kubeconfig != want {
+		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
 	}
 }

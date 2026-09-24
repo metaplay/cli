@@ -10,11 +10,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
@@ -289,15 +291,32 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 const ProxyExecCredentialSkew = time.Minute
 
 // NewProxyExecCredential returns the exec credential for a kubeconfig pointing
-// at the Kubernetes API proxy: the CLI's own access token.
-func NewProxyExecCredential(accessToken string, expiresAt time.Time) (string, error) {
+// at the Kubernetes API proxy: the access token of the session with
+// authProvider, refreshed first if it expires within ProxyExecCredentialSkew.
+func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
+	// kubectl runs the plugin without a terminal, so a missing session cannot
+	// be logged in to here.
+	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, ProxyExecCredentialSkew)
+	if err != nil {
+		return "", err
+	}
+	if tokenSet == nil {
+		return "", clierrors.New("Not logged in").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
+	}
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to parse access token expiration").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' to re-authenticate")
+	}
+
 	expiry := metav1.NewTime(expiresAt.Add(-ProxyExecCredentialSkew))
 	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
 		TypeMeta: metav1.TypeMeta{APIVersion: "client.authentication.k8s.io/v1beta1", Kind: "ExecCredential"},
-		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: accessToken, ExpirationTimestamp: &expiry},
+		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: tokenSet.AccessToken, ExpirationTimestamp: &expiry},
 	})
 	if err != nil {
-		return "", err
+		return "", clierrors.Wrap(err, "Failed to encode the exec credential")
 	}
 	return string(payload), nil
 }
@@ -318,8 +337,12 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		return "", err
 	}
 
+	isProxy, err := target.isKubernetesAPIProxy(server)
+	if err != nil {
+		return "", err
+	}
 	pluginArgs := []string{"get", "kubernetes-execcredential", target.HumanID}
-	if strings.HasPrefix(server, target.StackApiBaseURL+"/") {
+	if isProxy {
 		pluginArgs = append(pluginArgs, "--proxy")
 	} else {
 		pluginArgs = append(pluginArgs, target.StackApiBaseURL)
@@ -367,6 +390,29 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		return "", err
 	}
 	return string(kubeConfig), nil
+}
+
+// isKubernetesAPIProxy reports whether server is the Kubernetes API proxy,
+// which a stack names under StackAPI's own URL. A server under StackAPI's path
+// on another host is refused rather than taken for a cluster: the CLI sends
+// its access token only to the StackAPI it already talks to.
+func (target *TargetEnvironment) isKubernetesAPIProxy(server string) (bool, error) {
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return false, fmt.Errorf("the environment's kubeconfig names an invalid server %q: %w", server, err)
+	}
+	stackAPIURL, err := url.Parse(target.StackApiBaseURL)
+	if err != nil {
+		return false, fmt.Errorf("invalid StackAPI base URL %q: %w", target.StackApiBaseURL, err)
+	}
+	if !strings.HasPrefix(serverURL.Path, stackAPIURL.Path+"/") {
+		return false, nil
+	}
+	if serverURL.Scheme != stackAPIURL.Scheme || !strings.EqualFold(serverURL.Host, stackAPIURL.Host) {
+		return false, fmt.Errorf("the environment's kubeconfig names StackAPI at %s://%s, but the CLI reached it at %s://%s",
+			serverURL.Scheme, serverURL.Host, stackAPIURL.Scheme, stackAPIURL.Host)
+	}
+	return true, nil
 }
 
 // kubeconfigCluster returns the server and certificate authority a kubeconfig's
