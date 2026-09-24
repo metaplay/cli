@@ -5,11 +5,13 @@
 package cmd
 
 import (
+	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
-	"github.com/rs/zerolog/log"
-	"github.com/spf13/cobra"
 )
 
 type getKubernetesExecCredentialOpts struct {
@@ -17,6 +19,7 @@ type getKubernetesExecCredentialOpts struct {
 
 	argEnvironmentHumanID string
 	argStackAPIBaseURL    string
+	flagProxy             bool
 }
 
 func init() {
@@ -24,23 +27,33 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironmentHumanID, "ENVIRONMENT", "Target environment ID, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argStackAPIBaseURL, "STACK_API", "StackAPI base URL for environment, eg, 'https://infra.p1.metaplay.io/stackapi'.")
+	args.AddStringArgumentOpt(&o.argStackAPIBaseURL, "STACK_API", "StackAPI base URL for environment, eg, 'https://infra.p1.metaplay.io/stackapi'. Required without --proxy.")
 
 	cmd := &cobra.Command{
-		Use:   "kubernetes-execcredential ENVIRONMENT STACK_API",
+		Use:   "kubernetes-execcredential ENVIRONMENT [STACK_API]",
 		Short: "[internal] Get kubernetes credentials in execcredential format (used from the generated kubeconfigs)",
 		Run:   runCommand(&o),
 	}
 
 	cmd.Hidden = true
 	getCmd.AddCommand(cmd)
+	cmd.Flags().BoolVar(&o.flagProxy, "proxy", false, "Answer with the CLI's own access token, for a kubeconfig pointing at the Kubernetes API proxy, rather than asking StackAPI for a Kubernetes credential")
 }
 
 func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Every kubeconfig written before the proxy passes the StackAPI it asks,
+	// and one pointing at the proxy asks StackAPI nothing.
+	if !o.flagProxy && o.argStackAPIBaseURL == "" {
+		return clierrors.NewUsageError("A StackAPI base URL is required without --proxy")
+	}
 	return nil
 }
 
 func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
+	if o.flagProxy {
+		return o.runForProxy()
+	}
+
 	// Try to resolve the project & auth provider.
 	project, err := tryResolveProject()
 	if err != nil {
@@ -83,4 +96,57 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 
 	log.Info().Msg(*credential)
 	return nil
+}
+
+// runForProxy answers a kubeconfig pointing at the Kubernetes API proxy, which
+// takes the CLI's own access token: that token, refreshed first when it would
+// expire within the credential's skew, and reported to expire that much early.
+// StackAPI is not asked for anything, so a refresh is one request to the auth
+// provider and none to the stack.
+func (o *getKubernetesExecCredentialOpts) runForProxy() error {
+	// Try to resolve the project & auth provider. As for the credential
+	// StackAPI mints, an environment using a custom auth provider resolves it
+	// from the metaplay-project.yaml, so kubectl must run where that is found.
+	project, err := tryResolveProject()
+	if err != nil {
+		return err
+	}
+	providerName := ""
+	if project != nil {
+		envConfig, err := project.Config.FindEnvironmentConfig(o.argEnvironmentHumanID)
+		if err != nil {
+			return err
+		}
+		providerName = envConfig.AuthProvider
+	}
+	authProvider, err := getAuthProvider(project, providerName)
+	if err != nil {
+		return err
+	}
+
+	credential, err := proxyExecCredential(authProvider)
+	if err != nil {
+		return err
+	}
+	log.Info().Msg(credential)
+	return nil
+}
+
+// proxyExecCredential is the exec credential for the Kubernetes API proxy from
+// the session with authProvider. kubectl runs the plugin with no terminal to
+// ask on, so a missing session is reported rather than logged in to.
+func proxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
+	tokenSet, err := auth.LoadAndRefreshTokenSetWithin(authProvider, envapi.ProxyExecCredentialSkew)
+	if err != nil {
+		return "", err
+	}
+	if tokenSet == nil {
+		return "", clierrors.New("Not logged in").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
+	}
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return "", err
+	}
+	return envapi.NewProxyExecCredential(tokenSet.AccessToken, expiresAt)
 }

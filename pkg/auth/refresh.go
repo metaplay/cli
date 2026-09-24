@@ -39,11 +39,26 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("failed to parse claims")
 }
 
+// AccessTokenExpiresAt returns when the access token of the tokenSet expires,
+// read from its own exp claim.
+func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
+	return getAccessTokenExpiresAt(tokenSet)
+}
+
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
 // fails, return an error.
 // \todo Forget the tokens if the refresh fails (due to keys already used)
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
+	return LoadAndRefreshTokenSetWithin(authProvider, 0)
+}
+
+// LoadAndRefreshTokenSetWithin is LoadAndRefreshTokenSet for a caller that
+// hands the token on and tells its recipient the token expires margin earlier
+// than it does, as a kubectl credential plugin does. It refreshes on that same
+// boundary: a token expiring within margin is refreshed now, rather than
+// handed on with less life left than its recipient was promised.
+func LoadAndRefreshTokenSetWithin(authProvider *AuthProviderConfig, margin time.Duration) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
 	// presenting the refresh token again, which revokes the session.
@@ -81,8 +96,9 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
-	// Compare expiration time with the current time
-	isExpired := time.Now().After(expiresAt)
+	// Compare expiration time with the current time, brought forward by the
+	// margin.
+	isExpired := time.Now().Add(margin).After(expiresAt)
 
 	// Refresh the tokenSet (if we have a refresh token -- machine users do not).
 	if isExpired {
@@ -99,6 +115,9 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			if err != nil {
 				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
 			}
+		} else if margin > 0 && time.Now().Before(expiresAt) {
+			return nil, clierrors.Newf("Access token expires within %v and cannot be refreshed", margin).
+				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		} else {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
 				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")

@@ -4,10 +4,6 @@
 
 package envapi
 
-import (
-	"k8s.io/client-go/pkg/apis/clientauthentication"
-)
-
 type KubeConfig struct {
 	ApiVersion     string              `yaml:"apiVersion"`
 	Clusters       []KubeConfigCluster `yaml:"clusters"`
@@ -24,7 +20,7 @@ type KubeConfigCluster struct {
 }
 
 type KubeConfigClusterData struct {
-	CertificateAuthorityData string `yaml:"certificate-authority-data"`
+	CertificateAuthorityData string `yaml:"certificate-authority-data,omitempty"`
 	Server                   string `yaml:"server"`
 }
 
@@ -53,11 +49,4 @@ type KubeConfigUserDataExec struct {
 	Args            []string `yaml:"args"`
 	ApiVersion      string   `yaml:"apiVersion"`
 	InteractiveMode string   `yaml:"interactiveMode"`
-}
-
-type KubeExecCredential struct {
-	ApiVersion string                                    `json:"apiVersion"`
-	Kind       string                                    `json:"kind"`
-	Spec       clientauthentication.ExecCredentialSpec   `json:"spec"`
-	Status     clientauthentication.ExecCredentialStatus `json:"status"`
 }
