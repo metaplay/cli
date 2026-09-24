@@ -20,7 +20,7 @@ type KubeConfigCluster struct {
 }
 
 type KubeConfigClusterData struct {
-	CertificateAuthorityData string `yaml:"certificate-authority-data,omitempty"`
+	CertificateAuthorityData string `yaml:"certificate-authority-data"`
 	Server                   string `yaml:"server"`
 }
 
