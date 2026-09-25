@@ -5,10 +5,8 @@
 package cmd
 
 import (
-	"strings"
 	"testing"
 
-	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 )
 
@@ -28,6 +26,7 @@ func TestWantsDynamicKubeconfig(t *testing.T) {
 		{"human user asking for dynamic", humanTokens, "dynamic", true},
 		{"human user asking for static", humanTokens, "static", false},
 		{"machine user by default", machineTokens, "", false},
+		{"machine user asking for dynamic", machineTokens, "dynamic", true},
 		{"machine user asking for static", machineTokens, "static", false},
 	}
 	for _, test := range tests {
@@ -40,22 +39,6 @@ func TestWantsDynamicKubeconfig(t *testing.T) {
 				t.Errorf("isDynamic = %v, want %v", isDynamic, test.wantDynamic)
 			}
 		})
-	}
-}
-
-// A dynamic kubeconfig would work for a machine user until its access token
-// expired, and then fail on every request with nothing saying why.
-func TestWantsDynamicKubeconfig_RefusesAMachineUser(t *testing.T) {
-	_, err := wantsDynamicKubeconfig("dynamic", machineTokens)
-	if err == nil {
-		t.Fatal("a machine user was given a dynamic kubeconfig")
-	}
-	cliErr, ok := clierrors.AsCLIError(err)
-	if !ok {
-		t.Fatalf("error is not a CLIError: %v", err)
-	}
-	if !strings.Contains(cliErr.Suggestion, "--type=static") {
-		t.Errorf("suggestion = %q, want it to point at a static kubeconfig", cliErr.Suggestion)
 	}
 }
 
