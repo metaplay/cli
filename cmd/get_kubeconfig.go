@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -45,6 +46,13 @@ func init() {
 			If no type is specified, it defaults to:
 			- dynamic for human users (logged in with refresh token)
 			- static for machine users (logged in with access token only)
+
+			A machine user's session cannot be refreshed, so a dynamic KubeConfig works only until its access
+			token expires. Logging in again with 'metaplay auth machine-login' renews it.
+
+			On a stack that serves the Kubernetes API through StackAPI, the KubeConfig points at StackAPI.
+			A dynamic one then authenticates with your own access token, which the Metaplay CLI refreshes
+			locally, and a static one carries a short-lived credential for that environment alone.
 
 			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
 
@@ -105,20 +113,14 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	// Create environment helper.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Default to credentialsType==dynamic for human users, and credentialsType==static for machine users
-	credentialsType := o.flagCredentialsType
-	if credentialsType == "" {
-		if isHumanUser := tokenSet.RefreshToken != ""; isHumanUser {
-			credentialsType = "dynamic"
-		} else {
-			credentialsType = "static"
-		}
+	isDynamic, err := wantsDynamicKubeconfig(o.flagCredentialsType, tokenSet)
+	if err != nil {
+		return err
 	}
 
 	// Generate kubeconfig
 	var kubeconfigPayload string
-	switch credentialsType {
-	case "dynamic":
+	if isDynamic {
 		// Fetch the userinfo for an email.
 		var userinfo *auth.UserInfoResponse
 		userinfo, err = auth.FetchUserInfo(authProvider, tokenSet)
@@ -126,14 +128,16 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email)
-	case "static":
+		usesDefaultAuthProvider := coalesceString(envConfig.AuthProvider, "metaplay") == "metaplay"
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, usesDefaultAuthProvider)
+	} else {
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
-	default:
-		return clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
-			WithSuggestion("Use --type=static or --type=dynamic")
 	}
 
+	if errors.Is(err, envapi.ErrKubernetesAPIProxyRefused) {
+		return clierrors.Wrap(err, "Failed to get environment kubeconfig").
+			WithSuggestion("Use --type=static, whose kubeconfig carries the stack's own credential")
+	}
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to get environment kubeconfig")
 	}
@@ -151,4 +155,22 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+// wantsDynamicKubeconfig reports whether to write a dynamic kubeconfig: the
+// type asked for, or by default dynamic for human users and static for machine
+// users. A machine user has no refresh token, so its dynamic kubeconfig lasts
+// only until its next machine login, but it may still ask for one.
+func wantsDynamicKubeconfig(credentialsType string, tokenSet *auth.TokenSet) (bool, error) {
+	isHumanUser := tokenSet.RefreshToken != ""
+	switch credentialsType {
+	case "":
+		return isHumanUser, nil
+	case "dynamic":
+		return true, nil
+	case "static":
+		return false, nil
+	}
+	return false, clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
+		WithSuggestion("Use --type=static or --type=dynamic")
 }

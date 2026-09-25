@@ -7,13 +7,16 @@ package envapi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
@@ -22,11 +25,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	clientauthenticationv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -280,49 +285,105 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 	return &credentials, err
 }
 
-/**
-* Get a `kubeconfig` payload which invokes `metaplay-auth get-kubernetes-execcredential` to get the actual
-* access credentials each time the kubeconfig is used.
-* @param userID Any identity for the user, stored in the kubeconfig but not used otherwise.
-* @returns The kubeconfig YAML.
- */
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
-	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
-	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
+// ProxyExecCredentialSkew is how much earlier than its access token an exec
+// credential for the Kubernetes API proxy reports expiring, so that kubectl
+// never presents an expired token. The CLI refreshes on the same boundary.
+const ProxyExecCredentialSkew = time.Minute
 
-	credentials, err := metahttp.Post[KubeExecCredential](target.StackApiClient, path, nil, "")
+// NewProxyExecCredential returns the exec credential for a kubeconfig pointing
+// at the Kubernetes API proxy: the access token of the session with
+// authProvider, refreshed first if it expires within ProxyExecCredentialSkew.
+func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
+	// kubectl runs the plugin without a terminal, so a missing session cannot
+	// be logged in to here.
+	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, ProxyExecCredentialSkew)
+	if err != nil {
+		return "", err
+	}
+	if tokenSet == nil {
+		return "", clierrors.New("Not logged in").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
+	}
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to parse access token expiration").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' to re-authenticate")
+	}
+
+	// A token already within the skew, handed on because it could not be
+	// refreshed or because tokens live no longer than the skew, is reported
+	// with its own expiry. One already past would have kubectl run the plugin
+	// again for every request.
+	expiry := metav1.NewTime(expiresAt.Add(-ProxyExecCredentialSkew))
+	if !expiry.After(time.Now()) {
+		expiry = metav1.NewTime(expiresAt)
+	}
+	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
+		TypeMeta: metav1.TypeMeta{APIVersion: "client.authentication.k8s.io/v1beta1", Kind: "ExecCredential"},
+		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: tokenSet.AccessToken, ExpirationTimestamp: &expiry},
+	})
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to encode the exec credential")
+	}
+	return string(payload), nil
+}
+
+// ErrKubernetesAPIProxyRefused is wrapped by the errors GetKubeConfigWithExecCredential
+// returns when the stack serves the Kubernetes API proxy but a dynamic kubeconfig
+// cannot safely point at it. A static kubeconfig carries the stack's own
+// credential and is unaffected.
+var ErrKubernetesAPIProxyRefused = errors.New("a dynamic kubeconfig cannot use the stack's Kubernetes API proxy")
+
+// GetKubeConfigWithExecCredential returns a kubeconfig that runs the CLI for a
+// credential each time kubectl needs one. userID names its user, and is not
+// used otherwise. A stack serving the Kubernetes API proxy names a server under
+// StackAPI in its kubeconfig, and the CLI then answers kubectl with its own
+// access token. Otherwise the CLI asks StackAPI for a credential.
+//
+// The proxy plugin answers with the default auth provider's token, so
+// usesDefaultAuthProvider must say whether the environment signs in with it.
+// An environment that does not is refused rather than have another
+// provider's token handed to its stack.
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, usesDefaultAuthProvider bool) (string, error) {
+	log.Debug().Msgf("Getting the environment's kubeconfig from %s to find its Kubernetes API", target.StackApiBaseURL)
+	served, err := target.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return "", err
+	}
+	server, certificateAuthority, err := kubeconfigCluster(served)
 	if err != nil {
 		return "", err
 	}
 
-	// Spec.Cluster is a pointer, and the server omits it whenever the exec
-	// config did not ask for cluster info. Test it before reaching through it.
-	if credentials.Spec.Cluster == nil {
-		return "", fmt.Errorf("received kubeExecCredential with missing spec.cluster")
+	isProxy, err := target.isKubernetesAPIProxy(server)
+	if err != nil {
+		return "", err
 	}
-	if credentials.Spec.Cluster.Server == "" {
-		return "", fmt.Errorf("received kubeExecCredential with no spec.cluster.server")
+	pluginArgs := []string{"get", "kubernetes-execcredential", target.HumanID}
+	if isProxy {
+		if !usesDefaultAuthProvider {
+			return "", fmt.Errorf("%w: the environment uses an auth provider other than the default, whose token the proxy plugin answers with", ErrKubernetesAPIProxyRefused)
+		}
+		pluginArgs = append(pluginArgs, "--proxy")
+	} else {
+		pluginArgs = append(pluginArgs, target.StackApiBaseURL)
 	}
-	// An absent certificate authority is deliberately not an error: a server
-	// whose certificate chains to a publicly trusted root needs none, and
-	// client-go falls through to the system trust store when the kubeconfig
-	// carries no CA.
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{
 		ApiVersion: "v1",
 		Clusters: []KubeConfigCluster{
 			{
 				Cluster: KubeConfigClusterData{
-					CertificateAuthorityData: base64.StdEncoding.EncodeToString(credentials.Spec.Cluster.CertificateAuthorityData),
-					Server:                   credentials.Spec.Cluster.Server,
+					CertificateAuthorityData: base64.StdEncoding.EncodeToString(certificateAuthority),
+					Server:                   server,
 				},
-				Name: credentials.Spec.Cluster.Server,
+				Name: server,
 			},
 		},
 		Contexts: []KubeConfigContext{
 			{
 				Context: KubeConfigContextData{
-					Cluster:   credentials.Spec.Cluster.Server,
+					Cluster:   server,
 					Namespace: target.HumanID,
 					User:      userID,
 				},
@@ -337,13 +398,8 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 				Name: userID,
 				User: KubeConfigUserData{
 					Exec: KubeConfigUserDataExec{
-						Command: "metaplay",
-						Args: []string{
-							"get",
-							"kubernetes-execcredential",
-							target.HumanID,
-							target.StackApiBaseURL,
-						},
+						Command:         "metaplay",
+						Args:            pluginArgs,
 						ApiVersion:      "client.authentication.k8s.io/v1beta1",
 						InteractiveMode: "Never",
 					},
@@ -354,8 +410,71 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	if err != nil {
 		return "", err
 	}
-	dump := string(kubeConfig)
-	return dump, nil
+	return string(kubeConfig), nil
+}
+
+// isKubernetesAPIProxy reports whether server is the Kubernetes API proxy,
+// which a stack names under StackAPI's own URL. A server under StackAPI's path
+// on another host is refused rather than taken for a cluster: the CLI sends
+// its access token only to the StackAPI it already talks to.
+func (target *TargetEnvironment) isKubernetesAPIProxy(server string) (bool, error) {
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return false, fmt.Errorf("the environment's kubeconfig names an invalid server %q: %w", server, err)
+	}
+	stackAPIURL, err := url.Parse(target.StackApiBaseURL)
+	if err != nil {
+		return false, fmt.Errorf("invalid StackAPI base URL %q: %w", target.StackApiBaseURL, err)
+	}
+	// A base URL spelled with a trailing slash would otherwise demand a double
+	// slash, and take the proxy for a cluster.
+	if !strings.HasPrefix(serverURL.Path, strings.TrimSuffix(stackAPIURL.Path, "/")+"/") {
+		return false, nil
+	}
+	if serverURL.Scheme != stackAPIURL.Scheme || !sameHostAndPort(serverURL, stackAPIURL) {
+		return false, fmt.Errorf("%w: the environment's kubeconfig names StackAPI at %s://%s, but the CLI reached it at %s://%s",
+			ErrKubernetesAPIProxyRefused, serverURL.Scheme, serverURL.Host, stackAPIURL.Scheme, stackAPIURL.Host)
+	}
+	return true, nil
+}
+
+// sameHostAndPort reports whether two URLs of one scheme name the same host,
+// case-insensitively, and the same port, reading an omitted one as the
+// scheme's default.
+func sameHostAndPort(a, b *url.URL) bool {
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && portOrDefault(a) == portOrDefault(b)
+}
+
+func portOrDefault(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch u.Scheme {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// kubeconfigCluster returns the server and certificate authority a kubeconfig's
+// current context names. An absent certificate authority is not an error: a
+// server with a publicly trusted certificate needs none.
+func kubeconfigCluster(payload string) (string, []byte, error) {
+	config, err := clientcmd.Load([]byte(payload))
+	if err != nil {
+		return "", nil, fmt.Errorf("the environment's kubeconfig does not parse: %w", err)
+	}
+	kubeContext, ok := config.Contexts[config.CurrentContext]
+	if !ok {
+		return "", nil, fmt.Errorf("the environment's kubeconfig has no current context %q", config.CurrentContext)
+	}
+	cluster, ok := config.Clusters[kubeContext.Cluster]
+	if !ok || cluster.Server == "" {
+		return "", nil, fmt.Errorf("the environment's kubeconfig names no server for its context %q", config.CurrentContext)
+	}
+	return cluster.Server, cluster.CertificateAuthorityData, nil
 }
 
 // Get AWS credentials against the target environment.
