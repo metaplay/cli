@@ -5,6 +5,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
@@ -51,8 +53,12 @@ func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []str
 }
 
 func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
+	// kubectl reads the credential from stdout, so nothing else may reach it,
+	// with --verbose or without: the log goes to stderr, which kubectl shows.
+	log.Logger = stderrLogger
+
 	if o.flagProxy {
-		return o.runForProxy()
+		return o.runForProxy(cmd)
 	}
 
 	// Try to resolve the project & auth provider.
@@ -95,13 +101,13 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	log.Info().Msg(*credential)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), *credential)
+	return err
 }
 
 // runForProxy prints the credential for a kubeconfig pointing at the Kubernetes
 // API proxy: the CLI's own access token, without asking StackAPI for anything.
-func (o *getKubernetesExecCredentialOpts) runForProxy() error {
+func (o *getKubernetesExecCredentialOpts) runForProxy(cmd *cobra.Command) error {
 	// A stack serves the proxy only for environments using the default auth
 	// provider, so there is no need to resolve the project to find one, and
 	// kubectl can run anywhere.
@@ -114,6 +120,6 @@ func (o *getKubernetesExecCredentialOpts) runForProxy() error {
 	if err != nil {
 		return err
 	}
-	log.Info().Msg(credential)
-	return nil
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), credential)
+	return err
 }
