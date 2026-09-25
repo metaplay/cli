@@ -44,8 +44,18 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 // fails, return an error.
 // \todo Forget the tokens if the refresh fails (due to keys already used)
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
+	// Hold the session lock from loading the session to saving its refresh. A
+	// process that waited for it then loads the refreshed tokens, rather than
+	// presenting the refresh token again, which revokes the session.
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return nil, clierrors.Wrap(err, "Failed to lock stored credentials").
+			WithSuggestion("Try again, and check for a 'metaplay' process that has not exited")
+	}
+	defer unlock()
+
 	// Get current session (including credentials).
-	sessionState, err := LoadSessionState(authProvider)
+	sessionState, err := loadSessionState(authProvider)
 	if err != nil {
 		// A provider mismatch already names the command that resolves it. Wrapping
 		// buries that: displayError prints only the outermost suggestion, and a bare
@@ -85,7 +95,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			}
 
 			// Persist the refreshed tokens.
-			err = SaveSessionState(authProvider, sessionState.UserType, tokenSet)
+			err = saveSessionState(authProvider, sessionState.UserType, tokenSet)
 			if err != nil {
 				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
 			}
@@ -99,6 +109,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 }
 
 // Refresh the tokenSet. Return a new tokenSet that was returned by the token endpoint.
+// The caller holds the session lock.
 func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Create URL-encoded form data
 	data := url.Values{}
@@ -121,10 +132,18 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	// Check for a non-OK response (after retries exhausted for transient errors)
 	if statusCode != http.StatusOK {
 		log.Error().Msgf("Failed to refresh tokens. Response: %s", body)
-		log.Debug().Msg("Clearing local credentials...")
+
+		// Only a refused grant ends the session: RFC 6749 answers one with 400, or
+		// 401 for the client. Anything else, such as a server error outlasting the
+		// retries, says nothing about the session, so keep it for the next attempt.
+		if statusCode != http.StatusBadRequest && statusCode != http.StatusUnauthorized {
+			return nil, clierrors.Newf("Token endpoint %s answered the refresh with status %d", authProvider.TokenEndpoint, statusCode).
+				WithSuggestion("Try again in a moment")
+		}
 
 		// Remove the session state (something has gone badly wrong).
-		err = DeleteSessionState(authProvider)
+		log.Debug().Msg("Clearing local credentials...")
+		err = deleteSessionState(authProvider)
 		if err != nil {
 			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
 		}

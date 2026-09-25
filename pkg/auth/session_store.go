@@ -310,9 +310,23 @@ func savePersistedConfig(config *PersistedConfig) error {
 		return fmt.Errorf("failed to serialize PersistedConfig: %w", err)
 	}
 
-	// Write sessionState to file.
-	err = os.WriteFile(filePath, configJSON, 0600)
+	// Write to a temporary file and rename it over the config, so that the
+	// config on disk is always whole: writing it in place truncates it first,
+	// and a crash then loses every session.
+	tempFile, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
 	if err != nil {
+		return fmt.Errorf("failed to write session state to file: %w", err)
+	}
+	defer func() { _ = os.Remove(tempFile.Name()) }() // Fails harmlessly once renamed.
+
+	if _, err := tempFile.Write(configJSON); err != nil {
+		_ = tempFile.Close()
+		return fmt.Errorf("failed to write session state to file: %w", err)
+	}
+	if err := tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to write session state to file: %w", err)
+	}
+	if err := os.Rename(tempFile.Name(), filePath); err != nil {
 		return fmt.Errorf("failed to write session state to file: %w", err)
 	}
 
@@ -320,6 +334,7 @@ func savePersistedConfig(config *PersistedConfig) error {
 }
 
 // Load the persisted config from disk, apply the update, and then persist the config back to disk.
+// The caller holds the session lock, or another process's update in between is lost.
 func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 	// Load config from disk.
 	configState, err := loadPersistedConfig()
@@ -340,6 +355,17 @@ func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 // SaveSessionState saves the current session state (with GCM-encrypted tokenSet),
 // stamped with the fingerprint of the provider that minted the tokens.
 func SaveSessionState(authProvider *AuthProviderConfig, userType UserType, tokenSet *TokenSet) error {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return saveSessionState(authProvider, userType, tokenSet)
+}
+
+// saveSessionState is SaveSessionState for a caller holding the session lock.
+func saveSessionState(authProvider *AuthProviderConfig, userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
 	if err != nil {
@@ -378,6 +404,17 @@ func SaveSessionState(authProvider *AuthProviderConfig, userType UserType, token
 // On Linux, sessions encrypted with the fallback key are re-encrypted with the
 // keyring-based key if a keyring becomes available.
 func LoadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	return loadSessionState(authProvider)
+}
+
+// loadSessionState is LoadSessionState for a caller holding the session lock.
+func loadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
 	if err != nil {
@@ -469,7 +506,7 @@ func LoadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
 	// Migrate legacy session to GCM encryption
 	if needsMigration {
 		// Re-save with GCM encryption. Ignore errors as we can retry next time.
-		_ = SaveSessionState(authProvider, sessionState.UserType, &tokenSet)
+		_ = saveSessionState(authProvider, sessionState.UserType, &tokenSet)
 	}
 
 	return &SessionState{
@@ -488,6 +525,17 @@ func sessionBelongsToProvider(sessionState PersistedSessionState, authProvider *
 
 // DeleteSessionState removes the current session state (i.e., signs out the user).
 func DeleteSessionState(authProvider *AuthProviderConfig) error {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return deleteSessionState(authProvider)
+}
+
+// deleteSessionState is DeleteSessionState for a caller holding the session lock.
+func deleteSessionState(authProvider *AuthProviderConfig) error {
 	// Remove the session from the persisted config.
 	return updatePersistedConfig(func(config *PersistedConfig) error {
 		delete(config.Sessions, authProvider.GetSessionID())
