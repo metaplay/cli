@@ -321,12 +321,23 @@ func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, erro
 	return string(payload), nil
 }
 
+// ErrKubernetesAPIProxyRefused is wrapped by the errors GetKubeConfigWithExecCredential
+// returns when the stack serves the Kubernetes API proxy but a dynamic kubeconfig
+// cannot safely point at it. A static kubeconfig carries the stack's own
+// credential and is unaffected.
+var ErrKubernetesAPIProxyRefused = errors.New("a dynamic kubeconfig cannot use the stack's Kubernetes API proxy")
+
 // GetKubeConfigWithExecCredential returns a kubeconfig that runs the CLI for a
 // credential each time kubectl needs one. userID names its user, and is not
 // used otherwise. A stack serving the Kubernetes API proxy names a server under
 // StackAPI in its kubeconfig, and the CLI then answers kubectl with its own
 // access token. Otherwise the CLI asks StackAPI for a credential.
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
+//
+// The proxy plugin answers with the default auth provider's token, so
+// usesDefaultAuthProvider must say whether the environment signs in with it.
+// An environment that does not is refused rather than have another
+// provider's token handed to its stack.
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, usesDefaultAuthProvider bool) (string, error) {
 	log.Debug().Msgf("Getting the environment's kubeconfig from %s to find its Kubernetes API", target.StackApiBaseURL)
 	served, err := target.GetKubeConfigWithEmbeddedCredentials()
 	if err != nil {
@@ -343,6 +354,9 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	}
 	pluginArgs := []string{"get", "kubernetes-execcredential", target.HumanID}
 	if isProxy {
+		if !usesDefaultAuthProvider {
+			return "", fmt.Errorf("%w: the environment uses an auth provider other than the default, whose token the proxy plugin answers with", ErrKubernetesAPIProxyRefused)
+		}
 		pluginArgs = append(pluginArgs, "--proxy")
 	} else {
 		pluginArgs = append(pluginArgs, target.StackApiBaseURL)
@@ -405,14 +419,36 @@ func (target *TargetEnvironment) isKubernetesAPIProxy(server string) (bool, erro
 	if err != nil {
 		return false, fmt.Errorf("invalid StackAPI base URL %q: %w", target.StackApiBaseURL, err)
 	}
-	if !strings.HasPrefix(serverURL.Path, stackAPIURL.Path+"/") {
+	// A base URL spelled with a trailing slash would otherwise demand a double
+	// slash, and take the proxy for a cluster.
+	if !strings.HasPrefix(serverURL.Path, strings.TrimSuffix(stackAPIURL.Path, "/")+"/") {
 		return false, nil
 	}
-	if serverURL.Scheme != stackAPIURL.Scheme || !strings.EqualFold(serverURL.Host, stackAPIURL.Host) {
-		return false, fmt.Errorf("the environment's kubeconfig names StackAPI at %s://%s, but the CLI reached it at %s://%s",
-			serverURL.Scheme, serverURL.Host, stackAPIURL.Scheme, stackAPIURL.Host)
+	if serverURL.Scheme != stackAPIURL.Scheme || !sameHostAndPort(serverURL, stackAPIURL) {
+		return false, fmt.Errorf("%w: the environment's kubeconfig names StackAPI at %s://%s, but the CLI reached it at %s://%s",
+			ErrKubernetesAPIProxyRefused, serverURL.Scheme, serverURL.Host, stackAPIURL.Scheme, stackAPIURL.Host)
 	}
 	return true, nil
+}
+
+// sameHostAndPort reports whether two URLs of one scheme name the same host,
+// case-insensitively, and the same port, reading an omitted one as the
+// scheme's default.
+func sameHostAndPort(a, b *url.URL) bool {
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && portOrDefault(a) == portOrDefault(b)
+}
+
+func portOrDefault(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch u.Scheme {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
 }
 
 // kubeconfigCluster returns the server and certificate authority a kubeconfig's

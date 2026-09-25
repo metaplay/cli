@@ -6,6 +6,7 @@ package envapi
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -142,7 +143,7 @@ func TestGetKubeConfigWithExecCredential_IsUnchangedWhereTheStackServesNoProxy(t
 			stack.kubeconfig = servedKubeconfig(clusterServer, test.authority, "a-service-account-token")
 			stack.clusterAuthority = test.authority
 
-			kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+			kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
 			if err != nil {
 				t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 			}
@@ -169,7 +170,7 @@ func TestGetKubeConfigWithExecCredential_PointsAtTheProxyWhereTheStackServesOne(
 	proxyServer := stack.baseURL() + "/tenant/v1/" + kubeconfigEnvironment + "/k8s"
 	stack.kubeconfig = servedKubeconfig(proxyServer, "", "a-proxy-credential")
 
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
@@ -196,7 +197,7 @@ func TestGetKubeConfigWithExecCredential_CarriesTheProxysCertificateAuthority(t 
 	const stacksOwn = "-----BEGIN CERTIFICATE-----\nthe-stacks-own-authority\n-----END CERTIFICATE-----\n"
 	stack.kubeconfig = servedKubeconfig(proxyServer, stacksOwn, "a-proxy-credential")
 
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestGetKubeConfigWithExecCredential_RefusesAKubeconfigNamingNoServer(t *tes
 			stack := newFakeStackAPI(t)
 			stack.kubeconfig = test.served
 
-			if _, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser); err == nil {
+			if _, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true); err == nil {
 				t.Error("wrote a dynamic kubeconfig from one naming no server")
 			}
 		})
@@ -246,12 +247,71 @@ func TestGetKubeConfigWithExecCredential_RefusesStackAPIElsewhere(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			stack.kubeconfig = servedKubeconfig(test.origin+"/stackapi/tenant/v1/"+kubeconfigEnvironment+"/k8s", "", "a-proxy-credential")
 
-			_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser)
+			_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
 			if err == nil {
 				t.Fatal("wrote a dynamic kubeconfig for StackAPI elsewhere")
 			}
 			if !strings.Contains(err.Error(), test.origin) {
 				t.Errorf("error = %q, want it to name %s", err, test.origin)
+			}
+			if !errors.Is(err, ErrKubernetesAPIProxyRefused) {
+				t.Errorf("error = %q, want it to wrap ErrKubernetesAPIProxyRefused", err)
+			}
+		})
+	}
+}
+
+// The proxy plugin answers with the default auth provider's token, so an
+// environment signing in with another provider is refused rather than have
+// that token handed to its stack.
+func TestGetKubeConfigWithExecCredential_RefusesTheProxyForAnotherAuthProvider(t *testing.T) {
+	stack := newFakeStackAPI(t)
+	stack.kubeconfig = servedKubeconfig(stack.baseURL()+"/tenant/v1/"+kubeconfigEnvironment+"/k8s", "", "a-proxy-credential")
+
+	_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, false)
+	if !errors.Is(err, ErrKubernetesAPIProxyRefused) {
+		t.Fatalf("error = %v, want it to wrap ErrKubernetesAPIProxyRefused", err)
+	}
+}
+
+// A stack serving no proxy is unaffected by the auth provider, as before.
+func TestGetKubeConfigWithExecCredential_TakesTheClusterForAnotherAuthProvider(t *testing.T) {
+	stack := newFakeStackAPI(t)
+	stack.kubeconfig = servedKubeconfig(clusterServer, "", "a-service-account-token")
+
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, false)
+	if err != nil {
+		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
+	}
+	want := dynamicKubeconfig(clusterServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, stack.baseURL())
+	if kubeconfig != want {
+		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
+	}
+}
+
+func TestIsKubernetesAPIProxy_NormalizesPortAndTrailingSlash(t *testing.T) {
+	tests := []struct {
+		name       string
+		stackAPI   string
+		server     string
+		wantProxy  bool
+		wantRefuse bool
+	}{
+		{"explicit default https port", "https://infra.example.com/stackapi", "https://infra.example.com:443/stackapi/tenant/v1/e/k8s", true, false},
+		{"base URL with explicit default port", "https://infra.example.com:443/stackapi", "https://infra.example.com/stackapi/tenant/v1/e/k8s", true, false},
+		{"base URL with a trailing slash", "https://infra.example.com/stackapi/", "https://infra.example.com/stackapi/tenant/v1/e/k8s", true, false},
+		{"another port", "https://infra.example.com/stackapi", "https://infra.example.com:8443/stackapi/tenant/v1/e/k8s", false, true},
+		{"a cluster", "https://infra.example.com/stackapi", clusterServer, false, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target := &TargetEnvironment{StackApiBaseURL: test.stackAPI}
+			isProxy, err := target.isKubernetesAPIProxy(test.server)
+			if test.wantRefuse != (err != nil) {
+				t.Fatalf("err = %v, want refused %v", err, test.wantRefuse)
+			}
+			if isProxy != test.wantProxy {
+				t.Errorf("isProxy = %v, want %v", isProxy, test.wantProxy)
 			}
 		})
 	}
@@ -264,7 +324,7 @@ func TestGetKubeConfigWithExecCredential_TakesTheProxyOnTheSameHostSpelledOtherw
 	proxyServer := strings.Replace(reachedAt, "localhost", "LocalHost", 1) + "/tenant/v1/" + kubeconfigEnvironment + "/k8s"
 	stack.kubeconfig = servedKubeconfig(proxyServer, "", "a-proxy-credential")
 
-	kubeconfig, err := stack.targetAt(reachedAt).GetKubeConfigWithExecCredential(kubeconfigUser)
+	kubeconfig, err := stack.targetAt(reachedAt).GetKubeConfigWithExecCredential(kubeconfigUser, true)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
