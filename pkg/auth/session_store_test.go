@@ -8,8 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zalando/go-keyring"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 )
@@ -241,5 +246,50 @@ func TestGetSessionID_FileProviderIsNamespaced(t *testing.T) {
 	// The built-in provider's key must not move: everyone already has one on disk.
 	if NewMetaplayAuthProvider().GetSessionID() != metaplayAuthProviderName {
 		t.Error("the built-in provider's session ID changed, which would sign existing users out")
+	}
+}
+
+// A save stores the session in a config.json only its owner can read, and
+// leaves nothing else behind but the lock file.
+func TestSaveSessionState_LeavesTheConfigAndItsLock(t *testing.T) {
+	keyring.MockInit()
+	configPath := redirectConfigHome(t)
+	provider := selfHostedProvider()
+
+	// The second save replaces a config that exists.
+	for _, accessToken := range []string{"first", "second"} {
+		if err := SaveSessionState(provider, UserTypeHuman, &TokenSet{AccessToken: accessToken}); err != nil {
+			t.Fatalf("SaveSessionState: %v", err)
+		}
+	}
+
+	stored, err := LoadSessionState(provider)
+	if err != nil || stored == nil {
+		t.Fatalf("the session is gone: %v", err)
+	}
+	if stored.TokenSet.AccessToken != "second" {
+		t.Errorf("stored access token = %q, want the second", stored.TokenSet.AccessToken)
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(configPath))
+	if err != nil {
+		t.Fatalf("failed to list the config directory: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if want := []string{"config.json", "config.json.lock"}; !slices.Equal(names, want) {
+		t.Errorf("config directory holds %v, want %v", names, want)
+	}
+
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(configPath)
+		if err != nil {
+			t.Fatalf("failed to stat the config: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0600 {
+			t.Errorf("config mode = %v, want 0600", perm)
+		}
 	}
 }
