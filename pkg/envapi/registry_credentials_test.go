@@ -82,10 +82,10 @@ func TestGetRegistryCredentials_ReportsWhereImagesGoAndHowToAuthenticate(t *test
 	}
 }
 
-// The stack carries host and repository separately so one shape holds
-// registries laid out differently. A client that pushes has to join them, and
-// this is the only place that does.
-func TestGetRegistryCredentials_PushTargetIsHostQualified(t *testing.T) {
+// The stack carries host and repository separately; every registry client
+// needs them joined. Getting this wrong points every command at a repository
+// that does not exist.
+func TestGetRegistryCredentials_QualifiedRepositoryJoinsTheTwoHalves(t *testing.T) {
 	env, _ := serveRegistryCredentials(t, RegistryCredentials{
 		RegistryHost: "registry.example-stack.example.com",
 		Repository:   "lovely-wombats-build-nimbly/gameserver",
@@ -99,8 +99,8 @@ func TestGetRegistryCredentials_PushTargetIsHostQualified(t *testing.T) {
 	}
 
 	want := "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver"
-	if got := credentials.PushTarget(); got != want {
-		t.Errorf("push target = %q, want %q", got, want)
+	if got := credentials.QualifiedRepository(); got != want {
+		t.Errorf("reference = %q, want %q", got, want)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestGetRegistryCredentials_OtherFailuresAreNotMistakenForNotServed(t *testi
 	}
 }
 
-// A stack answering 200 with nothing useful cannot be pushed to. Saying so here
+// A stack answering 200 with nothing useful cannot be used. Saying so here
 // names the endpoint; letting it through produces a docker error about an empty
 // reference much further down.
 func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
@@ -189,7 +189,7 @@ func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
 
 	_, err := env.GetRegistryCredentials()
 	if err == nil {
-		t.Fatal("expected an error naming the field that cannot be pushed to")
+		t.Fatal("expected an error naming the field it could not use")
 	}
 	if !strings.Contains(err.Error(), "https://registry.example-stack.example.com") {
 		t.Errorf("error = %q, want it to name the host it could not parse", err)
@@ -202,9 +202,9 @@ func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
 // Where the stack issues a credential, that is the whole answer: nothing else
 // is consulted, and in particular nothing cloud-shaped is fetched. That second
 // half is the point — asking for the environment's cloud description first is
-// what made pushes fail before they reached any registry, since only a
+// what made this fail before it reached any registry, since only a
 // cloud-provisioned environment has one.
-func TestResolveImagePushTarget_UsesWhatTheStackIssued(t *testing.T) {
+func TestResolveImageRepository_UsesWhatTheStackIssued(t *testing.T) {
 	var asked []string
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.URL.Path)
@@ -217,20 +217,20 @@ func TestResolveImagePushTarget_UsesWhatTheStackIssued(t *testing.T) {
 		})
 	}))
 
-	pushTarget, err := env.ResolveImagePushTarget()
+	repository, err := env.ResolveImageRepository()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	want := "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver"
-	if pushTarget.Repository != want {
-		t.Errorf("repository = %q, want %q", pushTarget.Repository, want)
+	if repository.QualifiedRepository != want {
+		t.Errorf("qualified repository = %q, want %q", repository.QualifiedRepository, want)
 	}
-	if pushTarget.Credentials.Username != "developer" {
-		t.Errorf("username = %q", pushTarget.Credentials.Username)
+	if repository.Credentials.Username != "developer" {
+		t.Errorf("username = %q", repository.Credentials.Username)
 	}
-	if pushTarget.Credentials.RegistryURL != "registry.example-stack.example.com" {
-		t.Errorf("registry = %q, want the host the credential names", pushTarget.Credentials.RegistryURL)
+	if repository.Credentials.RegistryURL != "registry.example-stack.example.com" {
+		t.Errorf("registry = %q, want the host the credential names", repository.Credentials.RegistryURL)
 	}
 	for _, path := range asked {
 		if strings.Contains(path, "/deployments/") {
@@ -240,10 +240,10 @@ func TestResolveImagePushTarget_UsesWhatTheStackIssued(t *testing.T) {
 }
 
 // A stack that issues no credential, and an environment that names no
-// repository either, cannot be pushed to at all. Saying that names both halves
-// of why; reaching for cloud credentials anyway would report something that
-// names neither.
-func TestResolveImagePushTarget_NoCredentialAndNoRepositoryIsRefusedClearly(t *testing.T) {
+// repository either, has nowhere for its images at all. Saying that names both
+// halves of why; reaching for cloud credentials anyway would report something
+// that names neither.
+func TestResolveImageRepository_NoCredentialAndNoRepositoryIsRefusedClearly(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/registry") {
 			http.NotFound(w, r)
@@ -255,7 +255,7 @@ func TestResolveImagePushTarget_NoCredentialAndNoRepositoryIsRefusedClearly(t *t
 		_ = json.NewEncoder(w).Encode(DeploymentSecret{})
 	}))
 
-	_, err := env.ResolveImagePushTarget()
+	_, err := env.ResolveImageRepository()
 
 	if err == nil {
 		t.Fatal("expected an error")
@@ -269,14 +269,14 @@ func TestResolveImagePushTarget_NoCredentialAndNoRepositoryIsRefusedClearly(t *t
 // not on this stack gets one before the registry endpoint is even reached, so
 // it looks exactly like a stack that has no such endpoint; following the
 // fallback would report a missing description that was never the problem.
-func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
+func TestResolveImageRepository_AnUnknownEnvironmentSaysSo(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Both requests answer 404, which is what an unknown environment gets
 		// whether or not the stack serves its own registry.
 		http.NotFound(w, r)
 	}))
 
-	_, err := env.ResolveImagePushTarget()
+	_, err := env.ResolveImageRepository()
 
 	if err == nil {
 		t.Fatal("expected an error")
@@ -292,9 +292,9 @@ func TestResolveImagePushTarget_AnUnknownEnvironmentSaysSo(t *testing.T) {
 // The fallback's other leg: a stack that issues no credential but whose
 // environment does name a repository proceeds to the older path rather than
 // refusing. Only the branch is asserted — where it leads needs a cloud
-// registry no test should reach — but getting the branch wrong turns every
-// push on an older stack into a refusal.
-func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
+// registry no test should reach — but getting the branch wrong refuses every
+// older stack outright.
+func TestResolveImageRepository_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
 	var asked []string
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.URL.Path)
@@ -308,7 +308,7 @@ func TestResolveImagePushTarget_AnEnvironmentWithARepositoryTakesTheOlderPath(t 
 		_ = json.NewEncoder(w).Encode(details)
 	}))
 
-	_, err := env.ResolveImagePushTarget()
+	_, err := env.ResolveImageRepository()
 
 	// The older path gets as far as asking the stack for cloud credentials,
 	// which is where a test without a cloud account stops. Asserting that the
