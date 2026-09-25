@@ -39,6 +39,10 @@ func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("failed to parse claims")
 }
 
+// errGrantRefused is the cause of a refresh the token endpoint refused, after
+// which the session is gone. Other failures to refresh leave it in place.
+var errGrantRefused = errors.New("token endpoint refused the refresh grant")
+
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
 // fails, return an error.
@@ -49,7 +53,9 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 
 // LoadAndRefreshTokenSetValidFor is LoadAndRefreshTokenSet, but also refreshes
 // tokens that expire within validFor, for a caller handing the token on to
-// something that will hold it that long.
+// something that will hold it that long. If that early refresh fails, other
+// than by the grant being refused, the current token is handed on instead,
+// since it still works until it expires; the next call tries the refresh again.
 func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor time.Duration) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
@@ -95,11 +101,16 @@ func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor t
 	if isExpired {
 		if tokenSet.RefreshToken != "" {
 			// Refresh the tokenSet.
-			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
+			refreshed, err := refreshTokenSet(tokenSet, authProvider)
 			if err != nil {
+				if time.Now().Before(expiresAt) && !errors.Is(err, errGrantRefused) {
+					log.Warn().Msgf("Could not refresh the session, so using the current access token until it expires at %s", expiresAt.Format(time.TimeOnly))
+					return tokenSet, nil
+				}
 				return nil, clierrors.Wrap(err, "Failed to refresh authentication tokens").
 					WithSuggestion("Your session may have expired. Run 'metaplay auth login' to re-authenticate")
 			}
+			tokenSet = refreshed
 
 			// Persist the refreshed tokens.
 			err = saveSessionState(authProvider, sessionState.UserType, tokenSet)
@@ -160,6 +171,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 
 		log.Debug().Msg("Local credentials removed.")
 		return nil, clierrors.New("Session expired and could not be refreshed").
+			WithCause(fmt.Errorf("%w: status %d", errGrantRefused, statusCode)).
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 

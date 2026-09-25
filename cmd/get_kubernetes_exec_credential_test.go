@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -68,19 +69,26 @@ func accessTokenExpiringAt(t *testing.T, subject string, expiresAt time.Time) st
 // refreshedExpiresAt.
 func useAuthProvider(t *testing.T, refreshedExpiresAt time.Time) *auth.AuthProviderConfig {
 	t.Helper()
-	keyring.MockInit()
-	home := t.TempDir()
-	t.Setenv("HOME", home)        // unix
-	t.Setenv("USERPROFILE", home) // windows
-
-	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return useAuthProviderAt(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(auth.TokenSet{
 			AccessToken:  accessTokenExpiringAt(t, "refreshed", refreshedExpiresAt),
 			RefreshToken: "the-next-refresh-token",
 			TokenType:    "bearer",
 		})
-	}))
+	})
+}
+
+// useAuthProviderAt points the CLI at an auth provider with no session stored,
+// whose token endpoint is tokenEndpoint.
+func useAuthProviderAt(t *testing.T, tokenEndpoint http.HandlerFunc) *auth.AuthProviderConfig {
+	t.Helper()
+	keyring.MockInit()
+	home := t.TempDir()
+	t.Setenv("HOME", home)        // unix
+	t.Setenv("USERPROFILE", home) // windows
+
+	endpoint := httptest.NewServer(tokenEndpoint)
 	t.Cleanup(endpoint.Close)
 
 	providerFile := filepath.Join(t.TempDir(), "provider.yaml")
@@ -116,8 +124,8 @@ func logIn(t *testing.T, provider *auth.AuthProviderConfig, expiresAt time.Time)
 }
 
 // runProxyPlugin runs the plugin in dir the way kubectl does for a kubeconfig
-// pointing at the Kubernetes API proxy, and returns its stdout.
-func runProxyPlugin(t *testing.T, dir string) (string, error) {
+// pointing at the Kubernetes API proxy, and returns its stdout and stderr.
+func runProxyPlugin(t *testing.T, dir string) (string, string, error) {
 	t.Helper()
 	t.Chdir(dir)
 
@@ -126,19 +134,24 @@ func runProxyPlugin(t *testing.T, dir string) (string, error) {
 		t.Fatalf("failed to create stdout: %v", err)
 	}
 	defer func() { _ = stdout.Close() }()
-	// As initLogger sets it up without --verbose, which kubectl never passes.
-	previousLogger := log.Logger
+	// The loggers as initLogger sets them up, the log writing to stdout, so a
+	// log line the plugin lets through lands among its output.
+	var stderr bytes.Buffer
+	previousLogger, previousStderrLogger := log.Logger, stderrLogger
 	log.Logger = zerolog.New(&coloredLineConsoleWriter{Out: stdout}).Level(zerolog.InfoLevel)
-	t.Cleanup(func() { log.Logger = previousLogger })
+	stderrLogger = zerolog.New(&stderr).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger, stderrLogger = previousLogger, previousStderrLogger })
 
+	cmd := &cobra.Command{}
+	cmd.SetOut(stdout)
 	o := getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}
-	runErr := o.Run(&cobra.Command{})
+	runErr := o.Run(cmd)
 
 	printed, err := os.ReadFile(stdout.Name())
 	if err != nil {
 		t.Fatalf("failed to read stdout: %v", err)
 	}
-	return string(printed), runErr
+	return string(printed), stderr.String(), runErr
 }
 
 // decodeExecCredential decodes the plugin's stdout, which must be the exec
@@ -166,7 +179,7 @@ func TestGetKubernetesExecCredential_ProxyRefreshesATokenExpiringWithinTheSkew(t
 	provider := useAuthProvider(t, refreshedExpiresAt)
 	logIn(t, provider, time.Now().Add(30*time.Second))
 
-	stdout, err := runProxyPlugin(t, t.TempDir())
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -185,7 +198,7 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing
 	provider := useAuthProvider(t, time.Now().Add(time.Hour))
 	logIn(t, provider, expiresAt)
 
-	stdout, err := runProxyPlugin(t, t.TempDir())
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -204,7 +217,7 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing
 func TestGetKubernetesExecCredential_ProxySaysHowToLogInWithoutASession(t *testing.T) {
 	useAuthProvider(t, time.Now().Add(time.Hour))
 
-	stdout, err := runProxyPlugin(t, t.TempDir())
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
 	if err == nil {
 		t.Fatalf("answered with no session: %s", stdout)
 	}
@@ -229,7 +242,7 @@ func TestGetKubernetesExecCredential_ProxyIgnoresTheProjectItRunsIn(t *testing.T
 		t.Fatalf("failed to write the project: %v", err)
 	}
 
-	stdout, err := runProxyPlugin(t, projectDir)
+	stdout, _, err := runProxyPlugin(t, projectDir)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -237,5 +250,54 @@ func TestGetKubernetesExecCredential_ProxyIgnoresTheProjectItRunsIn(t *testing.T
 	status := decodeExecCredential(t, stdout)
 	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
 		t.Errorf("kubectl was handed another token than the stored one")
+	}
+}
+
+// A token the endpoint could not refresh still works until it expires, so it
+// is handed on, with its own expiry: the skew's is already past. What went
+// wrong is said on stderr, and stdout still carries the credential alone.
+func TestGetKubernetesExecCredential_ProxyHandsOnATokenItCouldNotRefresh(t *testing.T) {
+	expiresAt := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	provider := useAuthProviderAt(t, func(w http.ResponseWriter, r *http.Request) {
+		// Not retried, unlike the other server errors, so the test need not wait.
+		http.Error(w, "down for maintenance", http.StatusNotImplemented)
+	})
+	logIn(t, provider, expiresAt)
+
+	stdout, stderr, err := runProxyPlugin(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	status := decodeExecCredential(t, stdout)
+	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
+		t.Errorf("kubectl was handed another token than the stored one")
+	}
+	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(expiresAt) {
+		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, expiresAt)
+	}
+	if !strings.Contains(stderr, "down for maintenance") || !strings.Contains(stderr, "Could not refresh") {
+		t.Errorf("stderr does not say the refresh failed:\n%s", stderr)
+	}
+}
+
+// Tokens that live no longer than the skew are reported with their own
+// expiry, rather than one already past.
+func TestGetKubernetesExecCredential_ProxyReportsAShortLivedTokensOwnExpiry(t *testing.T) {
+	refreshedExpiresAt := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	provider := useAuthProvider(t, refreshedExpiresAt)
+	logIn(t, provider, time.Now().Add(10*time.Second))
+
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	status := decodeExecCredential(t, stdout)
+	if status.Token != accessTokenExpiringAt(t, "refreshed", refreshedExpiresAt) {
+		t.Errorf("kubectl was handed the stored token, which expires within the skew")
+	}
+	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(refreshedExpiresAt) {
+		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, refreshedExpiresAt)
 	}
 }

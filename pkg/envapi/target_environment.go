@@ -310,7 +310,14 @@ func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, erro
 			WithSuggestion("Run '" + authProvider.LoginCommand() + "' to re-authenticate")
 	}
 
+	// A token already within the skew, handed on because it could not be
+	// refreshed or because tokens live no longer than the skew, is reported
+	// with its own expiry. One already past would have kubectl run the plugin
+	// again for every request.
 	expiry := metav1.NewTime(expiresAt.Add(-ProxyExecCredentialSkew))
+	if !expiry.After(time.Now()) {
+		expiry = metav1.NewTime(expiresAt)
+	}
 	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
 		TypeMeta: metav1.TypeMeta{APIVersion: "client.authentication.k8s.io/v1beta1", Kind: "ExecCredential"},
 		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: tokenSet.AccessToken, ExpirationTimestamp: &expiry},

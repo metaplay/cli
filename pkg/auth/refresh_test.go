@@ -344,3 +344,42 @@ func TestLoadAndRefreshTokenSetValidFor_RefusesAMachineTokenItCannotRefresh(t *t
 		t.Errorf("suggestion = %q, want it to say how to get another token", cliErr.Suggestion)
 	}
 }
+
+// A token refreshed early still works until it expires. If the refresh fails,
+// it is handed on, and the session kept for the next attempt, unless the
+// endpoint refused the grant, which ends the session.
+func TestLoadAndRefreshTokenSetValidFor_HandsOnTheCurrentTokenUnlessTheGrantIsRefused(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		wantHandsOn bool
+	}{
+		{"server error", http.StatusNotImplemented, true},
+		{"invalid grant", http.StatusBadRequest, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "no", test.status)
+			})
+			storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+			tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+			if !test.wantHandsOn {
+				if err == nil {
+					t.Fatal("handed on a token whose grant was refused")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+			}
+			if got := subjectOf(t, tokenSet); got != "stored" {
+				t.Errorf("answered with the %s token, want the stored one", got)
+			}
+			if stored, err := LoadSessionState(provider); err != nil || stored == nil {
+				t.Errorf("the session is gone: %v", err)
+			}
+		})
+	}
+}
