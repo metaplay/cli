@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -127,11 +128,16 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email)
+		usesDefaultAuthProvider := coalesceString(envConfig.AuthProvider, "metaplay") == "metaplay"
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, usesDefaultAuthProvider)
 	} else {
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	}
 
+	if errors.Is(err, envapi.ErrKubernetesAPIProxyRefused) {
+		return clierrors.Wrap(err, "Failed to get environment kubeconfig").
+			WithSuggestion("Use --type=static, whose kubeconfig carries the stack's own credential")
+	}
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to get environment kubeconfig")
 	}
