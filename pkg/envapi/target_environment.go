@@ -63,7 +63,13 @@ type DockerCredentials struct {
 }
 
 func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
-	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	return NewTargetEnvironmentAtStackAPI(tokenSet, fmt.Sprintf("https://infra.%s/stackapi", stackDomain), humanID)
+}
+
+// NewTargetEnvironmentAtStackAPI is NewTargetEnvironment for a caller that
+// already holds the StackAPI base URL and would otherwise have to take it apart
+// to recover a stack domain this type never stores.
+func NewTargetEnvironmentAtStackAPI(tokenSet *auth.TokenSet, stackApiBaseURL, humanID string) *TargetEnvironment {
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
@@ -289,9 +295,18 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		return "", err
 	}
 
-	if string(credentials.Spec.Cluster.CertificateAuthorityData) == "" && credentials.Spec.Cluster.Server == "" {
+	// Spec.Cluster is a pointer, and the server omits it whenever the exec
+	// config did not ask for cluster info. Test it before reaching through it.
+	if credentials.Spec.Cluster == nil {
 		return "", fmt.Errorf("received kubeExecCredential with missing spec.cluster")
 	}
+	if credentials.Spec.Cluster.Server == "" {
+		return "", fmt.Errorf("received kubeExecCredential with no spec.cluster.server")
+	}
+	// An absent certificate authority is deliberately not an error: a server
+	// whose certificate chains to a publicly trusted root needs none, and
+	// client-go falls through to the system trust store when the kubeconfig
+	// carries no CA.
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{
 		ApiVersion: "v1",

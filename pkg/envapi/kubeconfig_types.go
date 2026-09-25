@@ -45,8 +45,7 @@ type KubeConfigUser struct {
 }
 
 type KubeConfigUserData struct {
-	Token string                 `yaml:"token"`
-	Exec  KubeConfigUserDataExec `yaml:"exec"`
+	Exec KubeConfigUserDataExec `yaml:"exec"`
 }
 
 type KubeConfigUserDataExec struct {
