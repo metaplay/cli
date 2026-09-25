@@ -46,8 +46,7 @@ var refreshTimeout = 20 * time.Second
 
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
-// fails, return an error.
-// \todo Forget the tokens if the refresh fails (due to keys already used)
+// fails, return an error. refreshTokenSet decides whether the session is kept.
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
