@@ -5,14 +5,17 @@
 package auth
 
 import (
-	"fmt"
 	"os"
 	"time"
+
+	"github.com/rs/zerolog/log"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 // sessionLockTimeout is how long to wait for another process to release the
-// session store. It outlasts a token refresh, retries included.
-var sessionLockTimeout = 30 * time.Second
+// session store. It outlasts a token refresh, which ends within refreshTimeout.
+var sessionLockTimeout = refreshTimeout + 10*time.Second
 
 // sessionLockPollInterval is how often a waiting process tries the lock again.
 const sessionLockPollInterval = 25 * time.Millisecond
@@ -25,7 +28,9 @@ const sessionLockPollInterval = 25 * time.Millisecond
 // a second process finds the refreshed tokens rather than refreshing again.
 //
 // The lock is an OS lock on a file of its own, so it is released if its holder
-// dies, and it excludes other open files within one process too.
+// dies, and it excludes other open files within one process too. Where no lock
+// can be had at all, such as a read-only config directory or a filesystem
+// without locks, the store is used unlocked, as it was before the lock existed.
 func lockSessionStore() (unlock func(), err error) {
 	configPath, err := resolvePersistedConfigFilePath()
 	if err != nil {
@@ -33,9 +38,15 @@ func lockSessionStore() (unlock func(), err error) {
 	}
 	lockPath := configPath + ".lock"
 
-	file, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0600)
+	// Opened for reading only, which is all a lock needs, so that a lock file
+	// another user created, such as root under sudo, still serves this one.
+	file, err := os.OpenFile(lockPath, os.O_RDONLY|os.O_CREATE, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open the session lock %s: %w", lockPath, err)
+		if cannotCreateLockFile(err) {
+			log.Debug().Msgf("Using the session store unlocked, as %s cannot be created: %v", lockPath, err)
+			return func() {}, nil
+		}
+		return nil, clierrors.Wrapf(err, "Failed to open the session lock %s", lockPath)
 	}
 
 	deadline := time.Now().Add(sessionLockTimeout)
@@ -43,14 +54,20 @@ func lockSessionStore() (unlock func(), err error) {
 		locked, err := tryLockFile(file)
 		if err != nil {
 			_ = file.Close()
-			return nil, fmt.Errorf("failed to lock %s: %w", lockPath, err)
+			if lockUnsupported(err) {
+				log.Debug().Msgf("Using the session store unlocked, as %s cannot be locked: %v", lockPath, err)
+				return func() {}, nil
+			}
+			return nil, clierrors.Wrapf(err, "Failed to lock the session store %s", lockPath)
 		}
 		if locked {
 			break
 		}
 		if time.Now().After(deadline) {
 			_ = file.Close()
-			return nil, fmt.Errorf("timed out after %v waiting for another metaplay process to release %s", sessionLockTimeout, lockPath)
+			return nil, clierrors.Newf("Timed out after %v waiting for another metaplay process to release the session store", sessionLockTimeout).
+				WithDetails("Lock file: " + lockPath).
+				WithSuggestion("Try again, and check for a 'metaplay' process that has not exited")
 		}
 		time.Sleep(sessionLockPollInterval)
 	}

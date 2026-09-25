@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,6 +18,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/zalando/go-keyring"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 func TestMergeRefreshedTokenSet(t *testing.T) {
@@ -200,38 +205,112 @@ func TestLoadAndRefreshTokenSet_RefreshesOnceForConcurrentCallers(t *testing.T) 
 	}
 }
 
-// Only a refused grant signs the user out. Any other failure keeps the session
-// for the next attempt. The server errors the CLI retries (500, 502-504) take
-// seconds to exhaust, so 501 stands in for them.
+// Only a refused grant signs the user out: an invalid_grant, with whatever
+// status, or failing a named error, a 400 or 401. Any other failure keeps the
+// session for the next attempt, and says to try again. The server errors the
+// CLI retries (500, 502-504) take seconds to exhaust, so 501 stands in for them.
 func TestLoadAndRefreshTokenSet_KeepsTheSessionUnlessTheGrantIsRefused(t *testing.T) {
 	tests := []struct {
 		name     string
 		status   int
+		body     string
 		wantKept bool
 	}{
-		{"invalid grant", http.StatusBadRequest, false},
-		{"client refused", http.StatusUnauthorized, false},
-		{"forbidden in between", http.StatusForbidden, true},
-		{"server error", http.StatusNotImplemented, true},
+		{"invalid grant", http.StatusBadRequest, `{"error":"invalid_grant"}`, false},
+		{"invalid grant, as Auth0 sends it", http.StatusForbidden, `{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}`, false},
+		{"another error", http.StatusBadRequest, `{"error":"invalid_scope"}`, true},
+		{"unnamed 400", http.StatusBadRequest, "no", false},
+		{"unnamed 401", http.StatusUnauthorized, "no", false},
+		{"forbidden in between", http.StatusForbidden, "no", true},
+		{"server error", http.StatusNotImplemented, "no", true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
-				http.Error(w, "no", test.status)
+				http.Error(w, test.body, test.status)
 			})
 			storeSession(t, provider, UserTypeHuman, time.Now().Add(-time.Minute))
 
-			if _, err := LoadAndRefreshTokenSet(provider); err == nil {
+			_, err := LoadAndRefreshTokenSet(provider)
+			if err == nil {
 				t.Fatal("answered with an expired token")
 			}
 
-			stored, err := LoadSessionState(provider)
-			if err != nil {
-				t.Fatalf("LoadSessionState: %v", err)
+			stored, loadErr := LoadSessionState(provider)
+			if loadErr != nil {
+				t.Fatalf("LoadSessionState: %v", loadErr)
 			}
 			if kept := stored != nil; kept != test.wantKept {
 				t.Errorf("session kept = %v, want %v", kept, test.wantKept)
 			}
+			// displayError shows the outermost suggestion only.
+			cliErr, ok := clierrors.AsCLIError(err)
+			if !ok {
+				t.Fatalf("error is not a CLIError: %v", err)
+			}
+			if wantLogin := !test.wantKept; strings.Contains(cliErr.Suggestion, "auth login") != wantLogin {
+				t.Errorf("suggestion = %q, want it to say to log in: %v", cliErr.Suggestion, wantLogin)
+			}
 		})
+	}
+}
+
+// A token endpoint that never answers gives up within refreshTimeout, rather
+// than hold the session lock, and every other process, indefinitely.
+func TestLoadAndRefreshTokenSet_GivesUpOnATokenEndpointThatDoesNotAnswer(t *testing.T) {
+	previous := refreshTimeout
+	refreshTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { refreshTimeout = previous })
+
+	// The server shuts down only once its handlers return, so release this
+	// one first: cleanups run last registered first.
+	release := make(chan struct{})
+	provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(-time.Minute))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := LoadAndRefreshTokenSet(provider)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("answered with an expired token")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("still waiting for the token endpoint")
+	}
+
+	if stored, err := LoadSessionState(provider); err != nil || stored == nil {
+		t.Errorf("the session is gone: %v", err)
+	}
+}
+
+// Tokens refreshed but not saved are still handed on: the refresh spent the
+// stored refresh token, so they are the only good ones.
+func TestLoadAndRefreshTokenSet_HandsOnRefreshedTokensItCannotSave(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner cannot write")
+	}
+	provider, _ := rotatingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(-time.Minute))
+	configPath, err := resolvePersistedConfigFilePath()
+	if err != nil {
+		t.Fatalf("resolvePersistedConfigFilePath: %v", err)
+	}
+	if err := os.Chmod(configPath, 0400); err != nil {
+		t.Fatalf("failed to make the config read-only: %v", err)
+	}
+
+	tokenSet, err := LoadAndRefreshTokenSet(provider)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSet: %v", err)
+	}
+	if got := subjectOf(t, tokenSet); got != "refreshed" {
+		t.Errorf("answered with the %s token, want the refreshed one", got)
 	}
 }

@@ -8,6 +8,7 @@ package auth
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 
 	"golang.org/x/sys/windows"
@@ -27,4 +28,15 @@ func tryLockFile(file *os.File) (bool, error) {
 func unlockFile(file *os.File) error {
 	var overlapped windows.Overlapped
 	return windows.UnlockFileEx(windows.Handle(file.Fd()), 0, 1, 0, &overlapped)
+}
+
+// cannotCreateLockFile reports whether opening the lock file failed because no
+// lock file can be made here, rather than by some passing fault.
+func cannotCreateLockFile(err error) bool {
+	return errors.Is(err, fs.ErrPermission) || errors.Is(err, windows.ERROR_WRITE_PROTECT)
+}
+
+// lockUnsupported reports whether the filesystem offers no locks.
+func lockUnsupported(err error) bool {
+	return errors.Is(err, windows.ERROR_NOT_SUPPORTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION)
 }

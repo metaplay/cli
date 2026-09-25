@@ -310,23 +310,12 @@ func savePersistedConfig(config *PersistedConfig) error {
 		return fmt.Errorf("failed to serialize PersistedConfig: %w", err)
 	}
 
-	// Write to a temporary file and rename it over the config, so that the
-	// config on disk is always whole: writing it in place truncates it first,
-	// and a crash then loses every session.
-	tempFile, err := os.CreateTemp(filepath.Dir(filePath), filepath.Base(filePath)+".*.tmp")
+	// Write sessionState to file. In place, under the session lock, which keeps
+	// readers from seeing it half written. Renaming a new file over it would
+	// instead fail on Windows while anything has it open, and hand it to
+	// whoever wrote it, such as root under sudo.
+	err = os.WriteFile(filePath, configJSON, 0600)
 	if err != nil {
-		return fmt.Errorf("failed to write session state to file: %w", err)
-	}
-	defer func() { _ = os.Remove(tempFile.Name()) }() // Fails harmlessly once renamed.
-
-	if _, err := tempFile.Write(configJSON); err != nil {
-		_ = tempFile.Close()
-		return fmt.Errorf("failed to write session state to file: %w", err)
-	}
-	if err := tempFile.Close(); err != nil {
-		return fmt.Errorf("failed to write session state to file: %w", err)
-	}
-	if err := os.Rename(tempFile.Name(), filePath); err != nil {
 		return fmt.Errorf("failed to write session state to file: %w", err)
 	}
 
@@ -588,8 +577,17 @@ func RevokeRefreshToken(authProvider *AuthProviderConfig, refreshToken string) {
 // RevokeAndDeleteSession revokes tokens server-side and removes local session state.
 // Server-side revocation is best-effort; local deletion always proceeds.
 func RevokeAndDeleteSession(authProvider *AuthProviderConfig) error {
+	// Hold the session lock throughout, so that a refresh in another process
+	// cannot replace the refresh token between loading and revoking it, and
+	// leave the replacement live on the server.
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	// Load session to get tokens
-	sessionState, err := LoadSessionState(authProvider)
+	sessionState, err := loadSessionState(authProvider)
 	if err != nil {
 		log.Warn().Msgf("Failed to load session for revocation: %v", err)
 		// Proceed with local deletion anyway
@@ -601,5 +599,5 @@ func RevokeAndDeleteSession(authProvider *AuthProviderConfig) error {
 	}
 
 	// Always delete local session state
-	return DeleteSessionState(authProvider)
+	return deleteSessionState(authProvider)
 }

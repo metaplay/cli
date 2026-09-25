@@ -249,9 +249,9 @@ func TestGetSessionID_FileProviderIsNamespaced(t *testing.T) {
 	}
 }
 
-// A save replaces config.json whole, by renaming a temporary file over it,
-// and leaves nothing of that file behind.
-func TestSaveSessionState_ReplacesTheConfigWhole(t *testing.T) {
+// A save stores the session in a config.json only its owner can read, and
+// leaves nothing else behind but the lock file.
+func TestSaveSessionState_LeavesTheConfigAndItsLock(t *testing.T) {
 	keyring.MockInit()
 	configPath := redirectConfigHome(t)
 	provider := selfHostedProvider()
