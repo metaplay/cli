@@ -54,8 +54,11 @@ type AWSCredentials struct {
 
 // Container for access information to an environment's docker registry.
 type DockerCredentials struct {
-	Username    string
-	Password    string
+	Username string
+	Password string
+	// The registry, in one of two shapes: ECR's proxy endpoint, scheme and all
+	// ('https://<id>.dkr.ecr...'), or the bare host a stack that issues its own
+	// credentials reports. Not a name a registry client will parse.
 	RegistryURL string
 }
 

@@ -94,18 +94,13 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the image goes and what authenticates the push; which
+	// registry that is depends on the stack.
+	pushTarget, err := targetEnv.ResolveImagePushTarget()
 	if err != nil {
 		return err
 	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
+	log.Debug().Msgf("Pushing to %s as username=%s", pushTarget.Repository, pushTarget.Credentials.Username)
 
 	// Use task runner to push the image.
 	taskRunner := tui.NewTaskRunner()
@@ -113,7 +108,7 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Push the image to the remote repository.
 	imagePushed := false
 	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, pushTarget.Repository, pushTarget.Credentials)
 		imagePushed = pushed
 		return err
 	})
