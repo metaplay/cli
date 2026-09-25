@@ -281,6 +281,10 @@ func TestLoadAndRefreshTokenSet_GivesUpOnATokenEndpointThatDoesNotAnswer(t *test
 		if err == nil {
 			t.Fatal("answered with an expired token")
 		}
+		// The session is kept, so the hint shown must not be to log in again.
+		if cliErr, ok := clierrors.AsCLIError(err); !ok || strings.Contains(cliErr.Suggestion, "auth login") {
+			t.Errorf("error %v, want a CLIError whose suggestion is not to log in", err)
+		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("still waiting for the token endpoint")
 	}

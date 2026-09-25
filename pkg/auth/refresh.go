@@ -141,7 +141,8 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 			return nil, clierrors.Wrap(err, "SSL certificate validation failed during token refresh").
 				WithSuggestion("Check your network connection — someone may be intercepting your traffic")
 		}
-		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint)
+		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint).
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	// Check for a non-OK response (after retries exhausted for transient errors)
