@@ -47,8 +47,8 @@ func init() {
 			- dynamic for human users (logged in with refresh token)
 			- static for machine users (logged in with access token only)
 
-			A dynamic KubeConfig refreshes its credentials with the session's refresh token, so a machine user
-			cannot use one.
+			A machine user's session cannot be refreshed, so a dynamic KubeConfig works only until its access
+			token expires. Logging in again with 'metaplay auth machine-login' renews it.
 
 			On a stack that serves the Kubernetes API through StackAPI, the KubeConfig points at StackAPI.
 			A dynamic one then authenticates with your own access token, which the Metaplay CLI refreshes
@@ -159,18 +159,14 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 
 // wantsDynamicKubeconfig reports whether to write a dynamic kubeconfig: the
 // type asked for, or by default dynamic for human users and static for machine
-// users. A machine user has no refresh token, so it cannot use a dynamic one.
+// users. A machine user has no refresh token, so its dynamic kubeconfig lasts
+// only until its next machine login, but it may still ask for one.
 func wantsDynamicKubeconfig(credentialsType string, tokenSet *auth.TokenSet) (bool, error) {
 	isHumanUser := tokenSet.RefreshToken != ""
 	switch credentialsType {
 	case "":
 		return isHumanUser, nil
 	case "dynamic":
-		if !isHumanUser {
-			return false, clierrors.NewUsageError("A machine user cannot use a dynamic kubeconfig").
-				WithDetails("A dynamic kubeconfig refreshes its credentials with a refresh token, which a machine user does not have").
-				WithSuggestion("Use --type=static, and fetch a new kubeconfig when it expires")
-		}
 		return true, nil
 	case "static":
 		return false, nil
