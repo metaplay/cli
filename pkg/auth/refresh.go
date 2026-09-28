@@ -5,6 +5,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,13 +40,25 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("failed to parse claims")
 }
 
+// refreshTimeout bounds a token refresh, retries included. It is held under the
+// session lock, so it must end well within sessionLockTimeout.
+var refreshTimeout = 20 * time.Second
+
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
-// fails, return an error.
-// \todo Forget the tokens if the refresh fails (due to keys already used)
+// fails, return an error. refreshTokenSet decides whether the session is kept.
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
+	// Hold the session lock from loading the session to saving its refresh. A
+	// process that waited for it then loads the refreshed tokens, rather than
+	// presenting the refresh token again, which revokes the session.
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
 	// Get current session (including credentials).
-	sessionState, err := LoadSessionState(authProvider)
+	sessionState, err := loadSessionState(authProvider)
 	if err != nil {
 		// A provider mismatch already names the command that resolves it. Wrapping
 		// buries that: displayError prints only the outermost suggestion, and a bare
@@ -80,14 +93,22 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			// Refresh the tokenSet.
 			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
 			if err != nil {
+				// displayError prints only the outermost suggestion, so carry up the
+				// one saying what to do about this failure, where there is one.
+				suggestion := "Your session may have expired. Run 'metaplay auth login' to re-authenticate"
+				if cause, ok := clierrors.AsCLIError(err); ok && cause.Suggestion != "" {
+					suggestion = cause.Suggestion
+				}
 				return nil, clierrors.Wrap(err, "Failed to refresh authentication tokens").
-					WithSuggestion("Your session may have expired. Run 'metaplay auth login' to re-authenticate")
+					WithSuggestion(suggestion)
 			}
 
-			// Persist the refreshed tokens.
-			err = SaveSessionState(authProvider, sessionState.UserType, tokenSet)
+			// Persist the refreshed tokens. The refresh has spent the stored refresh
+			// token, so if they cannot be saved, this process holds the only good
+			// ones: use them rather than fail as well.
+			err = saveSessionState(authProvider, sessionState.UserType, tokenSet)
 			if err != nil {
-				return nil, clierrors.Wrap(err, "Failed to persist refreshed tokens")
+				log.Warn().Msgf("Failed to save the refreshed session, so the next command will ask you to log in again: %v", err)
 			}
 		} else {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
@@ -99,6 +120,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 }
 
 // Refresh the tokenSet. Return a new tokenSet that was returned by the token endpoint.
+// The caller holds the session lock.
 func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*TokenSet, error) {
 	// Create URL-encoded form data
 	data := url.Values{}
@@ -107,24 +129,36 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	data.Set("scope", authProvider.Scopes) //"openid offline_access")
 	data.Set("client_id", authProvider.ClientID)
 
-	// Make the HTTP request with retry logic for transient errors
-	body, statusCode, err := httputil.PostFormWithRetry(authProvider.TokenEndpoint, data.Encode())
+	// Make the HTTP request with retry logic for transient errors, within a
+	// deadline: the session lock is held throughout.
+	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	defer cancel()
+	body, statusCode, err := httputil.PostFormWithRetryContext(ctx, authProvider.TokenEndpoint, data.Encode())
 	if err != nil {
 		log.Error().Msgf("Failed to refresh tokens via endpoint %s: %v", authProvider.TokenEndpoint, err)
 		if err.Error() == "x509: certificate signed by unknown authority" {
 			return nil, clierrors.Wrap(err, "SSL certificate validation failed during token refresh").
 				WithSuggestion("Check your network connection — someone may be intercepting your traffic")
 		}
-		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint)
+		return nil, clierrors.Wrapf(err, "Failed to refresh tokens via %s", authProvider.TokenEndpoint).
+			WithSuggestion("Check your network connection and try again")
 	}
 
 	// Check for a non-OK response (after retries exhausted for transient errors)
 	if statusCode != http.StatusOK {
 		log.Error().Msgf("Failed to refresh tokens. Response: %s", body)
-		log.Debug().Msg("Clearing local credentials...")
+
+		// Only a refused grant ends the session. Anything else, such as a server
+		// error outlasting the retries, says nothing about the session, so keep it
+		// for the next attempt.
+		if !isGrantRefused(statusCode, body) {
+			return nil, clierrors.Newf("Token endpoint %s answered the refresh with status %d", authProvider.TokenEndpoint, statusCode).
+				WithSuggestion("Try again in a moment")
+		}
 
 		// Remove the session state (something has gone badly wrong).
-		err = DeleteSessionState(authProvider)
+		log.Debug().Msg("Clearing local credentials...")
+		err = deleteSessionState(authProvider)
 		if err != nil {
 			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
 		}
@@ -142,6 +176,21 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 	}
 
 	return mergeRefreshedTokenSet(tokenSet, &tokens), nil
+}
+
+// isGrantRefused reports whether a failed refresh means the refresh token is no
+// good: RFC 6749 names that invalid_grant, which some servers send with a
+// status other than 400 (Auth0 uses 403). A response naming no error at all is
+// taken as refused if it has the status the RFC gives errors, 400, or 401 for
+// the client.
+func isGrantRefused(statusCode int, body []byte) bool {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) == nil && response.Error != "" {
+		return response.Error == "invalid_grant"
+	}
+	return statusCode == http.StatusBadRequest || statusCode == http.StatusUnauthorized
 }
 
 // mergeRefreshedTokenSet treats the refresh response as a delta: access_token comes from it,
