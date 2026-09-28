@@ -24,6 +24,10 @@ const (
 	clusterAuthority      = "-----BEGIN CERTIFICATE-----\nnot-a-real-ca\n-----END CERTIFICATE-----\n"
 )
 
+// proxyAuthProvider is the default auth provider, which the environments here
+// sign in with, and a proxy kubeconfig is pinned to.
+var proxyAuthProvider = auth.NewMetaplayAuthProvider()
+
 // fakeStackAPI answers the credentials endpoint the way a stack does: with a
 // kubeconfig when asked for one, and with an exec credential when asked for
 // that. It remembers what it was asked.
@@ -143,7 +147,7 @@ func TestGetKubeConfigWithExecCredential_IsUnchangedWhereTheStackServesNoProxy(t
 			stack.kubeconfig = servedKubeconfig(clusterServer, test.authority, "a-service-account-token")
 			stack.clusterAuthority = test.authority
 
-			kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
+			kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider)
 			if err != nil {
 				t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 			}
@@ -170,12 +174,12 @@ func TestGetKubeConfigWithExecCredential_PointsAtTheProxyWhereTheStackServesOne(
 	proxyServer := stack.baseURL() + "/tenant/v1/" + kubeconfigEnvironment + "/k8s"
 	stack.kubeconfig = servedKubeconfig(proxyServer, "", "a-proxy-credential")
 
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
 
-	want := dynamicKubeconfig(proxyServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy")
+	want := dynamicKubeconfig(proxyServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy", "--auth-provider-fingerprint", proxyAuthProvider.Fingerprint())
 	if kubeconfig != want {
 		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
 	}
@@ -197,12 +201,12 @@ func TestGetKubeConfigWithExecCredential_CarriesTheProxysCertificateAuthority(t 
 	const stacksOwn = "-----BEGIN CERTIFICATE-----\nthe-stacks-own-authority\n-----END CERTIFICATE-----\n"
 	stack.kubeconfig = servedKubeconfig(proxyServer, stacksOwn, "a-proxy-credential")
 
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
 
-	want := dynamicKubeconfig(proxyServer, stacksOwn, "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy")
+	want := dynamicKubeconfig(proxyServer, stacksOwn, "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy", "--auth-provider-fingerprint", proxyAuthProvider.Fingerprint())
 	if kubeconfig != want {
 		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
 	}
@@ -224,7 +228,7 @@ func TestGetKubeConfigWithExecCredential_RefusesAKubeconfigNamingNoServer(t *tes
 			stack := newFakeStackAPI(t)
 			stack.kubeconfig = test.served
 
-			if _, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true); err == nil {
+			if _, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider); err == nil {
 				t.Error("wrote a dynamic kubeconfig from one naming no server")
 			}
 		})
@@ -247,7 +251,7 @@ func TestGetKubeConfigWithExecCredential_RefusesStackAPIElsewhere(t *testing.T) 
 		t.Run(test.name, func(t *testing.T) {
 			stack.kubeconfig = servedKubeconfig(test.origin+"/stackapi/tenant/v1/"+kubeconfigEnvironment+"/k8s", "", "a-proxy-credential")
 
-			_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, true)
+			_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider)
 			if err == nil {
 				t.Fatal("wrote a dynamic kubeconfig for StackAPI elsewhere")
 			}
@@ -268,7 +272,7 @@ func TestGetKubeConfigWithExecCredential_RefusesTheProxyForAnotherAuthProvider(t
 	stack := newFakeStackAPI(t)
 	stack.kubeconfig = servedKubeconfig(stack.baseURL()+"/tenant/v1/"+kubeconfigEnvironment+"/k8s", "", "a-proxy-credential")
 
-	_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, false)
+	_, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, nil)
 	if !errors.Is(err, ErrKubernetesAPIProxyRefused) {
 		t.Fatalf("error = %v, want it to wrap ErrKubernetesAPIProxyRefused", err)
 	}
@@ -279,7 +283,7 @@ func TestGetKubeConfigWithExecCredential_TakesTheClusterForAnotherAuthProvider(t
 	stack := newFakeStackAPI(t)
 	stack.kubeconfig = servedKubeconfig(clusterServer, "", "a-service-account-token")
 
-	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, false)
+	kubeconfig, err := stack.target().GetKubeConfigWithExecCredential(kubeconfigUser, nil)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
@@ -325,12 +329,12 @@ func TestGetKubeConfigWithExecCredential_TakesTheProxyOnTheSameHostSpelledOtherw
 	proxyServer := strings.Replace(reachedAt, "localhost", "LocalHost", 1) + "/tenant/v1/" + kubeconfigEnvironment + "/k8s"
 	stack.kubeconfig = servedKubeconfig(proxyServer, "", "a-proxy-credential")
 
-	kubeconfig, err := stack.targetAt(reachedAt).GetKubeConfigWithExecCredential(kubeconfigUser, true)
+	kubeconfig, err := stack.targetAt(reachedAt).GetKubeConfigWithExecCredential(kubeconfigUser, proxyAuthProvider)
 	if err != nil {
 		t.Fatalf("GetKubeConfigWithExecCredential: %v", err)
 	}
 
-	want := dynamicKubeconfig(proxyServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy")
+	want := dynamicKubeconfig(proxyServer, "", "get", "kubernetes-execcredential", kubeconfigEnvironment, "--proxy", "--auth-provider-fingerprint", proxyAuthProvider.Fingerprint())
 	if kubeconfig != want {
 		t.Errorf("emitted kubeconfig:\n%s\nwant:\n%s", kubeconfig, want)
 	}

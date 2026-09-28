@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -19,9 +20,10 @@ import (
 type getKubernetesExecCredentialOpts struct {
 	UsePositionalArgs
 
-	argEnvironmentHumanID string
-	argStackAPIBaseURL    string
-	flagProxy             bool
+	argEnvironmentHumanID       string
+	argStackAPIBaseURL          string
+	flagProxy                   bool
+	flagAuthProviderFingerprint string
 }
 
 func init() {
@@ -40,6 +42,7 @@ func init() {
 	cmd.Hidden = true
 	getCmd.AddCommand(cmd)
 	cmd.Flags().BoolVar(&o.flagProxy, "proxy", false, "Answer with the CLI's own access token, for a kubeconfig pointing at the Kubernetes API proxy, rather than asking StackAPI for a Kubernetes credential")
+	cmd.Flags().StringVar(&o.flagAuthProviderFingerprint, "auth-provider-fingerprint", "", "With --proxy, the fingerprint of the auth provider the kubeconfig was made for, which the default auth provider must match")
 }
 
 func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -47,6 +50,10 @@ func (o *getKubernetesExecCredentialOpts) Prepare(cmd *cobra.Command, args []str
 	// others pass the StackAPI to ask for credentials.
 	if !o.flagProxy && o.argStackAPIBaseURL == "" {
 		return clierrors.NewUsageError("A StackAPI base URL is required without --proxy").
+			WithSuggestion("Get a new kubeconfig with 'metaplay get kubeconfig'")
+	}
+	if o.flagProxy && o.flagAuthProviderFingerprint == "" {
+		return clierrors.NewUsageError("--proxy requires --auth-provider-fingerprint").
 			WithSuggestion("Get a new kubeconfig with 'metaplay get kubeconfig'")
 	}
 	return nil
@@ -114,6 +121,19 @@ func (o *getKubernetesExecCredentialOpts) runForProxy(cmd *cobra.Command) error 
 	authProvider, err := auth.NewDefaultAuthProvider()
 	if err != nil {
 		return err
+	}
+
+	// Which provider is the default depends on METAPLAYCLI_AUTH_PROVIDER_FILE
+	// here, where kubectl runs, which need not match where the kubeconfig was
+	// made. Answering with another provider's token would hand it to a stack
+	// on another platform.
+	if authProvider.Fingerprint() != o.flagAuthProviderFingerprint {
+		return clierrors.Newf("This kubeconfig was made for another auth provider than '%s', the one in effect here", authProvider.Name).
+			WithDetails(
+				fmt.Sprintf("The kubeconfig's provider has fingerprint %s, and '%s' has %s", o.flagAuthProviderFingerprint, authProvider.Name, authProvider.Fingerprint()),
+				fmt.Sprintf("%s picks the provider: %q here", auth.AuthProviderFileEnvVar, os.Getenv(auth.AuthProviderFileEnvVar)),
+			).
+			WithSuggestion(fmt.Sprintf("Run kubectl with %s set as it was when the kubeconfig was made, or get a new kubeconfig with 'metaplay get kubeconfig'", auth.AuthProviderFileEnvVar))
 	}
 
 	credential, err := envapi.NewProxyExecCredential(authProvider)

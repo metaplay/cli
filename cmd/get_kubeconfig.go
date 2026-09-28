@@ -129,7 +129,16 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, isDefaultAuthProviderName(envConfig.AuthProvider))
+		// The proxy plugin answers with the default auth provider's token, so
+		// only an environment signing in with it may use the proxy.
+		var proxyAuthProvider *auth.AuthProviderConfig
+		if isDefaultAuthProviderName(envConfig.AuthProvider) {
+			proxyAuthProvider, err = auth.NewDefaultAuthProvider()
+			if err != nil {
+				return err
+			}
+		}
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, proxyAuthProvider)
 	} else {
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	}

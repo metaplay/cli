@@ -340,11 +340,13 @@ var ErrKubernetesAPIProxyRefused = errors.New("a dynamic kubeconfig cannot use t
 // StackAPI in its kubeconfig, and the CLI then answers kubectl with its own
 // access token. Otherwise the CLI asks StackAPI for a credential.
 //
-// The proxy plugin answers with the default auth provider's token, so
-// usesDefaultAuthProvider must say whether the environment signs in with it.
-// An environment that does not is refused rather than have another
-// provider's token handed to its stack.
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, usesDefaultAuthProvider bool) (string, error) {
+// The proxy plugin answers with the default auth provider's token.
+// proxyAuthProvider is that provider, if the environment signs in with it, and
+// nil otherwise, in which case a stack serving the proxy is refused rather than
+// have another provider's token handed to it. The kubeconfig pins the plugin to
+// proxyAuthProvider's fingerprint, since which provider is the default depends
+// on METAPLAYCLI_AUTH_PROVIDER_FILE where kubectl runs.
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, proxyAuthProvider *auth.AuthProviderConfig) (string, error) {
 	log.Debug().Msgf("Getting the environment's kubeconfig from %s to find its Kubernetes API", target.StackApiBaseURL)
 	served, err := target.GetKubeConfigWithEmbeddedCredentials()
 	if err != nil {
@@ -361,10 +363,10 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, 
 	}
 	pluginArgs := []string{"get", "kubernetes-execcredential", target.HumanID}
 	if isProxy {
-		if !usesDefaultAuthProvider {
+		if proxyAuthProvider == nil {
 			return "", fmt.Errorf("%w: the environment uses an auth provider other than the default, whose token the proxy plugin answers with", ErrKubernetesAPIProxyRefused)
 		}
-		pluginArgs = append(pluginArgs, "--proxy")
+		pluginArgs = append(pluginArgs, "--proxy", "--auth-provider-fingerprint", proxyAuthProvider.Fingerprint())
 	} else {
 		pluginArgs = append(pluginArgs, target.StackApiBaseURL)
 	}

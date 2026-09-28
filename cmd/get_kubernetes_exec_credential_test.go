@@ -34,7 +34,8 @@ func TestGetKubernetesExecCredential_NeedsAStackAPIOnlyWithoutProxy(t *testing.T
 		valid bool
 	}{
 		{"with STACK_API", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", argStackAPIBaseURL: "https://infra.stack.example.com/stackapi"}, true},
-		{"with --proxy", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}, true},
+		{"with --proxy", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true, flagAuthProviderFingerprint: "0123456789abcdef"}, true},
+		{"with --proxy but no provider", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}, false},
 		{"with neither", getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids"}, false},
 	}
 	for _, test := range tests {
@@ -124,8 +125,20 @@ func logIn(t *testing.T, provider *auth.AuthProviderConfig, expiresAt time.Time)
 }
 
 // runProxyPlugin runs the plugin in dir the way kubectl does for a kubeconfig
-// pointing at the Kubernetes API proxy, and returns its stdout and stderr.
+// pointing at the Kubernetes API proxy, made where the same auth provider was
+// the default, and returns its stdout and stderr.
 func runProxyPlugin(t *testing.T, dir string) (string, string, error) {
+	t.Helper()
+	provider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		t.Fatalf("NewDefaultAuthProvider: %v", err)
+	}
+	return runProxyPluginFor(t, dir, provider.Fingerprint())
+}
+
+// runProxyPluginFor is runProxyPlugin for a kubeconfig made for the auth
+// provider with fingerprint.
+func runProxyPluginFor(t *testing.T, dir, fingerprint string) (string, string, error) {
 	t.Helper()
 	t.Chdir(dir)
 
@@ -144,7 +157,7 @@ func runProxyPlugin(t *testing.T, dir string) (string, string, error) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(stdout)
-	o := getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true}
+	o := getKubernetesExecCredentialOpts{argEnvironmentHumanID: "tiny-squids", flagProxy: true, flagAuthProviderFingerprint: fingerprint}
 	runErr := o.Run(cmd)
 
 	printed, err := os.ReadFile(stdout.Name())
@@ -299,5 +312,29 @@ func TestGetKubernetesExecCredential_ProxyReportsAShortLivedTokensOwnExpiry(t *t
 	}
 	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(refreshedExpiresAt) {
 		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, refreshedExpiresAt)
+	}
+}
+
+// Which auth provider is the default depends on METAPLAYCLI_AUTH_PROVIDER_FILE
+// where kubectl runs. A kubeconfig made for Metaplay Auth, run where a
+// self-hosted provider is the default, is refused rather than hand that
+// provider's token to Metaplay's stack, and says what to set.
+func TestGetKubernetesExecCredential_ProxyRefusesAnotherAuthProvider(t *testing.T) {
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	logIn(t, provider, time.Now().Add(10*time.Minute))
+
+	stdout, _, err := runProxyPluginFor(t, t.TempDir(), auth.NewMetaplayAuthProvider().Fingerprint())
+	if err == nil {
+		t.Fatalf("answered for another auth provider: %s", stdout)
+	}
+	if stdout != "" {
+		t.Errorf("stdout carries %q, want nothing", stdout)
+	}
+	cliErr, ok := clierrors.AsCLIError(err)
+	if !ok {
+		t.Fatalf("error is not a CLIError: %v", err)
+	}
+	if !strings.Contains(cliErr.Suggestion, auth.AuthProviderFileEnvVar) {
+		t.Errorf("suggestion = %q, want it to name %s", cliErr.Suggestion, auth.AuthProviderFileEnvVar)
 	}
 }
