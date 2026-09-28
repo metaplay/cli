@@ -302,6 +302,7 @@ func TestIsKubernetesAPIProxy_NormalizesPortAndTrailingSlash(t *testing.T) {
 		{"base URL with a trailing slash", "https://infra.example.com/stackapi/", "https://infra.example.com/stackapi/tenant/v1/e/k8s", true, false},
 		{"another port", "https://infra.example.com/stackapi", "https://infra.example.com:8443/stackapi/tenant/v1/e/k8s", false, true},
 		{"a cluster", "https://infra.example.com/stackapi", clusterServer, false, false},
+		{"a cluster named without a scheme", "https://infra.example.com/stackapi", "10.0.0.1:6443", false, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

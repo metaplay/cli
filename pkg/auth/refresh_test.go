@@ -463,3 +463,26 @@ func TestLoadAndRefreshTokenSetValidFor_HandsOnTheCurrentTokenUnlessTheGrantIsRe
 		})
 	}
 }
+
+// A refused grant is refused even when the session it ended cannot be removed:
+// the early refresh does not hand on its token and retry the dead grant.
+func TestLoadAndRefreshTokenSetValidFor_RefusesARefusedGrantItCannotRemove(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner cannot write")
+	}
+	provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusBadRequest)
+	})
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+	configPath, err := resolvePersistedConfigFilePath()
+	if err != nil {
+		t.Fatalf("resolvePersistedConfigFilePath: %v", err)
+	}
+	if err := os.Chmod(configPath, 0400); err != nil {
+		t.Fatalf("failed to make the config read-only: %v", err)
+	}
+
+	if _, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute); err == nil {
+		t.Fatal("handed on a token whose grant was refused")
+	}
+}

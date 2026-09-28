@@ -418,9 +418,13 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, 
 // on another host is refused rather than taken for a cluster: the CLI sends
 // its access token only to the StackAPI it already talks to.
 func (target *TargetEnvironment) isKubernetesAPIProxy(server string) (bool, error) {
+	// The proxy is always named by a full URL. Anything else, such as a bare
+	// '10.0.0.1:6443' that kubectl accepts and url.Parse does not, is a
+	// cluster's, as the CLI always took it, and its plugin never hands the
+	// server the user's token.
 	serverURL, err := url.Parse(server)
-	if err != nil {
-		return false, fmt.Errorf("the environment's kubeconfig names an invalid server %q: %w", server, err)
+	if err != nil || serverURL.Host == "" {
+		return false, nil
 	}
 	stackAPIURL, err := url.Parse(target.StackApiBaseURL)
 	if err != nil {

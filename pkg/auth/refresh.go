@@ -181,7 +181,9 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		log.Debug().Msg("Clearing local credentials...")
 		err = deleteSessionState(authProvider)
 		if err != nil {
-			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
+			// Still a refused grant, though the session outlived it: an early
+			// refresh must not hand on its token and retry the dead grant.
+			return nil, clierrors.Wrap(fmt.Errorf("%w (status %d), and removing the session failed: %w", errGrantRefused, statusCode, err), "Failed to clean up expired credentials")
 		}
 
 		log.Debug().Msg("Local credentials removed.")

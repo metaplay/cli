@@ -84,7 +84,13 @@ func init() {
 }
 
 func (o *getKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
-	return nil
+	// Checked before Run resolves the environment, which may ask to log in.
+	switch o.flagCredentialsType {
+	case "", "dynamic", "static":
+		return nil
+	}
+	return clierrors.NewUsageErrorf("Invalid credentials type '%s'", o.flagCredentialsType).
+		WithSuggestion("Use --type=static or --type=dynamic")
 }
 
 func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
@@ -113,14 +119,9 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	// Create environment helper.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	isDynamic, err := wantsDynamicKubeconfig(o.flagCredentialsType, tokenSet)
-	if err != nil {
-		return err
-	}
-
 	// Generate kubeconfig
 	var kubeconfigPayload string
-	if isDynamic {
+	if wantsDynamicKubeconfig(o.flagCredentialsType, tokenSet) {
 		// Fetch the userinfo for an email.
 		var userinfo *auth.UserInfoResponse
 		userinfo, err = auth.FetchUserInfo(authProvider, tokenSet)
@@ -128,8 +129,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 
-		usesDefaultAuthProvider := coalesceString(envConfig.AuthProvider, "metaplay") == "metaplay"
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, usesDefaultAuthProvider)
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, isDefaultAuthProviderName(envConfig.AuthProvider))
 	} else {
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
 	}
@@ -158,19 +158,13 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 }
 
 // wantsDynamicKubeconfig reports whether to write a dynamic kubeconfig: the
-// type asked for, or by default dynamic for human users and static for machine
-// users. A machine user has no refresh token, so its dynamic kubeconfig lasts
-// only until its next machine login, but it may still ask for one.
-func wantsDynamicKubeconfig(credentialsType string, tokenSet *auth.TokenSet) (bool, error) {
-	isHumanUser := tokenSet.RefreshToken != ""
-	switch credentialsType {
-	case "":
-		return isHumanUser, nil
-	case "dynamic":
-		return true, nil
-	case "static":
-		return false, nil
+// type asked for, which Prepare has checked, or by default dynamic for human
+// users and static for machine users. A machine user has no refresh token, so
+// its dynamic kubeconfig lasts only until its next machine login, but it may
+// still ask for one.
+func wantsDynamicKubeconfig(credentialsType string, tokenSet *auth.TokenSet) bool {
+	if credentialsType == "" {
+		return tokenSet.RefreshToken != ""
 	}
-	return false, clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
-		WithSuggestion("Use --type=static or --type=dynamic")
+	return credentialsType == "dynamic"
 }

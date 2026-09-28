@@ -7,6 +7,7 @@ package cmd
 import (
 	"testing"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 )
 
@@ -31,19 +32,29 @@ func TestWantsDynamicKubeconfig(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			isDynamic, err := wantsDynamicKubeconfig(test.credentialsType, test.tokens)
-			if err != nil {
-				t.Fatalf("wantsDynamicKubeconfig: %v", err)
-			}
-			if isDynamic != test.wantDynamic {
+			if isDynamic := wantsDynamicKubeconfig(test.credentialsType, test.tokens); isDynamic != test.wantDynamic {
 				t.Errorf("isDynamic = %v, want %v", isDynamic, test.wantDynamic)
 			}
 		})
 	}
 }
 
-func TestWantsDynamicKubeconfig_RefusesAnUnknownType(t *testing.T) {
-	if _, err := wantsDynamicKubeconfig("yaml", humanTokens); err == nil {
-		t.Error("an unknown credentials type was accepted")
+// An unknown type is refused before Run resolves the environment, which may
+// ask to log in first.
+func TestGetKubeConfig_PrepareRefusesAnUnknownType(t *testing.T) {
+	for _, credentialsType := range []string{"", "dynamic", "static"} {
+		o := getKubeConfigOpts{flagCredentialsType: credentialsType}
+		if err := o.Prepare(nil, nil); err != nil {
+			t.Errorf("type %q refused: %v", credentialsType, err)
+		}
+	}
+
+	o := getKubeConfigOpts{flagCredentialsType: "yaml"}
+	err := o.Prepare(nil, nil)
+	if err == nil {
+		t.Fatal("an unknown credentials type was accepted")
+	}
+	if !clierrors.IsUsageError(err) {
+		t.Errorf("error = %v, want a usage error", err)
 	}
 }
