@@ -399,29 +399,45 @@ func TestLoadAndRefreshTokenSet_StillWaitsForATokenToExpire(t *testing.T) {
 	}
 }
 
-// A machine user holds no refresh token, so a token that expires too soon
-// cannot be replaced. Refused, saying how to get another.
-func TestLoadAndRefreshTokenSetValidFor_RefusesAMachineTokenItCannotRefresh(t *testing.T) {
-	provider, refreshes := refreshingProvider(t)
-	storeSession(t, provider, UserTypeMachine, time.Now().Add(30*time.Second))
+// A machine user holds no refresh token, so its token cannot be refreshed
+// early, but it still works until it expires, and is handed on until then, as
+// a person's is when a refresh fails. Once expired, it is refused, saying how
+// to get another.
+func TestLoadAndRefreshTokenSetValidFor_HandsOnAMachineTokenUntilItExpires(t *testing.T) {
+	tests := []struct {
+		name        string
+		expiresIn   time.Duration
+		wantHandsOn bool
+	}{
+		{"expiring soon", 30 * time.Second, true},
+		{"expired", -time.Minute, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider, refreshes := refreshingProvider(t)
+			storeSession(t, provider, UserTypeMachine, time.Now().Add(test.expiresIn))
 
-	_, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
-	if err == nil {
-		t.Fatal("answered with a machine token expiring too soon")
-	}
-	if refreshes.Load() != 0 {
-		t.Errorf("tried to refresh a session with no refresh token")
-	}
-	cliErr, ok := clierrors.AsCLIError(err)
-	if !ok {
-		t.Fatalf("error is not a CLIError: %v", err)
-	}
-	// Not yet expired, and not reported as if it had.
-	if !strings.Contains(cliErr.Message, "expires within") {
-		t.Errorf("message = %q, want it to say the token expires too soon", cliErr.Message)
-	}
-	if !strings.Contains(cliErr.Suggestion, "machine-login") {
-		t.Errorf("suggestion = %q, want it to say how to get another token", cliErr.Suggestion)
+			tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+			if refreshes.Load() != 0 {
+				t.Errorf("tried to refresh a session with no refresh token")
+			}
+			if test.wantHandsOn {
+				if err != nil {
+					t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+				}
+				if got := subjectOf(t, tokenSet); got != "stored" {
+					t.Errorf("answered with the %s token, want the stored one", got)
+				}
+				return
+			}
+			cliErr, ok := clierrors.AsCLIError(err)
+			if !ok {
+				t.Fatalf("error = %v, want a CLIError", err)
+			}
+			if !strings.Contains(cliErr.Suggestion, "machine-login") {
+				t.Errorf("suggestion = %q, want it to say how to get another token", cliErr.Suggestion)
+			}
+		})
 	}
 }
 
@@ -484,5 +500,35 @@ func TestLoadAndRefreshTokenSetValidFor_RefusesARefusedGrantItCannotRemove(t *te
 
 	if _, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute); err == nil {
 		t.Fatal("handed on a token whose grant was refused")
+	}
+}
+
+// A refresh of a token that still works gives up within earlyRefreshTimeout,
+// rather than the full refreshTimeout, and hands on the current token: waiting
+// longer gains nothing, and holds the session lock from other processes.
+func TestLoadAndRefreshTokenSetValidFor_GivesUpEarlyOnARefreshItDoesNotNeed(t *testing.T) {
+	previousRefresh, previousEarly := refreshTimeout, earlyRefreshTimeout
+	refreshTimeout, earlyRefreshTimeout = 10*time.Second, 200*time.Millisecond
+	t.Cleanup(func() { refreshTimeout, earlyRefreshTimeout = previousRefresh, previousEarly })
+
+	// The server shuts down only once its handlers return, so release this
+	// one first: cleanups run last registered first.
+	release := make(chan struct{})
+	provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	started := time.Now()
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Errorf("gave up after %v, want within earlyRefreshTimeout", elapsed)
+	}
+	if got := subjectOf(t, tokenSet); got != "stored" {
+		t.Errorf("answered with the %s token, want the stored one", got)
 	}
 }

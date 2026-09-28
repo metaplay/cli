@@ -44,6 +44,12 @@ func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 // session lock, so it must end well within sessionLockTimeout.
 var refreshTimeout = 20 * time.Second
 
+// earlyRefreshTimeout bounds the refresh of a token that still works, which a
+// caller asking for it to stay valid a while triggers early. Giving up on it
+// costs nothing, since the current token is handed on instead, and processes
+// waiting for the session lock meanwhile get theirs sooner.
+var earlyRefreshTimeout = 5 * time.Second
+
 // errGrantRefused is the cause of a refresh the token endpoint refused, after
 // which the session is gone. Other failures to refresh leave it in place.
 var errGrantRefused = errors.New("token endpoint refused the refresh grant")
@@ -60,6 +66,8 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 // something that will hold it that long. If that early refresh fails, other
 // than by the grant being refused, the current token is handed on instead,
 // since it still works until it expires; the next call tries the refresh again.
+// A machine user's token, which cannot be refreshed, is likewise handed on until
+// it expires.
 func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor time.Duration) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
@@ -98,15 +106,21 @@ func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor t
 	}
 
 	// Compare expiration time with the current time, plus the validity needed.
-	isExpired := time.Now().Add(validFor).After(expiresAt)
+	now := time.Now()
+	stillValid := now.Before(expiresAt)
+	needsRefresh := now.Add(validFor).After(expiresAt)
 
 	// Refresh the tokenSet (if we have a refresh token -- machine users do not).
-	if isExpired {
+	if needsRefresh {
 		if tokenSet.RefreshToken != "" {
-			// Refresh the tokenSet.
-			refreshed, err := refreshTokenSet(tokenSet, authProvider)
+			// Refresh the tokenSet, only briefly if the current one still works.
+			timeout := refreshTimeout
+			if stillValid {
+				timeout = earlyRefreshTimeout
+			}
+			refreshed, err := refreshTokenSet(tokenSet, authProvider, timeout)
 			if err != nil {
-				if time.Now().Before(expiresAt) && !errors.Is(err, errGrantRefused) {
+				if stillValid && !errors.Is(err, errGrantRefused) {
 					log.Warn().Msgf("Could not refresh the session, so using the current access token until it expires at %s", expiresAt.Format(time.TimeOnly))
 					return tokenSet, nil
 				}
@@ -128,10 +142,7 @@ func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor t
 			if err != nil {
 				log.Warn().Msgf("Failed to save the refreshed session, so the next command will ask you to log in again: %v", err)
 			}
-		} else if time.Now().Before(expiresAt) {
-			return nil, clierrors.Newf("Access token expires within %v and cannot be refreshed", validFor).
-				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
-		} else {
+		} else if !stillValid {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
 				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		}
@@ -141,8 +152,9 @@ func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor t
 }
 
 // Refresh the tokenSet. Return a new tokenSet that was returned by the token endpoint.
-// The caller holds the session lock.
-func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*TokenSet, error) {
+// The caller holds the session lock. The refresh gives up after timeout, retries
+// included.
+func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig, timeout time.Duration) (*TokenSet, error) {
 	// Create URL-encoded form data
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
@@ -152,7 +164,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 
 	// Make the HTTP request with retry logic for transient errors, within a
 	// deadline: the session lock is held throughout.
-	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	body, statusCode, err := httputil.PostFormWithRetryContext(ctx, authProvider.TokenEndpoint, data.Encode())
 	if err != nil {

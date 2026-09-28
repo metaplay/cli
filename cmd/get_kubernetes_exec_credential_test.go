@@ -338,3 +338,27 @@ func TestGetKubernetesExecCredential_ProxyRefusesAnotherAuthProvider(t *testing.
 		t.Errorf("suggestion = %q, want it to name %s", cliErr.Suggestion, auth.AuthProviderFileEnvVar)
 	}
 }
+
+// A machine user's token cannot be refreshed, but works until it expires, so
+// it is handed to kubectl until then, reported with its own expiry.
+func TestGetKubernetesExecCredential_ProxyHandsOnAMachineTokenUntilItExpires(t *testing.T) {
+	expiresAt := time.Now().Add(30 * time.Second).Truncate(time.Second)
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	machineTokens := &auth.TokenSet{AccessToken: accessTokenExpiringAt(t, "machine", expiresAt), TokenType: "bearer"}
+	if err := auth.SaveSessionState(provider, auth.UserTypeMachine, machineTokens); err != nil {
+		t.Fatalf("failed to store a session: %v", err)
+	}
+
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	status := decodeExecCredential(t, stdout)
+	if status.Token != machineTokens.AccessToken {
+		t.Errorf("kubectl was handed another token than the machine user's")
+	}
+	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(expiresAt) {
+		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, expiresAt)
+	}
+}
