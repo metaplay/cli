@@ -51,6 +51,18 @@ var ignoredFilePrefixes = []string{
 	"._", // macOS resource fork files
 }
 
+// isSdkPathInDirs returns true if archivePath is one of the dirs or below one. Both are
+// paths within the SDK archive, e.g. "MetaplaySDK/Foo/bar.txt" is in "MetaplaySDK/Foo".
+func isSdkPathInDirs(archivePath string, dirs []string) bool {
+	for _, dir := range dirs {
+		dir = strings.TrimSuffix(dir, "/")
+		if archivePath == dir || strings.HasPrefix(archivePath, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // shouldIgnoreFile returns true if the file should be ignored during comparison.
 func shouldIgnoreFile(filename string) bool {
 	// Check exact matches
@@ -464,7 +476,8 @@ type zipFileEntry struct {
 
 // DetectSdkModificationsWithPatch compares the local SDK directory against the original
 // SDK zip file and returns both the list of modifications and a git-compatible patch.
-func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*SdkModificationResult, error) {
+// Directories listed in excludedDirs are ignored on both sides.
+func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string, excludedDirs []string) (*SdkModificationResult, error) {
 	// Build gitignore matcher by scanning the SDK directory for all .gitignore files
 	gitMatcher := buildGitignoreMatcherForDir(sdkRootDir)
 
@@ -496,6 +509,11 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 
 		// Skip ignored files (OS-specific)
 		if shouldIgnoreFile(filepath.Base(relPath)) {
+			continue
+		}
+
+		// Skip excluded directories
+		if isSdkPathInDirs(file.Name, excludedDirs) {
 			continue
 		}
 
@@ -542,6 +560,12 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 
 		// Skip ignored files (OS-specific)
 		if shouldIgnoreFile(filepath.Base(relPath)) {
+			return nil
+		}
+
+		// Skip excluded directories. The excludedDirs are canonical MetaplaySDK/-rooted
+		// paths.
+		if isSdkPathInDirs("MetaplaySDK/"+relPath, excludedDirs) {
 			return nil
 		}
 

@@ -876,3 +876,40 @@ func TestGenerateUnifiedDiff_MultipleHunks(t *testing.T) {
 		t.Errorf("missing +new_last in:\n%s", result)
 	}
 }
+
+func TestIsSdkPathInDirs(t *testing.T) {
+	dirs := []string{"MetaplaySDK/PrebuiltDashboard"}
+
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"MetaplaySDK/PrebuiltDashboard", true},
+		{"MetaplaySDK/PrebuiltDashboard/", true},
+		{"MetaplaySDK/PrebuiltDashboard/index.html", true},
+		{"MetaplaySDK/PrebuiltDashboard/assets/index-abc123.js", true},
+		{"MetaplaySDK/PrebuiltDashboardOther/index.html", false},
+		{"MetaplaySDK/Frontend/PrebuiltDashboard/index.html", false},
+		{"MetaplaySDK/Backend/Server/Program.cs", false},
+		{"PrebuiltDashboard/index.html", false},
+		{"MetaplaySamples/PrebuiltDashboard/index.html", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			if result := isSdkPathInDirs(tc.path, dirs); result != tc.expected {
+				t.Errorf("isSdkPathInDirs(%q) = %v, expected %v", tc.path, result, tc.expected)
+			}
+		})
+	}
+
+	// A trailing slash on a dir is tolerated.
+	if !isSdkPathInDirs("MetaplaySDK/PrebuiltDashboard/index.html", []string{"MetaplaySDK/PrebuiltDashboard/"}) {
+		t.Error("isSdkPathInDirs() should tolerate a trailing slash on a dir")
+	}
+
+	// No dirs means no match.
+	if isSdkPathInDirs("MetaplaySDK/PrebuiltDashboard/index.html", nil) {
+		t.Error("isSdkPathInDirs() with no dirs should return false")
+	}
+}
