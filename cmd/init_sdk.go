@@ -181,7 +181,7 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 
 	// Download and extract the SDK.
 	// Pass the parent directory since the extractor creates MetaplaySDK/ within it
-	if err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo); err != nil {
+	if err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo, nil); err != nil {
 		return err
 	}
 

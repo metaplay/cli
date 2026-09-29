@@ -214,9 +214,9 @@ func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.
 	return sdkZipPath, nil
 }
 
-// Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
-// Downloads the version specified by versionInfo.
-func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo) error {
+// Download the SDK version specified by versionInfo and extract it to the
+// targetProjectPath. Directories listed in excludedDirs are not extracted.
+func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo, excludedDirs []string) error {
 	// Download the SDK archive to temp directory.
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
@@ -240,7 +240,7 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	log.Debug().Msgf("Use downloaded SDK archive: %s (v%s)", sdkZipPath, sdkMetadata.SdkVersion)
 
 	// Extract SDK into target directory.
-	if err := extractSdkFromZip(targetProjectPath, sdkZipPath); err != nil {
+	if err := extractSdkFromZip(targetProjectPath, sdkZipPath, excludedDirs); err != nil {
 		return fmt.Errorf("failed to extract SDK archive: %w", err)
 	}
 
@@ -272,7 +272,7 @@ func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.Me
 		log.Debug().Msgf("Use local SDK archive file: %s (v%s)", sdkSource, sdkMetadata.SdkVersion)
 
 		// Extract SDK into target directory.
-		if err := extractSdkFromZip(targetProjectPath, sdkSource); err != nil {
+		if err := extractSdkFromZip(targetProjectPath, sdkSource, nil); err != nil {
 			return "", nil, fmt.Errorf("failed to extract SDK archive: %w", err)
 		}
 
@@ -352,9 +352,9 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	return versionMetadata, nil
 }
 
-// Extract the MetaplaySDK/ directory from the release zip into the target
-// project directory. The MetaplaySamples/ is ignored.
-func extractSdkFromZip(targetDir string, sdkZipPath string) error {
+// Extract only the MetaplaySDK/ directory from the release zip into the target
+// project directory. Directories listed in excludedDirs are skipped.
+func extractSdkFromZip(targetDir string, sdkZipPath string, excludedDirs []string) error {
 	// Open the zip archive
 	reader, err := zip.OpenReader(sdkZipPath)
 	if err != nil {
@@ -375,6 +375,11 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 	for _, file := range reader.File {
 		// Only process files that are within the MetaplaySDK directory
 		if !strings.HasPrefix(file.Name, "MetaplaySDK/") {
+			continue
+		}
+
+		// Skip excluded directories
+		if isSdkPathInDirs(file.Name, excludedDirs) {
 			continue
 		}
 
