@@ -99,6 +99,7 @@ func (o *buildDashboardOpts) Run(cmd *cobra.Command) error {
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
 		return clierrors.New("Project does not have a custom dashboard to build").
+			WithDetails("This project uses the SDK's prebuilt default dashboard").
 			WithSuggestion("Initialize a custom dashboard with 'metaplay init dashboard'")
 	}
 

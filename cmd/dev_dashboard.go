@@ -46,7 +46,9 @@ func (o *devDashboardOpts) Run(cmd *cobra.Command) error {
 
 	// Check that project uses a custom dashboard, otherwise error out
 	if !project.UsesCustomDashboard() {
-		return clierrors.New("Project does not have a custom dashboard to run")
+		return clierrors.New("Project does not have a custom dashboard to run").
+			WithDetails("Without a custom dashboard, the game server serves the SDK's default dashboard on http://localhost:5550").
+			WithSuggestion("Initialize a custom dashboard with 'metaplay init dashboard'")
 	}
 
 	log.Info().Msg("")
