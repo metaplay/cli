@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -46,6 +47,13 @@ func init() {
 			- dynamic for human users (logged in with refresh token)
 			- static for machine users (logged in with access token only)
 
+			A machine user's session cannot be refreshed, so a dynamic KubeConfig works only until its access
+			token expires. Logging in again with 'metaplay auth machine-login' renews it.
+
+			On a stack that serves the Kubernetes API through StackAPI, the KubeConfig points at StackAPI.
+			A dynamic one then authenticates with your own access token, which the Metaplay CLI refreshes
+			locally, and a static one carries a short-lived credential for that environment alone.
+
 			The KubeConfig can be written to a file using the --output flag, or printed to stdout if not specified.
 
 			The default auth provider is 'metaplay'. If you have multiple auth providers configured in your
@@ -76,7 +84,13 @@ func init() {
 }
 
 func (o *getKubeConfigOpts) Prepare(cmd *cobra.Command, args []string) error {
-	return nil
+	// Checked before Run resolves the environment, which may ask to log in.
+	switch o.flagCredentialsType {
+	case "", "dynamic", "static":
+		return nil
+	}
+	return clierrors.NewUsageErrorf("Invalid credentials type '%s'", o.flagCredentialsType).
+		WithSuggestion("Use --type=static or --type=dynamic")
 }
 
 func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
@@ -105,20 +119,9 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	// Create environment helper.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Default to credentialsType==dynamic for human users, and credentialsType==static for machine users
-	credentialsType := o.flagCredentialsType
-	if credentialsType == "" {
-		if isHumanUser := tokenSet.RefreshToken != ""; isHumanUser {
-			credentialsType = "dynamic"
-		} else {
-			credentialsType = "static"
-		}
-	}
-
 	// Generate kubeconfig
 	var kubeconfigPayload string
-	switch credentialsType {
-	case "dynamic":
+	if wantsDynamicKubeconfig(o.flagCredentialsType, tokenSet) {
 		// Fetch the userinfo for an email.
 		var userinfo *auth.UserInfoResponse
 		userinfo, err = auth.FetchUserInfo(authProvider, tokenSet)
@@ -126,14 +129,24 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 			return err
 		}
 
-		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email)
-	case "static":
+		// The proxy plugin answers with the default auth provider's token, so
+		// only an environment signing in with it may use the proxy.
+		var proxyAuthProvider *auth.AuthProviderConfig
+		if isDefaultAuthProviderName(envConfig.AuthProvider) {
+			proxyAuthProvider, err = auth.NewDefaultAuthProvider()
+			if err != nil {
+				return err
+			}
+		}
+		kubeconfigPayload, err = targetEnv.GetKubeConfigWithExecCredential(userinfo.Email, proxyAuthProvider)
+	} else {
 		kubeconfigPayload, err = targetEnv.GetKubeConfigWithEmbeddedCredentials()
-	default:
-		return clierrors.NewUsageErrorf("Invalid credentials type '%s'", credentialsType).
-			WithSuggestion("Use --type=static or --type=dynamic")
 	}
 
+	if errors.Is(err, envapi.ErrKubernetesAPIProxyRefused) {
+		return clierrors.Wrap(err, "Failed to get environment kubeconfig").
+			WithSuggestion("Use --type=static, whose kubeconfig carries the stack's own credential")
+	}
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to get environment kubeconfig")
 	}
@@ -151,4 +164,16 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+// wantsDynamicKubeconfig reports whether to write a dynamic kubeconfig: the
+// type asked for, which Prepare has checked, or by default dynamic for human
+// users and static for machine users. A machine user has no refresh token, so
+// its dynamic kubeconfig lasts only until its next machine login, but it may
+// still ask for one.
+func wantsDynamicKubeconfig(credentialsType string, tokenSet *auth.TokenSet) bool {
+	if credentialsType == "" {
+		return tokenSet.RefreshToken != ""
+	}
+	return credentialsType == "dynamic"
 }

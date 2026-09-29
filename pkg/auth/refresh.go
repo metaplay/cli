@@ -19,8 +19,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Get the expires-at of the access token of the tokenSet.
-func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
+// AccessTokenExpiresAt returns when the access token of the tokenSet expires.
+func AccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 	// Parse the token without validation
 	token, _, err := jwt.NewParser().ParseUnverified(tokenSet.AccessToken, jwt.MapClaims{})
 	if err != nil {
@@ -44,10 +44,31 @@ func getAccessTokenExpiresAt(tokenSet *TokenSet) (time.Time, error) {
 // session lock, so it must end well within sessionLockTimeout.
 var refreshTimeout = 20 * time.Second
 
+// earlyRefreshTimeout bounds the refresh of a token that still works, which a
+// caller asking for it to stay valid a while triggers early. Giving up on it
+// costs nothing, since the current token is handed on instead, and processes
+// waiting for the session lock meanwhile get theirs sooner.
+var earlyRefreshTimeout = 5 * time.Second
+
+// errGrantRefused is the cause of a refresh the token endpoint refused, after
+// which the session is gone. Other failures to refresh leave it in place.
+var errGrantRefused = errors.New("token endpoint refused the refresh grant")
+
 // Load the current token set. If not logged in, just return empty tokens.
 // If logged in and tokens have expired, refresh the tokens. If the refresh
 // fails, return an error. refreshTokenSet decides whether the session is kept.
 func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error) {
+	return LoadAndRefreshTokenSetValidFor(authProvider, 0)
+}
+
+// LoadAndRefreshTokenSetValidFor is LoadAndRefreshTokenSet, but also refreshes
+// tokens that expire within validFor, for a caller handing the token on to
+// something that will hold it that long. If that early refresh fails, other
+// than by the grant being refused, the current token is handed on instead,
+// since it still works until it expires; the next call tries the refresh again.
+// A machine user's token, which cannot be refreshed, is likewise handed on until
+// it expires.
+func LoadAndRefreshTokenSetValidFor(authProvider *AuthProviderConfig, validFor time.Duration) (*TokenSet, error) {
 	// Hold the session lock from loading the session to saving its refresh. A
 	// process that waited for it then loads the refreshed tokens, rather than
 	// presenting the refresh token again, which revokes the session.
@@ -78,21 +99,31 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 
 	// Resolve when access token expires.
 	tokenSet := sessionState.TokenSet
-	expiresAt, err := getAccessTokenExpiresAt(tokenSet)
+	expiresAt, err := AccessTokenExpiresAt(tokenSet)
 	if err != nil {
 		return nil, clierrors.Wrap(err, "Failed to parse access token expiration").
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 
-	// Compare expiration time with the current time
-	isExpired := time.Now().After(expiresAt)
+	// Compare expiration time with the current time, plus the validity needed.
+	now := time.Now()
+	stillValid := now.Before(expiresAt)
+	needsRefresh := now.Add(validFor).After(expiresAt)
 
 	// Refresh the tokenSet (if we have a refresh token -- machine users do not).
-	if isExpired {
+	if needsRefresh {
 		if tokenSet.RefreshToken != "" {
-			// Refresh the tokenSet.
-			tokenSet, err = refreshTokenSet(tokenSet, authProvider)
+			// Refresh the tokenSet, only briefly if the current one still works.
+			timeout := refreshTimeout
+			if stillValid {
+				timeout = earlyRefreshTimeout
+			}
+			refreshed, err := refreshTokenSet(tokenSet, authProvider, timeout)
 			if err != nil {
+				if stillValid && !errors.Is(err, errGrantRefused) {
+					log.Warn().Msgf("Could not refresh the session, so using the current access token until it expires at %s", expiresAt.Format(time.TimeOnly))
+					return tokenSet, nil
+				}
 				// displayError prints only the outermost suggestion, so carry up the
 				// one saying what to do about this failure, where there is one.
 				suggestion := "Your session may have expired. Run 'metaplay auth login' to re-authenticate"
@@ -102,6 +133,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 				return nil, clierrors.Wrap(err, "Failed to refresh authentication tokens").
 					WithSuggestion(suggestion)
 			}
+			tokenSet = refreshed
 
 			// Persist the refreshed tokens. The refresh has spent the stored refresh
 			// token, so if they cannot be saved, this process holds the only good
@@ -110,7 +142,7 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 			if err != nil {
 				log.Warn().Msgf("Failed to save the refreshed session, so the next command will ask you to log in again: %v", err)
 			}
-		} else {
+		} else if !stillValid {
 			return nil, clierrors.New("Access token has expired and cannot be refreshed").
 				WithSuggestion("Run 'metaplay auth machine-login' to obtain new credentials")
 		}
@@ -120,8 +152,9 @@ func LoadAndRefreshTokenSet(authProvider *AuthProviderConfig) (*TokenSet, error)
 }
 
 // Refresh the tokenSet. Return a new tokenSet that was returned by the token endpoint.
-// The caller holds the session lock.
-func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*TokenSet, error) {
+// The caller holds the session lock. The refresh gives up after timeout, retries
+// included.
+func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig, timeout time.Duration) (*TokenSet, error) {
 	// Create URL-encoded form data
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
@@ -131,7 +164,7 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 
 	// Make the HTTP request with retry logic for transient errors, within a
 	// deadline: the session lock is held throughout.
-	ctx, cancel := context.WithTimeout(context.Background(), refreshTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	body, statusCode, err := httputil.PostFormWithRetryContext(ctx, authProvider.TokenEndpoint, data.Encode())
 	if err != nil {
@@ -160,11 +193,14 @@ func refreshTokenSet(tokenSet *TokenSet, authProvider *AuthProviderConfig) (*Tok
 		log.Debug().Msg("Clearing local credentials...")
 		err = deleteSessionState(authProvider)
 		if err != nil {
-			return nil, clierrors.Wrap(err, "Failed to clean up expired credentials")
+			// Still a refused grant, though the session outlived it: an early
+			// refresh must not hand on its token and retry the dead grant.
+			return nil, clierrors.Wrap(fmt.Errorf("%w (status %d), and removing the session failed: %w", errGrantRefused, statusCode, err), "Failed to clean up expired credentials")
 		}
 
 		log.Debug().Msg("Local credentials removed.")
 		return nil, clierrors.New("Session expired and could not be refreshed").
+			WithCause(fmt.Errorf("%w: status %d", errGrantRefused, statusCode)).
 			WithSuggestion("Run 'metaplay auth login' to re-authenticate")
 	}
 

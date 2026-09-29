@@ -109,6 +109,26 @@ func providerAt(t *testing.T, handler http.HandlerFunc) *AuthProviderConfig {
 	}
 }
 
+// refreshingProvider is a provider whose token endpoint answers every refresh
+// with a token good for an hour, and counts how often it was asked.
+func refreshingProvider(t *testing.T) (*AuthProviderConfig, *atomic.Int32) {
+	t.Helper()
+	var refreshes atomic.Int32
+	return providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		if err := r.ParseForm(); err != nil || r.Form.Get("grant_type") != "refresh_token" {
+			http.Error(w, "not a refresh", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(TokenSet{
+			AccessToken:  accessTokenExpiringAt(t, "refreshed", time.Now().Add(time.Hour)),
+			RefreshToken: "the-next-refresh-token",
+			TokenType:    "bearer",
+		})
+	}), &refreshes
+}
+
 // rotatingProvider is a provider whose token endpoint rotates the refresh
 // token, and counts how often it was asked. A refresh token presented twice
 // revokes the session, as Ory does by default.
@@ -316,5 +336,199 @@ func TestLoadAndRefreshTokenSet_HandsOnRefreshedTokensItCannotSave(t *testing.T)
 	}
 	if got := subjectOf(t, tokenSet); got != "refreshed" {
 		t.Errorf("answered with the %s token, want the refreshed one", got)
+	}
+}
+
+// A token that expires sooner than it must stay valid is refreshed now, and the
+// refreshed one is what the session keeps.
+func TestLoadAndRefreshTokenSetValidFor_RefreshesATokenExpiringSooner(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+
+	if refreshes.Load() != 1 {
+		t.Errorf("refreshed %d times, want once", refreshes.Load())
+	}
+	if got := subjectOf(t, tokenSet); got != "refreshed" {
+		t.Errorf("answered with the %s token, want the refreshed one", got)
+	}
+	stored, err := LoadSessionState(provider)
+	if err != nil || stored == nil {
+		t.Fatalf("the session is gone: %v", err)
+	}
+	if got := subjectOf(t, stored.TokenSet); got != "refreshed" {
+		t.Errorf("the session keeps the %s token, want the refreshed one", got)
+	}
+}
+
+// One valid for longer is left alone: refreshing on every invocation would
+// spend a refresh token each time kubectl asks.
+func TestLoadAndRefreshTokenSetValidFor_KeepsATokenValidForLonger(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(5*time.Minute))
+
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+
+	if refreshes.Load() != 0 {
+		t.Errorf("refreshed %d times, want none", refreshes.Load())
+	}
+	if got := subjectOf(t, tokenSet); got != "stored" {
+		t.Errorf("answered with the %s token, want the stored one", got)
+	}
+}
+
+// The control: everything else refreshes once a token has expired, and not a
+// moment before, as it always has.
+func TestLoadAndRefreshTokenSet_StillWaitsForATokenToExpire(t *testing.T) {
+	provider, refreshes := refreshingProvider(t)
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	if _, err := LoadAndRefreshTokenSet(provider); err != nil {
+		t.Fatalf("LoadAndRefreshTokenSet: %v", err)
+	}
+
+	if refreshes.Load() != 0 {
+		t.Errorf("refreshed %d times, want none", refreshes.Load())
+	}
+}
+
+// A machine user holds no refresh token, so its token cannot be refreshed
+// early, but it still works until it expires, and is handed on until then, as
+// a person's is when a refresh fails. Once expired, it is refused, saying how
+// to get another.
+func TestLoadAndRefreshTokenSetValidFor_HandsOnAMachineTokenUntilItExpires(t *testing.T) {
+	tests := []struct {
+		name        string
+		expiresIn   time.Duration
+		wantHandsOn bool
+	}{
+		{"expiring soon", 30 * time.Second, true},
+		{"expired", -time.Minute, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider, refreshes := refreshingProvider(t)
+			storeSession(t, provider, UserTypeMachine, time.Now().Add(test.expiresIn))
+
+			tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+			if refreshes.Load() != 0 {
+				t.Errorf("tried to refresh a session with no refresh token")
+			}
+			if test.wantHandsOn {
+				if err != nil {
+					t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+				}
+				if got := subjectOf(t, tokenSet); got != "stored" {
+					t.Errorf("answered with the %s token, want the stored one", got)
+				}
+				return
+			}
+			cliErr, ok := clierrors.AsCLIError(err)
+			if !ok {
+				t.Fatalf("error = %v, want a CLIError", err)
+			}
+			if !strings.Contains(cliErr.Suggestion, "machine-login") {
+				t.Errorf("suggestion = %q, want it to say how to get another token", cliErr.Suggestion)
+			}
+		})
+	}
+}
+
+// A token refreshed early still works until it expires. If the refresh fails,
+// it is handed on, and the session kept for the next attempt, unless the
+// endpoint refused the grant, which ends the session.
+func TestLoadAndRefreshTokenSetValidFor_HandsOnTheCurrentTokenUnlessTheGrantIsRefused(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		wantHandsOn bool
+	}{
+		{"server error", http.StatusNotImplemented, true},
+		{"invalid grant", http.StatusBadRequest, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "no", test.status)
+			})
+			storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+			tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+			if !test.wantHandsOn {
+				if err == nil {
+					t.Fatal("handed on a token whose grant was refused")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+			}
+			if got := subjectOf(t, tokenSet); got != "stored" {
+				t.Errorf("answered with the %s token, want the stored one", got)
+			}
+			if stored, err := LoadSessionState(provider); err != nil || stored == nil {
+				t.Errorf("the session is gone: %v", err)
+			}
+		})
+	}
+}
+
+// A refused grant is refused even when the session it ended cannot be removed:
+// the early refresh does not hand on its token and retry the dead grant.
+func TestLoadAndRefreshTokenSetValidFor_RefusesARefusedGrantItCannotRemove(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner cannot write")
+	}
+	provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "no", http.StatusBadRequest)
+	})
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+	configPath, err := resolvePersistedConfigFilePath()
+	if err != nil {
+		t.Fatalf("resolvePersistedConfigFilePath: %v", err)
+	}
+	if err := os.Chmod(configPath, 0400); err != nil {
+		t.Fatalf("failed to make the config read-only: %v", err)
+	}
+
+	if _, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute); err == nil {
+		t.Fatal("handed on a token whose grant was refused")
+	}
+}
+
+// A refresh of a token that still works gives up within earlyRefreshTimeout,
+// rather than the full refreshTimeout, and hands on the current token: waiting
+// longer gains nothing, and holds the session lock from other processes.
+func TestLoadAndRefreshTokenSetValidFor_GivesUpEarlyOnARefreshItDoesNotNeed(t *testing.T) {
+	previousRefresh, previousEarly := refreshTimeout, earlyRefreshTimeout
+	refreshTimeout, earlyRefreshTimeout = 10*time.Second, 200*time.Millisecond
+	t.Cleanup(func() { refreshTimeout, earlyRefreshTimeout = previousRefresh, previousEarly })
+
+	// The server shuts down only once its handlers return, so release this
+	// one first: cleanups run last registered first.
+	release := make(chan struct{})
+	provider := providerAt(t, func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	})
+	t.Cleanup(func() { close(release) })
+	storeSession(t, provider, UserTypeHuman, time.Now().Add(30*time.Second))
+
+	started := time.Now()
+	tokenSet, err := LoadAndRefreshTokenSetValidFor(provider, time.Minute)
+	if err != nil {
+		t.Fatalf("LoadAndRefreshTokenSetValidFor: %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Errorf("gave up after %v, want within earlyRefreshTimeout", elapsed)
+	}
+	if got := subjectOf(t, tokenSet); got != "stored" {
+		t.Errorf("answered with the %s token, want the stored one", got)
 	}
 }
