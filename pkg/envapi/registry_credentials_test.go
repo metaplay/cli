@@ -18,10 +18,10 @@ import (
 )
 
 // Where a stack's image repository is, and how the CLI finds out: it asks, and
-// a 404 means this stack still keeps its images in a cloud registry the older
-// path reaches. That makes "not served" and "failed" load-bearing to tell
-// apart — treating a failure as "not served" takes the fallback and reports
-// whatever that fails with instead.
+// a 404 means a stack older than the endpoint, whose images are in a cloud
+// registry the older path reaches. That makes "not served" and "failed"
+// load-bearing to tell apart — treating a failure as "not served" takes the
+// fallback and reports whatever that fails with instead.
 
 func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
 	t.Helper()
@@ -104,8 +104,8 @@ func TestGetRegistryCredentials_QualifiedRepositoryJoinsTheTwoHalves(t *testing.
 	}
 }
 
-// A stack that does not serve this endpoint keeps its images somewhere the
-// older path reaches. That is not an error, and must not read as one.
+// A stack older than this endpoint keeps its images somewhere the older path
+// reaches. That is not an error, and must not read as one.
 func TestGetRegistryCredentials_NotServedIsNotAFailure(t *testing.T) {
 	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
@@ -235,6 +235,46 @@ func TestResolveImageRepository_UsesWhatTheStackIssued(t *testing.T) {
 	for _, path := range asked {
 		if strings.Contains(path, "/deployments/") {
 			t.Errorf("fetched %s, which only a cloud-provisioned environment has", path)
+		}
+	}
+}
+
+// A stack serving an environment whose images are in ECR answers the same
+// endpoint, with ECR's own login. Nothing here treats it differently: the
+// reference it resolves to is exactly the repository the environment's
+// description names, which is what the older path pushed to, and nothing
+// cloud-shaped is asked for along the way.
+func TestResolveImageRepository_AnECRAnswerIsTheRepositoryTheOlderPathPushedTo(t *testing.T) {
+	const described = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly-gameserver"
+
+	var asked []string
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(RegistryCredentials{
+			RegistryHost: "123456789012.dkr.ecr.eu-west-1.amazonaws.com",
+			Repository:   "lovely-wombats-build-nimbly-gameserver",
+			Username:     "AWS",
+			Password:     "ecr-authorization-token",
+		})
+	}))
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.QualifiedRepository != described {
+		t.Errorf("qualified repository = %q, want the one the environment's description names, %q",
+			repository.QualifiedRepository, described)
+	}
+	if repository.Credentials.Username != "AWS" || repository.Credentials.Password != "ecr-authorization-token" {
+		t.Errorf("credentials = %s / %s, want ECR's login as the stack answered it",
+			repository.Credentials.Username, repository.Credentials.Password)
+	}
+	for _, path := range asked {
+		if strings.HasSuffix(path, "/aws") || strings.Contains(path, "/deployments/") {
+			t.Errorf("requested %s, which only the older path needs", path)
 		}
 	}
 }

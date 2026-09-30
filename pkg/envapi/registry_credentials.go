@@ -16,13 +16,17 @@ import (
 	"github.com/metaplay/cli/pkg/metahttp"
 )
 
-// ErrRegistryCredentialsNotServed reports that this stack issues no registry
-// credentials of its own, so the caller should reach the environment's images
-// the way it did before.
+// ErrRegistryCredentialsNotServed reports that this stack's API is older than
+// the registry credentials endpoint, so the caller should reach the
+// environment's images the way it did before.
 //
-// A stack says so by not serving the endpoint at all: answering 200 with an
-// empty body would be indistinguishable from a stack that is simply broken.
-var ErrRegistryCredentialsNotServed = errors.New("this stack does not issue image registry credentials")
+// Every stack serves the endpoint from the version that introduced it on,
+// whichever registry its environments keep their images in, and a stack older
+// than that says so by not serving it at all: answering 200 with an empty body
+// would be indistinguishable from a stack that is simply broken. Stacks run by
+// their owners upgrade on their own schedule, so the path this selects stays
+// supported for as long as they run such a version.
+var ErrRegistryCredentialsNotServed = errors.New("this stack predates the image registry credentials endpoint")
 
 // RegistryCredentials is where an environment's images live, and what to
 // present to push or pull them.
@@ -65,9 +69,9 @@ func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials,
 	path := fmt.Sprintf("/v0/credentials/%s/registry", target.HumanID)
 	log.Debug().Msgf("Get image registry credentials from %s%s", target.StackApiClient.BaseURL, path)
 
-	// A 404 is expected here: it is how a stack says it keeps its images
-	// elsewhere. Every command reaching such a stack's images takes this path
-	// and recovers from it, so it must not be logged as a failed request.
+	// A 404 is expected here: it is how a stack older than the endpoint answers.
+	// Every command reaching such a stack's images takes this path and recovers
+	// from it, so it must not be logged as a failed request.
 	credentials, err := metahttp.PostExpecting[RegistryCredentials](target.StackApiClient, path, nil, "", http.StatusNotFound)
 	if err != nil {
 		if isHTTPNotFound(err) {
@@ -130,8 +134,9 @@ type EnvironmentImageRepository struct {
 }
 
 // ResolveImageRepository answers where this environment's images live:
-// whatever the stack issues a credential for, and for a stack that issues
-// none, the cloud registry the older path reaches.
+// whatever the stack issues a credential for, which it does for every registry
+// it keeps images in, and for a stack older than that, the cloud registry the
+// older path reaches.
 //
 // Nothing cloud-shaped is fetched before that fallback is taken. Asking first
 // and deciding after is what made reaching an environment's images depend on
@@ -151,7 +156,7 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 			Credentials:         credentials.DockerCredentials(),
 		}, nil
 	case errors.Is(err, ErrRegistryCredentialsNotServed):
-		log.Debug().Msg("Stack issues no registry credentials; using the environment's cloud registry")
+		log.Debug().Msg("Stack predates the registry credentials endpoint; using the environment's cloud registry")
 	default:
 		return nil, err
 	}
@@ -170,7 +175,7 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 	}
 	if envDetails.Deployment.EcrRepo == "" {
 		return nil, clierrors.New("The environment has no image repository").
-			WithDetails("Its stack issues no registry credentials, and the environment names no repository of its own.").
+			WithDetails("Its stack predates the registry credentials endpoint, and the environment names no repository of its own.").
 			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
 	}
 
