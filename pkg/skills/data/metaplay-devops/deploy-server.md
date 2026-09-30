@@ -31,7 +31,7 @@ Use the explicit form when build and deploy happen on different machines (CI bui
 
 - **Manual local build:** if you ran `metaplay build image` without a tag, the resulting image is uniquely tagged `<projectId>:YYYYMMDD-HHMMSS-<commit>` (timestamp only if no commit is available). `build image` prints this tag — pass it to `metaplay deploy server <env> <tag>` to ship that build.
 - **CI:** always pass an explicit, unique tag (e.g. `<commit>-<build-number>`) so the deployed artifact is traceable.
-- **Already-pushed image:** `metaplay image list <env>` shows the 20 most-recent images in the env's registry. Pass `--limit=0` for the full list.
+- **Already-pushed image:** `metaplay image list <env>` shows the 20 most recently built images in the env's registry. Pass `--limit=0` for the full list.
 
 Always deploy a unique tag. Never reuse a tag (e.g. `latest`, `latest-local`, or a bare commit SHA — you can build the same commit more than once) for a cloud deploy; they won't work. Use the unique `<timestamp>-<commit>` tag from `build image`, or a `<commit>-<build-number>` tag in CI.
 
