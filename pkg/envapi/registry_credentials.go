@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog/log"
@@ -133,6 +134,45 @@ type EnvironmentImageRepository struct {
 	Credentials         *DockerCredentials
 }
 
+// Reference is the image reference for a tag in this repository.
+func (r *EnvironmentImageRepository) Reference(tag string) string {
+	return r.QualifiedRepository + ":" + tag
+}
+
+// credentialsFor is the credential to present when reading imageRef: this
+// repository's, where imageRef is on the same registry, and nil where it names
+// another, which is then read anonymously.
+//
+// Most references are built from this repository and always match. One is
+// not: a deployed release names its image repository itself, and whatever host
+// it names would otherwise be handed the environment's credential. The host is
+// taken from the repository rather than from the credential, which for ECR
+// carries its registry with a scheme a reference does not have.
+func (r *EnvironmentImageRepository) credentialsFor(imageRef string) *DockerCredentials {
+	repository, err := name.NewRepository(r.QualifiedRepository)
+	if err != nil {
+		// Only the older path's repository can get here, since a stack's answer
+		// is checked when it arrives. Read anonymously, the image fails as an
+		// authentication error, so say why the credential was held back.
+		log.Debug().Msgf("Not presenting the environment's credential: its repository '%s' does not parse: %v", r.QualifiedRepository, err)
+		return nil
+	}
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil
+	}
+	if !strings.EqualFold(ref.Context().RegistryStr(), repository.RegistryStr()) {
+		return nil
+	}
+	return r.Credentials
+}
+
+// FetchImageMetadata reads the Metaplay labels of an image, presenting this
+// repository's credential only if the image is on its registry.
+func (r *EnvironmentImageRepository) FetchImageMetadata(imageRef string) (*MetaplayImageInfo, error) {
+	return FetchRemoteDockerImageMetadata(r.credentialsFor(imageRef), imageRef)
+}
+
 // ResolveImageRepository answers where this environment's images live:
 // whatever the stack issues a credential for, which it does for every registry
 // it keeps images in, and for a stack older than that, the cloud registry the
@@ -151,10 +191,7 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 	credentials, err := target.GetRegistryCredentials()
 	switch {
 	case err == nil:
-		return &EnvironmentImageRepository{
-			QualifiedRepository: credentials.QualifiedRepository(),
-			Credentials:         credentials.DockerCredentials(),
-		}, nil
+		return newResolvedImageRepository(credentials.QualifiedRepository(), credentials.DockerCredentials()), nil
 	case errors.Is(err, ErrRegistryCredentialsNotServed):
 		log.Debug().Msg("Stack predates the registry credentials endpoint; using the environment's cloud registry")
 	default:
@@ -184,8 +221,15 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 		return nil, clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
 			WithSuggestion("Check that you have access to this environment")
 	}
+	return newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials), nil
+}
+
+// newResolvedImageRepository is the repository a resolution answered with,
+// logged once here rather than by every command that resolves one.
+func newResolvedImageRepository(qualifiedRepository string, credentials *DockerCredentials) *EnvironmentImageRepository {
+	log.Debug().Msgf("Resolved the environment's image repository to %s, as username=%s", qualifiedRepository, credentials.Username)
 	return &EnvironmentImageRepository{
-		QualifiedRepository: envDetails.Deployment.EcrRepo,
-		Credentials:         dockerCredentials,
-	}, nil
+		QualifiedRepository: qualifiedRepository,
+		Credentials:         credentials,
+	}
 }

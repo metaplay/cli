@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -94,28 +93,21 @@ func (o *imagePullOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
 	// Construct the full remote image name
-	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
+	remoteImageName := imageRepository.Reference(o.argImageTag)
 
 	// Use task runner to pull the image.
 	taskRunner := tui.NewTaskRunner()
 
 	// Pull the image from the remote repository.
 	taskRunner.AddTask("Pull docker image from environment repository", func(output *tui.TaskOutput) error {
-		return pullDockerImage(cmd.Context(), output, remoteImageName, dockerCredentials)
+		return pullDockerImage(cmd.Context(), output, remoteImageName, imageRepository.Credentials)
 	})
 
 	// Run the tasks.
