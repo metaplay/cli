@@ -444,3 +444,76 @@ func TestCredentialsFor_TheFallbacksCredentialGoesToItsRepositorysRegistry(t *te
 		t.Error("another account's registry was given the environment's credential")
 	}
 }
+
+// serveRegistryCredentialsInTurn answers each credentials request with the
+// next of answers, and fails the test on a request it has no answer for.
+func serveRegistryCredentialsInTurn(t *testing.T, answers ...RegistryCredentials) *TargetEnvironment {
+	t.Helper()
+	asked := 0
+	return testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if asked >= len(answers) {
+			t.Errorf("credentials asked for %d times, want %d", asked+1, len(answers))
+			http.Error(w, "no answer left", http.StatusInternalServerError)
+			return
+		}
+		answer := answers[asked]
+		asked++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer)
+	}))
+}
+
+// A deploy can sit at an image picker for longer than a stack's credential
+// lives, so it resolves again right before it pushes. What it gets back is a
+// fresh credential for the same repository.
+func TestResolveImageRepositoryAgain_HandsBackAFreshCredentialForTheSameRepository(t *testing.T) {
+	env := serveRegistryCredentialsInTurn(t,
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
+	)
+
+	earlier, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	again, err := env.ResolveImageRepositoryAgain(earlier)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if again.Credentials.Password != "second" {
+		t.Errorf("password = %q, want the fresh credential", again.Credentials.Password)
+	}
+	if again.QualifiedRepository != earlier.QualifiedRepository {
+		t.Errorf("repository = %q, want %q", again.QualifiedRepository, earlier.QualifiedRepository)
+	}
+}
+
+// The chart is told the repository resolved first, and the push goes to the
+// one resolved second. If the stack names another in between, pushing would
+// deploy a reference the image never went to, so the deploy is refused
+// instead, naming both.
+func TestResolveImageRepositoryAgain_RefusesARepositoryThatChangedInBetween(t *testing.T) {
+	env := serveRegistryCredentialsInTurn(t,
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
+		RegistryCredentials{RegistryHost: "registry.elsewhere.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
+	)
+
+	earlier, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = env.ResolveImageRepositoryAgain(earlier)
+
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, named := range []string{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver",
+		"registry.elsewhere.example.com/lovely-wombats-build-nimbly/gameserver",
+	} {
+		if !strings.Contains(err.Error(), named) {
+			t.Errorf("error = %q, want it to name %s", err, named)
+		}
+	}
+}
