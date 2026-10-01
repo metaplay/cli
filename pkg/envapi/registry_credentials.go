@@ -238,3 +238,27 @@ func newResolvedImageRepository(qualifiedRepository string, credentials *DockerC
 		Credentials:         credentials,
 	}
 }
+
+// RefreshImageRepository resolves this environment's images again, for a push
+// that happens long after an earlier resolution, and hands back a fresh
+// credential for the same repository.
+//
+// A stack's credential is short-lived where an ECR login was not, and a deploy
+// can wait at an image picker for longer than one lives, so it asks again right
+// before the push. A stack signs a credential for its own registry itself; for
+// ECR it asks ECR for one more authorization token. What the chart is told has
+// already been taken from the earlier answer, so a repository that changed in
+// between is refused rather than pushed to: the image would land somewhere the
+// deployment does not name.
+func (target *TargetEnvironment) RefreshImageRepository(earlier *EnvironmentImageRepository) (*EnvironmentImageRepository, error) {
+	refreshed, err := target.ResolveImageRepository()
+	if err != nil {
+		return nil, err
+	}
+	if refreshed.QualifiedRepository != earlier.QualifiedRepository {
+		return nil, clierrors.Newf("The environment's image repository changed from '%s' to '%s' since it was first resolved",
+			earlier.QualifiedRepository, refreshed.QualifiedRepository).
+			WithSuggestion("Run the command again")
+	}
+	return refreshed, nil
+}

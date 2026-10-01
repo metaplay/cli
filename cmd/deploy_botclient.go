@@ -147,21 +147,23 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Get environment details.
+	// Resolve where the environment's images live, and a credential for them.
+	// This goes first because it is what says so when the environment is not
+	// on this stack at all.
+	imageRepository, err := targetEnv.ResolveImageRepository()
+	if err != nil {
+		return err
+	}
+
+	// Get environment details, for the game server's hostname and the CDN the
+	// bots are pointed at. Its images are reached through the stack above.
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return err
 	}
 
-	// Get docker credentials to fetch image metadata.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return clierrors.Wrap(err, "Failed to get Docker credentials")
-	}
-
 	// Fetch SDK version from the remote docker image to determine actual SDK version being deployed.
-	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
-	imageInfo, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+	imageInfo, err := imageRepository.FetchImageMetadata(imageRepository.Reference(o.argImageTag))
 	if err != nil {
 		return clierrors.Newf("Image '%s' not found in the environment's container registry", o.argImageTag).
 			WithSuggestion("Push the image first with 'metaplay image push'").
@@ -236,7 +238,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			"botSpawnRate":       5,
 			"botSessionDuration": "00:00:20",
 			"image": map[string]any{
-				"repository": envDetails.Deployment.EcrRepo,
+				"repository": imageRepository.QualifiedRepository,
 				"tag":        o.argImageTag,
 			},
 			"targetHost":       serverHostname,
@@ -261,7 +263,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	helmRequiredValues := map[string]any{
 		"botclients": map[string]any{
 			"image": map[string]any{
-				"repository": envDetails.Deployment.EcrRepo,
+				"repository": imageRepository.QualifiedRepository,
 				"tag":        o.argImageTag,
 			},
 		},

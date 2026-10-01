@@ -163,18 +163,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	// The chart is told this repository; a push resolves again right before
+	// it goes, and is held to the same one.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return fmt.Errorf("failed to get docker credentials: %w", err)
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
@@ -222,8 +217,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		imageTag = o.argImageNameTag
 
 		// Fetch the image info from the remote docker image.
-		remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)
-		imageInfo, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+		imageInfo, err = imageRepository.FetchImageMetadata(imageRepository.Reference(imageTag))
 		if err != nil {
 			return err
 		}
@@ -377,7 +371,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	helmRequiredValues := map[string]any{
 		"image": map[string]any{
 			"tag":        imageTag,
-			"repository": envDetails.Deployment.EcrRepo,
+			"repository": imageRepository.QualifiedRepository,
 		},
 	}
 
@@ -415,7 +409,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if useLocalImage {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(o.argImageNameTag))
 	} else {
-		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
+		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(imageRepository.Reference(imageTag)))
 	}
 	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageInfo.BuildNumber))
 	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
@@ -476,7 +470,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-			_, err := pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			// Refreshed here, since the credential resolved above may have
+			// expired while the deploy waited at the image picker.
+			pushTo, err := targetEnv.RefreshImageRepository(imageRepository)
+			if err != nil {
+				return err
+			}
+			_, err = pushDockerImage(cmd.Context(), output, o.argImageNameTag, pushTo)
 			return err
 		})
 	}
