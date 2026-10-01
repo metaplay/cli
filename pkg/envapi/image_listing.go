@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/rs/zerolog/log"
 
 	"github.com/metaplay/cli/internal/syncutil"
 )
@@ -36,8 +37,8 @@ type RepositoryImage struct {
 	// image records none or could not be read.
 	BuiltAt time.Time `json:"builtAt,omitzero"`
 	// SizeBytes is the compressed size of the image's config and layers, as
-	// the registry stores them, summed over every platform a multi-platform
-	// image carries.
+	// the registry stores them, over every platform a multi-platform image
+	// carries, counting a layer the platforms share once.
 	SizeBytes  int64  `json:"sizeBytes,omitempty"`
 	SdkVersion string `json:"sdkVersion,omitempty"`
 	CommitID   string `json:"commitId,omitempty"`
@@ -77,7 +78,10 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 	if isRemoteImageNotFound(err) {
 		// A registry creates a repository on the first push to it, so one
 		// nothing has been pushed to does not exist yet: that is empty, as it
-		// is on a registry creating repositories up front.
+		// is on a registry creating repositories up front. A registry that
+		// creates them up front answers the same for a repository that is not
+		// there at all, which listing cannot tell apart, so say what it saw.
+		log.Debug().Msgf("The registry reports no repository '%s'; listing it as empty: %v", repository.QualifiedRepository, err)
 		return []RepositoryImage{}, nil
 	}
 	if err != nil {
@@ -284,14 +288,21 @@ func platformName(platform v1.Descriptor) string {
 // compressedSize is the size a registry stores for images with these
 // manifests: every config and layer as pushed, which for a gzipped layer is its
 // compressed size. A client-side sum, since no manifest or index carries a
-// total, and for a multi-platform image the sum of every platform the
-// repository holds.
+// total. For a multi-platform image it covers every platform the repository
+// holds, and a blob two platforms share is stored once, so it counts once.
 func compressedSize(manifests ...*v1.Manifest) int64 {
 	var size int64
+	counted := map[v1.Hash]bool{}
+	count := func(blob v1.Descriptor) {
+		if !counted[blob.Digest] {
+			counted[blob.Digest] = true
+			size += blob.Size
+		}
+	}
 	for _, manifest := range manifests {
-		size += manifest.Config.Size
+		count(manifest.Config)
 		for _, layer := range manifest.Layers {
-			size += layer.Size
+			count(layer)
 		}
 	}
 	return size

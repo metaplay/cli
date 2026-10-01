@@ -43,9 +43,9 @@ func init() {
 			report when an image was pushed, so re-pushing an old image does not change it.
 
 			SIZE is the compressed size of the image's config and layers as the registry stores
-			them, summed over every platform of a multi-platform image. It is smaller than
-			'docker images' reports for an unpacked image, and for a multi-platform image larger
-			than a single platform's download.
+			them, over every platform of a multi-platform image, counting a layer the platforms
+			share once. It is smaller than 'docker images' reports for an unpacked image, and for
+			a multi-platform image larger than a single platform's download.
 
 			Every tag is read to find when its image was built, so listing a repository with many
 			tags takes a while even with --limit.
@@ -57,7 +57,7 @@ func init() {
 			- Push a built image to the repository using 'metaplay image push ...'.
 		`),
 		Example: renderExample(`
-			# List the 20 most recent images in environment 'lovely-wombats-build-nimbly'.
+			# List the 20 most recently built images in environment 'lovely-wombats-build-nimbly'.
 			metaplay image list lovely-wombats-build-nimbly
 
 			# List all images in JSON format.

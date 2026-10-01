@@ -120,22 +120,32 @@ func TestAssembleImages_ListsWhatCouldNotBeReadLast(t *testing.T) {
 	}
 }
 
-func descriptorOf(size int64) v1.Descriptor {
-	return v1.Descriptor{Size: size}
+func blobOf(hex string, size int64) v1.Descriptor {
+	return v1.Descriptor{Digest: v1.Hash{Algorithm: "sha256", Hex: hex}, Size: size}
 }
 
 // Size is what the registry stores: each config and layer as pushed, which for
 // a gzipped layer is the compressed size. Summed over every platform of a
-// multi-platform image, since the repository holds every one of them.
-func TestCompressedSize_SumsConfigAndLayersOverEveryPlatform(t *testing.T) {
-	amd64 := &v1.Manifest{Config: descriptorOf(100), Layers: []v1.Descriptor{descriptorOf(1000), descriptorOf(2000)}}
-	arm64 := &v1.Manifest{Config: descriptorOf(90), Layers: []v1.Descriptor{descriptorOf(900), descriptorOf(1900)}}
+// multi-platform image, since the repository holds every one of them, and a
+// layer the platforms share is stored once, so it counts once.
+func TestCompressedSize_SumsWhatTheRegistryStoresOverEveryPlatform(t *testing.T) {
+	amd64 := &v1.Manifest{Config: blobOf("amd64-config", 100), Layers: []v1.Descriptor{blobOf("amd64-base", 1000), blobOf("amd64-app", 2000)}}
+	arm64 := &v1.Manifest{Config: blobOf("arm64-config", 90), Layers: []v1.Descriptor{blobOf("arm64-base", 900), blobOf("arm64-app", 1900)}}
+	sharingTheAppLayer := &v1.Manifest{Config: blobOf("arm64-config", 90), Layers: []v1.Descriptor{blobOf("arm64-base", 900), blobOf("amd64-app", 2000)}}
 
-	if got := compressedSize(amd64); got != 3100 {
-		t.Errorf("single platform = %d, want 3100", got)
-	}
-	if got := compressedSize(amd64, arm64); got != 5990 {
-		t.Errorf("two platforms = %d, want 5990", got)
+	for scenario, tc := range map[string]struct {
+		manifests []*v1.Manifest
+		want      int64
+	}{
+		"single platform":           {manifests: []*v1.Manifest{amd64}, want: 3100},
+		"two platforms":             {manifests: []*v1.Manifest{amd64, arm64}, want: 5990},
+		"two platforms with shared": {manifests: []*v1.Manifest{amd64, sharingTheAppLayer}, want: 4090},
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			if got := compressedSize(tc.manifests...); got != tc.want {
+				t.Errorf("compressedSize = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 
