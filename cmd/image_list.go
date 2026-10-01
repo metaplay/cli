@@ -146,20 +146,26 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 				widths[column] = max(widths[column], len(row[column]))
 			}
 		}
-		pad := func(column int, text string) string {
-			return fmt.Sprintf("%-*s", widths[column], text)
+		// Every column but the last is padded to its width, and styled after
+		// padding, since styling adds codes that take no room on screen.
+		line := func(cells []string, styled bool) string {
+			parts := make([]string, len(cells))
+			for column, cell := range cells {
+				if column < len(cells)-1 {
+					cell = fmt.Sprintf("%-*s", widths[column], cell)
+				}
+				if style := imageListColumns[column].style; styled && style != nil {
+					cell = style(cell)
+				}
+				parts[column] = cell
+			}
+			return "  " + strings.Join(parts, "  ")
 		}
 
-		log.Info().Msgf("  %s  %s  %s  %s  %s", pad(0, header[0]), pad(1, header[1]), pad(2, header[2]), pad(3, header[3]), header[4])
+		log.Info().Msg(line(header, false))
 		log.Info().Msg("")
 		for _, row := range rows {
-			log.Info().Msgf("  %s  %s  %s  %s  %s",
-				styles.RenderTechnical(pad(0, row[0])),
-				pad(1, row[1]),
-				pad(2, row[2]),
-				styles.RenderMuted(pad(3, row[3])),
-				row[4],
-			)
+			log.Info().Msg(line(row, true))
 		}
 	}
 
@@ -174,25 +180,43 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
+// imageListColumns are the columns the text output shows, in order, and how
+// each is styled; nil leaves it plain.
+var imageListColumns = []struct {
+	heading string
+	style   func(string) string
+}{
+	{"TAG", styles.RenderTechnical},
+	{"SDK", nil},
+	{"COMMIT", nil},
+	{"BUILT", styles.RenderMuted},
+	{"SIZE", nil},
+}
+
 // imageListTable is the table the text output shows: a heading per column,
 // and a row per image, in the order given. An image that could not be read
 // keeps its tags and leaves its other columns blank.
 func imageListTable(images []envapi.RepositoryImage) (header []string, rows [][]string) {
-	header = []string{"TAG", "SDK", "COMMIT", "BUILT", "SIZE"}
+	for _, column := range imageListColumns {
+		header = append(header, column.heading)
+	}
 	for _, image := range images {
-		row := []string{strings.Join(image.Tags, ", "), "", "", "", ""}
-		if image.Readable() {
-			commit := image.CommitID
-			if len(commit) > 12 {
-				commit = commit[:12]
-			}
-			built := ""
-			if !image.BuiltAt.IsZero() {
-				built = image.BuiltAt.UTC().Format("2006-01-02 15:04")
-			}
-			row = []string{row[0], image.SdkVersion, commit, built, formatImageSize(image.SizeBytes)}
+		tags := strings.Join(image.Tags, ", ")
+		if !image.Readable() {
+			row := make([]string, len(imageListColumns))
+			row[0] = tags
+			rows = append(rows, row)
+			continue
 		}
-		rows = append(rows, row)
+		commit := image.CommitID
+		if len(commit) > 12 {
+			commit = commit[:12]
+		}
+		built := ""
+		if !image.BuiltAt.IsZero() {
+			built = image.BuiltAt.UTC().Format("2006-01-02 15:04")
+		}
+		rows = append(rows, []string{tags, image.SdkVersion, commit, built, formatImageSize(image.SizeBytes)})
 	}
 	return header, rows
 }

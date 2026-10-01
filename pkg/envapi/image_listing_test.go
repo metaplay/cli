@@ -51,8 +51,8 @@ func TestAssembleImages_GroupsTagsNamingTheSameImage(t *testing.T) {
 			{tag: "20260101-000000", digest: "sha256:bbb"},
 		},
 		map[string]imageRead{
-			"sha256:aaa": {facts: imageFacts{builtAt: builtOn("2026-09-30"), sizeBytes: 300, sdkVersion: "39.0.0", commitID: "abc"}},
-			"sha256:bbb": {facts: imageFacts{builtAt: builtOn("2026-01-01"), sizeBytes: 200}},
+			"sha256:aaa": {described: RepositoryImage{BuiltAt: builtOn("2026-09-30"), SizeBytes: 300, SdkVersion: "39.0.0", CommitID: "abc"}},
+			"sha256:bbb": {described: RepositoryImage{BuiltAt: builtOn("2026-01-01"), SizeBytes: 200}},
 		})
 
 	want := []RepositoryImage{
@@ -75,9 +75,9 @@ func TestAssembleImages_OrdersNewestBuiltFirstWhateverTheTagIsCalled(t *testing.
 			{tag: "20260930-120000", digest: "sha256:new"},
 		},
 		map[string]imageRead{
-			"sha256:old":    {facts: imageFacts{builtAt: builtOn("2026-01-01")}},
-			"sha256:middle": {facts: imageFacts{builtAt: builtOn("2026-06-01")}},
-			"sha256:new":    {facts: imageFacts{builtAt: builtOn("2026-09-30")}},
+			"sha256:old":    {described: RepositoryImage{BuiltAt: builtOn("2026-01-01")}},
+			"sha256:middle": {described: RepositoryImage{BuiltAt: builtOn("2026-06-01")}},
+			"sha256:new":    {described: RepositoryImage{BuiltAt: builtOn("2026-09-30")}},
 		})
 
 	want := [][]string{{"20260930-120000"}, {"release-candidate"}, {"20260101-000000"}}
@@ -100,7 +100,7 @@ func TestAssembleImages_ListsWhatCouldNotBeReadLast(t *testing.T) {
 			{tag: "20260930-120000", digest: "sha256:good"},
 		},
 		map[string]imageRead{
-			"sha256:good":    {facts: imageFacts{builtAt: builtOn("2026-09-30")}},
+			"sha256:good":    {described: RepositoryImage{BuiltAt: builtOn("2026-09-30")}},
 			"sha256:undated": {},
 			"sha256:broken":  {err: errors.New("config blob unknown")},
 		})
@@ -163,29 +163,29 @@ func platformDescriptor(os, architecture string) v1.Descriptor {
 func TestImagePlatforms_DescribeAnIndexByItsAmd64Image(t *testing.T) {
 	attestation := platformDescriptor("unknown", "unknown")
 
-	for name, tc := range map[string]struct {
-		manifests  []v1.Descriptor
-		platforms  int
-		describing string
+	for scenario, tc := range map[string]struct {
+		manifests   []v1.Descriptor
+		platforms   int
+		describedBy string
 	}{
 		"amd64 listed second": {
-			manifests:  []v1.Descriptor{platformDescriptor("linux", "arm64"), platformDescriptor("linux", "amd64"), attestation},
-			platforms:  2,
-			describing: "linux-amd64",
+			manifests:   []v1.Descriptor{platformDescriptor("linux", "arm64"), platformDescriptor("linux", "amd64"), attestation},
+			platforms:   2,
+			describedBy: "linux-amd64",
 		},
 		"no amd64": {
-			manifests:  []v1.Descriptor{attestation, platformDescriptor("linux", "arm64"), platformDescriptor("linux", "arm")},
-			platforms:  2,
-			describing: "linux-arm64",
+			manifests:   []v1.Descriptor{attestation, platformDescriptor("linux", "arm64"), platformDescriptor("linux", "arm")},
+			platforms:   2,
+			describedBy: "linux-arm64",
 		},
 	} {
-		t.Run(name, func(t *testing.T) {
-			platforms, describing := imagePlatforms(&v1.IndexManifest{Manifests: tc.manifests})
+		t.Run(scenario, func(t *testing.T) {
+			platforms, describedBy := imagePlatforms(&v1.IndexManifest{Manifests: tc.manifests})
 			if len(platforms) != tc.platforms {
 				t.Errorf("platforms = %d, want %d: %+v", len(platforms), tc.platforms, platforms)
 			}
-			if describing.Digest.Hex != tc.describing {
-				t.Errorf("described by %s, want %s", describing.Digest.Hex, tc.describing)
+			if describedBy.Digest.Hex != tc.describedBy {
+				t.Errorf("described by %s, want %s", describedBy.Digest.Hex, tc.describedBy)
 			}
 		})
 	}
@@ -216,8 +216,8 @@ func builtImage(t *testing.T, builtAt time.Time, sdkVersion, commitID string) v1
 	config = config.DeepCopy()
 	config.Created = v1.Time{Time: builtAt}
 	config.Config.Labels = map[string]string{
-		"io.metaplay.sdk_version": sdkVersion,
-		"io.metaplay.commit_id":   commitID,
+		labelSdkVersion: sdkVersion,
+		labelCommitID:   commitID,
 	}
 	image, err = mutate.ConfigFile(image, config)
 	if err != nil {

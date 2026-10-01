@@ -27,6 +27,14 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// The labels a Metaplay server image carries about itself.
+const (
+	labelProjectID   = "io.metaplay.project_id"
+	labelSdkVersion  = "io.metaplay.sdk_version"
+	labelCommitID    = "io.metaplay.commit_id"
+	labelBuildNumber = "io.metaplay.build_number"
+)
+
 // Metadata about a Metaplay docker image.
 type MetaplayImageInfo struct {
 	ImageID      string    // Docker image ID
@@ -44,24 +52,24 @@ type MetaplayImageInfo struct {
 
 func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string, createdTime time.Time, os string, architecture string) (*MetaplayImageInfo, error) {
 	// Extract required labels for a valid Metaplay server image.
-	projectID, ok := labels["io.metaplay.project_id"]
+	projectID, ok := labels[labelProjectID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.project_id' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelProjectID, imageID, repoTag)
 	}
 
-	sdkVersion, ok := labels["io.metaplay.sdk_version"]
+	sdkVersion, ok := labels[labelSdkVersion]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.sdk_version' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelSdkVersion, imageID, repoTag)
 	}
 
-	commitID, ok := labels["io.metaplay.commit_id"]
+	commitID, ok := labels[labelCommitID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.commit_id' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelCommitID, imageID, repoTag)
 	}
 
-	buildNumber, ok := labels["io.metaplay.build_number"]
+	buildNumber, ok := labels[labelBuildNumber]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.build_number' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelBuildNumber, imageID, repoTag)
 	}
 
 	// Create and return the MetaplayImageInfo
@@ -335,7 +343,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 
 	// Create filter for the project ID label
 	filterArgs := filters.NewArgs()
-	filterArgs.Add("label", fmt.Sprintf("io.metaplay.project_id=%s", projectID))
+	filterArgs.Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID))
 
 	// List all images from the local Docker daemon with the filter
 	images, err := dockerClient.ImageList(context.Background(), image.ListOptions{

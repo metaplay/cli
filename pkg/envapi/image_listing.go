@@ -103,14 +103,14 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		}
 	}
 	reads := syncutil.ParallelMap(digests, listingConcurrency, func(digest string) imageRead {
-		facts, err := readImageFacts(ctx, puller, repo.Digest(digest))
-		return imageRead{facts: facts, err: err}
+		described, err := readImage(ctx, puller, repo.Digest(digest))
+		return imageRead{described: described, err: err}
 	})
-	byDigest := map[string]imageRead{}
+	readsByDigest := map[string]imageRead{}
 	for i, digest := range digests {
-		byDigest[digest] = reads[i]
+		readsByDigest[digest] = reads[i]
 	}
-	return assembleImages(tagged, byDigest), nil
+	return assembleImages(tagged, readsByDigest), nil
 }
 
 // registryAuthenticator presents credentials where there are any, and reads
@@ -122,12 +122,14 @@ func registryAuthenticator(credentials *DockerCredentials) authn.Authenticator {
 	return authn.FromConfig(authn.AuthConfig{Username: credentials.Username, Password: credentials.Password})
 }
 
-// readImageFacts reads one image's manifest and config. A multi-platform image
-// is sized over every platform and described by the one imagePlatforms picks.
-func readImageFacts(ctx context.Context, puller *remote.Puller, ref name.Digest) (imageFacts, error) {
+// readImage reads what one image says about itself, from its manifest and
+// config: when it was built, its size, and its labels. Its tags and digest are
+// the listing's to fill in. A multi-platform image is sized over every
+// platform and described by the one imagePlatforms picks.
+func readImage(ctx context.Context, puller *remote.Puller, ref name.Digest) (RepositoryImage, error) {
 	descriptor, err := puller.Get(ctx, ref)
 	if err != nil {
-		return imageFacts{}, fmt.Errorf("failed to read the image's manifest: %w", err)
+		return RepositoryImage{}, fmt.Errorf("failed to fetch the image's manifest: %w", err)
 	}
 
 	var manifests []*v1.Manifest
@@ -135,24 +137,24 @@ func readImageFacts(ctx context.Context, puller *remote.Puller, ref name.Digest)
 	if descriptor.MediaType.IsIndex() {
 		index, err := descriptor.ImageIndex()
 		if err != nil {
-			return imageFacts{}, fmt.Errorf("failed to read the image's index: %w", err)
+			return RepositoryImage{}, fmt.Errorf("failed to open the image's index: %w", err)
 		}
 		indexManifest, err := index.IndexManifest()
 		if err != nil {
-			return imageFacts{}, fmt.Errorf("failed to read the image's index: %w", err)
+			return RepositoryImage{}, fmt.Errorf("failed to parse the image's index: %w", err)
 		}
 		platforms, describedBy := imagePlatforms(indexManifest)
 		if len(platforms) == 0 {
-			return imageFacts{}, errors.New("the index names no platform image")
+			return RepositoryImage{}, errors.New("the index names no platform image")
 		}
 		for _, platform := range platforms {
 			image, err := index.Image(platform.Digest)
 			if err != nil {
-				return imageFacts{}, fmt.Errorf("failed to read the image for %s: %w", platformName(platform), err)
+				return RepositoryImage{}, fmt.Errorf("failed to fetch the image for %s: %w", platformName(platform), err)
 			}
 			manifest, err := image.Manifest()
 			if err != nil {
-				return imageFacts{}, fmt.Errorf("failed to read the manifest for %s: %w", platformName(platform), err)
+				return RepositoryImage{}, fmt.Errorf("failed to parse the manifest for %s: %w", platformName(platform), err)
 			}
 			manifests = append(manifests, manifest)
 			if platform.Digest == describedBy.Digest {
@@ -162,24 +164,24 @@ func readImageFacts(ctx context.Context, puller *remote.Puller, ref name.Digest)
 	} else {
 		describing, err = descriptor.Image()
 		if err != nil {
-			return imageFacts{}, fmt.Errorf("failed to read the image: %w", err)
+			return RepositoryImage{}, fmt.Errorf("failed to open the image: %w", err)
 		}
 		manifest, err := describing.Manifest()
 		if err != nil {
-			return imageFacts{}, fmt.Errorf("failed to read the image's manifest: %w", err)
+			return RepositoryImage{}, fmt.Errorf("failed to parse the image's manifest: %w", err)
 		}
 		manifests = append(manifests, manifest)
 	}
 
 	config, err := describing.ConfigFile()
 	if err != nil {
-		return imageFacts{}, fmt.Errorf("failed to read the image's config: %w", err)
+		return RepositoryImage{}, fmt.Errorf("failed to read the image's config: %w", err)
 	}
-	return imageFacts{
-		builtAt:    config.Created.Time,
-		sizeBytes:  compressedSize(manifests...),
-		sdkVersion: config.Config.Labels["io.metaplay.sdk_version"],
-		commitID:   config.Config.Labels["io.metaplay.commit_id"],
+	return RepositoryImage{
+		BuiltAt:    config.Created.Time,
+		SizeBytes:  compressedSize(manifests...),
+		SdkVersion: config.Config.Labels[labelSdkVersion],
+		CommitID:   config.Config.Labels[labelCommitID],
 	}, nil
 }
 
@@ -191,19 +193,11 @@ type taggedDigest struct {
 	err    error
 }
 
-// imageRead is what reading one image gave: its facts, or why it could not be
-// read.
+// imageRead is what reading one image gave: what the image says about itself,
+// or why it could not be read.
 type imageRead struct {
-	facts imageFacts
-	err   error
-}
-
-// imageFacts is what reading one image's manifest and config says about it.
-type imageFacts struct {
-	builtAt    time.Time
-	sizeBytes  int64
-	sdkVersion string
-	commitID   string
+	described RepositoryImage
+	err       error
 }
 
 // assembleImages turns what each tag resolved to, and what reading each image
@@ -216,27 +210,25 @@ type imageFacts struct {
 // its own. Everything that could not be read says why.
 func assembleImages(tags []taggedDigest, reads map[string]imageRead) []RepositoryImage {
 	images := []RepositoryImage{}
-	byDigest := map[string]int{}
+	positionByDigest := map[string]int{}
 	for _, tagged := range tags {
 		if tagged.err != nil {
 			images = append(images, RepositoryImage{Tags: []string{tagged.tag}, Error: tagged.err.Error()})
 			continue
 		}
-		if index, seen := byDigest[tagged.digest]; seen {
-			images[index].Tags = append(images[index].Tags, tagged.tag)
+		if position, seen := positionByDigest[tagged.digest]; seen {
+			images[position].Tags = append(images[position].Tags, tagged.tag)
 			continue
 		}
 
-		image := RepositoryImage{Tags: []string{tagged.tag}, Digest: tagged.digest}
-		if read := reads[tagged.digest]; read.err != nil {
+		read := reads[tagged.digest]
+		image := read.described
+		image.Tags = []string{tagged.tag}
+		image.Digest = tagged.digest
+		if read.err != nil {
 			image.Error = read.err.Error()
-		} else {
-			image.BuiltAt = read.facts.builtAt
-			image.SizeBytes = read.facts.sizeBytes
-			image.SdkVersion = read.facts.sdkVersion
-			image.CommitID = read.facts.commitID
 		}
-		byDigest[tagged.digest] = len(images)
+		positionByDigest[tagged.digest] = len(images)
 		images = append(images, image)
 	}
 
@@ -310,12 +302,12 @@ func compressedSize(manifests ...*v1.Manifest) int64 {
 
 // imagePlatforms is the platform images a multi-platform image's index names,
 // and the one that describes the image: linux/amd64, which is what every other
-// command reads, or the first listed where there is none. describing is the
+// command reads, or the first listed where there is none. describedBy is the
 // zero descriptor when the index names no platform image at all.
 //
 // An attestation buildx adds to an index names the platform unknown/unknown,
 // and is not a platform.
-func imagePlatforms(index *v1.IndexManifest) (platforms []v1.Descriptor, describing v1.Descriptor) {
+func imagePlatforms(index *v1.IndexManifest) (platforms []v1.Descriptor, describedBy v1.Descriptor) {
 	for _, manifest := range index.Manifests {
 		if manifest.Platform != nil && manifest.Platform.OS == "unknown" {
 			continue
@@ -328,7 +320,7 @@ func imagePlatforms(index *v1.IndexManifest) (platforms []v1.Descriptor, describ
 		}
 	}
 	if len(platforms) > 0 {
-		describing = platforms[0]
+		describedBy = platforms[0]
 	}
-	return platforms, describing
+	return platforms, describedBy
 }

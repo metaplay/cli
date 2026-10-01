@@ -6,7 +6,7 @@ package cmd
 
 import (
 	"reflect"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -50,20 +50,37 @@ func TestImageListTable_ShowsEachImageOnce(t *testing.T) {
 // and how many could not be read at all, counted over the whole repository
 // since those sort last and are the first a limit cuts.
 func TestImageListFooters_SayWhatTheTableLeavesOut(t *testing.T) {
-	images := []envapi.RepositoryImage{
-		{Tags: []string{"a"}}, {Tags: []string{"b"}}, {Tags: []string{"c"}},
-		{Tags: []string{"broken"}, Error: "manifest unknown"},
-	}
+	readable := []envapi.RepositoryImage{{Tags: []string{"a"}}, {Tags: []string{"b"}}, {Tags: []string{"c"}}}
+	broken := envapi.RepositoryImage{Tags: []string{"broken"}, Error: "manifest unknown"}
 
-	footers := strings.Join(imageListFooters(images, 2), "\n")
-	if !strings.Contains(footers, "Showing 2 of 4 images") {
-		t.Errorf("footers = %q, want them to say how many are shown", footers)
-	}
-	if !strings.Contains(footers, "1 image could not be read. Use --format=json --limit=0 to see why.") {
-		t.Errorf("footers = %q, want them to count what could not be read", footers)
-	}
-
-	if footers := imageListFooters(images[:3], 0); len(footers) != 0 {
-		t.Errorf("footers = %q, want none when everything is shown and readable", footers)
+	for scenario, tc := range map[string]struct {
+		images []envapi.RepositoryImage
+		limit  int
+		want   []string
+	}{
+		"past the limit, one unreadable": {
+			images: append(slices.Clone(readable), broken),
+			limit:  2,
+			want: []string{
+				"Showing 2 of 4 images. Use --limit to see more.",
+				"1 image could not be read. Use --format=json --limit=0 to see why.",
+			},
+		},
+		"two unreadable": {
+			images: append(slices.Clone(readable), broken, broken),
+			limit:  0,
+			want:   []string{"2 images could not be read. Use --format=json --limit=0 to see why."},
+		},
+		"everything shown and readable": {
+			images: readable,
+			limit:  0,
+			want:   nil,
+		},
+	} {
+		t.Run(scenario, func(t *testing.T) {
+			if footers := imageListFooters(tc.images, tc.limit); !reflect.DeepEqual(footers, tc.want) {
+				t.Errorf("footers = %q, want %q", footers, tc.want)
+			}
+		})
 	}
 }
