@@ -147,15 +147,17 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Get environment details, for the game server's hostname and the CDN the
-	// bots are pointed at. Its images are reached through the stack below.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	// This goes first because it is what says so when the environment is not
+	// on this stack at all.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
 
-	// Resolve where the environment's images live, and a credential for them.
-	imageRepository, err := targetEnv.ResolveImageRepository()
+	// Get environment details, for the game server's hostname and the CDN the
+	// bots are pointed at. Its images are reached through the stack above.
+	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return err
 	}
