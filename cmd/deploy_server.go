@@ -470,9 +470,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-			// Resolved again here, since the credential resolved above may have
+			// Refreshed here, since the credential resolved above may have
 			// expired while the deploy waited at the image picker.
-			pushTo, err := targetEnv.ResolveImageRepositoryAgain(imageRepository)
+			pushTo, err := targetEnv.RefreshImageRepository(imageRepository)
 			if err != nil {
 				return err
 			}

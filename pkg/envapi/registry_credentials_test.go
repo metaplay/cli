@@ -466,7 +466,7 @@ func serveRegistryCredentialsInTurn(t *testing.T, answers ...RegistryCredentials
 // A deploy can sit at an image picker for longer than a stack's credential
 // lives, so it resolves again right before it pushes. What it gets back is a
 // fresh credential for the same repository.
-func TestResolveImageRepositoryAgain_HandsBackAFreshCredentialForTheSameRepository(t *testing.T) {
+func TestRefreshImageRepository_HandsBackAFreshCredentialForTheSameRepository(t *testing.T) {
 	env := serveRegistryCredentialsInTurn(t,
 		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
 		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
@@ -476,16 +476,16 @@ func TestResolveImageRepositoryAgain_HandsBackAFreshCredentialForTheSameReposito
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	again, err := env.ResolveImageRepositoryAgain(earlier)
+	refreshed, err := env.RefreshImageRepository(earlier)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if again.Credentials.Password != "second" {
-		t.Errorf("password = %q, want the fresh credential", again.Credentials.Password)
+	if refreshed.Credentials.Password != "second" {
+		t.Errorf("password = %q, want the fresh credential", refreshed.Credentials.Password)
 	}
-	if again.QualifiedRepository != earlier.QualifiedRepository {
-		t.Errorf("repository = %q, want %q", again.QualifiedRepository, earlier.QualifiedRepository)
+	if refreshed.QualifiedRepository != earlier.QualifiedRepository {
+		t.Errorf("repository = %q, want %q", refreshed.QualifiedRepository, earlier.QualifiedRepository)
 	}
 }
 
@@ -493,7 +493,7 @@ func TestResolveImageRepositoryAgain_HandsBackAFreshCredentialForTheSameReposito
 // one resolved second. If the stack names another in between, pushing would
 // deploy a reference the image never went to, so the deploy is refused
 // instead, naming both.
-func TestResolveImageRepositoryAgain_RefusesARepositoryThatChangedInBetween(t *testing.T) {
+func TestRefreshImageRepository_RefusesARepositoryThatChangedInBetween(t *testing.T) {
 	env := serveRegistryCredentialsInTurn(t,
 		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
 		RegistryCredentials{RegistryHost: "registry.elsewhere.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
@@ -503,7 +503,7 @@ func TestResolveImageRepositoryAgain_RefusesARepositoryThatChangedInBetween(t *t
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	_, err = env.ResolveImageRepositoryAgain(earlier)
+	_, err = env.RefreshImageRepository(earlier)
 
 	if err == nil {
 		t.Fatal("expected a refusal")
