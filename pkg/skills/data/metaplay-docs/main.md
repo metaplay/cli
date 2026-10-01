@@ -22,7 +22,7 @@ The remote payload is organized into top-level subtrees, each with its own `inde
 
 - `docs/` — full SDK documentation (markdown)
 - `MetaplaySDK/` — SDK source: `Backend/`, `Client/`, `Frontend/`, `Plugins/`, plus `version.yaml`
-- `samples/` — sample projects: `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`
+- `samples/` — sample projects, e.g. `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`, `CollectibleCardGame/`, `TableStakes/`. The set varies by SDK version; `samples/index.md` lists the ones available.
 - `website/` — Metaplay blog posts and customer case studies
 - `cli/` — `metaplay` CLI command reference
 
@@ -90,6 +90,10 @@ metaplay llm-docs glob "**/PlayerActorBase.cs"
 # Explore a sample project.
 metaplay llm-docs read samples/index.md
 metaplay llm-docs glob "**/*.cs" --path samples/HelloWorld
+metaplay llm-docs read samples/HelloWorld/Assets/SharedCode/Player/PlayerModel.cs
+
+# Compare how the sample projects implement something.
+metaplay llm-docs ripgrep "class PlayerModel\b" -n --path samples
 
 # List the SDK versions the service serves, and the default.
 metaplay llm-docs info

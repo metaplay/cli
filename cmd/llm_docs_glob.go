@@ -64,6 +64,15 @@ func init() {
 
 			# Find a specific file by name anywhere in the payload.
 			metaplay llm-docs glob "**/PlayerActorBase.cs"
+
+			# List the sample projects.
+			metaplay llm-docs glob "*" --path samples
+
+			# All C# sources in one sample project.
+			metaplay llm-docs glob "**/*.cs" --path samples/HelloWorld
+
+			# The same file in every sample project.
+			metaplay llm-docs glob "**/PlayerModel.cs" --path samples
 		`),
 	}
 

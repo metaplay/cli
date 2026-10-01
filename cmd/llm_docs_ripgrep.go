@@ -77,6 +77,9 @@ func init() {
 
 			# Scope a search to a subdirectory of the payload.
 			metaplay llm-docs ripgrep EntityKind --path MetaplaySDK
+
+			# See how the sample projects define their PlayerModel.
+			metaplay llm-docs ripgrep "class PlayerModel\b" -n --path samples
 		`),
 	}
 
