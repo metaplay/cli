@@ -7,8 +7,10 @@ package cmd
 import (
 	"context"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/llmdocsclient"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 type llmDocsRipgrepOpts struct {
@@ -61,8 +63,13 @@ func init() {
 			# Count matches per file in C# sources.
 			metaplay llm-docs ripgrep "throw new" -c --type cs
 
-			# Restrict search to a glob filter (matched against file names).
+			# Restrict search to a glob filter. A glob without a slash matches the
+			# file name at any depth.
 			metaplay llm-docs ripgrep "EntityActor" --glob "*.cs" --path MetaplaySDK/Backend
+
+			# A glob with a slash matches the full payload path, regardless of --path.
+			# A leading '!' excludes; later globs take precedence.
+			metaplay llm-docs ripgrep "EntityActor" --glob "**/Server/**/*.cs" --glob "!**/Tests/**"
 
 			# Multi-line regex with line numbers (e.g. find class declarations
 			# that span lines).
@@ -70,12 +77,19 @@ func init() {
 
 			# Scope a search to a subdirectory of the payload.
 			metaplay llm-docs ripgrep EntityKind --path MetaplaySDK
+
+			# See how the sample projects define their PlayerModel.
+			metaplay llm-docs ripgrep "class PlayerModel\b" -n --path samples
 		`),
 	}
 
 	llmDocsCmd.AddCommand(cmd)
+	o.registerFlags(cmd.Flags())
+}
 
-	flags := cmd.Flags()
+// registerFlags defines the ripgrep command's flags on flags, bound to o.
+// Shared by init and the tests so both parse argv the same way.
+func (o *llmDocsRipgrepOpts) registerFlags(flags *pflag.FlagSet) {
 	flags.BoolVarP(&o.flagFixed, "fixed", "F", false, "Treat PATTERN as a literal string instead of a regex")
 	flags.BoolVarP(&o.flagIgnoreCase, "ignore-case", "i", false, "Case-insensitive matching")
 	flags.BoolVarP(&o.flagLineNumbers, "line-numbers", "n", false, "Show line numbers in matches")
@@ -86,11 +100,31 @@ func init() {
 	flags.IntVarP(&o.flagBeforeContext, "before-context", "B", 0, "Lines of context before each match")
 	flags.IntVarP(&o.flagAfterContext, "after-context", "A", 0, "Lines of context after each match")
 	flags.StringSliceVar(&o.flagFileTypes, "type", nil, "Restrict search to file types (repeatable, e.g. --type md --type go)")
-	flags.StringSliceVar(&o.flagGlobs, "glob", nil, "Restrict search to glob patterns (repeatable, e.g. --glob '*.md')")
+	// StringArray, not StringSlice: a slice splits each value at commas,
+	// which breaks brace alternatives such as "*.{cs,md}".
+	flags.StringArrayVar(&o.flagGlobs, "glob", nil, "Include or exclude files by glob, like rg -g (repeatable, one glob per flag). Without a slash it matches the file name at any depth; with a slash it matches the full payload path, regardless of --path. '**' and '{a,b}' alternatives are supported, a leading '!' excludes, and later globs take precedence")
 	flags.StringVar(&o.flagPath, "path", "", "Subdirectory of the docs payload to search in")
 }
 
+// llmDocsMaxContextLines caps --context/--before-context/--after-context. The
+// server sets no limit of its own; this bound keeps a mistyped value from
+// returning whole files and rejects values that would not fit the int32
+// request fields.
+const llmDocsMaxContextLines = 1000
+
 func (o *llmDocsRipgrepOpts) Prepare(cmd *cobra.Command, args []string) error {
+	for _, f := range []struct {
+		name  string
+		value int
+	}{
+		{"context", o.flagContext},
+		{"before-context", o.flagBeforeContext},
+		{"after-context", o.flagAfterContext},
+	} {
+		if f.value < 0 || f.value > llmDocsMaxContextLines {
+			return clierrors.NewUsageErrorf("--%s must be between 0 and %d", f.name, llmDocsMaxContextLines)
+		}
+	}
 	return nil
 }
 

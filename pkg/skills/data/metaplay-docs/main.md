@@ -11,10 +11,10 @@ All commands live under `metaplay llm-docs` and print plain text to stdout.
 | Command | Use it to... |
 |---|---|
 | `search QUERY --keywords k1,k2,...` | Submit a natural-language question plus pre-extracted keywords and get back a catalog of relevant entry points to follow up on. |
-| `read PATH` | Fetch a single file by path (e.g. `index.md`, `docs/cloud-deployments/getting-started`, `MetaplaySDK/version.yaml`). `.md` is auto-appended server-side when no extension is given. |
-| `ripgrep PATTERN [flags]` | Full ripgrep against the payload. Supports `-i`, `-F`, `-n`, `-l`, `-c`, `-C`/`-B`/`-A`, `--multiline`, `--type`, `--glob`, `--path`. |
-| `glob PATTERN [--path SUBDIR]` | List files matching a glob (e.g. `**/*.md`, `**/PlayerActorBase.cs`). |
-| `info` | Show deployment metadata JSON (which SDK version the service currently ships, etc.). Useful when results look stale. |
+| `read PATH` | Fetch a single file by path (e.g. `index.md`, `docs/cloud-deployments/getting-started`, `MetaplaySDK/version.yaml`). The server tries the exact path first, then the path with `.md` appended. |
+| `ripgrep PATTERN [flags]` | Full ripgrep against the payload. Supports `-i`, `-F`, `-n`, `-l`, `-c`, `-C`/`-B`/`-A`, `--multiline`, `--type`, `--glob`, `--path`. `--glob` follows `rg -g`: without a slash it matches the file name at any depth; with a slash it matches the full payload path, regardless of `--path` (e.g. `**/Server/**/*.cs`). A leading `!` excludes. |
+| `glob PATTERN [--path SUBDIR]` | List paths matching a glob, relative to `--path`. Directory parts may appear anywhere (e.g. `**/*.md`, `MetaplaySDK/entrypoint/*`, `docs/**`, `**/entrypoint/*`). Matching directories are listed too unless the last segment is `**`; a trailing `/` lists directories only. |
+| `info` | Show deployment metadata JSON: which SDK versions the service serves and which is the default. It does not show which version answered your request. |
 
 ## Payload layout
 
@@ -22,7 +22,7 @@ The remote payload is organized into top-level subtrees, each with its own `inde
 
 - `docs/` — full SDK documentation (markdown)
 - `MetaplaySDK/` — SDK source: `Backend/`, `Client/`, `Frontend/`, `Plugins/`, plus `version.yaml`
-- `samples/` — sample projects: `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`
+- `samples/` — sample projects, e.g. `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`, `CollectibleCardGame/`, `TableStakes/`. The set varies by SDK version; `samples/index.md` lists the ones available.
 - `website/` — Metaplay blog posts and customer case studies
 - `cli/` — `metaplay` CLI command reference
 
@@ -41,11 +41,10 @@ Loop steps 2–4 as you narrow down.
 
 - `search` mechanics: pass the user's question verbatim as `QUERY`, and extract 3–7 informative keywords yourself. `--keywords` is comma-separated; quote the whole value if any keyword contains spaces: `--keywords "guild actor,members,social"`.
 - Cite sources to the user as payload-relative paths (e.g. `docs/game-logic/player-actor.md`, `MetaplaySDK/Backend/Server/Player/PlayerActorBase.cs`). They can open any such path with `metaplay llm-docs read <path>`.
-- `ripgrep` output may prefix matches with `/app/payload/` — strip that before quoting paths back to the user.
 - Summarize the output of these commands rather than pasting it raw, unless the user asked for it verbatim.
 - Authentication: the CLI reuses the user's `metaplay auth` session if present. Unauthenticated calls still work for public content.
-- `NotFound` usually means a bad path — run `metaplay llm-docs read index.md` for the root catalog. `Unavailable` means network/service trouble, not a bad query.
-- To confirm which SDK release the payload reflects, run `metaplay llm-docs info` or `metaplay llm-docs read MetaplaySDK/version.yaml`. Flag version mismatches if the user's project pins a different release.
+- `NotFound` usually means a bad path — run `metaplay llm-docs read index.md` for the root catalog. A "path is a directory" error means you passed a directory to `read`; list it with `glob "*" --path DIR`. Only a few directories have an `index.md`. `Unavailable` means network/service trouble, not a bad query.
+- The CLI sends the project's SDK version, and the service answers from the closest SDK version it serves. Don't report a version mismatch based on `info`. To see the version that answered, run `metaplay llm-docs read MetaplaySDK/version.yaml`.
 
 ## Examples
 
@@ -91,8 +90,12 @@ metaplay llm-docs glob "**/PlayerActorBase.cs"
 # Explore a sample project.
 metaplay llm-docs read samples/index.md
 metaplay llm-docs glob "**/*.cs" --path samples/HelloWorld
+metaplay llm-docs read samples/HelloWorld/Assets/SharedCode/Player/PlayerModel.cs
 
-# Check which SDK version the service currently ships.
+# Compare how the sample projects implement something.
+metaplay llm-docs ripgrep "class PlayerModel\b" -n --path samples
+
+# List the SDK versions the service serves, and the default.
 metaplay llm-docs info
 ```
 

@@ -207,8 +207,25 @@ func wrapLLMDocsError(err error, action string) error {
 			WithDetails(st.Message()).
 			WithSuggestion("Check the path; use 'metaplay llm-docs read index.md' to see the catalog")
 	case codes.FailedPrecondition:
-		return clierrors.Newf("llm-docs could not %s", action).
+		cliErr := clierrors.Newf("llm-docs could not %s", action).
 			WithDetails(st.Message())
+		// The server reports "path is a directory: <path>" when 'read' is
+		// given a directory.
+		if dir, isDir := strings.CutPrefix(st.Message(), "path is a directory"); isDir {
+			dir = strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(dir, ":")), "/")
+			if dir == "" {
+				dir = "<path>"
+			}
+			// Only a few directories have an index.md, so listing comes first.
+			cliErr = cliErr.WithSuggestion(fmt.Sprintf("This path is a directory; list it with 'metaplay llm-docs glob \"*\" --path \"%s\"' (some directories also have an index.md)", dir))
+		}
+		return cliErr
+	case codes.OutOfRange:
+		return clierrors.Newf("Requested range is out of bounds while trying to %s", action).
+			WithDetails(st.Message()).
+			WithSuggestion("Use a smaller --offset; the details above give the file's line count")
+	case codes.Canceled:
+		return clierrors.Wrapf(err, "llm-docs request was cancelled while trying to %s", action)
 	case codes.DeadlineExceeded:
 		return clierrors.Wrapf(err, "llm-docs request timed out while trying to %s", action).
 			WithSuggestion("Retry the command; if this persists, the service may be overloaded")
