@@ -100,7 +100,6 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("Pushing to %s as username=%s", imageRepository.QualifiedRepository, imageRepository.Credentials.Username)
 
 	// Use task runner to push the image.
 	taskRunner := tui.NewTaskRunner()

@@ -240,20 +240,28 @@ func isRemoteImageNotFound(err error) bool {
 }
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
+//
+// creds is nil for a registry the caller holds no credential for, which is read
+// anonymously. EnvironmentImageRepository.FetchImageMetadata answers which it is.
 func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*MetaplayImageInfo, error) {
 	log.Debug().Msgf("Fetch image metadata for a remote container image: %s", imageRef)
 	if imageRef == "" {
 		return nil, fmt.Errorf("empty image reference")
 	}
 
-	// Create a registry authenticator using the provided credentials
-	authenticator := authn.FromConfig(authn.AuthConfig{
-		Username: creds.Username,
-		Password: creds.Password,
-	})
+	// Create a registry authenticator using the provided credentials, if any.
+	authenticator := authn.Anonymous
+	var parseOptions []name.Option
+	if creds != nil {
+		authenticator = authn.FromConfig(authn.AuthConfig{
+			Username: creds.Username,
+			Password: creds.Password,
+		})
+		parseOptions = append(parseOptions, name.WithDefaultRegistry(creds.RegistryURL))
+	}
 
 	// Parse the image reference (name + tag or digest)
-	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
+	ref, err := name.ParseReference(imageRef, parseOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
 	}

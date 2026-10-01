@@ -273,20 +273,16 @@ func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.
 		return nil, fmt.Errorf("no image information found in Helm release")
 	}
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return nil, err
 	}
 
-	// Get docker credentials for the image registry.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return nil, err
-	}
-
-	// Fetch image metadata from the remote docker repository.
-	imageMetadata, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, fullImageRef)
+	// Fetch image metadata from the remote docker repository. The release names
+	// its image itself, so the credential goes only to the registry it was
+	// issued for; an image on any other registry is read anonymously.
+	imageMetadata, err := imageRepository.FetchImageMetadata(fullImageRef)
 	if err != nil {
 		return nil, err
 	}

@@ -364,3 +364,83 @@ func TestResolveImageRepository_AnEnvironmentWithARepositoryTakesTheOlderPath(t 
 		t.Errorf("error = %q, want it to have taken the older path rather than refusing", err)
 	}
 }
+
+// What a command pulls or reads metadata from: a tag in the repository the
+// stack answered with, built from that answer and from nothing else.
+func TestReference_NamesATagInTheResolvedRepository(t *testing.T) {
+	for qualified, want := range map[string]string{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver": "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42",
+		"123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly":  "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42",
+	} {
+		t.Run(qualified, func(t *testing.T) {
+			repository := &EnvironmentImageRepository{QualifiedRepository: qualified}
+			if got := repository.Reference("v42"); got != want {
+				t.Errorf("Reference(v42) = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A credential is presented to the registry it was issued for and to no other.
+// Most references a command reads are built from the stack's answer, but one
+// is not: a deployed release names its image repository itself, and whatever
+// host it names would otherwise be handed the environment's credential. A
+// reference on another registry is read without one.
+func TestCredentialsFor_PresentsTheCredentialOnlyToItsOwnRegistry(t *testing.T) {
+	credentials := &DockerCredentials{
+		Username:    "developer",
+		Password:    "signed-assertion",
+		RegistryURL: "registry.example-stack.example.com",
+	}
+	repository := &EnvironmentImageRepository{
+		QualifiedRepository: "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver",
+		Credentials:         credentials,
+	}
+
+	for ref, presented := range map[string]bool{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42": true,
+		// The same registry: the credential is the registry's, and what it
+		// reaches there is the stack's to narrow.
+		"registry.example-stack.example.com/another-environment/gameserver:v42":                          true,
+		"REGISTRY.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42":                  true,
+		"registry.example-stack.example.com.attacker.example/lovely-wombats-build-nimbly/gameserver:v42": false,
+		"registry.example-stack.example.com:5000/lovely-wombats-build-nimbly/gameserver:v42":             false,
+		"attacker.example/registry.example-stack.example.com/gameserver:v42":                             false,
+		"localhost:5000/some/image:v1": false,
+		"alpine:3":                     false,
+		"not a reference":              false,
+	} {
+		t.Run(ref, func(t *testing.T) {
+			got := repository.credentialsFor(ref)
+			if presented && got != credentials {
+				t.Errorf("credentialsFor(%q) = %v, want the environment's credential", ref, got)
+			}
+			if !presented && got != nil {
+				t.Errorf("credentialsFor(%q) presented the environment's credential to another registry", ref)
+			}
+		})
+	}
+}
+
+// An environment on a stack older than the credentials endpoint reaches ECR
+// the older way, and the repository the fallback names is where its credential
+// goes. ECR's credential carries its registry with a scheme, which is not how
+// a reference spells it, so the repository decides rather than the credential.
+func TestCredentialsFor_TheFallbacksCredentialGoesToItsRepositorysRegistry(t *testing.T) {
+	credentials := &DockerCredentials{
+		Username:    "AWS",
+		Password:    "ecr-authorization-token",
+		RegistryURL: "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com",
+	}
+	repository := &EnvironmentImageRepository{
+		QualifiedRepository: "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly",
+		Credentials:         credentials,
+	}
+
+	if got := repository.credentialsFor("123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42"); got != credentials {
+		t.Errorf("the environment's own ECR image was not given its credential: %v", got)
+	}
+	if got := repository.credentialsFor("210987654321.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42"); got != nil {
+		t.Error("another account's registry was given the environment's credential")
+	}
+}
