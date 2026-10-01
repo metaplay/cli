@@ -372,10 +372,12 @@ func TestReference_NamesATagInTheResolvedRepository(t *testing.T) {
 		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver": "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42",
 		"123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly":  "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42",
 	} {
-		repository := &EnvironmentImageRepository{QualifiedRepository: qualified}
-		if got := repository.Reference("v42"); got != want {
-			t.Errorf("Reference(v42) = %q, want %q", got, want)
-		}
+		t.Run(qualified, func(t *testing.T) {
+			repository := &EnvironmentImageRepository{QualifiedRepository: qualified}
+			if got := repository.Reference("v42"); got != want {
+				t.Errorf("Reference(v42) = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -408,13 +410,15 @@ func TestCredentialsFor_PresentsTheCredentialOnlyToItsOwnRegistry(t *testing.T) 
 		"alpine:3":                     false,
 		"not a reference":              false,
 	} {
-		got := repository.credentialsFor(ref)
-		if presented && got != credentials {
-			t.Errorf("credentialsFor(%q) = %v, want the environment's credential", ref, got)
-		}
-		if !presented && got != nil {
-			t.Errorf("credentialsFor(%q) presented the environment's credential to another registry", ref)
-		}
+		t.Run(ref, func(t *testing.T) {
+			got := repository.credentialsFor(ref)
+			if presented && got != credentials {
+				t.Errorf("credentialsFor(%q) = %v, want the environment's credential", ref, got)
+			}
+			if !presented && got != nil {
+				t.Errorf("credentialsFor(%q) presented the environment's credential to another registry", ref)
+			}
+		})
 	}
 }
 
