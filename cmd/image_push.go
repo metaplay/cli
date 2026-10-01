@@ -107,7 +107,7 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Push the image to the remote repository.
 	imagePushed := false
 	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, imageRepository.QualifiedRepository, imageRepository.Credentials)
+		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, imageRepository)
 		imagePushed = pushed
 		return err
 	})
@@ -145,10 +145,13 @@ func extractDockerImageTag(imageName string) (string, error) {
 	return srcImageParts[1], nil
 }
 
-// pushDockerImage pushes a local image from the local repo to the remote repository, writing
-// progress into the task output. The returned bool is true if an image was actually pushed, and
-// false if the push was skipped because the identical image was already present in the repository.
-func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) (bool, error) {
+// pushDockerImage pushes a local image from the local repo to the environment's repository, with
+// that repository's credential, writing progress into the task output. The returned bool is true
+// if an image was actually pushed, and false if the push was skipped because the identical image
+// was already present in the repository.
+func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName string, dstRepository *envapi.EnvironmentImageRepository) (bool, error) {
+	dockerCredentials := dstRepository.Credentials
+
 	// Create a Docker client
 	cli, err := envapi.NewDockerClient()
 	if err != nil {
@@ -163,7 +166,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 	// Resolve source and destination image names.
 	srcImageName := imageName
-	dstImageName := fmt.Sprintf("%s:%s", dstRepoName, imageTag)
+	dstImageName := dstRepository.Reference(imageTag)
 
 	// Check whether the tag already exists in the remote repository. Image tags must be unique
 	// per build: re-using a tag (e.g. 'latest', a bare commit SHA, or any tag that has already

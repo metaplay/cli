@@ -476,7 +476,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			if err != nil {
 				return err
 			}
-			_, err = pushDockerImage(cmd.Context(), output, o.argImageNameTag, pushTo.QualifiedRepository, pushTo.Credentials)
+			_, err = pushDockerImage(cmd.Context(), output, o.argImageNameTag, pushTo)
 			return err
 		})
 	}
