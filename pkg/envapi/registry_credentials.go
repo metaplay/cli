@@ -159,9 +159,14 @@ func (r *EnvironmentImageRepository) credentialsFor(imageRef string) *DockerCred
 	}
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
+		// Nothing is read with it either way: the fetch parses the reference
+		// again, and reports why it does not parse.
 		return nil
 	}
 	if !strings.EqualFold(ref.Context().RegistryStr(), repository.RegistryStr()) {
+		// An image another registry keeps private fails the same way, so say
+		// here too why the credential was held back.
+		log.Debug().Msgf("Not presenting the environment's credential to %s: it was issued for %s", ref.Context().RegistryStr(), repository.RegistryStr())
 		return nil
 	}
 	return r.Credentials
