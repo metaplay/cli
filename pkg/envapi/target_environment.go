@@ -530,13 +530,8 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 	return ecr.NewFromConfig(cfg), nil
 }
 
-// Get Docker credentials for the environment's docker registry.
-func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecret) (*DockerCredentials, error) {
-	client, err := target.newECRClient(envDetails)
-	if err != nil {
-		return nil, err
-	}
-
+// ecrDockerCredentials gets a docker login for ECR from its control plane.
+func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, error) {
 	// Fetch the ECR docker authentication token
 	log.Debug().Msg("Fetch ECR login credentials from AWS")
 	response, err := client.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})

@@ -5,6 +5,7 @@
 package envapi
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/rs/zerolog/log"
 
 	"github.com/metaplay/cli/internal/syncutil"
@@ -70,6 +72,13 @@ func (o ListingOptions) startPhase(phase string, total int) *phaseProgress {
 	return p
 }
 
+// addTotal counts n more parts to the phase, found as it runs.
+func (p *phaseProgress) addTotal(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.total += n
+}
+
 // add counts n more parts of the phase done.
 func (p *phaseProgress) add(n int) {
 	if p.report == nil {
@@ -79,6 +88,14 @@ func (p *phaseProgress) add(n int) {
 	defer p.mu.Unlock()
 	p.done += n
 	p.report.Update(p.phase, p.done, p.total)
+}
+
+// finishPhase ends the phase in progress as failed, for a listing that
+// carries on another way.
+func (o ListingOptions) finishPhase(err error) {
+	if o.Progress != nil {
+		o.Progress.Finish(err)
+	}
 }
 
 // concurrency is how many requests to have in flight.
@@ -127,6 +144,11 @@ func (i RepositoryImage) Readable() bool {
 // tag to its digest with a HEAD and reading each image once however many tags
 // name it, over pooled connections sharing one token.
 //
+// Where the repository is in ECR and can be asked about through ECR's control
+// plane, its tags and manifests come from there instead, which takes a handful
+// of calls rather than a request per tag and per image. What is listed is the
+// same either way; only configs are always read through the registry.
+//
 // A tag or an image that cannot be read is still listed, saying why. Only a
 // repository whose tags cannot be listed at all is an error.
 func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepository, options ListingOptions) ([]RepositoryImage, error) {
@@ -144,6 +166,18 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a registry client: %w", err)
+	}
+	registry := &registryImageSource{puller: puller, repo: repo}
+
+	if repository.ecr != nil {
+		images, err := listECRImages(ctx, repository.ecr, registry, options)
+		if err == nil {
+			return images, nil
+		}
+		// A credential that reaches the registry need not be allowed ECR's
+		// control plane, and the registry protocol lists the same images.
+		log.Debug().Msgf("Could not list '%s' through ECR; listing it through the registry protocol: %v", repository.QualifiedRepository, err)
+		options.finishPhase(err)
 	}
 
 	tags, err := listTags(ctx, puller, repo, options.startPhase(PhaseListingTags, 0))
@@ -170,17 +204,16 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		return taggedDigest{tag: tag, digest: descriptor.Digest.String()}
 	})
 
-	var digests []string
-	seen := map[string]bool{}
-	for _, t := range tagged {
-		if t.err == nil && !seen[t.digest] {
-			seen[t.digest] = true
-			digests = append(digests, t.digest)
-		}
-	}
+	return readImages(ctx, tagged, registry, options), nil
+}
+
+// readImages reads each image the tags name once, however many tags name it,
+// and assembles the listing.
+func readImages(ctx context.Context, tagged []taggedDigest, source imageSource, options ListingOptions) []RepositoryImage {
+	digests := uniqueDigests(tagged)
 	reading := options.startPhase(PhaseReadingImages, len(digests))
-	reads := syncutil.ParallelMap(digests, concurrency, func(digest string) imageRead {
-		described, err := readImage(ctx, puller, repo.Digest(digest))
+	reads := syncutil.ParallelMap(digests, options.concurrency(), func(digest string) imageRead {
+		described, err := readImage(ctx, source, digest)
 		reading.add(1)
 		return imageRead{described: described, err: err}
 	})
@@ -188,7 +221,7 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 	for i, digest := range digests {
 		readsByDigest[digest] = reads[i]
 	}
-	return assembleImages(tagged, readsByDigest), nil
+	return assembleImages(tagged, readsByDigest)
 }
 
 // listTags lists every tag in the repository a page at a time, counting the
@@ -220,58 +253,101 @@ func registryAuthenticator(credentials *DockerCredentials) authn.Authenticator {
 	return authn.FromConfig(authn.AuthConfig{Username: credentials.Username, Password: credentials.Password})
 }
 
+// uniqueDigests is each image the tags resolved to, once, in the order the
+// tags first name them.
+func uniqueDigests(tagged []taggedDigest) []string {
+	var digests []string
+	seen := map[string]bool{}
+	for _, t := range tagged {
+		if t.err == nil && !seen[t.digest] {
+			seen[t.digest] = true
+			digests = append(digests, t.digest)
+		}
+	}
+	return digests
+}
+
+// imageSource is where describing an image reads its parts from: manifests,
+// by digest, and configs.
+type imageSource interface {
+	manifest(ctx context.Context, digest string) ([]byte, types.MediaType, error)
+	config(ctx context.Context, digest v1.Hash) (*v1.ConfigFile, error)
+}
+
+// registryImageSource reads an image's parts through the registry protocol.
+type registryImageSource struct {
+	puller *remote.Puller
+	repo   name.Repository
+}
+
+// manifest fetches the manifest with this digest, checked against it.
+func (s *registryImageSource) manifest(ctx context.Context, digest string) ([]byte, types.MediaType, error) {
+	descriptor, err := s.puller.Get(ctx, s.repo.Digest(digest))
+	if err != nil {
+		return nil, "", err
+	}
+	return descriptor.Manifest, descriptor.MediaType, nil
+}
+
+// config fetches and parses the config blob with this digest.
+func (s *registryImageSource) config(ctx context.Context, digest v1.Hash) (*v1.ConfigFile, error) {
+	layer, err := s.puller.Layer(ctx, s.repo.Digest(digest.String()))
+	if err != nil {
+		return nil, err
+	}
+	blob, err := layer.Compressed()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = blob.Close() }()
+	return v1.ParseConfigFile(blob)
+}
+
 // readImage reads what one image says about itself, from its manifest and
 // config: when it was built, its size, and its labels. Its tags and digest are
 // the listing's to fill in. A multi-platform image is sized over every
 // platform and described by the one imagePlatforms picks.
-func readImage(ctx context.Context, puller *remote.Puller, ref name.Digest) (RepositoryImage, error) {
-	descriptor, err := puller.Get(ctx, ref)
+func readImage(ctx context.Context, source imageSource, digest string) (RepositoryImage, error) {
+	raw, mediaType, err := source.manifest(ctx, digest)
 	if err != nil {
 		return RepositoryImage{}, fmt.Errorf("failed to fetch the image's manifest: %w", err)
 	}
 
 	var manifests []*v1.Manifest
-	var describing v1.Image
-	if descriptor.MediaType.IsIndex() {
-		index, err := descriptor.ImageIndex()
-		if err != nil {
-			return RepositoryImage{}, fmt.Errorf("failed to open the image's index: %w", err)
-		}
-		indexManifest, err := index.IndexManifest()
+	var describing *v1.Manifest
+	if mediaType.IsIndex() {
+		index, err := v1.ParseIndexManifest(bytes.NewReader(raw))
 		if err != nil {
 			return RepositoryImage{}, fmt.Errorf("failed to parse the image's index: %w", err)
 		}
-		platforms, describedBy := imagePlatforms(indexManifest)
+		platforms, describedBy := imagePlatforms(index)
 		if len(platforms) == 0 {
 			return RepositoryImage{}, errors.New("the index names no platform image")
 		}
 		for _, platform := range platforms {
-			image, err := index.Image(platform.Digest)
+			raw, _, err := source.manifest(ctx, platform.Digest.String())
 			if err != nil {
 				return RepositoryImage{}, fmt.Errorf("failed to fetch the image for %s: %w", platformName(platform), err)
 			}
-			manifest, err := image.Manifest()
+			manifest, err := v1.ParseManifest(bytes.NewReader(raw))
 			if err != nil {
 				return RepositoryImage{}, fmt.Errorf("failed to parse the manifest for %s: %w", platformName(platform), err)
 			}
 			manifests = append(manifests, manifest)
 			if platform.Digest == describedBy.Digest {
-				describing = image
+				describing = manifest
 			}
 		}
 	} else {
-		describing, err = descriptor.Image()
-		if err != nil {
-			return RepositoryImage{}, fmt.Errorf("failed to open the image: %w", err)
-		}
-		manifest, err := describing.Manifest()
+		manifest, err := v1.ParseManifest(bytes.NewReader(raw))
 		if err != nil {
 			return RepositoryImage{}, fmt.Errorf("failed to parse the image's manifest: %w", err)
 		}
 		manifests = append(manifests, manifest)
+		describing = manifest
 	}
 
-	config, err := describing.ConfigFile()
+	config, err := source.config(ctx, describing.Config.Digest)
 	if err != nil {
 		return RepositoryImage{}, fmt.Errorf("failed to read the image's config: %w", err)
 	}
