@@ -44,7 +44,7 @@ func init() {
 	o := buildImageOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:20260601-153000-1a27c25' or '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build.")
 
 	cmd := &cobra.Command{
@@ -65,26 +65,28 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Build Docker image, produces image named '<projectID>:YYYYMMDD-HHMMSS-COMMIT_ID'.
-			# Only recommended when building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
-			# Specify only the tag, produces image named '<projectID>:364cff09'.
-			metaplay build image 364cff09
+			# Specify only the tag, produces image named '<projectID>:20260601-153000-1a27c25'.
+			metaplay build image 20260601-153000-1a27c25
 
 			# Build a project from another directory.
 			metaplay -p ../MyProject build image
 
-			# Build docker image with commit ID and build number specified.
-			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
+			# In CI, generate the tag in the same YYYYMMDD-HHMMSS-COMMIT_ID format and pass it
+			# explicitly, so that later steps can refer to it. Tags in this format are unique, and
+			# sort in the order the images were built.
+			export IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)-$COMMIT_ID"
+			metaplay build image mygame:$IMAGE_TAG --commit-id=$COMMIT_ID --build-number=$BUILD_NUMBER
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build image mygame:364cff09 --architecture=arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=arm64
 
 			# Build a multi-arch image for both amd64 and arm64 (only supported with 'buildx').
-			metaplay build image mygame:364cff09 --architecture=amd64,arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=amd64,arm64
 
 			# Pass extra arguments to the docker build.
-			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
+			metaplay build image mygame:20260601-153000-1a27c25 -- --build-arg FOO=BAR
 		`),
 	}
 
@@ -178,7 +180,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	if strings.HasSuffix(imageName, ":latest") {
 		return clierrors.New("Cannot build image with tag 'latest'").
-			WithSuggestion("Use a unique tag like 'mygame:20250131-133012'")
+			WithSuggestion("Use a unique tag like 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Check that docker is installed and running

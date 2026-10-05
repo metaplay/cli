@@ -45,7 +45,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25' or '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
@@ -64,9 +64,10 @@ func init() {
 			- Admin domain name resolves correctly.
 			- Admin endpoint responds with a success code.
 
-			When a full docker image tag is specified (eg, 'mygame:364cff09'), the image is first
-			pushed to the environment's registry. If only a tag is specified (eg, '364cff09'), the
-			image is assumed to be present in the remote registry already.
+			When a full docker image tag is specified (eg, 'mygame:20260601-153000-1a27c25'), the
+			image is first pushed to the environment's registry. If only a tag is specified (eg,
+			'20260601-153000-1a27c25'), the image is assumed to be present in the remote registry
+			already.
 
 			{Arguments}
 
@@ -78,25 +79,25 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Push the local image and deploy to the environment nimbly.
-			metaplay deploy server nimbly mygame:364cff09
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy server nimbly 364cff09
+			metaplay deploy server nimbly 20260601-153000-1a27c25
 
 			# Deploy the latest locally built image for this project.
 			metaplay deploy server nimbly latest-local
 
 			# Pass extra arguments to Helm.
-			metaplay deploy server nimbly mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy server nimbly mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy server nimbly mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy server nimbly mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)

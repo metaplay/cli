@@ -51,7 +51,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '364cff09'.")
+	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
@@ -75,8 +75,8 @@ func init() {
 			- 'metaplay debug shell ...' to debug a running server pod.
 		`),
 		Example: renderExample(`
-			# Deploy bots into environment nimbly with the docker image tag 364cff09.
-			metaplay deploy botclient nimbly 364cff09
+			# Deploy bots into environment nimbly with the docker image tag 20260601-153000-1a27c25.
+			metaplay deploy botclient nimbly 20260601-153000-1a27c25
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -95,7 +95,7 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 		log.Panic().Msgf("Positional argument IMAGE_TAG is empty")
 	}
 	if strings.Contains(o.argImageTag, ":") {
-		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '364cff092af8646bd'")
+		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '20260601-153000-1a27c25'")
 	}
 
 	return nil

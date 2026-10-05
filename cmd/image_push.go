@@ -36,7 +36,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25'.")
 
 	cmd := &cobra.Command{
 		Use:   "push ENVIRONMENT IMAGE:TAG",
@@ -52,8 +52,8 @@ func init() {
 			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
 		Example: renderExample(`
-			# Push the docker image 'mygame:1a27c25753' into environment 'nimbly'.
-			metaplay image push nimbly mygame:1a27c25753
+			# Push the docker image 'mygame:20260601-153000-1a27c25' into environment 'nimbly'.
+			metaplay image push nimbly mygame:20260601-153000-1a27c25
 		`),
 	}
 	imageCmd.AddCommand(cmd)
@@ -63,8 +63,8 @@ func (o *imagePushOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate docker image name: must be a repository:tag pair.
 	if !strings.Contains(o.argImageName, ":") {
 		return clierrors.NewUsageErrorf("Invalid image name '%s'", o.argImageName).
-			WithDetails("Image name must include a tag (e.g., 'mygame:abc123')").
-			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:abc123'")
+			WithDetails("Image name must include a tag (e.g., 'mygame:20260601-153000-1a27c25')").
+			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:20260601-153000-1a27c25'")
 	}
 
 	return nil
@@ -138,7 +138,7 @@ func extractDockerImageTag(imageName string) (string, error) {
 	srcImageParts := strings.Split(imageName, ":")
 	if len(srcImageParts) != 2 || len(srcImageParts[0]) == 0 || len(srcImageParts[1]) == 0 {
 		return "", clierrors.NewUsageErrorf("Invalid docker image name '%s'", imageName).
-			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:abc123'")
+			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Return the tag part of the image name
