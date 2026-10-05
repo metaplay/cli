@@ -101,7 +101,7 @@ func (o *llmDocsGlobOpts) Run(cmd *cobra.Command) error {
 		Path:     o.flagPath,
 	})
 	if err != nil {
-		return wrapLLMDocsError(err, "find files")
+		return client.wrapError(err, "find files")
 	}
 	printLLMDocsContent(resp.RenderedOutput)
 	return nil

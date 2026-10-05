@@ -53,7 +53,7 @@ func init() {
 // llm-docs gRPC service with the bearer token attached to the transport, and
 // returns the RequestMetadata to include in every RPC body. All metadata is
 // best-effort; missing values are simply omitted. Caller must Close the client.
-func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, error) {
+func newLLMDocsClient() (*llmDocsClient, *llmdocsclient.RequestMetadata, error) {
 	reqMeta := &llmdocsclient.RequestMetadata{}
 
 	// Project metadata from metaplay-project.yaml (if any).
@@ -145,7 +145,12 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		return nil, nil, clierrors.Wrapf(err, "Failed to prepare llm-docs client for %s", target).
 			WithSuggestion("Set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target; loopback targets use plaintext automatically")
 	}
-	return client, reqMeta, nil
+	return &llmDocsClient{Client: client, target: target}, reqMeta, nil
+}
+
+type llmDocsClient struct {
+	*llmdocsclient.Client
+	target string
 }
 
 func isLoopbackTarget(target string) bool {
@@ -180,7 +185,7 @@ func (c bearerCredentials) RequireTransportSecurity() bool {
 	return c.requireTLS
 }
 
-func wrapLLMDocsError(err error, action string) error {
+func (c *llmDocsClient) wrapError(err error, action string) error {
 	if err == nil {
 		return nil
 	}
@@ -230,6 +235,10 @@ func wrapLLMDocsError(err error, action string) error {
 		return clierrors.Wrapf(err, "llm-docs request timed out while trying to %s", action).
 			WithSuggestion("Retry the command; if this persists, the service may be overloaded")
 	case codes.Unavailable:
+		if isNetworkAccessDenied(c.target) {
+			return clierrors.Wrapf(err, "Cannot connect to %s", c.target).
+				WithSuggestion("A restricted sandbox may be blocking network access")
+		}
 		return clierrors.Wrapf(err, "llm-docs service is unavailable while trying to %s", action).
 			WithSuggestion("Check your network connection, or set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target")
 	default:
