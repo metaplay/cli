@@ -100,7 +100,7 @@ func (o *llmDocsReadOpts) Run(cmd *cobra.Command) error {
 	}
 	resp, err := client.ReadFile(ctx, req)
 	if err != nil {
-		return wrapLLMDocsError(err, "read file")
+		return client.wrapError(err, "read file")
 	}
 	printLLMDocsContent(resp.Content)
 	return nil

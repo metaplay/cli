@@ -48,7 +48,7 @@ func (o *llmDocsInfoOpts) Run(cmd *cobra.Command) error {
 	defer cancel()
 	resp, err := client.GetInfo(ctx, &llmdocsclient.GetInfoRequest{Metadata: reqMeta})
 	if err != nil {
-		return wrapLLMDocsError(err, "read deployment info")
+		return client.wrapError(err, "read deployment info")
 	}
 	printLLMDocsContent(resp.DeploymentInfoJson)
 	return nil

@@ -154,7 +154,7 @@ func (o *llmDocsRipgrepOpts) Run(cmd *cobra.Command) error {
 		Path:          o.flagPath,
 	})
 	if err != nil {
-		return wrapLLMDocsError(err, "run ripgrep")
+		return client.wrapError(err, "run ripgrep")
 	}
 	printLLMDocsContent(resp.Output)
 	return nil

@@ -82,7 +82,7 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 		Keywords: o.keywords,
 	})
 	if err != nil {
-		return wrapLLMDocsError(err, "search documentation")
+		return client.wrapError(err, "search documentation")
 	}
 	printLLMDocsContent(resp.Content)
 	return nil
