@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -30,6 +31,54 @@ type ListingOptions struct {
 	// Concurrency is how many registry requests the listing has in flight at
 	// once. Zero means DefaultListingConcurrency.
 	Concurrency int
+	// Progress, where given, is told how far the listing has got.
+	Progress ListingProgress
+}
+
+// ListingProgress is told how far a listing has got.
+type ListingProgress interface {
+	// Update reports the phase the listing is in, how much of that phase is
+	// done, and the phase's total, or zero where the total is not known until
+	// the phase ends. Reports arrive one at a time, phase by phase, each
+	// counting up.
+	Update(phase string, done, total int)
+	// Finish ends the phase in progress, as failed where err is not nil.
+	Finish(err error)
+}
+
+// The phases of a listing, in the order they run.
+const (
+	PhaseListingTags   = "Listing tags"
+	PhaseResolvingTags = "Resolving tags"
+	PhaseReadingImages = "Reading images"
+)
+
+// phaseProgress counts one phase of a listing up as its parts finish, which
+// they do in parallel, and reports each count in turn.
+type phaseProgress struct {
+	mu     sync.Mutex
+	report ListingProgress
+	phase  string
+	done   int
+	total  int
+}
+
+// startPhase reports that phase has begun, with nothing done of total.
+func (o ListingOptions) startPhase(phase string, total int) *phaseProgress {
+	p := &phaseProgress{report: o.Progress, phase: phase, total: total}
+	p.add(0)
+	return p
+}
+
+// add counts n more parts of the phase done.
+func (p *phaseProgress) add(n int) {
+	if p.report == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.done += n
+	p.report.Update(p.phase, p.done, p.total)
 }
 
 // concurrency is how many requests to have in flight.
@@ -97,7 +146,7 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		return nil, fmt.Errorf("failed to create a registry client: %w", err)
 	}
 
-	tags, err := puller.List(ctx, repo)
+	tags, err := listTags(ctx, puller, repo, options.startPhase(PhaseListingTags, 0))
 	if isRemoteImageNotFound(err) {
 		// A registry creates a repository on the first push to it, so one
 		// nothing has been pushed to does not exist yet: that is empty, as it
@@ -111,8 +160,10 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		return nil, fmt.Errorf("failed to list the tags in '%s': %w", repository.QualifiedRepository, err)
 	}
 
+	resolving := options.startPhase(PhaseResolvingTags, len(tags))
 	tagged := syncutil.ParallelMap(tags, concurrency, func(tag string) taggedDigest {
 		descriptor, err := puller.Head(ctx, repo.Tag(tag))
+		resolving.add(1)
 		if err != nil {
 			return taggedDigest{tag: tag, err: err}
 		}
@@ -127,8 +178,10 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 			digests = append(digests, t.digest)
 		}
 	}
+	reading := options.startPhase(PhaseReadingImages, len(digests))
 	reads := syncutil.ParallelMap(digests, concurrency, func(digest string) imageRead {
 		described, err := readImage(ctx, puller, repo.Digest(digest))
+		reading.add(1)
 		return imageRead{described: described, err: err}
 	})
 	readsByDigest := map[string]imageRead{}
@@ -136,6 +189,26 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		readsByDigest[digest] = reads[i]
 	}
 	return assembleImages(tagged, readsByDigest), nil
+}
+
+// listTags lists every tag in the repository a page at a time, counting the
+// tags listed so far, since a registry pages a long list and each page can
+// take seconds.
+func listTags(ctx context.Context, puller *remote.Puller, repo name.Repository, listing *phaseProgress) ([]string, error) {
+	lister, err := puller.Lister(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	for lister.HasNext() {
+		page, err := lister.Next(ctx)
+		if err != nil {
+			return nil, err
+		}
+		tags = append(tags, page.Tags...)
+		listing.add(len(page.Tags))
+	}
+	return tags, nil
 }
 
 // registryAuthenticator presents credentials where there are any, and reads

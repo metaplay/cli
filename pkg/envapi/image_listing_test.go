@@ -438,3 +438,85 @@ func testRegistryBehind(t *testing.T, middleware func(http.Handler) http.Handler
 	t.Cleanup(server.Close)
 	return strings.TrimPrefix(server.URL, "http://")
 }
+
+// A listing of thousands of images takes long enough that someone watching
+// needs to see it moving. It says which phase it is in and how far through
+// that phase it is, in order, counting up to the phase's total where the
+// total is known.
+func TestListRepositoryImages_ReportsHowFarItHasGot(t *testing.T) {
+	repository := testRegistry(t) + "/lovely-wombats-build-nimbly/gameserver"
+	release := builtImage(t, builtOn("2026-09-30"), "39.0.0", "abc123")
+	for _, tagged := range []struct {
+		tag   string
+		image v1.Image
+	}{
+		{"20260930-120000", release},
+		{"release", release},
+		{"20260101-000000", builtImage(t, builtOn("2026-01-01"), "38.0.0", "def456")},
+	} {
+		ref, err := name.NewTag(repository + ":" + tagged.tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, tagged.image); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	progress := &recordedProgress{}
+	_, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{Progress: progress})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Phases in order, each counting up and ending at its total. Listing tags
+	// cannot know its total until it is done, so reports none.
+	wantPhases := []progressReport{
+		{PhaseListingTags, 3, 0},
+		{PhaseResolvingTags, 3, 3},
+		{PhaseReadingImages, 2, 2},
+	}
+	var phases []progressReport
+	for i, r := range progress.reports {
+		if len(phases) == 0 || phases[len(phases)-1].phase != r.phase {
+			phases = append(phases, r)
+		} else if r.done < phases[len(phases)-1].done {
+			t.Errorf("report %d went backwards: %+v after %+v", i, r, phases[len(phases)-1])
+		}
+		phases[len(phases)-1] = r
+	}
+	if !reflect.DeepEqual(phases, wantPhases) {
+		t.Errorf("phases ended at %+v\nwant           %+v", phases, wantPhases)
+	}
+}
+
+// progressReport is one report a listing made of how far it had got.
+type progressReport struct {
+	phase       string
+	done, total int
+}
+
+// recordedProgress records every report a listing makes, and the phases it
+// ended as failed.
+type recordedProgress struct {
+	mu      sync.Mutex
+	reports []progressReport
+	failed  []string
+}
+
+func (p *recordedProgress) Update(phase string, done, total int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reports = append(p.reports, progressReport{phase, done, total})
+}
+
+func (p *recordedProgress) Finish(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil && len(p.reports) > 0 {
+		p.failed = append(p.failed, p.reports[len(p.reports)-1].phase)
+	}
+}

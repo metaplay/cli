@@ -7,9 +7,11 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -114,8 +116,14 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// List every image, newest built first.
-	images, err := envapi.ListRepositoryImages(cmd.Context(), imageRepository, envapi.ListingOptions{Concurrency: o.flagConcurrency})
+	// List every image, newest built first. A large repository takes a while,
+	// so show how far the listing has got, on stderr to keep JSON output clean.
+	progress := tui.NewCountProgress(os.Stderr, tui.IsInteractiveMode())
+	images, err := envapi.ListRepositoryImages(cmd.Context(), imageRepository, envapi.ListingOptions{
+		Concurrency: o.flagConcurrency,
+		Progress:    progress,
+	})
+	progress.Finish(err)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to list the environment's images").
 			WithSuggestion("Check that you have access to this environment, and that its image registry is reachable")
