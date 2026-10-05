@@ -39,6 +39,7 @@ Loop steps 2–4 as you narrow down.
 
 ## Calling notes
 
+- A `<seealso href="https://docs.metaplay.io/<path>"/>` in an SDK doc comment is a link to the documentation: read it with `metaplay llm-docs read <url>`.
 - `search` mechanics: pass the user's question verbatim as `QUERY`, and extract 3–7 informative keywords yourself. `--keywords` is comma-separated; quote the whole value if any keyword contains spaces: `--keywords "guild actor,members,social"`.
 - Cite sources to the user as payload-relative paths (e.g. `docs/game-logic/player-actor.md`, `MetaplaySDK/Backend/Server/Player/PlayerActorBase.cs`). They can open any such path with `metaplay llm-docs read <path>`.
 - Summarize the output of these commands rather than pasting it raw, unless the user asked for it verbatim.
