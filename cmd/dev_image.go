@@ -26,7 +26,7 @@ func init() {
 	o := devImageOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'docker run'.")
 
 	cmd := &cobra.Command{
@@ -45,7 +45,7 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Run the docker image (until terminated).
-			metaplay dev image mygame:test
+			metaplay dev image mygame:20260601-153000-1a27c25
 
 			# Run the latest built local docker image.
 			metaplay dev image latest-local

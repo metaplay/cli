@@ -36,7 +36,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageTag, "TAG", "Docker image tag to pull, eg, '364cff09'.")
+	args.AddStringArgument(&o.argImageTag, "TAG", "Docker image tag to pull, eg, '20260601-153000-1a27c25'.")
 
 	cmd := &cobra.Command{
 		Use:   "pull ENVIRONMENT TAG",
@@ -52,8 +52,8 @@ func init() {
 			- After pulling, the image can be used locally or potentially deployed elsewhere.
 		`),
 		Example: renderExample(`
-			# Pull the docker image with tag '1a27c25753' from environment 'lovely-wombats-build-nimbly'.
-			metaplay image pull lovely-wombats-build-nimbly 1a27c25753
+			# Pull the docker image with tag '20260601-153000-1a27c25' from environment 'lovely-wombats-build-nimbly'.
+			metaplay image pull lovely-wombats-build-nimbly 20260601-153000-1a27c25
 		`),
 	}
 	imageCmd.AddCommand(cmd)
@@ -64,7 +64,7 @@ func (o *imagePullOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argImageTag == "" || strings.Contains(o.argImageTag, ":") {
 		return clierrors.NewUsageErrorf("Invalid TAG '%s'", o.argImageTag).
 			WithDetails("Tag must be a valid docker tag (cannot be empty or contain ':')").
-			WithSuggestion("Use just the tag, for example 'metaplay image pull lovely-wombats-build-nimbly 364cff09'")
+			WithSuggestion("Use just the tag, for example 'metaplay image pull lovely-wombats-build-nimbly 20260601-153000-1a27c25'")
 	}
 	return nil
 }
