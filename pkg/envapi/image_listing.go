@@ -21,8 +21,24 @@ import (
 	"github.com/metaplay/cli/internal/syncutil"
 )
 
-// listingConcurrency is how many registry requests a listing has in flight.
-const listingConcurrency = 10
+// DefaultListingConcurrency is how many registry requests a listing has in
+// flight unless told otherwise.
+const DefaultListingConcurrency = 64
+
+// ListingOptions tunes how a repository is listed.
+type ListingOptions struct {
+	// Concurrency is how many registry requests the listing has in flight at
+	// once. Zero means DefaultListingConcurrency.
+	Concurrency int
+}
+
+// concurrency is how many requests to have in flight.
+func (o ListingOptions) concurrency() int {
+	if o.Concurrency > 0 {
+		return o.Concurrency
+	}
+	return DefaultListingConcurrency
+}
 
 // RepositoryImage is one image in an environment's repository: every tag that
 // names the same bytes, and what the image says about itself.
@@ -64,12 +80,19 @@ func (i RepositoryImage) Readable() bool {
 //
 // A tag or an image that cannot be read is still listed, saying why. Only a
 // repository whose tags cannot be listed at all is an error.
-func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepository) ([]RepositoryImage, error) {
+func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepository, options ListingOptions) ([]RepositoryImage, error) {
+	concurrency := options.concurrency()
 	repo, err := name.NewRepository(repository.QualifiedRepository)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse image repository '%s': %w", repository.QualifiedRepository, err)
 	}
-	puller, err := remote.NewPuller(remote.WithAuth(registryAuthenticator(repository.Credentials)), remote.WithContext(ctx))
+	// The puller limits its own blob reads, which are how configs are read,
+	// to a handful at a time unless told otherwise.
+	puller, err := remote.NewPuller(
+		remote.WithAuth(registryAuthenticator(repository.Credentials)),
+		remote.WithContext(ctx),
+		remote.WithJobs(concurrency),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a registry client: %w", err)
 	}
@@ -88,7 +111,7 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		return nil, fmt.Errorf("failed to list the tags in '%s': %w", repository.QualifiedRepository, err)
 	}
 
-	tagged := syncutil.ParallelMap(tags, listingConcurrency, func(tag string) taggedDigest {
+	tagged := syncutil.ParallelMap(tags, concurrency, func(tag string) taggedDigest {
 		descriptor, err := puller.Head(ctx, repo.Tag(tag))
 		if err != nil {
 			return taggedDigest{tag: tag, err: err}
@@ -97,12 +120,14 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 	})
 
 	var digests []string
+	seen := map[string]bool{}
 	for _, t := range tagged {
-		if t.err == nil && !slices.Contains(digests, t.digest) {
+		if t.err == nil && !seen[t.digest] {
+			seen[t.digest] = true
 			digests = append(digests, t.digest)
 		}
 	}
-	reads := syncutil.ParallelMap(digests, listingConcurrency, func(digest string) imageRead {
+	reads := syncutil.ParallelMap(digests, concurrency, func(digest string) imageRead {
 		described, err := readImage(ctx, puller, repo.Digest(digest))
 		return imageRead{described: described, err: err}
 	})

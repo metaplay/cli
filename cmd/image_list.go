@@ -19,9 +19,10 @@ import (
 type imageListOpts struct {
 	UsePositionalArgs
 
-	argEnvironment string
-	flagFormat     string
-	flagLimit      int
+	argEnvironment  string
+	flagFormat      string
+	flagLimit       int
+	flagConcurrency int
 }
 
 func init() {
@@ -48,7 +49,9 @@ func init() {
 			a multi-platform image larger than a single platform's download.
 
 			Every tag is read to find when its image was built, so listing a repository with many
-			tags takes a while even with --limit.
+			tags takes a while even with --limit. --concurrency sets how many requests are made to
+			the registry at once: raise it for a registry that keeps up, or lower it for one that
+			throttles or fails under load.
 
 			{Arguments}
 
@@ -70,6 +73,7 @@ func init() {
 	flags := cmd.Flags()
 	flags.StringVar(&o.flagFormat, "format", "text", "Output format: 'text' or 'json'")
 	flags.IntVar(&o.flagLimit, "limit", 20, "Maximum number of images to show (0 for all)")
+	flags.IntVar(&o.flagConcurrency, "concurrency", envapi.DefaultListingConcurrency, "Maximum number of requests to the registry at once")
 }
 
 func (o *imageListOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -80,6 +84,10 @@ func (o *imageListOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagLimit < 0 {
 		return clierrors.NewUsageErrorf("Invalid limit %d", o.flagLimit).
 			WithSuggestion("Use a non-negative number (0 for all)")
+	}
+	if o.flagConcurrency < 1 {
+		return clierrors.NewUsageErrorf("Invalid concurrency %d", o.flagConcurrency).
+			WithSuggestion("Use a positive number")
 	}
 	return nil
 }
@@ -107,7 +115,7 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// List every image, newest built first.
-	images, err := envapi.ListRepositoryImages(cmd.Context(), imageRepository)
+	images, err := envapi.ListRepositoryImages(cmd.Context(), imageRepository, envapi.ListingOptions{Concurrency: o.flagConcurrency})
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to list the environment's images").
 			WithSuggestion("Check that you have access to this environment, and that its image registry is reachable")

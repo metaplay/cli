@@ -6,11 +6,15 @@ package envapi
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -282,7 +286,7 @@ func TestListRepositoryImages_ReadsTheRepositoryThroughTheRegistryProtocol(t *te
 	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
 		QualifiedRepository: repository,
 		Credentials:         &DockerCredentials{},
-	})
+	}, ListingOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,7 +328,7 @@ func TestListRepositoryImages_ListsARepositoryNothingWasPushedToAsEmpty(t *testi
 	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
 		QualifiedRepository: testRegistry(t) + "/lovely-wombats-build-nimbly/gameserver",
 		Credentials:         &DockerCredentials{},
-	})
+	}, ListingOptions{})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -332,4 +336,105 @@ func TestListRepositoryImages_ListsARepositoryNothingWasPushedToAsEmpty(t *testi
 	if images == nil || len(images) != 0 {
 		t.Errorf("images = %#v, want an empty list, which is also what --format=json prints as []", images)
 	}
+}
+
+// A repository with thousands of images is read in a reasonable time only by
+// reading many images at once. Every read the listing makes, the images'
+// configs included, runs as many at a time as the listing is allowed, and
+// never more.
+func TestListRepositoryImages_ReadsAsManyImagesAtOnceAsAllowed(t *testing.T) {
+	const allowed = 8
+	gate := &concurrencyGate{want: allowed, released: make(chan struct{})}
+	registryHost := testRegistryBehind(t, gate.wrap)
+	repository := registryHost + "/lovely-wombats-build-nimbly/gameserver"
+	for i := range 2 * allowed {
+		ref, err := name.NewTag(fmt.Sprintf("%s:build-%d", repository, i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, builtImage(t, builtOn("2026-09-30").Add(time.Duration(i)*time.Hour), "39.0.0", "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gate.armed.Store(true)
+
+	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{Concurrency: allowed})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != 2*allowed {
+		t.Fatalf("listed %d images, want %d", len(images), 2*allowed)
+	}
+	for _, image := range images {
+		if !image.Readable() {
+			t.Errorf("image %v could not be read: %s", image.Tags, image.Error)
+		}
+	}
+	if peak := gate.peakBlobs.Load(); peak != allowed {
+		t.Errorf("at most %d configs were read at once, want %d", peak, allowed)
+	}
+	if peak := gate.peak.Load(); peak > allowed {
+		t.Errorf("%d requests were in flight at once, want at most %d", peak, allowed)
+	}
+}
+
+// concurrencyGate counts the requests a registry is serving at once. Once
+// armed, it holds each config read until as many as it wants are in flight
+// together, or a moment has passed, so a listing reading fewer at a time is
+// slow rather than stuck, and is seen to read fewer.
+type concurrencyGate struct {
+	want       int64
+	armed      atomic.Bool
+	inFlight   atomic.Int64
+	peak       atomic.Int64
+	blobs      atomic.Int64
+	peakBlobs  atomic.Int64
+	releaseOne sync.Once
+	released   chan struct{}
+}
+
+func (g *concurrencyGate) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !g.armed.Load() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		storeMax(&g.peak, g.inFlight.Add(1))
+		defer g.inFlight.Add(-1)
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+			blobs := g.blobs.Add(1)
+			storeMax(&g.peakBlobs, blobs)
+			if blobs >= g.want {
+				g.releaseOne.Do(func() { close(g.released) })
+			}
+			select {
+			case <-g.released:
+			case <-time.After(200 * time.Millisecond):
+			}
+			g.blobs.Add(-1)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func storeMax(peak *atomic.Int64, value int64) {
+	for {
+		current := peak.Load()
+		if value <= current || peak.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+// testRegistryBehind is testRegistry, with every request passing through
+// middleware first.
+func testRegistryBehind(t *testing.T, middleware func(http.Handler) http.Handler) string {
+	t.Helper()
+	server := httptest.NewServer(middleware(registry.New(registry.Logger(stdlog.New(io.Discard, "", 0)))))
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "http://")
 }
