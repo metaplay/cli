@@ -98,7 +98,9 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '20260601-153000-1a27c25'")
 	}
 
-	return nil
+	// Refuse a local chart that is not the loadtest chart before Run resolves
+	// the environment, which may ask to log in first.
+	return validateLocalChartPath(o.flagHelmChartLocalPath, metaplayLoadTestChartName)
 }
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
@@ -121,14 +123,10 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Validate Helm chart reference.
+	// Resolve Helm chart version constraints. A local chart was validated in
+	// Prepare and is used as-is.
 	var chartVersionConstraints version.Constraints = nil
-	if o.flagHelmChartLocalPath != "" {
-		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath, metaplayLoadTestChartName)
-		if err != nil {
-			return clierrors.WrapUsageError(err, "Invalid --local-chart-path")
-		}
-	} else {
+	if o.flagHelmChartLocalPath == "" {
 		// Resolve Helm chart version to use, either from config file or command line override
 		helmChartVersion := project.Config.BotClientChartVersion
 		if o.flagHelmChartVersion != "" {

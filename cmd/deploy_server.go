@@ -112,7 +112,9 @@ func init() {
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	return nil
+	// Refuse a local chart that is not the game server chart before Run
+	// resolves the environment, which may ask to log in first.
+	return validateLocalChartPath(o.flagHelmChartLocalPath, metaplayGameServerChartName)
 }
 
 func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
@@ -138,14 +140,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Validate Helm chart reference.
+	// Resolve Helm chart version constraints. A local chart was validated in
+	// Prepare and is used as-is.
 	var chartVersionConstraints version.Constraints = nil
-	if o.flagHelmChartLocalPath != "" {
-		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath, metaplayGameServerChartName)
-		if err != nil {
-			return clierrors.WrapUsageError(err, "Invalid --local-chart-path")
-		}
-	} else {
+	if o.flagHelmChartLocalPath == "" {
 		// Resolve Helm chart version to use, either from config file or command line override
 		helmChartVersion := project.Config.ServerChartVersion
 		if o.flagHelmChartVersion != "" {
@@ -669,6 +667,19 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedImage.RepoTag)
 	return selectedImage, nil
+}
+
+// validateLocalChartPath refuses a --local-chart-path that is not a local copy
+// of chartName, the chart the command installs. An unset flag is accepted.
+func validateLocalChartPath(localChartPath string, chartName string) error {
+	if localChartPath == "" {
+		return nil
+	}
+	if err := helmutil.ValidateLocalHelmChart(localChartPath, chartName); err != nil {
+		return clierrors.WrapUsageError(err, "Invalid --local-chart-path").
+			WithSuggestion(fmt.Sprintf("Pass the directory of a local copy of the %s chart, the one holding its Chart.yaml", chartName))
+	}
+	return nil
 }
 
 // Return the first non-empty string in the provided arguments.

@@ -7,6 +7,7 @@ package helmutil
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
+	"helm.sh/helm/v3/pkg/chartutil"
 )
 
 // ValidateLocalHelmChart checks that helmChartLocalPath is a local copy of the
@@ -28,30 +30,15 @@ func ValidateLocalHelmChart(helmChartLocalPath string, chartName string) error {
 		return fmt.Errorf("path to Helm chart is not a directory")
 	}
 
-	// Read Chart.yaml.
-	chartBytes, err := os.ReadFile(helmChartLocalPath + "/Chart.yaml")
+	// Read Chart.yaml, as Helm itself reads it when it loads the chart.
+	metadata, err := chartutil.LoadChartfile(filepath.Join(helmChartLocalPath, chartutil.ChartfileName))
 	if err != nil {
-		return fmt.Errorf("failed to read Chart.yaml in directory %s", helmChartLocalPath)
-	}
-
-	// Parse Chart data.
-	type HelmChart struct {
-		APIVersion  string `yaml:"apiVersion"`
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-		Version     string `yaml:"version"`
-	}
-
-	// Parse the YAML.
-	var chart HelmChart
-	err = yaml.Unmarshal(chartBytes, &chart)
-	if err != nil {
-		return fmt.Errorf("failed to parse Chart.yaml: %w", err)
+		return fmt.Errorf("failed to read %s in directory %s: %w", chartutil.ChartfileName, helmChartLocalPath, err)
 	}
 
 	// The chart must be the one the command installs.
-	if chart.Name != chartName {
-		return fmt.Errorf("invalid chart name: %s (expected '%s')", chart.Name, chartName)
+	if metadata.Name != chartName {
+		return fmt.Errorf("invalid chart name %q (expected %q)", metadata.Name, chartName)
 	}
 
 	return nil
