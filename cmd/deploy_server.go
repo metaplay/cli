@@ -270,24 +270,26 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil && existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
 		log.Debug().Msgf("Existing Helm release '%s' found with chart version %s", existingRelease.Name, existingRelease.Chart.Metadata.Version)
 
-		// Parse the new chart version.
-		newVersion, err := semver.NewVersion(useHelmChartVersion)
-		if err != nil {
-			return fmt.Errorf("failed to parse Helm chart version '%s': %w", useHelmChartVersion, err)
+		threshold := semver.MustParse("0.8.0")
+
+		// Parse the new chart version. A local chart has no version to parse
+		// here, and is assumed recent, as for the schema validation below.
+		newAboveV080 := true
+		if useHelmChartVersion != "local" {
+			newVersion, err := semver.NewVersion(useHelmChartVersion)
+			if err != nil {
+				return fmt.Errorf("failed to parse Helm chart version '%s': %w", useHelmChartVersion, err)
+			}
+			newAboveV080 = newVersion.GreaterThanEqual(threshold)
 		}
 
-		// Parse existing chart version.
+		// Parse existing chart version, and check if crossing the v0.8.0
+		// threshold (in either direction).
 		existingVersion, err := semver.NewVersion(existingRelease.Chart.Metadata.Version)
 		if err != nil {
 			log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingRelease.Chart.Metadata.Version)
 			uninstallExisting = true
-		}
-
-		// Check if crossing the v0.8.0 threshold (in either direction).
-		threshold := semver.MustParse("0.8.0")
-		newAboveV080 := newVersion.GreaterThanEqual(threshold)
-		existingAboveV080 := existingVersion.GreaterThanEqual(threshold)
-		if newAboveV080 != existingAboveV080 {
+		} else if newAboveV080 != existingVersion.GreaterThanEqual(threshold) {
 			log.Info().Msgf("Going from Helm chart v%s to v%s. Must uninstall existing release before installing new one.", existingRelease.Chart.Metadata.Version, useHelmChartVersion)
 			uninstallExisting = true
 		}
