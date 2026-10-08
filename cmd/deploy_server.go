@@ -143,7 +143,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if o.flagHelmChartLocalPath != "" {
 		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath, metaplayGameServerChartName)
 		if err != nil {
-			return fmt.Errorf("invalid --local-chart-path: %w", err)
+			return clierrors.WrapUsageError(err, "Invalid --local-chart-path")
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override
