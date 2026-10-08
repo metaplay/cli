@@ -118,7 +118,7 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 
 	// List every image, newest built first. A large repository takes a while,
 	// so show how far the listing has got, on stderr to keep JSON output clean.
-	progress := tui.NewCountProgress(os.Stderr, tui.IsInteractiveMode())
+	progress := tui.NewCountProgress(os.Stderr, tui.IsInteractiveTerminal(os.Stderr))
 	images, err := envapi.ListRepositoryImages(cmd.Context(), imageRepository, envapi.ListingOptions{
 		Concurrency: o.flagConcurrency,
 		Progress:    progress,
