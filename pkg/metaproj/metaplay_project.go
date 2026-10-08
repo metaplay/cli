@@ -194,9 +194,9 @@ func validateProjectDir(projectDir, fieldName, dirValue string) error {
 	return nil
 }
 
-// validateHelmChartRepositoryURL checks if the given input is a valid Helm chart repository URL.
+// ValidateHelmChartRepositoryURL checks if the given input is a valid Helm chart repository URL.
 // It returns nil if the URL is valid, or an error describing the issue if invalid.
-func validateHelmChartRepositoryURL(chartRepo string) error {
+func ValidateHelmChartRepositoryURL(chartRepo string) error {
 	// Empty repo is allowed (we use the default).
 	if chartRepo == "" {
 		return nil
@@ -204,17 +204,17 @@ func validateHelmChartRepositoryURL(chartRepo string) error {
 
 	parsedURL, err := url.Parse(chartRepo)
 	if err != nil {
-		return fmt.Errorf("invalid helmChartRepository URL: %w", err)
+		return fmt.Errorf("invalid URL: %w", err)
 	}
 
 	// Check if the scheme is either "http" or "https"
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("invalid helmChartRepository URL scheme: %s (must be 'http' or 'https')", parsedURL.Scheme)
+		return fmt.Errorf("invalid URL scheme: '%s' (must be 'http' or 'https')", parsedURL.Scheme)
 	}
 
 	// Check if the host is not empty
 	if parsedURL.Host == "" {
-		return fmt.Errorf("invalid helmChartRepository URL: host is empty")
+		return fmt.Errorf("invalid URL: host is empty")
 	}
 
 	return nil
@@ -302,8 +302,8 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	}
 
 	// Helm charts.
-	if err := validateHelmChartRepositoryURL(config.HelmChartRepository); err != nil {
-		return err
+	if err := ValidateHelmChartRepositoryURL(config.HelmChartRepository); err != nil {
+		return fmt.Errorf("invalid helmChartRepository: %w", err)
 	}
 	if err := validateHelmChartVersion("serverChartVersion", config.ServerChartVersion); err != nil {
 		return err
@@ -408,13 +408,13 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
 		}
 		if envConfig.ServerValuesFile != "" {
-			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
+			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
 			if err != nil {
 				return fmt.Errorf("environment '%s' failed to validate 'serverValuesFile': %w", envName, err)
 			}
 		}
 		if envConfig.BotClientValuesFile != "" {
-			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
+			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
 			if err != nil {
 				return fmt.Errorf("environment '%s' failed to validate 'botclientValuesFile': %w", envName, err)
 			}
@@ -842,8 +842,8 @@ func GenerateProjectConfigFile(
 	return projectConfig, nil
 }
 
-// validateHelmValuesFile validates the given Helm values file path.
-func validateHelmValuesFile(filePath string) error {
+// ValidateHelmValuesFile validates the given Helm values file path.
+func ValidateHelmValuesFile(filePath string) error {
 	// Check if the file has a .yaml or .yml suffix
 	if ext := filepath.Ext(filePath); ext != ".yaml" && ext != ".yml" {
 		return fmt.Errorf("file must have .yaml or .yml extension, got: %s", ext)
