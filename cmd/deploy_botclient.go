@@ -236,7 +236,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			"botsPerPod":         10,
 			"botSpawnRate":       5,
 			"botSessionDuration": "00:00:20",
-			"image":              botClientImageValues(imageRepository.QualifiedRepository, o.argImageTag, imageRepository.PullSecret),
+			"image":              botClientImageValues(imageRepository, o.argImageTag),
 			"targetHost":         serverHostname,
 			"targetTlsEnabled":   true,
 			"cdnBaseUrl":         fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
@@ -354,20 +354,21 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// botClientImageValues are the chart values naming the image the bots run, and
-// the Secret they pull it with where the environment names one.
+// botClientImageValues are the chart values naming the image the bots run, from
+// the environment's repository, and the Secret they pull it with where the
+// environment names one.
 //
 // The bots run the game server image, from the same repository, but nothing
 // gives their pods the credential the operator gives the game server's. Where
 // the environment names no Secret, as where nodes pull from ECR as themselves,
 // the chart is told nothing and renders what it always did.
-func botClientImageValues(repository, tag, pullSecret string) map[string]any {
+func botClientImageValues(repository *envapi.EnvironmentImageRepository, tag string) map[string]any {
 	values := map[string]any{
-		"repository": repository,
+		"repository": repository.QualifiedRepository,
 		"tag":        tag,
 	}
-	if pullSecret != "" {
-		values["pullSecrets"] = []any{pullSecret}
+	if repository.PullSecret != "" {
+		values["pullSecrets"] = []any{repository.PullSecret}
 	}
 	return values
 }

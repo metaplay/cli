@@ -5,7 +5,6 @@
 package cmd
 
 import (
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"helm.sh/helm/v3/pkg/chart"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/envapi"
 )
 
 // Bot clients run the game server image, and where the environment's registry
@@ -20,7 +20,10 @@ import (
 // operator gives one to the game server's pods only.
 
 func TestBotClientImageValues_NamesThePullSecretTheEnvironmentNames(t *testing.T) {
-	values := botClientImageValues("registry.example.com/env/gameserver", "20260601-153000-1a27c25", "env-registry-pull")
+	values := botClientImageValues(&envapi.EnvironmentImageRepository{
+		QualifiedRepository: "registry.example.com/env/gameserver",
+		PullSecret:          "env-registry-pull",
+	}, "20260601-153000-1a27c25")
 
 	want := map[string]any{
 		"repository":  "registry.example.com/env/gameserver",
@@ -36,7 +39,9 @@ func TestBotClientImageValues_NamesThePullSecretTheEnvironmentNames(t *testing.T
 // Secret, and the chart is told nothing: it renders exactly what it rendered
 // before the value existed.
 func TestBotClientImageValues_NamesNoPullSecretWhereTheEnvironmentNamesNone(t *testing.T) {
-	values := botClientImageValues("123456789012.dkr.ecr.eu-west-1.amazonaws.com/env-gameserver", "20260601-153000-1a27c25", "")
+	values := botClientImageValues(&envapi.EnvironmentImageRepository{
+		QualifiedRepository: "123456789012.dkr.ecr.eu-west-1.amazonaws.com/env-gameserver",
+	}, "20260601-153000-1a27c25")
 
 	if _, ok := values["pullSecrets"]; ok {
 		t.Errorf("values = %#v, want no pullSecrets at all", values)
@@ -46,7 +51,7 @@ func TestBotClientImageValues_NamesNoPullSecretWhereTheEnvironmentNamesNone(t *t
 // errorText is everything a user is shown for err: its message, suggestion and
 // details.
 func errorText(err error) string {
-	cliErr, ok := errors.AsType[*clierrors.CLIError](err)
+	cliErr, ok := clierrors.AsCLIError(err)
 	if !ok {
 		return err.Error()
 	}
