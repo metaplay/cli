@@ -141,9 +141,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Validate Helm chart reference.
 	var chartVersionConstraints version.Constraints = nil
 	if o.flagHelmChartLocalPath != "" {
-		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath)
+		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath, metaplayGameServerChartName)
 		if err != nil {
-			return fmt.Errorf("invalid --helm-chart-path: %w", err)
+			return fmt.Errorf("invalid --local-chart-path: %w", err)
 		}
 	} else {
 		// Resolve Helm chart version to use, either from config file or command line override

@@ -16,7 +16,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func ValidateLocalHelmChart(helmChartLocalPath string) error {
+// ValidateLocalHelmChart checks that helmChartLocalPath is a local copy of the
+// chart named chartName: the one the calling command installs.
+func ValidateLocalHelmChart(helmChartLocalPath string, chartName string) error {
 	// Helm chart local path must exist and be a directory.
 	info, err := os.Stat(helmChartLocalPath)
 	if err != nil {
@@ -47,9 +49,9 @@ func ValidateLocalHelmChart(helmChartLocalPath string) error {
 		return fmt.Errorf("failed to parse Chart.yaml: %w", err)
 	}
 
-	// Chart name must be 'metaplay-gameserver'.
-	if chart.Name != "metaplay-gameserver" {
-		return fmt.Errorf("invalid chart name: %s (expected 'metaplay-gameserver')", chart.Name)
+	// The chart must be the one the command installs.
+	if chart.Name != chartName {
+		return fmt.Errorf("invalid chart name: %s (expected '%s')", chart.Name, chartName)
 	}
 
 	return nil
