@@ -129,9 +129,15 @@ func isHTTPNotFound(err error) bool {
 // reaches them: one host-qualified repository, ready to tag against, and a
 // credential for it. Which way the stack answered is not recorded, because
 // nothing downstream may behave differently for it.
+//
+// Where the repository is in ECR and the CLI holds AWS credentials for it,
+// which is the older path, it also carries ECR's control plane. That changes
+// only how fast an image listing is, never what it lists.
 type EnvironmentImageRepository struct {
 	QualifiedRepository string
 	Credentials         *DockerCredentials
+
+	ecr *ecrRepository
 }
 
 // Reference is the image reference for a tag in this repository.
@@ -221,12 +227,32 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
 	}
 
-	dockerCredentials, err := target.GetDockerCredentials(envDetails)
-	if err != nil {
-		return nil, clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
+	credentialsFailed := func(err error) error {
+		return clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
 			WithSuggestion("Check that you have access to this environment")
 	}
-	return newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials), nil
+	client, err := target.newECRClient(envDetails)
+	if err != nil {
+		return nil, credentialsFailed(err)
+	}
+	dockerCredentials, err := ecrDockerCredentials(client)
+	if err != nil {
+		return nil, credentialsFailed(err)
+	}
+	repository := newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials)
+	repository.ecr = newECRRepository(client, envDetails.Deployment.EcrRepo)
+	return repository, nil
+}
+
+// newECRRepository is the ECR repository behind a qualified repository, as
+// ECR's control plane names it, or nil where the name does not parse, which
+// leaves listing it to the registry protocol.
+func newECRRepository(client ecrImageAPI, qualifiedRepository string) *ecrRepository {
+	repository, err := name.NewRepository(qualifiedRepository)
+	if err != nil {
+		return nil
+	}
+	return &ecrRepository{client: client, name: repository.RepositoryStr()}
 }
 
 // newResolvedImageRepository is the repository a resolution answered with,

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 )
 
@@ -82,5 +83,29 @@ func TestImageListFooters_SayWhatTheTableLeavesOut(t *testing.T) {
 				t.Errorf("footers = %q, want %q", footers, tc.want)
 			}
 		})
+	}
+}
+
+// How many requests a listing has in flight can be raised for a registry that
+// keeps up, or lowered for one that does not, but a listing with nothing in
+// flight never finishes.
+func TestImageList_PrepareRefusesAConcurrencyBelowOne(t *testing.T) {
+	for _, concurrency := range []int{1, 64, 200} {
+		o := imageListOpts{flagFormat: "text", flagConcurrency: concurrency}
+		if err := o.Prepare(nil, nil); err != nil {
+			t.Errorf("concurrency %d refused: %v", concurrency, err)
+		}
+	}
+
+	for _, concurrency := range []int{0, -1} {
+		o := imageListOpts{flagFormat: "text", flagConcurrency: concurrency}
+		err := o.Prepare(nil, nil)
+		if err == nil {
+			t.Errorf("concurrency %d was accepted", concurrency)
+			continue
+		}
+		if !clierrors.IsUsageError(err) {
+			t.Errorf("concurrency %d: error = %v, want a usage error", concurrency, err)
+		}
 	}
 }

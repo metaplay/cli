@@ -5,12 +5,21 @@
 package envapi
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"io"
 	stdlog "log"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -21,6 +30,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
@@ -196,9 +206,7 @@ func TestImagePlatforms_DescribeAnIndexByItsAmd64Image(t *testing.T) {
 // speaks, with no network beyond this process.
 func testRegistry(t *testing.T) string {
 	t.Helper()
-	server := httptest.NewServer(registry.New(registry.Logger(stdlog.New(io.Discard, "", 0))))
-	t.Cleanup(server.Close)
-	return strings.TrimPrefix(server.URL, "http://")
+	return testRegistryBehind(t, func(next http.Handler) http.Handler { return next })
 }
 
 // builtImage is an image built at builtAt, carrying the labels a Metaplay
@@ -282,7 +290,7 @@ func TestListRepositoryImages_ReadsTheRepositoryThroughTheRegistryProtocol(t *te
 	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
 		QualifiedRepository: repository,
 		Credentials:         &DockerCredentials{},
-	})
+	}, ListingOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -324,12 +332,446 @@ func TestListRepositoryImages_ListsARepositoryNothingWasPushedToAsEmpty(t *testi
 	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
 		QualifiedRepository: testRegistry(t) + "/lovely-wombats-build-nimbly/gameserver",
 		Credentials:         &DockerCredentials{},
-	})
+	}, ListingOptions{})
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if images == nil || len(images) != 0 {
 		t.Errorf("images = %#v, want an empty list, which is also what --format=json prints as []", images)
+	}
+}
+
+// A repository with thousands of images is read in a reasonable time only by
+// reading many images at once. Every read the listing makes, the images'
+// configs included, runs as many at a time as the listing is allowed, and
+// never more.
+func TestListRepositoryImages_ReadsAsManyImagesAtOnceAsAllowed(t *testing.T) {
+	const allowed = 8
+	gate := &concurrencyGate{want: allowed, released: make(chan struct{})}
+	registryHost := testRegistryBehind(t, gate.wrap)
+	repository := registryHost + "/lovely-wombats-build-nimbly/gameserver"
+	for i := range 2 * allowed {
+		ref, err := name.NewTag(fmt.Sprintf("%s:build-%d", repository, i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, builtImage(t, builtOn("2026-09-30").Add(time.Duration(i)*time.Hour), "39.0.0", "")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gate.armed.Store(true)
+
+	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{Concurrency: allowed})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != 2*allowed {
+		t.Fatalf("listed %d images, want %d", len(images), 2*allowed)
+	}
+	for _, image := range images {
+		if !image.Readable() {
+			t.Errorf("image %v could not be read: %s", image.Tags, image.Error)
+		}
+	}
+	if peak := gate.peakBlobs.Load(); peak != allowed {
+		t.Errorf("at most %d configs were read at once, want %d", peak, allowed)
+	}
+	if peak := gate.peak.Load(); peak > allowed {
+		t.Errorf("%d requests were in flight at once, want at most %d", peak, allowed)
+	}
+}
+
+// concurrencyGate counts the requests a registry is serving at once. Once
+// armed, it holds each config read until as many as it wants are in flight
+// together, or a moment has passed, so a listing reading fewer at a time is
+// slow rather than stuck, and is seen to read fewer.
+type concurrencyGate struct {
+	want       int64
+	armed      atomic.Bool
+	inFlight   atomic.Int64
+	peak       atomic.Int64
+	blobs      atomic.Int64
+	peakBlobs  atomic.Int64
+	releaseOne sync.Once
+	released   chan struct{}
+}
+
+func (g *concurrencyGate) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !g.armed.Load() {
+			next.ServeHTTP(w, r)
+			return
+		}
+		storeMax(&g.peak, g.inFlight.Add(1))
+		defer g.inFlight.Add(-1)
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/blobs/") {
+			blobs := g.blobs.Add(1)
+			storeMax(&g.peakBlobs, blobs)
+			if blobs >= g.want {
+				g.releaseOne.Do(func() { close(g.released) })
+			}
+			select {
+			case <-g.released:
+			case <-time.After(200 * time.Millisecond):
+			}
+			g.blobs.Add(-1)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func storeMax(peak *atomic.Int64, value int64) {
+	for {
+		current := peak.Load()
+		if value <= current || peak.CompareAndSwap(current, value) {
+			return
+		}
+	}
+}
+
+// testRegistryBehind is testRegistry, with every request passing through
+// middleware first.
+func testRegistryBehind(t *testing.T, middleware func(http.Handler) http.Handler) string {
+	t.Helper()
+	server := httptest.NewServer(middleware(registry.New(registry.Logger(stdlog.New(io.Discard, "", 0)))))
+	t.Cleanup(server.Close)
+	return strings.TrimPrefix(server.URL, "http://")
+}
+
+// A listing of thousands of images takes long enough that someone watching
+// needs to see it moving. It says which phase it is in and how far through
+// that phase it is, in order, counting up to the phase's total where the
+// total is known.
+func TestListRepositoryImages_ReportsHowFarItHasGot(t *testing.T) {
+	repository := testRegistry(t) + "/lovely-wombats-build-nimbly/gameserver"
+	release := builtImage(t, builtOn("2026-09-30"), "39.0.0", "abc123")
+	for _, tagged := range []struct {
+		tag   string
+		image v1.Image
+	}{
+		{"20260930-120000", release},
+		{"release", release},
+		{"20260101-000000", builtImage(t, builtOn("2026-01-01"), "38.0.0", "def456")},
+	} {
+		ref, err := name.NewTag(repository + ":" + tagged.tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, tagged.image); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	progress := &recordedProgress{}
+	_, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{Progress: progress})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Phases in order, each counting up and ending at its total. Listing tags
+	// cannot know its total until it is done, so reports none.
+	wantPhases := []progressReport{
+		{PhaseListingTags, 3, 0},
+		{PhaseResolvingTags, 3, 3},
+		{PhaseReadingImages, 2, 2},
+	}
+	var phases []progressReport
+	for i, r := range progress.reports {
+		if len(phases) == 0 || phases[len(phases)-1].phase != r.phase {
+			phases = append(phases, r)
+		} else if r.done < phases[len(phases)-1].done {
+			t.Errorf("report %d went backwards: %+v after %+v", i, r, phases[len(phases)-1])
+		}
+		phases[len(phases)-1] = r
+	}
+	if !reflect.DeepEqual(phases, wantPhases) {
+		t.Errorf("phases ended at %+v\nwant           %+v", phases, wantPhases)
+	}
+}
+
+// progressReport is one report a listing made of how far it had got.
+type progressReport struct {
+	phase       string
+	done, total int
+}
+
+// recordedProgress records every report a listing makes, and the phases it
+// ended as failed.
+type recordedProgress struct {
+	mu      sync.Mutex
+	reports []progressReport
+	failed  []string
+}
+
+func (p *recordedProgress) Update(phase string, done, total int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.reports = append(p.reports, progressReport{phase, done, total})
+}
+
+func (p *recordedProgress) Finish(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil && len(p.reports) > 0 {
+		p.failed = append(p.failed, p.reports[len(p.reports)-1].phase)
+	}
+}
+
+// writeTagged pushes image to repository under tag.
+func writeTagged(t *testing.T, repository, tag string, image v1.Image) {
+	t.Helper()
+	ref, err := name.NewTag(repository + ":" + tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.Write(ref, image); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Everything a row says, and so the order rows are in, comes from an image's
+// config. A config is checked against the digest its manifest names, as a
+// manifest is, so a registry, proxy or redirect serving other bytes in its
+// place makes the image unreadable rather than wrongly described. That holds
+// even for other bytes of the same size, which a size check alone would pass.
+func TestListRepositoryImages_RefusesAConfigThatDoesNotMatchItsDigest(t *testing.T) {
+	image := builtImage(t, builtOn("2026-09-30"), "39.0.0", "abc123")
+	configDigest, err := image.ConfigName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := image.RawConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	impostor := bytes.Replace(config, []byte(`"39.0.0"`), []byte(`"WRONG!"`), 1)
+	if bytes.Equal(impostor, config) || len(impostor) != len(config) {
+		t.Fatal("could not make a different config of the same size")
+	}
+
+	registryHost := testRegistryBehind(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/blobs/"+configDigest.String()) {
+				w.Header().Set("Content-Length", strconv.Itoa(len(impostor)))
+				_, _ = w.Write(impostor)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	repository := registryHost + "/lovely-wombats-build-nimbly/gameserver"
+	writeTagged(t, repository, "release", image)
+
+	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != 1 {
+		t.Fatalf("images = %+v, want one", images)
+	}
+	if images[0].Readable() || images[0].SdkVersion != "" {
+		t.Errorf("image = %+v, want it unreadable rather than described by a config that is not its own", images[0])
+	}
+}
+
+// A listing someone interrupts is not a listing. Once it is cancelled every
+// read left fails for that reason alone, so it is an error, which the command
+// shows as an interruption, rather than a table of rows saying "context
+// canceled".
+func TestListRepositoryImages_FailsWhenCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var armed atomic.Bool
+	registryHost := testRegistryBehind(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Cancelled as the listing resolves its first tag.
+			if armed.Load() && r.Method == http.MethodHead && strings.Contains(r.URL.Path, "/manifests/") {
+				cancel()
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	repository := registryHost + "/lovely-wombats-build-nimbly/gameserver"
+	for _, tag := range []string{"t1", "t2", "t3"} {
+		writeTagged(t, repository, tag, builtImage(t, builtOn("2026-09-30"), "39.0.0", ""))
+	}
+	armed.Store(true)
+
+	images, err := ListRepositoryImages(ctx, &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, images = %+v, want the listing to fail as cancelled", err, images)
+	}
+}
+
+// legacyManifest is a manifest of an older kind than a listing reads, pushed
+// as it is.
+type legacyManifest struct {
+	raw       []byte
+	mediaType types.MediaType
+}
+
+func (m legacyManifest) RawManifest() ([]byte, error)        { return m.raw, nil }
+func (m legacyManifest) MediaType() (types.MediaType, error) { return m.mediaType, nil }
+
+// A schema 1 manifest predates configs. It parses as a manifest naming none, so
+// an image pushed with one is reported as being of a kind the listing cannot
+// read, rather than as having a config that cannot be read.
+func TestListRepositoryImages_SaysWhatKindOfManifestItCannotRead(t *testing.T) {
+	repository := testRegistry(t) + "/lovely-wombats-build-nimbly/gameserver"
+	ref, err := name.NewTag(repository + ":legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema1 := legacyManifest{
+		raw:       []byte(`{"schemaVersion":1,"name":"lovely-wombats-build-nimbly/gameserver","tag":"legacy","architecture":"amd64","fsLayers":[],"history":[]}`),
+		mediaType: types.DockerManifestSchema1,
+	}
+	if err := remote.Put(ref, schema1); err != nil {
+		t.Fatal(err)
+	}
+
+	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != 1 {
+		t.Fatalf("images = %+v, want one", images)
+	}
+	if got := images[0].Error; !strings.Contains(got, string(types.DockerManifestSchema1)) || strings.Contains(got, "hash") {
+		t.Errorf("error = %q, want it to name the manifest's media type", got)
+	}
+}
+
+// A registry under the load of a listing can fail a read past its client's
+// own retries, and serve it once the load has passed. So a tag or an image
+// whose read failed that way is read once more after the rest, and listed as
+// read if that succeeds. A read the registry refused outright fails the same
+// way every time, and is not tried again.
+func TestListRepositoryImages_TriesAgainWhatFailedUnderLoad(t *testing.T) {
+	flakyTag := builtImage(t, builtOn("2026-09-30"), "39.0.0", "")
+	flakyConfig := builtImage(t, builtOn("2026-09-29"), "39.0.0", "")
+	missingConfig := builtImage(t, builtOn("2026-09-28"), "39.0.0", "")
+	configPath := func(image v1.Image) string {
+		digest, err := image.ConfigName()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return "/blobs/" + digest.String()
+	}
+	flakyConfigPath, missingConfigPath := configPath(flakyConfig), configPath(missingConfig)
+
+	var armed atomic.Bool
+	var mu sync.Mutex
+	served := map[string]int{}
+	registryHost := testRegistryBehind(t, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !armed.Load() {
+				next.ServeHTTP(w, r)
+				return
+			}
+			request := r.Method + " " + r.URL.Path
+			mu.Lock()
+			served[request]++
+			times := served[request]
+			mu.Unlock()
+			switch {
+			case r.Method == http.MethodHead && strings.HasSuffix(r.URL.Path, "/manifests/flaky-tag") && times == 1,
+				r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, flakyConfigPath) && times == 1:
+				// A status the registry client does not retry itself.
+				w.WriteHeader(520)
+				return
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, missingConfigPath):
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
+	repository := registryHost + "/lovely-wombats-build-nimbly/gameserver"
+	writeTagged(t, repository, "flaky-tag", flakyTag)
+	writeTagged(t, repository, "flaky-config", flakyConfig)
+	writeTagged(t, repository, "missing-config", missingConfig)
+	armed.Store(true)
+
+	progress := &recordedProgress{}
+	images, err := ListRepositoryImages(t.Context(), &EnvironmentImageRepository{
+		QualifiedRepository: repository,
+		Credentials:         &DockerCredentials{},
+	}, ListingOptions{Progress: progress})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !reflect.DeepEqual(tagsOf(images), [][]string{{"flaky-tag"}, {"flaky-config"}, {"missing-config"}}) {
+		t.Fatalf("listed %v", tagsOf(images))
+	}
+	for _, image := range images[:2] {
+		if !image.Readable() {
+			t.Errorf("image %v could not be read: %s", image.Tags, image.Error)
+		}
+	}
+	if images[2].Readable() {
+		t.Errorf("image %v was read, though its config is not there", images[2].Tags)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for request, times := range served {
+		if strings.HasSuffix(request, missingConfigPath) && times != 1 {
+			t.Errorf("%s was asked for %d times, want once: the registry refused it outright", request, times)
+		}
+	}
+	var phases []string
+	for _, report := range progress.reports {
+		if len(phases) == 0 || phases[len(phases)-1] != report.phase {
+			phases = append(phases, report.phase)
+		}
+	}
+	wantPhases := []string{PhaseListingTags, PhaseResolvingTags, PhaseRetryingTags, PhaseReadingImages, PhaseRetryingImages}
+	if !reflect.DeepEqual(phases, wantPhases) {
+		t.Errorf("phases = %v, want %v", phases, wantPhases)
+	}
+}
+
+// Only a read that failed in a way another try might not is tried again.
+func TestWorthRetrying_OnlyWhatAnotherTryMightNotFail(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"throttled", &transport.Error{StatusCode: http.StatusTooManyRequests}, true},
+		{"timed out", &transport.Error{StatusCode: http.StatusRequestTimeout}, true},
+		{"registry failed", fmt.Errorf("failed to fetch the image's manifest: %w", &transport.Error{StatusCode: http.StatusServiceUnavailable}), true},
+		{"connection broke", &url.Error{Op: "Get", URL: "https://registry.example", Err: syscall.ECONNRESET}, true},
+		{"cut short", io.ErrUnexpectedEOF, true},
+		{"not found", &transport.Error{StatusCode: http.StatusNotFound}, false},
+		{"refused", &transport.Error{StatusCode: http.StatusForbidden}, false},
+		{"unreadable", errors.New("unsupported manifest media type"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := worthRetrying(tc.err); got != tc.want {
+				t.Errorf("worthRetrying(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
