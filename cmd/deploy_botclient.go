@@ -87,7 +87,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-botclients.yaml'")
+	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Path to a Helm values file to use in place of the environment's in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-botclients.yaml'")
 }
 
 func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -99,9 +99,12 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '20260601-153000-1a27c25'")
 	}
 
-	// Refuse a local chart that is not the loadtest chart before Run resolves
-	// the environment, which may ask to log in first.
-	return validateLocalChartPath(o.flagHelmChartLocalPath, metaplayLoadTestChartName)
+	// Refuse a local chart that is not the loadtest chart, or a values file that is not
+	// there, before Run resolves the environment, which may ask to log in first.
+	if err := validateLocalChartPath(o.flagHelmChartLocalPath, metaplayLoadTestChartName); err != nil {
+		return err
+	}
+	return validateValuesPath(o.flagHelmValuesPath)
 }
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
@@ -194,7 +197,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
-		helmChartRepo := coalesceString(project.Config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
+		helmChartRepo := helmChartRepository(o.flagHelmChartRepository, project.Config.HelmChartRepository)
 		minChartVersion, _ := version.NewVersion("0.4.0")
 		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayLoadTestChartName, minChartVersion, chartVersionConstraints)
 		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayLoadTestChartName, useHelmChartVersion)
@@ -203,8 +206,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.GetBotClientValuesFiles(envConfig)
+	// Resolve Helm values file paths, relative to the current directory.
+	valuesFiles := helmValuesFiles(o.flagHelmValuesPath, project.GetBotClientValuesFiles(envConfig))
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
