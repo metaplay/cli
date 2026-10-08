@@ -70,11 +70,16 @@ func listECRImages(ctx context.Context, repository *ecrRepository, registry *reg
 
 	manifests, err := getECRImageManifests(ctx, repository, uniqueDigests(tagged), options)
 	if err != nil {
+		if ctx.Err() != nil {
+			// Cancelled rather than refused, so the registry would fail the
+			// same way.
+			return nil, ctx.Err()
+		}
 		log.Debug().Msgf("Could not get manifests from ECR repository '%s'; reading them through the registry protocol: %v", repository.name, err)
 		options.finishPhase(err)
 		manifests = map[string]ecrManifest{}
 	}
-	return readImages(ctx, tagged, &ecrImageSource{registryImageSource: registry, manifests: manifests}, options), nil
+	return readImages(ctx, tagged, &ecrImageSource{registryImageSource: registry, manifests: manifests}, options)
 }
 
 // getECRImageManifests fetches the manifests of the images with these
@@ -202,8 +207,8 @@ func getECRManifests(ctx context.Context, repository *ecrRepository, digests []s
 
 // batchGetECRManifests fetches one call's worth of manifests. A manifest is
 // checked against the digest it was asked for, as the registry protocol
-// checks one it serves. One that does not match, or that ECR reports it
-// cannot return, is left out.
+// checks one it serves. One that does not match, that comes without its media
+// type, or that ECR reports it cannot return, is left out.
 func batchGetECRManifests(ctx context.Context, repository *ecrRepository, digests []string) (map[string]ecrManifest, error) {
 	ids := make([]ecrtypes.ImageIdentifier, len(digests))
 	for i, digest := range digests {
@@ -230,7 +235,14 @@ func batchGetECRManifests(ctx context.Context, repository *ecrRepository, digest
 			log.Debug().Msgf("ECR returned a manifest for %s that does not match its digest; reading it through the registry protocol", digest)
 			continue
 		}
-		manifests[digest] = ecrManifest{raw: raw, mediaType: types.MediaType(aws.ToString(image.ImageManifestMediaType))}
+		mediaType := types.MediaType(aws.ToString(image.ImageManifestMediaType))
+		if mediaType == "" {
+			// Whether it is an index is told by its media type alone, so one
+			// ECR does not name is read through the registry, which does.
+			log.Debug().Msgf("ECR returned a manifest for %s without its media type; reading it through the registry protocol", digest)
+			continue
+		}
+		manifests[digest] = ecrManifest{raw: raw, mediaType: mediaType}
 	}
 	for _, failure := range output.Failures {
 		if failure.ImageId != nil {

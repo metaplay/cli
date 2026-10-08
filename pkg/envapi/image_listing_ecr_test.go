@@ -6,6 +6,7 @@ package envapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -50,6 +51,14 @@ type fakeECR struct {
 	// failDescribeAfter fails the call for this page of images and any after
 	// it, where it is more than zero, as a call throttled partway does.
 	failDescribeAfter int
+	// tamper names images whose manifests ECR returns altered, so they no
+	// longer match their digests.
+	tamper map[string]bool
+	// withoutMediaType names images whose manifests ECR returns without
+	// saying what type they are.
+	withoutMediaType map[string]bool
+	// beforeBatch, where set, runs as each call for manifests is made.
+	beforeBatch func()
 
 	mu       sync.Mutex
 	describe int
@@ -127,6 +136,12 @@ func (f *fakeECR) BatchGetImage(ctx context.Context, input *ecr.BatchGetImageInp
 	if f.failBatchesWith != nil {
 		return nil, f.failBatchesWith
 	}
+	if f.beforeBatch != nil {
+		f.beforeBatch()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(input.ImageIds) > 100 {
 		return nil, fmt.Errorf("InvalidParameterException: %d image IDs, at most 100", len(input.ImageIds))
 	}
@@ -170,13 +185,37 @@ func (f *fakeECR) BatchGetImage(ctx context.Context, input *ecr.BatchGetImageInp
 		if !slices.Contains(input.AcceptedMediaTypes, string(descriptor.MediaType)) {
 			return nil, fmt.Errorf("manifest %s is a %s, which the call does not accept", ref, descriptor.MediaType)
 		}
+		manifest := descriptor.Manifest
+		if f.tamper[aws.ToString(id.ImageDigest)] {
+			manifest = tampered(manifest)
+		}
+		mediaType := aws.String(string(descriptor.MediaType))
+		if f.withoutMediaType[aws.ToString(id.ImageDigest)] {
+			mediaType = nil
+		}
 		output.Images = append(output.Images, ecrtypes.Image{
 			ImageId:                &ecrtypes.ImageIdentifier{ImageDigest: id.ImageDigest},
-			ImageManifest:          aws.String(string(descriptor.Manifest)),
-			ImageManifestMediaType: aws.String(string(descriptor.MediaType)),
+			ImageManifest:          aws.String(string(manifest)),
+			ImageManifestMediaType: mediaType,
 		})
 	}
 	return output, nil
+}
+
+// tampered is a manifest altered so that, read as it is, it describes its
+// image wrongly: its first layer a byte larger than it is.
+func tampered(raw []byte) []byte {
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		panic(err)
+	}
+	layer := manifest["layers"].([]any)[0].(map[string]any)
+	layer["size"] = layer["size"].(float64) + 1
+	altered, err := json.Marshal(manifest)
+	if err != nil {
+		panic(err)
+	}
+	return altered
 }
 
 // fakeECRHeader marks the requests the fake ECR makes to read the registry it
@@ -468,5 +507,105 @@ func TestListRepositoryImages_ReadsOnlyTheManifestsECRWithholdsFromTheRegistry(t
 	}
 	if len(progress.failed) != 0 {
 		t.Errorf("phases ended as failed = %v, want none", progress.failed)
+	}
+}
+
+// ECR's answer is checked against the digest it was asked for, as the
+// registry protocol checks a manifest it serves. A manifest that does not
+// match is read through the registry instead, so the listing is still exactly
+// what the registry protocol lists, rather than describing the image by bytes
+// that are not its manifest.
+func TestListRepositoryImages_ReadsAManifestECRAltersFromTheRegistry(t *testing.T) {
+	repository, fake, requests := ecrTestRepository(t)
+
+	throughRegistry, err := ListRepositoryImages(t.Context(), repository, ListingOptions{})
+	if err != nil {
+		t.Fatalf("listing through the registry protocol: %v", err)
+	}
+
+	requests.reset()
+	altered := throughRegistry[0].Digest
+	fake.tamper = map[string]bool{altered: true}
+	repository.ecr = &ecrRepository{client: fake, name: "lovely-wombats-build-nimbly/gameserver"}
+	images, err := ListRepositoryImages(t.Context(), repository, ListingOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != len(throughRegistry) {
+		t.Fatalf("listed %d images, want %d", len(images), len(throughRegistry))
+	}
+	for i := range throughRegistry {
+		throughRegistry[i].BuiltAt = throughRegistry[i].BuiltAt.UTC()
+		images[i].BuiltAt = images[i].BuiltAt.UTC()
+		if !reflect.DeepEqual(images[i], throughRegistry[i]) {
+			t.Errorf("image %d = %+v\nthrough the registry %+v", i, images[i], throughRegistry[i])
+		}
+	}
+	// Only the altered manifest came from the registry.
+	if served, ofAltered := requests.served("/manifests/"), requests.served("/manifests/"+altered); served != 1 || ofAltered != 1 {
+		t.Errorf("the registry was asked for %d manifests, %d of them the altered one, want only that one", served, ofAltered)
+	}
+}
+
+// Someone interrupting a listing while ECR is returning manifests has not had
+// ECR refuse them. The listing fails as cancelled rather than reading them
+// through the registry, where every read would fail for the same reason and
+// be listed as an unreadable row.
+func TestListRepositoryImages_FailsWhenCancelledWhileECRReturnsManifests(t *testing.T) {
+	repository, fake, requests := ecrTestRepository(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	fake.beforeBatch = cancel
+	repository.ecr = &ecrRepository{client: fake, name: "lovely-wombats-build-nimbly/gameserver"}
+	requests.reset()
+
+	images, err := ListRepositoryImages(ctx, repository, ListingOptions{})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, listed %d images, want the listing to fail as cancelled", err, len(images))
+	}
+	if served := requests.served("/"); served != 0 {
+		t.Errorf("the registry was asked %d times after the listing was cancelled", served)
+	}
+}
+
+// Whether a manifest is a multi-platform image's index is told by its media
+// type. A manifest ECR returns without one is read through the registry,
+// which says, rather than being read as a single-platform image's.
+func TestListRepositoryImages_ReadsAManifestECRDoesNotNameTheTypeOfFromTheRegistry(t *testing.T) {
+	repository, fake, requests := ecrTestRepository(t)
+
+	throughRegistry, err := ListRepositoryImages(t.Context(), repository, ListingOptions{})
+	if err != nil {
+		t.Fatalf("listing through the registry protocol: %v", err)
+	}
+	var index string
+	for _, image := range throughRegistry {
+		if slices.Contains(image.Tags, "hotfix") {
+			index = image.Digest
+		}
+	}
+
+	requests.reset()
+	fake.withoutMediaType = map[string]bool{index: true}
+	repository.ecr = &ecrRepository{client: fake, name: "lovely-wombats-build-nimbly/gameserver"}
+	images, err := ListRepositoryImages(t.Context(), repository, ListingOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(images) != len(throughRegistry) {
+		t.Fatalf("listed %d images, want %d", len(images), len(throughRegistry))
+	}
+	for i := range throughRegistry {
+		throughRegistry[i].BuiltAt = throughRegistry[i].BuiltAt.UTC()
+		images[i].BuiltAt = images[i].BuiltAt.UTC()
+		if !reflect.DeepEqual(images[i], throughRegistry[i]) {
+			t.Errorf("image %d = %+v\nthrough the registry %+v", i, images[i], throughRegistry[i])
+		}
+	}
+	if served := requests.served("/manifests/" + index); served != 1 {
+		t.Errorf("the registry was asked for the index %d times, want once", served)
 	}
 }

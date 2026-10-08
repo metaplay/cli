@@ -10,14 +10,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/rs/zerolog/log"
 
@@ -50,9 +56,11 @@ type ListingProgress interface {
 
 // The phases of a listing, in the order they run.
 const (
-	PhaseListingTags   = "Listing tags"
-	PhaseResolvingTags = "Resolving tags"
-	PhaseReadingImages = "Reading images"
+	PhaseListingTags    = "Listing tags"
+	PhaseResolvingTags  = "Resolving tags"
+	PhaseRetryingTags   = "Retrying failed tags"
+	PhaseReadingImages  = "Reading images"
+	PhaseRetryingImages = "Retrying failed images"
 )
 
 // phaseProgress counts one phase of a listing up as its parts finish, which
@@ -149,8 +157,9 @@ func (i RepositoryImage) Readable() bool {
 // of calls rather than a request per tag and per image. What is listed is the
 // same either way; only configs are always read through the registry.
 //
-// A tag or an image that cannot be read is still listed, saying why. Only a
-// repository whose tags cannot be listed at all is an error.
+// A tag or an image that cannot be read is still listed, saying why, after
+// one more try where another might succeed. Only a repository whose tags
+// cannot be listed at all, or a listing that was cancelled, is an error.
 func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepository, options ListingOptions) ([]RepositoryImage, error) {
 	concurrency := options.concurrency()
 	repo, err := name.NewRepository(repository.QualifiedRepository)
@@ -174,6 +183,11 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		if err == nil {
 			return images, nil
 		}
+		if ctx.Err() != nil {
+			// Cancelled rather than refused, so the registry protocol would
+			// fail the same way.
+			return nil, ctx.Err()
+		}
 		// A credential that reaches the registry need not be allowed ECR's
 		// control plane, and the registry protocol lists the same images.
 		log.Debug().Msgf("Could not list '%s' through ECR; listing it through the registry protocol: %v", repository.QualifiedRepository, err)
@@ -194,34 +208,111 @@ func ListRepositoryImages(ctx context.Context, repository *EnvironmentImageRepos
 		return nil, fmt.Errorf("failed to list the tags in '%s': %w", repository.QualifiedRepository, err)
 	}
 
-	resolving := options.startPhase(PhaseResolvingTags, len(tags))
-	tagged := syncutil.ParallelMap(tags, concurrency, func(tag string) taggedDigest {
+	resolve := func(tag string) taggedDigest {
 		descriptor, err := puller.Head(ctx, repo.Tag(tag))
-		resolving.add(1)
 		if err != nil {
 			return taggedDigest{tag: tag, err: err}
 		}
 		return taggedDigest{tag: tag, digest: descriptor.Digest.String()}
+	}
+	resolving := options.startPhase(PhaseResolvingTags, len(tags))
+	tagged := syncutil.ParallelMap(tags, concurrency, func(tag string) taggedDigest {
+		resolved := resolve(tag)
+		resolving.add(1)
+		return resolved
 	})
+	if err := retryFailed(ctx, options, PhaseRetryingTags, tags, tagged, taggedDigest.failure, resolve); err != nil {
+		return nil, err
+	}
 
-	return readImages(ctx, tagged, registry, options), nil
+	return readImages(ctx, tagged, registry, options)
 }
 
 // readImages reads each image the tags name once, however many tags name it,
-// and assembles the listing.
-func readImages(ctx context.Context, tagged []taggedDigest, source imageSource, options ListingOptions) []RepositoryImage {
+// and assembles the listing. It fails only where the listing was cancelled.
+func readImages(ctx context.Context, tagged []taggedDigest, source imageSource, options ListingOptions) ([]RepositoryImage, error) {
 	digests := uniqueDigests(tagged)
+	read := func(digest string) imageRead {
+		described, err := readImage(ctx, source, digest)
+		return imageRead{described: described, err: err}
+	}
 	reading := options.startPhase(PhaseReadingImages, len(digests))
 	reads := syncutil.ParallelMap(digests, options.concurrency(), func(digest string) imageRead {
-		described, err := readImage(ctx, source, digest)
+		described := read(digest)
 		reading.add(1)
-		return imageRead{described: described, err: err}
+		return described
 	})
+	if err := retryFailed(ctx, options, PhaseRetryingImages, digests, reads, imageRead.failure, read); err != nil {
+		return nil, err
+	}
 	readsByDigest := map[string]imageRead{}
 	for i, digest := range digests {
 		readsByDigest[digest] = reads[i]
 	}
-	return assembleImages(tagged, readsByDigest)
+	return assembleImages(tagged, readsByDigest), nil
+}
+
+// listingRetryConcurrency is how many failed reads a listing tries again at
+// once.
+const listingRetryConcurrency = 4
+
+// retryFailed tries each item whose result failed once more, where another
+// try might succeed, and keeps what the second try gave. Under the load of a
+// listing a registry can fail a read past its client's own retries, by
+// throttling it, timing it out or dropping its connection, and then serve it
+// once the load has passed. So the second tries come after the rest, a few at
+// a time. A second try failing the same way says the registry has not
+// recovered, and the rest are left as they failed rather than waited on.
+//
+// It fails only where the listing was cancelled: every read failed for that
+// reason, and there is no listing to show.
+func retryFailed[In, Out any](ctx context.Context, options ListingOptions, phase string, items []In, results []Out, failure func(Out) error, try func(In) Out) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	var failed []int
+	for i, result := range results {
+		if err := failure(result); err != nil && worthRetrying(err) {
+			failed = append(failed, i)
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+
+	log.Debug().Msgf("%s: trying %d failed reads again", phase, len(failed))
+	retrying := options.startPhase(phase, len(failed))
+	var givenUp atomic.Bool
+	retried := syncutil.ParallelMap(failed, min(listingRetryConcurrency, options.concurrency()), func(i int) Out {
+		defer retrying.add(1)
+		if givenUp.Load() {
+			return results[i]
+		}
+		result := try(items[i])
+		if err := failure(result); err != nil && worthRetrying(err) {
+			givenUp.Store(true)
+		}
+		return result
+	})
+	for j, i := range failed {
+		results[i] = retried[j]
+	}
+	return ctx.Err()
+}
+
+// worthRetrying reports whether a read that failed might succeed if tried
+// again: the registry throttled it, timed it out or failed itself, or the
+// connection broke. A read the registry refused, or one whose answer could not
+// be used, fails the same way every time.
+func worthRetrying(err error) bool {
+	if registryErr, ok := errors.AsType[*transport.Error](err); ok {
+		code := registryErr.StatusCode
+		return code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+	}
+	if _, ok := errors.AsType[net.Error](err); ok {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 // listTags lists every tag in the repository a page at a time, counting the
@@ -271,7 +362,7 @@ func uniqueDigests(tagged []taggedDigest) []string {
 // by digest, and configs.
 type imageSource interface {
 	manifest(ctx context.Context, digest string) ([]byte, types.MediaType, error)
-	config(ctx context.Context, digest v1.Hash) (*v1.ConfigFile, error)
+	config(ctx context.Context, descriptor v1.Descriptor) (*v1.ConfigFile, error)
 }
 
 // registryImageSource reads an image's parts through the registry protocol.
@@ -289,9 +380,10 @@ func (s *registryImageSource) manifest(ctx context.Context, digest string) ([]by
 	return descriptor.Manifest, descriptor.MediaType, nil
 }
 
-// config fetches and parses the config blob with this digest.
-func (s *registryImageSource) config(ctx context.Context, digest v1.Hash) (*v1.ConfigFile, error) {
-	layer, err := s.puller.Layer(ctx, s.repo.Digest(digest.String()))
+// config fetches and parses the config blob a manifest names, checked against
+// the digest and size the manifest gives it.
+func (s *registryImageSource) config(ctx context.Context, descriptor v1.Descriptor) (*v1.ConfigFile, error) {
+	layer, err := s.puller.Layer(ctx, s.repo.Digest(descriptor.Digest.String()))
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +392,17 @@ func (s *registryImageSource) config(ctx context.Context, digest v1.Hash) (*v1.C
 		return nil, err
 	}
 	defer func() { _ = blob.Close() }()
-	return v1.ParseConfigFile(blob)
+	// The blob is checked against its digest only once it is read to its end,
+	// and parsing stops at the config's closing brace, so it is read whole
+	// first, and no further than the size it should be.
+	raw, err := io.ReadAll(io.LimitReader(blob, descriptor.Size+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) != descriptor.Size {
+		return nil, fmt.Errorf("the registry served a config of another size than the %d bytes its manifest gives", descriptor.Size)
+	}
+	return v1.ParseConfigFile(bytes.NewReader(raw))
 }
 
 // readImage reads what one image says about itself, from its manifest and
@@ -325,11 +427,11 @@ func readImage(ctx context.Context, source imageSource, digest string) (Reposito
 			return RepositoryImage{}, errors.New("the index names no platform image")
 		}
 		for _, platform := range platforms {
-			raw, _, err := source.manifest(ctx, platform.Digest.String())
+			raw, mediaType, err := source.manifest(ctx, platform.Digest.String())
 			if err != nil {
 				return RepositoryImage{}, fmt.Errorf("failed to fetch the image for %s: %w", platformName(platform), err)
 			}
-			manifest, err := v1.ParseManifest(bytes.NewReader(raw))
+			manifest, err := parseImageManifest(raw, mediaType)
 			if err != nil {
 				return RepositoryImage{}, fmt.Errorf("failed to parse the manifest for %s: %w", platformName(platform), err)
 			}
@@ -339,7 +441,7 @@ func readImage(ctx context.Context, source imageSource, digest string) (Reposito
 			}
 		}
 	} else {
-		manifest, err := v1.ParseManifest(bytes.NewReader(raw))
+		manifest, err := parseImageManifest(raw, mediaType)
 		if err != nil {
 			return RepositoryImage{}, fmt.Errorf("failed to parse the image's manifest: %w", err)
 		}
@@ -347,7 +449,7 @@ func readImage(ctx context.Context, source imageSource, digest string) (Reposito
 		describing = manifest
 	}
 
-	config, err := source.config(ctx, describing.Config.Digest)
+	config, err := source.config(ctx, describing.Config)
 	if err != nil {
 		return RepositoryImage{}, fmt.Errorf("failed to read the image's config: %w", err)
 	}
@@ -359,6 +461,22 @@ func readImage(ctx context.Context, source imageSource, digest string) (Reposito
 	}, nil
 }
 
+// parseImageManifest parses a single-platform image's manifest. Any JSON
+// parses as a manifest, so one of another kind -- a schema 1 manifest, which
+// predates configs, or a type the listing does not know -- parses as a
+// manifest naming no config. That is reported by its media type, since the
+// config it lacks is not what is wrong with it.
+func parseImageManifest(raw []byte, mediaType types.MediaType) (*v1.Manifest, error) {
+	manifest, err := v1.ParseManifest(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	if manifest.Config.Digest == (v1.Hash{}) {
+		return nil, fmt.Errorf("unsupported manifest media type %q, which names no config", mediaType)
+	}
+	return manifest, nil
+}
+
 // taggedDigest is what one tag resolved to: the digest of the image it names,
 // or why that could not be read.
 type taggedDigest struct {
@@ -367,12 +485,16 @@ type taggedDigest struct {
 	err    error
 }
 
+func (t taggedDigest) failure() error { return t.err }
+
 // imageRead is what reading one image gave: what the image says about itself,
 // or why it could not be read.
 type imageRead struct {
 	described RepositoryImage
 	err       error
 }
+
+func (r imageRead) failure() error { return r.err }
 
 // assembleImages turns what each tag resolved to, and what reading each image
 // said, into the images of a repository: tags naming the same digest grouped
