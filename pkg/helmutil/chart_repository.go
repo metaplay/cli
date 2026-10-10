@@ -7,6 +7,7 @@ package helmutil
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -14,9 +15,12 @@ import (
 	"github.com/metaplay/cli/pkg/httputil"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
+	"helm.sh/helm/v3/pkg/chartutil"
 )
 
-func ValidateLocalHelmChart(helmChartLocalPath string) error {
+// ValidateLocalHelmChart checks that helmChartLocalPath is a local copy of the
+// chart named chartName: the one the calling command installs.
+func ValidateLocalHelmChart(helmChartLocalPath string, chartName string) error {
 	// Helm chart local path must exist and be a directory.
 	info, err := os.Stat(helmChartLocalPath)
 	if err != nil {
@@ -26,30 +30,15 @@ func ValidateLocalHelmChart(helmChartLocalPath string) error {
 		return fmt.Errorf("path to Helm chart is not a directory")
 	}
 
-	// Read Chart.yaml.
-	chartBytes, err := os.ReadFile(helmChartLocalPath + "/Chart.yaml")
+	// Read Chart.yaml, as Helm itself reads it when it loads the chart.
+	metadata, err := chartutil.LoadChartfile(filepath.Join(helmChartLocalPath, chartutil.ChartfileName))
 	if err != nil {
-		return fmt.Errorf("failed to read Chart.yaml in directory %s", helmChartLocalPath)
+		return fmt.Errorf("failed to read %s in directory %s: %w", chartutil.ChartfileName, helmChartLocalPath, err)
 	}
 
-	// Parse Chart data.
-	type HelmChart struct {
-		APIVersion  string `yaml:"apiVersion"`
-		Name        string `yaml:"name"`
-		Description string `yaml:"description"`
-		Version     string `yaml:"version"`
-	}
-
-	// Parse the YAML.
-	var chart HelmChart
-	err = yaml.Unmarshal(chartBytes, &chart)
-	if err != nil {
-		return fmt.Errorf("failed to parse Chart.yaml: %w", err)
-	}
-
-	// Chart name must be 'metaplay-gameserver'.
-	if chart.Name != "metaplay-gameserver" {
-		return fmt.Errorf("invalid chart name: %s (expected 'metaplay-gameserver')", chart.Name)
+	// The chart must be the one the command installs.
+	if metadata.Name != chartName {
+		return fmt.Errorf("invalid chart name %q (expected %q)", metadata.Name, chartName)
 	}
 
 	return nil
