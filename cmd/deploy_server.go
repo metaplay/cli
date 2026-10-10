@@ -268,28 +268,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil && existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
 		log.Debug().Msgf("Existing Helm release '%s' found with chart version %s", existingRelease.Name, existingRelease.Chart.Metadata.Version)
 
-		threshold := semver.MustParse("0.8.0")
-
-		// Parse the new chart version. A local chart has no version to parse
-		// here, and is assumed recent, as for the schema validation below.
-		newAboveV080 := true
-		if useHelmChartVersion != "local" {
-			newVersion, err := semver.NewVersion(useHelmChartVersion)
-			if err != nil {
-				return fmt.Errorf("failed to parse Helm chart version '%s': %w", useHelmChartVersion, err)
-			}
-			newAboveV080 = newVersion.GreaterThanEqual(threshold)
-		}
-
-		// Parse existing chart version, and check if crossing the v0.8.0
-		// threshold (in either direction).
-		existingVersion, err := semver.NewVersion(existingRelease.Chart.Metadata.Version)
+		uninstallExisting, err = mustUninstallExistingRelease(existingRelease.Chart.Metadata.Version, useHelmChartVersion)
 		if err != nil {
-			log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingRelease.Chart.Metadata.Version)
-			uninstallExisting = true
-		} else if newAboveV080 != existingVersion.GreaterThanEqual(threshold) {
-			log.Info().Msgf("Going from Helm chart v%s to v%s. Must uninstall existing release before installing new one.", existingRelease.Chart.Metadata.Version, useHelmChartVersion)
-			uninstallExisting = true
+			return err
 		}
 	}
 
@@ -667,6 +648,39 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 
 	log.Info().Msgf(" %s %s", styles.RenderSuccess("✓"), selectedImage.RepoTag)
 	return selectedImage, nil
+}
+
+// mustUninstallExistingRelease tells whether an existing release of chart
+// version existingVersion must be uninstalled before the chart of version
+// newVersion is installed over it: crossing chart v0.8.0, in either direction,
+// would leave the old and the new operator modifying the same resources. An
+// existing version that does not parse is assumed to be the old operator. A
+// local chart, of version 'local', has no version to compare, and is assumed
+// recent, as for the schema validation.
+func mustUninstallExistingRelease(existingVersion string, newVersion string) (bool, error) {
+	threshold := semver.MustParse("0.8.0")
+
+	newAboveV080 := true
+	newChart := "the local chart"
+	if newVersion != "local" {
+		parsed, err := semver.NewVersion(newVersion)
+		if err != nil {
+			return false, fmt.Errorf("failed to parse Helm chart version '%s': %w", newVersion, err)
+		}
+		newAboveV080 = parsed.GreaterThanEqual(threshold)
+		newChart = "v" + newVersion
+	}
+
+	existing, err := semver.NewVersion(existingVersion)
+	if err != nil {
+		log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingVersion)
+		return true, nil
+	}
+	if newAboveV080 != existing.GreaterThanEqual(threshold) {
+		log.Info().Msgf("Going from Helm chart v%s to %s. Must uninstall existing release before installing new one.", existingVersion, newChart)
+		return true, nil
+	}
+	return false, nil
 }
 
 // validateLocalChartPath refuses a --local-chart-path that is not a local copy
