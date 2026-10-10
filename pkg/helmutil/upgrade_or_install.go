@@ -33,6 +33,9 @@ import (
 // The values from requiredValues are used as-is with the highest priority. Any attempt to override
 // a value defined in requiredValues with a different value results in an error. Overriding with
 // the same value is allowed.
+//
+// If checkChart is not nil, it is called with the loaded chart before anything is installed or
+// upgraded, and an error from it is returned as is.
 func HelmUpgradeOrInstall(
 	output *tui.TaskOutput,
 	actionConfig *action.Configuration,

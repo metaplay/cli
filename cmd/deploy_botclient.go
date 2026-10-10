@@ -333,7 +333,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			helmRequiredValues,
 			5*time.Minute,
 			true,
-			checkBotClientChart(imageRepository.PullSecret))
+			checkBotClientChart(imageRepository.PullSecret, o.flagHelmChartLocalPath))
 		return err
 	})
 
@@ -380,7 +380,9 @@ func botClientImageValues(repository *envapi.EnvironmentImageRepository, tag str
 // anonymously until the registry's refusals run the deploy into its timeout.
 // It is told apart by whether it declares the value rather than by its version,
 // so no version number here has to be kept in step with the chart's releases.
-func checkBotClientChart(pullSecret string) func(*chart.Chart) error {
+// A chart from localChartPath ignores the project's chart version and
+// --helm-chart-version alike, so the suggestion names the path instead.
+func checkBotClientChart(pullSecret string, localChartPath string) func(*chart.Chart) error {
 	return func(loadedChart *chart.Chart) error {
 		if pullSecret == "" {
 			return nil
@@ -390,10 +392,14 @@ func checkBotClientChart(pullSecret string) func(*chart.Chart) error {
 		if _, ok := image["pullSecrets"]; ok {
 			return nil
 		}
+		suggestion := "Use a newer metaplay-loadtest chart: raise botClientChartVersion in metaplay-project.yaml, or pass --helm-chart-version"
+		if localChartPath != "" {
+			suggestion = fmt.Sprintf("Point --local-chart-path at a newer metaplay-loadtest chart than the one in '%s', one whose values declare botclients.image.pullSecrets", localChartPath)
+		}
 		return clierrors.Newf("The %s chart %s cannot give the bots a credential to pull their image with", loadedChart.Name(), loadedChart.Metadata.Version).
 			WithDetails(
 				fmt.Sprintf("This environment's registry wants a credential, held in the Secret '%s'.", pullSecret),
 				"Without it the bots cannot pull the image, and the deploy waits until it times out.").
-			WithSuggestion("Use a newer metaplay-loadtest chart: raise botClientChartVersion in metaplay-project.yaml, or pass --helm-chart-version")
+			WithSuggestion(suggestion)
 	}
 }

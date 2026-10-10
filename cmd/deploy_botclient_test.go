@@ -58,6 +58,8 @@ func errorText(err error) string {
 	return strings.Join(append([]string{cliErr.Message, cliErr.Suggestion}, cliErr.Details...), "\n")
 }
 
+// loadtestChart is a loaded metaplay-loadtest chart at version, declaring
+// imageValues as its botclients.image values.
 func loadtestChart(version string, imageValues map[string]any) *chart.Chart {
 	return &chart.Chart{
 		Metadata: &chart.Metadata{Name: metaplayLoadTestChartName, Version: version},
@@ -74,21 +76,29 @@ func TestCheckBotClientChart(t *testing.T) {
 	takesPullSecrets := loadtestChart("0.5.0", map[string]any{"repository": nil, "tag": nil, "pullSecrets": []any{}})
 	predatesPullSecrets := loadtestChart("0.4.2", map[string]any{"repository": nil, "tag": nil})
 
+	// The advice for a published chart, and for a local one, which ignores the
+	// project's chart version and --helm-chart-version alike.
+	published := []string{"0.4.2", "botClientChartVersion", "--helm-chart-version"}
+	local := []string{"0.4.2", "--local-chart-path", "./charts/metaplay-loadtest"}
+
 	tests := []struct {
-		name       string
-		chart      *chart.Chart
-		pullSecret string
-		refused    bool
+		name           string
+		chart          *chart.Chart
+		pullSecret     string
+		localChartPath string
+		mentions       []string // what the refusal names; none when the chart is not refused
+		omits          []string
 	}{
-		{"a chart that takes pull Secrets, for an environment that names one", takesPullSecrets, "env-registry-pull", false},
-		{"a chart that takes pull Secrets, for an environment that names none", takesPullSecrets, "", false},
-		{"an older chart, for an environment that names none", predatesPullSecrets, "", false},
-		{"an older chart, for an environment that names one", predatesPullSecrets, "env-registry-pull", true},
+		{"a chart that takes pull Secrets, for an environment that names one", takesPullSecrets, "env-registry-pull", "", nil, nil},
+		{"a chart that takes pull Secrets, for an environment that names none", takesPullSecrets, "", "", nil, nil},
+		{"an older chart, for an environment that names none", predatesPullSecrets, "", "", nil, nil},
+		{"an older chart, for an environment that names one", predatesPullSecrets, "env-registry-pull", "", published, nil},
+		{"an older local chart, for an environment that names one", predatesPullSecrets, "env-registry-pull", "./charts/metaplay-loadtest", local, []string{"botClientChartVersion", "--helm-chart-version"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := checkBotClientChart(test.pullSecret)(test.chart)
-			if !test.refused {
+			err := checkBotClientChart(test.pullSecret, test.localChartPath)(test.chart)
+			if test.mentions == nil {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
 				}
@@ -97,9 +107,14 @@ func TestCheckBotClientChart(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected the chart to be refused")
 			}
-			for _, named := range []string{"0.4.2", "botClientChartVersion", "--helm-chart-version"} {
+			for _, named := range test.mentions {
 				if !strings.Contains(errorText(err), named) {
 					t.Errorf("error %q does not mention %s", errorText(err), named)
+				}
+			}
+			for _, named := range test.omits {
+				if strings.Contains(errorText(err), named) {
+					t.Errorf("error %q mentions %s, which does not apply", errorText(err), named)
 				}
 			}
 		})
