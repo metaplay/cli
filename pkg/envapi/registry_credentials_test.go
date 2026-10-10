@@ -239,6 +239,48 @@ func TestResolveImageRepository_UsesWhatTheStackIssued(t *testing.T) {
 	}
 }
 
+// Pods other than the game server's, such as bot clients, need the Secret the
+// environment's pods pull with, and nothing but the stack can say which one it
+// is. What the stack names is carried through unchanged.
+func TestResolveImageRepository_CarriesThePullSecretTheStackNames(t *testing.T) {
+	env, _ := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+		PullSecret:   "lovely-wombats-build-nimbly-registry-pull",
+	})
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.PullSecret != "lovely-wombats-build-nimbly-registry-pull" {
+		t.Errorf("pull secret = %q, want the one the stack named", repository.PullSecret)
+	}
+}
+
+// Where nodes pull as themselves, as from ECR, the stack names no Secret, and
+// a stack older than the field sends none. Neither is an incomplete answer:
+// the image is still there to push to.
+func TestResolveImageRepository_NoPullSecretIsAnAnswer(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Written by hand, as a stack that predates the field answers.
+		_, _ = w.Write([]byte(`{"registry_host":"registry.example-stack.example.com","repository":"lovely-wombats-build-nimbly/gameserver","username":"developer","password":"signed-assertion"}`))
+	}))
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.PullSecret != "" {
+		t.Errorf("pull secret = %q, want none", repository.PullSecret)
+	}
+}
+
 // A stack serving an environment whose images are in ECR answers the same
 // endpoint, with ECR's own login. Nothing here treats it differently: the
 // reference it resolves to is exactly the repository the environment's

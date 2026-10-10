@@ -21,6 +21,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 )
 
@@ -235,13 +236,10 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			"botsPerPod":         10,
 			"botSpawnRate":       5,
 			"botSessionDuration": "00:00:20",
-			"image": map[string]any{
-				"repository": imageRepository.QualifiedRepository,
-				"tag":        o.argImageTag,
-			},
-			"targetHost":       serverHostname,
-			"targetTlsEnabled": true,
-			"cdnBaseUrl":       fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
+			"image":              botClientImageValues(imageRepository, o.argImageTag),
+			"targetHost":         serverHostname,
+			"targetTlsEnabled":   true,
+			"cdnBaseUrl":         fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
 		},
 		"prometheus": map[string]any{
 			"enabled": true,
@@ -292,6 +290,9 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Deployment info:")
 	log.Info().Msgf("  Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
 	log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(coalesceString(strings.Join(valuesFiles, ", "), "none")))
+	if imageRepository.PullSecret != "" {
+		log.Info().Msgf("  Image pull secret:  %s", styles.RenderTechnical(imageRepository.PullSecret))
+	}
 	log.Info().Msg("")
 
 	// Check if the existing release is in some kind of pending state
@@ -331,7 +332,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
-			true)
+			true,
+			checkBotClientChart(imageRepository.PullSecret, o.flagHelmChartLocalPath))
 		return err
 	})
 
@@ -350,4 +352,54 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully deployed bots"))
 
 	return nil
+}
+
+// botClientImageValues are the chart values naming the image the bots run, from
+// the environment's repository, and the Secret they pull it with where the
+// environment names one.
+//
+// The bots run the game server image, from the same repository, but nothing
+// gives their pods the credential the operator gives the game server's. Where
+// the environment names no Secret, as where nodes pull from ECR as themselves,
+// the chart is told nothing and renders what it always did.
+func botClientImageValues(repository *envapi.EnvironmentImageRepository, tag string) map[string]any {
+	values := map[string]any{
+		"repository": repository.QualifiedRepository,
+		"tag":        tag,
+	}
+	if repository.PullSecret != "" {
+		values["pullSecrets"] = []any{repository.PullSecret}
+	}
+	return values
+}
+
+// checkBotClientChart refuses a loadtest chart that cannot name the Secret the
+// environment's images are pulled with, where the environment names one.
+//
+// Such a chart ignores the value, installs cleanly, and leaves its pods pulling
+// anonymously until the registry's refusals run the deploy into its timeout.
+// It is told apart by whether it declares the value rather than by its version,
+// so no version number here has to be kept in step with the chart's releases.
+// A chart from localChartPath ignores the project's chart version and
+// --helm-chart-version alike, so the suggestion names the path instead.
+func checkBotClientChart(pullSecret string, localChartPath string) func(*chart.Chart) error {
+	return func(loadedChart *chart.Chart) error {
+		if pullSecret == "" {
+			return nil
+		}
+		botclients, _ := loadedChart.Values["botclients"].(map[string]any)
+		image, _ := botclients["image"].(map[string]any)
+		if _, ok := image["pullSecrets"]; ok {
+			return nil
+		}
+		suggestion := "Use a newer metaplay-loadtest chart: raise botClientChartVersion in metaplay-project.yaml, or pass --helm-chart-version"
+		if localChartPath != "" {
+			suggestion = fmt.Sprintf("Point --local-chart-path at a newer metaplay-loadtest chart than the one in '%s', one whose values declare botclients.image.pullSecrets", localChartPath)
+		}
+		return clierrors.Newf("The %s chart %s cannot give the bots a credential to pull their image with", loadedChart.Name(), loadedChart.Metadata.Version).
+			WithDetails(
+				fmt.Sprintf("This environment's registry wants a credential, held in the Secret '%s'.", pullSecret),
+				"Without it the bots cannot pull the image, and the deploy waits until it times out.").
+			WithSuggestion(suggestion)
+	}
 }

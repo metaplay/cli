@@ -40,6 +40,13 @@ type RegistryCredentials struct {
 	Repository   string `json:"repository"`
 	Username     string `json:"username"`
 	Password     string `json:"password"`
+
+	// PullSecret names the Secret, in the environment's namespace, holding the
+	// credential its pods pull these images with. Empty where none is needed,
+	// as for ECR, whose nodes pull as themselves, and from a stack that
+	// predates the field. It is not checked like the fields above: a missing
+	// one leaves nothing to push to, and this one does not.
+	PullSecret string `json:"pull_secret"`
 }
 
 // QualifiedRepository is the Repository field prefixed with its host: what a
@@ -137,6 +144,11 @@ type EnvironmentImageRepository struct {
 	QualifiedRepository string
 	Credentials         *DockerCredentials
 
+	// PullSecret is the Secret pods installed into the environment pull these
+	// images with, for those whose credential nothing else provides, such as
+	// bot clients. Empty where the stack names none.
+	PullSecret string
+
 	ecr *ecrRepository
 }
 
@@ -202,7 +214,7 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 	credentials, err := target.GetRegistryCredentials()
 	switch {
 	case err == nil:
-		return newResolvedImageRepository(credentials.QualifiedRepository(), credentials.DockerCredentials()), nil
+		return newResolvedImageRepository(credentials.QualifiedRepository(), credentials.DockerCredentials(), credentials.PullSecret), nil
 	case errors.Is(err, ErrRegistryCredentialsNotServed):
 		log.Debug().Msg("Stack predates the registry credentials endpoint; using the environment's cloud registry")
 	default:
@@ -239,7 +251,9 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 	if err != nil {
 		return nil, credentialsFailed(err)
 	}
-	repository := newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials)
+	// A stack this old names no Secret: its environments' images are all in
+	// ECR, which nodes pull from as themselves.
+	repository := newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials, "")
 	repository.ecr = newECRRepository(client, envDetails.Deployment.EcrRepo)
 	return repository, nil
 }
@@ -257,11 +271,12 @@ func newECRRepository(client ecrImageAPI, qualifiedRepository string) *ecrReposi
 
 // newResolvedImageRepository is the repository a resolution answered with,
 // logged once here rather than by every command that resolves one.
-func newResolvedImageRepository(qualifiedRepository string, credentials *DockerCredentials) *EnvironmentImageRepository {
-	log.Debug().Msgf("Resolved the environment's image repository to %s, as username=%s", qualifiedRepository, credentials.Username)
+func newResolvedImageRepository(qualifiedRepository string, credentials *DockerCredentials, pullSecret string) *EnvironmentImageRepository {
+	log.Debug().Msgf("Resolved the environment's image repository to %s, as username=%s, pulled with Secret %q", qualifiedRepository, credentials.Username, pullSecret)
 	return &EnvironmentImageRepository{
 		QualifiedRepository: qualifiedRepository,
 		Credentials:         credentials,
+		PullSecret:          pullSecret,
 	}
 }
 

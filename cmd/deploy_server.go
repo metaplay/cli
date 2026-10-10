@@ -552,7 +552,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
-			validateJsonSchema)
+			validateJsonSchema,
+			nil)
 		return err
 	})
 
