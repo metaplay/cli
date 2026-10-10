@@ -204,17 +204,17 @@ func ValidateHelmChartRepositoryURL(chartRepo string) error {
 
 	parsedURL, err := url.Parse(chartRepo)
 	if err != nil {
-		return fmt.Errorf("invalid URL: %w", err)
+		return fmt.Errorf("not a URL: %w", err)
 	}
 
 	// Check if the scheme is either "http" or "https"
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("invalid URL scheme: '%s' (must be 'http' or 'https')", parsedURL.Scheme)
+		return fmt.Errorf("URL scheme is '%s', must be 'http' or 'https'", parsedURL.Scheme)
 	}
 
 	// Check if the host is not empty
 	if parsedURL.Host == "" {
-		return fmt.Errorf("invalid URL: host is empty")
+		return fmt.Errorf("URL has no host")
 	}
 
 	return nil
@@ -842,11 +842,14 @@ func GenerateProjectConfigFile(
 	return projectConfig, nil
 }
 
-// ValidateHelmValuesFile validates the given Helm values file path.
+// ValidateHelmValuesFile checks that filePath names a Helm values file: one
+// with a .yaml or .yml extension that can be read and parses as YAML. Unlike
+// ValidateHelmChartRepositoryURL, it refuses an empty path, so a caller with an
+// optional file checks for that first.
 func ValidateHelmValuesFile(filePath string) error {
 	// Check if the file has a .yaml or .yml suffix
 	if ext := filepath.Ext(filePath); ext != ".yaml" && ext != ".yml" {
-		return fmt.Errorf("file must have .yaml or .yml extension, got: %s", ext)
+		return fmt.Errorf("file must have .yaml or .yml extension, got: '%s'", ext)
 	}
 
 	// Check if the file exists and can be opened

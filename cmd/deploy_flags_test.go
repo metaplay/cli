@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
+
 	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
@@ -37,21 +39,22 @@ func TestHelmChartRepository_FlagOverridesTheProjectConfig(t *testing.T) {
 }
 
 // --values replaces the environment's values file from the project config,
-// rather than adding to it.
+// rather than adding to it, and keeps every file it is given, in order.
 func TestHelmValuesFiles_FlagReplacesTheProjectConfigs(t *testing.T) {
 	configValuesFiles := []string{"Backend/Deployments/develop-server.yaml"}
 
 	for _, tc := range []struct {
-		name           string
-		flagValuesPath string
-		want           []string
+		name            string
+		flagValuesPaths []string
+		want            []string
 	}{
-		{"with --values", "custom.yaml", []string{"custom.yaml"}},
-		{"without --values", "", configValuesFiles},
+		{"with --values", []string{"custom.yaml"}, []string{"custom.yaml"}},
+		{"with --values twice", []string{"base.yaml", "custom.yaml"}, []string{"base.yaml", "custom.yaml"}},
+		{"without --values", nil, configValuesFiles},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := helmValuesFiles(tc.flagValuesPath, configValuesFiles); !slices.Equal(got, tc.want) {
-				t.Errorf("helmValuesFiles(%q, %v) = %v, want %v", tc.flagValuesPath, configValuesFiles, got, tc.want)
+			if got := helmValuesFiles(tc.flagValuesPaths, configValuesFiles); !slices.Equal(got, tc.want) {
+				t.Errorf("helmValuesFiles(%q, %v) = %v, want %v", tc.flagValuesPaths, configValuesFiles, got, tc.want)
 			}
 		})
 	}
@@ -76,38 +79,43 @@ func TestDeploy_PrepareRefusesWhatTheProjectConfigWould(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	otherValuesFile := writeFile("other.yaml", "replicas: 2\n")
+	missingValuesFile := filepath.Join(dir, "missing.yaml")
+
 	cases := []struct {
 		name            string
 		chartRepository string
-		valuesPath      string
+		valuesPaths     []string
 		refusedFlag     string // empty where Prepare accepts
 	}{
 		{name: "no overrides"},
 		{name: "chart repository", chartRepository: "https://charts.example.com"},
-		{name: "values file", valuesPath: valuesFile},
+		{name: "values file", valuesPaths: []string{valuesFile}},
+		{name: "two values files", valuesPaths: []string{valuesFile, otherValuesFile}},
 		{name: "chart repository with no scheme", chartRepository: "charts.example.com", refusedFlag: "--helm-chart-repo"},
 		{name: "chart repository with another scheme", chartRepository: "oci://charts.example.com", refusedFlag: "--helm-chart-repo"},
-		{name: "values file that is not there", valuesPath: filepath.Join(dir, "missing.yaml"), refusedFlag: "--values"},
-		{name: "values directory", valuesPath: valuesDir, refusedFlag: "--values"},
-		{name: "values file not named as YAML", valuesPath: writeFile("values.txt", "replicas: 1\n"), refusedFlag: "--values"},
-		{name: "values file that is not YAML", valuesPath: writeFile("broken.yaml", "replicas: [1\n"), refusedFlag: "--values"},
+		{name: "values file that is not there", valuesPaths: []string{missingValuesFile}, refusedFlag: "--values"},
+		{name: "second values file that is not there", valuesPaths: []string{valuesFile, missingValuesFile}, refusedFlag: "--values '" + missingValuesFile + "'"},
+		{name: "values directory", valuesPaths: []string{valuesDir}, refusedFlag: "--values"},
+		{name: "values file not named as YAML", valuesPaths: []string{writeFile("values.txt", "replicas: 1\n")}, refusedFlag: "--values"},
+		{name: "values file that is not YAML", valuesPaths: []string{writeFile("broken.yaml", "replicas: [1\n")}, refusedFlag: "--values"},
 	}
 
 	commands := []struct {
 		name    string
-		prepare func(chartRepository string, valuesPath string) error
+		prepare func(chartRepository string, valuesPaths []string) error
 	}{
 		{
 			name: "deploy server",
-			prepare: func(chartRepository string, valuesPath string) error {
-				o := deployGameServerOpts{flagHelmChartRepository: chartRepository, flagHelmValuesPath: valuesPath}
+			prepare: func(chartRepository string, valuesPaths []string) error {
+				o := deployGameServerOpts{flagHelmChartRepository: chartRepository, flagHelmValuesPaths: valuesPaths}
 				return o.Prepare(nil, nil)
 			},
 		},
 		{
 			name: "deploy botclient",
-			prepare: func(chartRepository string, valuesPath string) error {
-				o := deployBotClientOpts{argImageTag: "20260601-153000-1a27c25", flagHelmChartRepository: chartRepository, flagHelmValuesPath: valuesPath}
+			prepare: func(chartRepository string, valuesPaths []string) error {
+				o := deployBotClientOpts{argImageTag: "20260601-153000-1a27c25", flagHelmChartRepository: chartRepository, flagHelmValuesPaths: valuesPaths}
 				return o.Prepare(nil, nil)
 			},
 		},
@@ -115,7 +123,7 @@ func TestDeploy_PrepareRefusesWhatTheProjectConfigWould(t *testing.T) {
 	for _, command := range commands {
 		for _, tc := range cases {
 			t.Run(command.name+"/"+tc.name, func(t *testing.T) {
-				err := command.prepare(tc.chartRepository, tc.valuesPath)
+				err := command.prepare(tc.chartRepository, tc.valuesPaths)
 				if tc.refusedFlag == "" {
 					if err != nil {
 						t.Errorf("refused: %v", err)
@@ -133,5 +141,35 @@ func TestDeploy_PrepareRefusesWhatTheProjectConfigWould(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// -f/--values can be repeated, as Helm's own can, and each command keeps every
+// file it is given, in order, rather than only the last.
+func TestDeploy_ValuesFlagIsRepeatable(t *testing.T) {
+	for _, name := range []string{"server", "botclient"} {
+		t.Run("deploy "+name, func(t *testing.T) {
+			cmd, _, err := rootCmd.Find([]string{"deploy", name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			values := cmd.Flags().Lookup("values")
+			t.Cleanup(func() {
+				if slice, ok := values.Value.(pflag.SliceValue); ok {
+					_ = slice.Replace(nil)
+				}
+			})
+
+			if err := cmd.ParseFlags([]string{"-f", "base.yaml", "--values", "custom.yaml"}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := cmd.Flags().GetStringArray("values")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"base.yaml", "custom.yaml"}; !slices.Equal(got, want) {
+				t.Errorf("--values = %v, want %v", got, want)
+			}
+		})
 	}
 }

@@ -44,7 +44,7 @@ type deployBotClientOpts struct {
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
-	flagHelmValuesPath      string
+	flagHelmValuesPaths     []string
 }
 
 func init() {
@@ -87,7 +87,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Path to a Helm values file, relative to the current directory, to use in place of the environment's in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-botclients.yaml'")
+	flags.StringArrayVarP(&o.flagHelmValuesPaths, "values", "f", nil, "Path to a Helm values file, relative to the current directory, to use in place of the environment's botclientValuesFile in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-botclients.yaml' (repeatable, the later overriding the earlier)")
 }
 
 func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -100,15 +100,15 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 	}
 
 	// Refuse a local chart that is not the loadtest chart, and a chart
-	// repository or values file the project config would refuse in their place,
-	// before Run resolves the environment, which may ask to log in first.
+	// repository or values files the project config would refuse in their
+	// place, before Run resolves the environment, which may ask to log in first.
 	if err := validateLocalChartPath(o.flagHelmChartLocalPath, metaplayLoadTestChartName); err != nil {
 		return err
 	}
 	if err := validateChartRepository(o.flagHelmChartRepository); err != nil {
 		return err
 	}
-	return validateValuesPath(o.flagHelmValuesPath)
+	return validateValuesPaths(o.flagHelmValuesPaths)
 }
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
@@ -211,7 +211,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve Helm values file paths, relative to the current directory.
-	valuesFiles := helmValuesFiles(o.flagHelmValuesPath, project.GetBotClientValuesFiles(envConfig))
+	valuesFiles := helmValuesFiles(o.flagHelmValuesPaths, project.GetBotClientValuesFiles(envConfig))
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()

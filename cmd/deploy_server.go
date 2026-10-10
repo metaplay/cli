@@ -37,7 +37,7 @@ type deployGameServerOpts struct {
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
-	flagHelmValuesPath      string
+	flagHelmValuesPaths     []string
 	flagDryRun              bool
 }
 
@@ -108,21 +108,21 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-gameserver chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Path to a Helm values file, relative to the current directory, to use in place of the environment's in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.StringArrayVarP(&o.flagHelmValuesPaths, "values", "f", nil, "Path to a Helm values file, relative to the current directory, to use in place of the environment's serverValuesFile in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-server.yaml' (repeatable, the later overriding the earlier)")
 	flags.BoolVar(&o.flagDryRun, "dry-run", false, "Show what would be deployed without actually performing the deployment")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Refuse a local chart that is not the game server chart, and a chart
-	// repository or values file the project config would refuse in their place,
-	// before Run resolves the environment, which may ask to log in first.
+	// repository or values files the project config would refuse in their
+	// place, before Run resolves the environment, which may ask to log in first.
 	if err := validateLocalChartPath(o.flagHelmChartLocalPath, metaplayGameServerChartName); err != nil {
 		return err
 	}
 	if err := validateChartRepository(o.flagHelmChartRepository); err != nil {
 		return err
 	}
-	return validateValuesPath(o.flagHelmValuesPath)
+	return validateValuesPaths(o.flagHelmValuesPaths)
 }
 
 func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
@@ -250,7 +250,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Helm chart path: %s", helmChartPath)
 
 	// Resolve Helm values file paths, relative to the current directory.
-	valuesFiles := helmValuesFiles(o.flagHelmValuesPath, project.GetServerValuesFiles(envConfig))
+	valuesFiles := helmValuesFiles(o.flagHelmValuesPaths, project.GetServerValuesFiles(envConfig))
 
 	// Create a Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
@@ -722,11 +722,12 @@ func helmChartRepository(flagRepository string, configRepository string) string 
 	return coalesceString(flagRepository, configRepository, "https://charts.metaplay.dev")
 }
 
-// helmValuesFiles is the Helm values files to deploy with: the --values flag
-// where given, in place of the environment's from the project config.
-func helmValuesFiles(flagValuesPath string, configValuesFiles []string) []string {
-	if flagValuesPath != "" {
-		return []string{flagValuesPath}
+// helmValuesFiles is the Helm values files to deploy with: those given with
+// --values, in their order, in place of the environment's from the project
+// config.
+func helmValuesFiles(flagValuesPaths []string, configValuesFiles []string) []string {
+	if len(flagValuesPaths) > 0 {
+		return flagValuesPaths
 	}
 	return configValuesFiles
 }
@@ -741,15 +742,14 @@ func validateChartRepository(chartRepository string) error {
 	return nil
 }
 
-// validateValuesPath refuses a --values that the project config would refuse
+// validateValuesPaths refuses a --values that the project config would refuse
 // as an environment's values file. An unset flag is accepted.
-func validateValuesPath(valuesPath string) error {
-	if valuesPath == "" {
-		return nil
-	}
-	if err := metaproj.ValidateHelmValuesFile(valuesPath); err != nil {
-		return clierrors.WrapUsageError(err, fmt.Sprintf("Invalid --values '%s'", valuesPath)).
-			WithSuggestion("Pass the path to a .yaml or .yml Helm values file, relative to the current directory")
+func validateValuesPaths(valuesPaths []string) error {
+	for _, valuesPath := range valuesPaths {
+		if err := metaproj.ValidateHelmValuesFile(valuesPath); err != nil {
+			return clierrors.WrapUsageError(err, fmt.Sprintf("Invalid --values '%s'", valuesPath)).
+				WithSuggestion("Pass the path to a .yaml or .yml Helm values file, relative to the current directory")
+		}
 	}
 	return nil
 }
