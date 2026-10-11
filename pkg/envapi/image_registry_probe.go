@@ -6,26 +6,12 @@ package envapi
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-)
-
-// PushPath is which path a push or deploy takes to an environment's images.
-type PushPath string
-
-const (
-	// PushPathCredentialsEndpoint is a credential the stack issues, for
-	// whichever registry it keeps the environment's images in.
-	PushPathCredentialsEndpoint PushPath = "credentials-endpoint"
-	// PushPathOlder is the repository the environment's description names,
-	// in ECR, reached with AWS credentials the stack issues: how a stack older
-	// than the registry credentials endpoint has its images reached.
-	PushPathOlder PushPath = "older-path"
-	// PushPathNone is a push that fails before it reaches any registry.
-	PushPathNone PushPath = "none"
 )
 
 // CredentialsEndpointStatus is what the registry credentials endpoint
@@ -77,15 +63,25 @@ type CredentialsEndpointAnswer struct {
 
 	// ExpiresAt is when the credential stops being accepted, read from the
 	// credential itself where it states one: a credential a stack signs for
-	// its own registry does, and ECR's token does not.
-	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	// its own registry does, and ECR's token does not. ExpiryNote says so
+	// where it does not, rather than leaving an absence a reader would take
+	// for "never".
+	ExpiresAt  *time.Time `json:"expiresAt,omitempty"`
+	ExpiryNote string     `json:"expiryNote,omitempty"`
 }
 
 // OlderPathAnswer is what the older path found.
 type OlderPathAnswer struct {
-	Status     OlderPathStatus `json:"status"`
-	Error      string          `json:"error,omitempty"`
-	Repository string          `json:"repository,omitempty"`
+	Status OlderPathStatus `json:"status"`
+
+	// Reason is why there is nothing to reach, where the path is absent;
+	// Error is what reaching it failed with, where it failed.
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
+
+	// Repository is the one the environment's description names, whatever
+	// reaching it did.
+	Repository string `json:"repository,omitempty"`
 
 	// ExpiresAt is when ECR's authorization token expires, as ECR says.
 	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
@@ -102,8 +98,9 @@ func (target *TargetEnvironment) ProbeImageRegistry() *ImageRegistryProbe {
 	probe := &ImageRegistryProbe{}
 
 	credentials, credentialsErr := target.GetRegistryCredentials()
-	switch {
-	case credentialsErr == nil:
+	probe.PushPath = pushPathFor(credentialsErr)
+	switch probe.PushPath {
+	case PushPathCredentialsEndpoint:
 		probe.CredentialsEndpoint = CredentialsEndpointAnswer{
 			Status:       CredentialsEndpointServed,
 			RegistryHost: credentials.RegistryHost,
@@ -111,31 +108,37 @@ func (target *TargetEnvironment) ProbeImageRegistry() *ImageRegistryProbe {
 			Username:     credentials.Username,
 			ExpiresAt:    statedExpiry(credentials.Password),
 		}
-	case errors.Is(credentialsErr, ErrRegistryCredentialsNotServed):
+		if probe.CredentialsEndpoint.ExpiresAt == nil {
+			probe.CredentialsEndpoint.ExpiryNote = unstatedExpiryNote(credentials.RegistryHost)
+		}
+	case PushPathOlder:
 		probe.CredentialsEndpoint = CredentialsEndpointAnswer{Status: CredentialsEndpointNotServed}
 	default:
-		probe.CredentialsEndpoint = CredentialsEndpointAnswer{Status: CredentialsEndpointFailed, Error: describe(credentialsErr)}
+		failure := errorChainText(credentialsErr)
+		probe.CredentialsEndpoint = CredentialsEndpointAnswer{Status: CredentialsEndpointFailed, Error: failure}
+		probe.PushPathError = failure
 	}
 
-	repository, expiresAt, olderErr := target.reachOlderPath()
+	older, olderErr := target.reachOlderPath()
+	probe.OlderPath = OlderPathAnswer{Repository: older.namedRepository}
 	switch {
 	case olderErr == nil:
-		probe.OlderPath = OlderPathAnswer{Status: OlderPathReachable, Repository: repository.QualifiedRepository, ExpiresAt: expiresAt}
+		probe.OlderPath.Status = OlderPathReachable
+		probe.OlderPath.ExpiresAt = older.expiresAt
 	case errors.Is(olderErr, errEnvironmentNotDescribed), errors.Is(olderErr, errNoOlderRepository):
-		probe.OlderPath = OlderPathAnswer{Status: OlderPathAbsent, Error: olderErr.Error()}
+		probe.OlderPath.Status = OlderPathAbsent
+		probe.OlderPath.Reason = olderErr.Error()
 	default:
-		probe.OlderPath = OlderPathAnswer{Status: OlderPathFailed, Error: describe(olderErr)}
+		probe.OlderPath.Status = OlderPathFailed
+		probe.OlderPath.Error = errorChainText(olderErr)
 	}
 
-	probe.PushPath = pushPathFor(credentialsErr)
-	switch {
-	case probe.PushPath == PushPathNone:
-		probe.PushPathError = describe(credentialsErr)
-	case probe.PushPath == PushPathOlder && olderErr != nil:
-		// A push falls back here and fails here, so this is what it would
-		// fail with, and no path is taken.
+	// A push that falls back to the older path and cannot reach it fails
+	// there, with what ResolveImageRepository makes of that failure, and no
+	// path is taken.
+	if probe.PushPath == PushPathOlder && olderErr != nil {
 		probe.PushPath = PushPathNone
-		probe.PushPathError = probe.OlderPath.Error
+		probe.PushPathError = errorChainText(target.olderPathFailure(olderErr))
 	}
 	return probe
 }
@@ -156,13 +159,29 @@ func statedExpiry(password string) *time.Time {
 	return &expiry.Time
 }
 
-// describe is an error as the probe reports it. A CLI error's own text is only
-// its headline, and whatever wraps one carries just that, so the cause beneath
-// it follows.
-func describe(err error) string {
+// unstatedExpiryNote says a credential states no expiry, and, for ECR, what
+// ECR documents instead.
+func unstatedExpiryNote(registryHost string) string {
+	if isECRRegistryHost(registryHost) {
+		return "not stated by the credential; an ECR authorization token is valid for 12 hours"
+	}
+	return "not stated by the credential"
+}
+
+// isECRRegistryHost is whether a registry host is ECR's:
+// <account>.dkr.ecr.<region>.amazonaws.com, or .amazonaws.com.cn in China.
+func isECRRegistryHost(host string) bool {
+	return strings.Contains(host, ".dkr.ecr.") &&
+		(strings.HasSuffix(host, ".amazonaws.com") || strings.HasSuffix(host, ".amazonaws.com.cn"))
+}
+
+// errorChainText is an error as the probe reports it. A CLI error's own text
+// is only its headline, and whatever wraps one carries just that, so the cause
+// beneath it follows.
+func errorChainText(err error) string {
 	text := err.Error()
-	if cliErr, ok := errors.AsType[*clierrors.CLIError](err); ok && cliErr.Cause != nil {
-		return text + ": " + describe(cliErr.Cause)
+	if cliErr, ok := clierrors.AsCLIError(err); ok && cliErr.Cause != nil {
+		return text + ": " + errorChainText(cliErr.Cause)
 	}
 	return text
 }

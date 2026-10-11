@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -264,9 +265,15 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 
 // Request details about an environment from the StackAPI.
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
+	return target.getDetails()
+}
+
+// getDetails is GetDetails, naming the non-2xx statuses the caller handles
+// itself, which are then not logged as failed requests.
+func (target *TargetEnvironment) getDetails(expectedStatuses ...int) (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
+	details, err := metahttp.RequestExpecting[DeploymentSecret](target.StackApiClient, http.MethodGet, path, nil, "", expectedStatuses...)
 	return &details, err
 }
 

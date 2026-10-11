@@ -52,7 +52,8 @@ func init() {
 			The credential's expiry is shown where it states one. The password is
 			never shown.
 
-			Needs no deployed game server: it talks to the stack's API alone.
+			Needs no deployed game server and no access to its cluster: it talks to
+			the stack's API, and to ECR for the older path.
 
 			{Arguments}
 
@@ -103,7 +104,7 @@ func (o *debugImageRegistryOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderTitle("Image Registry Paths"))
 		log.Info().Msg("")
-		log.Info().Msgf("Target environment:")
+		log.Info().Msg("Target environment:")
 		log.Info().Msgf("  Name:              %s", styles.RenderTechnical(envConfig.Name))
 		log.Info().Msgf("  ID:                %s", styles.RenderTechnical(envConfig.HumanID))
 		log.Info().Msgf("  Stack domain:      %s", styles.RenderTechnical(envConfig.StackDomain))
@@ -121,14 +122,14 @@ func formatImageRegistryProbe(probe *envapi.ImageRegistryProbe, format string, n
 	if format == "json" {
 		encoded, err := json.MarshalIndent(probe, "", "  ")
 		if err != nil {
-			return "", err
+			return "", clierrors.Wrap(err, "Failed to encode the report as JSON")
 		}
 		return string(encoded), nil
 	}
 
 	var lines []string
-	add := func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
-	field := func(name, value string) { add("  %-17s  %s", name+":", value) }
+	add := func(line string, args ...any) { lines = append(lines, fmt.Sprintf(line, args...)) }
+	field := func(name, value string) { add("  %-19s %s", name+":", value) }
 
 	endpoint := probe.CredentialsEndpoint
 	add("Registry credentials endpoint: %s", renderEndpointStatus(endpoint.Status))
@@ -140,7 +141,7 @@ func formatImageRegistryProbe(probe *envapi.ImageRegistryProbe, format string, n
 		if endpoint.ExpiresAt != nil {
 			field("Expires", renderExpiry(*endpoint.ExpiresAt, now))
 		} else {
-			field("Expires", styles.RenderMuted("not stated by the credential (an ECR token is valid for 12 hours)"))
+			field("Expires", styles.RenderMuted(endpoint.ExpiryNote))
 		}
 	case envapi.CredentialsEndpointNotServed:
 		field("Meaning", styles.RenderMuted("the stack predates the endpoint"))
@@ -158,19 +159,22 @@ func formatImageRegistryProbe(probe *envapi.ImageRegistryProbe, format string, n
 			field("Expires", renderExpiry(*older.ExpiresAt, now))
 		}
 	case envapi.OlderPathAbsent:
-		field("Meaning", styles.RenderMuted(older.Error))
+		field("Meaning", styles.RenderMuted(older.Reason))
 	case envapi.OlderPathFailed:
+		field("Repository", styles.RenderTechnical(older.Repository))
 		field("Error", styles.RenderError(older.Error))
 	}
 	add("")
 
+	taken := styles.RenderError("neither")
 	switch probe.PushPath {
 	case envapi.PushPathCredentialsEndpoint:
-		add("A push or deploy would take: %s", styles.RenderSuccess("the registry credentials endpoint"))
+		taken = styles.RenderSuccess("the registry credentials endpoint")
 	case envapi.PushPathOlder:
-		add("A push or deploy would take: %s", styles.RenderSuccess("the older path"))
-	default:
-		add("A push or deploy would take: %s", styles.RenderError("neither"))
+		taken = styles.RenderSuccess("the older path")
+	}
+	add("A push or deploy would take: %s", taken)
+	if probe.PushPath == envapi.PushPathNone {
 		field("It would fail with", styles.RenderError(probe.PushPathError))
 	}
 	return strings.Join(lines, "\n"), nil

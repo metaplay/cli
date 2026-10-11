@@ -19,26 +19,38 @@ import (
 	"github.com/metaplay/cli/pkg/metahttp"
 )
 
-// probedFrom is what the probe reports against a stack that issues credential
-// and describes no environment, so the older path finds nothing.
+// probedFrom is what the probe reports against a stack that issues a
+// credential and describes no environment, so the older path finds nothing.
 func probedFrom(t *testing.T, credential envapi.RegistryCredentials) *envapi.ImageRegistryProbe {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return probedFromStack(t, func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/registry") {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(credential)
-	}))
+	})
+}
+
+// probedFromStack is what the probe reports against a fake stack answering as
+// handler does: the report as the command really receives it, rather than one
+// built by hand to look like it.
+func probedFromStack(t *testing.T, handler http.HandlerFunc) *envapi.ImageRegistryProbe {
+	t.Helper()
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	tokenSet := &auth.TokenSet{}
+	client := metahttp.NewJSONClient(tokenSet, server.URL)
+	// The shared client retries a 5xx with a backoff, which only slows a test
+	// that is about what is printed.
+	client.Resty.SetRetryCount(0)
 	env := &envapi.TargetEnvironment{
 		TokenSet:        tokenSet,
 		StackApiBaseURL: server.URL,
 		HumanID:         "lovely-wombats-build-nimbly",
-		StackApiClient:  metahttp.NewJSONClient(tokenSet, server.URL),
+		StackApiClient:  client,
 	}
 	return env.ProbeImageRegistry()
 }
@@ -94,7 +106,7 @@ func TestFormatImageRegistryProbe_SaysWhenTheCredentialExpires(t *testing.T) {
 			Username:     "developer",
 			ExpiresAt:    new(now.Add(-5 * time.Minute)),
 		},
-		OlderPath: envapi.OlderPathAnswer{Status: envapi.OlderPathAbsent, Error: "the stack has no description of this environment"},
+		OlderPath: envapi.OlderPathAnswer{Status: envapi.OlderPathAbsent, Reason: "the stack has no description of this environment"},
 		PushPath:  envapi.PushPathCredentialsEndpoint,
 	}
 
@@ -108,26 +120,81 @@ func TestFormatImageRegistryProbe_SaysWhenTheCredentialExpires(t *testing.T) {
 	}
 }
 
-// An ECR token says nothing of its own expiry. The output says so, rather than
-// leaving a blank a reader would take for "never".
+// A credential that states no expiry is said to state none, and ECR's
+// documented validity is offered only where the registry is ECR's.
 func TestFormatImageRegistryProbe_SaysWhenACredentialStatesNoExpiry(t *testing.T) {
-	unstated := envapi.ImageRegistryProbe{
-		CredentialsEndpoint: envapi.CredentialsEndpointAnswer{
-			Status:       envapi.CredentialsEndpointServed,
-			RegistryHost: "123456789012.dkr.ecr.eu-west-1.amazonaws.com",
-			Repository:   "lovely-wombats-build-nimbly",
-			Username:     "AWS",
-		},
-		OlderPath: envapi.OlderPathAnswer{Status: envapi.OlderPathAbsent, Error: "the environment names no repository of its own"},
-		PushPath:  envapi.PushPathCredentialsEndpoint,
-	}
+	for name, tc := range map[string]struct {
+		host    string
+		wantECR bool
+	}{
+		"an ECR token":                  {host: "123456789012.dkr.ecr.eu-west-1.amazonaws.com", wantECR: true},
+		"another registry's credential": {host: "registry.example-stack.example.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			probe := probedFrom(t, envapi.RegistryCredentials{
+				RegistryHost: tc.host,
+				Repository:   "lovely-wombats-build-nimbly",
+				Username:     "AWS",
+				Password:     "a-token-that-is-not-a-jwt",
+			})
 
-	output, err := formatImageRegistryProbe(&unstated, "text", time.Now())
+			output, err := formatImageRegistryProbe(probe, "text", time.Now())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if !strings.Contains(output, "not stated by the credential") {
+				t.Errorf("the output does not say the expiry is unstated:\n%s", output)
+			}
+			if mentionsECR := strings.Contains(output, "12 hours"); mentionsECR != tc.wantECR {
+				t.Errorf("ECR's 12-hour validity offered = %v, want %v:\n%s", mentionsECR, tc.wantECR, output)
+			}
+		})
+	}
+}
+
+// Why the older path has nothing to reach is said, not left as a blank line.
+func TestFormatImageRegistryProbe_SaysWhyTheOlderPathIsAbsent(t *testing.T) {
+	probe := probedFrom(t, envapi.RegistryCredentials{
+		RegistryHost: "registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "a-password",
+	})
+
+	output, err := formatImageRegistryProbe(probe, "text", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(output, "not stated by the credential") {
-		t.Errorf("the output does not say the expiry is unstated:\n%s", output)
+	if !strings.Contains(output, "the stack has no description of this environment") {
+		t.Errorf("the output does not say why the older path is absent:\n%s", output)
+	}
+}
+
+// A failing older path names what it was failing to reach.
+func TestFormatImageRegistryProbe_NamesTheRepositoryAFailingOlderPathNames(t *testing.T) {
+	const repository = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly"
+	probe := probedFromStack(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/registry"):
+			http.NotFound(w, r)
+		case strings.HasSuffix(r.URL.Path, "/aws"):
+			http.Error(w, `{"error":"refused"}`, http.StatusForbidden)
+		default:
+			details := envapi.DeploymentSecret{}
+			details.Deployment.EcrRepo = repository
+			_ = json.NewEncoder(w).Encode(details)
+		}
+	})
+
+	output, err := formatImageRegistryProbe(probe, "text", time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(output, repository) {
+		t.Errorf("the output does not name the repository the older path failed to reach:\n%s", output)
 	}
 }

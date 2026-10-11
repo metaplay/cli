@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // The probe asks both paths to an environment's images and reports what each
@@ -187,7 +189,8 @@ func TestProbeImageRegistry_AStackOlderThanTheEndpoint(t *testing.T) {
 }
 
 // The failures are the answer. None of them stops the probe, and each says
-// what failed and what a push would do about it.
+// what failed — and where no path would be taken, what a push would fail with,
+// in exactly the words a push would use.
 func TestProbeImageRegistry_FailuresAreReportedRatherThanReturned(t *testing.T) {
 	for name, tc := range map[string]struct {
 		answers      stackAnswers
@@ -201,6 +204,24 @@ func TestProbeImageRegistry_FailuresAreReportedRatherThanReturned(t *testing.T) 
 			wantEndpoint: CredentialsEndpointFailed,
 			wantOlder:    OlderPathReachable,
 			wantPush:     PushPathNone,
+		},
+		"the endpoint fails, and there is no older path either": {
+			answers:      stackAnswers{registryStatus: http.StatusInternalServerError},
+			wantEndpoint: CredentialsEndpointFailed,
+			wantOlder:    OlderPathAbsent,
+			wantPush:     PushPathNone,
+		},
+		"both fail": {
+			answers:      stackAnswers{registryStatus: http.StatusInternalServerError, ecrRepo: olderRepository, awsStatus: http.StatusForbidden},
+			wantEndpoint: CredentialsEndpointFailed,
+			wantOlder:    OlderPathFailed,
+			wantPush:     PushPathNone,
+		},
+		"served, and the older path fails, which a push never reaches": {
+			answers:      stackAnswers{registry: servedCredential("a-password"), ecrRepo: olderRepository, awsStatus: http.StatusForbidden},
+			wantEndpoint: CredentialsEndpointServed,
+			wantOlder:    OlderPathFailed,
+			wantPush:     PushPathCredentialsEndpoint,
 		},
 		"not served, and the stack refuses cloud credentials": {
 			answers:      stackAnswers{registryStatus: http.StatusNotFound, ecrRepo: olderRepository, awsStatus: http.StatusForbidden},
@@ -239,18 +260,104 @@ func TestProbeImageRegistry_FailuresAreReportedRatherThanReturned(t *testing.T) 
 			if tc.wantEndpoint == CredentialsEndpointFailed && probe.CredentialsEndpoint.Error == "" {
 				t.Errorf("endpoint failed with no error to show")
 			}
-			if probe.OlderPath.Status != tc.wantOlder {
-				t.Errorf("older path = %+v, want %q", probe.OlderPath, tc.wantOlder)
+
+			older := probe.OlderPath
+			if older.Status != tc.wantOlder {
+				t.Errorf("older path = %+v, want %q", older, tc.wantOlder)
 			}
-			if tc.wantOlder != OlderPathReachable && probe.OlderPath.Error == "" {
-				t.Errorf("older path is %q with nothing saying why", probe.OlderPath.Status)
+			switch tc.wantOlder {
+			case OlderPathAbsent:
+				if older.Reason == "" {
+					t.Errorf("older path is absent with nothing saying why")
+				}
+			case OlderPathFailed:
+				if older.Error == "" {
+					t.Errorf("older path failed with no error to show")
+				}
 			}
+			if tc.answers.ecrRepo != "" && tc.answers.detailsStatus == 0 && older.Repository != tc.answers.ecrRepo {
+				t.Errorf("older path repository = %q, want the %q the environment names, whatever reaching it did", older.Repository, tc.answers.ecrRepo)
+			}
+
 			if probe.PushPath != tc.wantPush {
 				t.Errorf("push path = %q, want %q", probe.PushPath, tc.wantPush)
 			}
-			if tc.wantPush == PushPathNone && probe.PushPathError == "" {
-				t.Errorf("no path would be taken, and nothing says what a push would fail with")
+			if tc.wantPush == PushPathNone {
+				// The claim is that this is what a push would fail with, so it
+				// is held to what a push does fail with.
+				_, pushErr := env.ResolveImageRepository()
+				if pushErr == nil {
+					t.Fatalf("the probe says no path would be taken, and resolving one succeeded")
+				}
+				if probe.PushPathError != errorChainText(pushErr) {
+					t.Errorf("push path error = %q, but a push fails with %q", probe.PushPathError, errorChainText(pushErr))
+				}
 			}
 		})
+	}
+}
+
+// A credential that states no expiry is said to state none, in the data as
+// well as in the text, and ECR's documented validity is offered only for ECR.
+func TestProbeImageRegistry_ACredentialStatingNoExpirySaysSo(t *testing.T) {
+	for name, tc := range map[string]struct {
+		host     string
+		password string
+		wantECR  bool
+	}{
+		"an ECR token": {host: "123456789012.dkr.ecr.eu-west-1.amazonaws.com", password: "an-ecr-token", wantECR: true},
+		"a signed credential without an expiry": {host: "registry.example-stack.example.com", password: func() string {
+			signed, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"sub": "developer"}).SignedString([]byte("k"))
+			return signed
+		}()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			credential := servedCredential(tc.password)
+			credential.RegistryHost = tc.host
+			env := stackWithECR(t, stackAnswers{registry: credential}, 0)
+
+			endpoint := env.ProbeImageRegistry().CredentialsEndpoint
+
+			if endpoint.ExpiresAt != nil {
+				t.Fatalf("expiry = %v, want none stated", endpoint.ExpiresAt)
+			}
+			if !strings.Contains(endpoint.ExpiryNote, "not stated by the credential") {
+				t.Errorf("expiry note = %q, want it to say the credential states none", endpoint.ExpiryNote)
+			}
+			if mentionsECR := strings.Contains(endpoint.ExpiryNote, "12 hours"); mentionsECR != tc.wantECR {
+				t.Errorf("expiry note = %q; ECR's validity offered = %v, want %v", endpoint.ExpiryNote, mentionsECR, tc.wantECR)
+			}
+		})
+	}
+}
+
+// An older path with nothing to reach is an ordinary answer — it is what an
+// environment whose images are not in ECR looks like — so finding it is not
+// logged as a failed request. On a stack that keeps no such descriptions, every
+// run of the command would otherwise open with an error line.
+func TestProbeImageRegistry_AnAbsentOlderPathIsNotLoggedAsAFailure(t *testing.T) {
+	var logged strings.Builder
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = previousLogger })
+	// Not found as a route that does not exist answers it: plain text rather
+	// than the stack's structured error, which is the body a failed request
+	// is logged loudest for.
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/registry") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(servedCredential("a-password"))
+	}))
+
+	probe := env.ProbeImageRegistry()
+
+	if probe.OlderPath.Status != OlderPathAbsent {
+		t.Fatalf("older path = %+v, want absent", probe.OlderPath)
+	}
+	if strings.Contains(logged.String(), `"level":"error"`) {
+		t.Errorf("an absent older path was logged as an error:\n%s", logged.String())
 	}
 }
