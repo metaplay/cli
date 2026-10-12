@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/rs/zerolog/log"
@@ -212,31 +213,94 @@ func (r *EnvironmentImageRepository) FetchImageMetadata(imageRef string) (*Metap
 // guessing at the first 404.
 func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepository, error) {
 	credentials, err := target.GetRegistryCredentials()
-	switch {
-	case err == nil:
+	switch pushPathFor(err) {
+	case PushPathCredentialsEndpoint:
 		return newResolvedImageRepository(credentials.QualifiedRepository(), credentials.DockerCredentials(), credentials.PullSecret), nil
-	case errors.Is(err, ErrRegistryCredentialsNotServed):
+	case PushPathOlder:
 		log.Debug().Msg("Stack predates the registry credentials endpoint; using the environment's cloud registry")
 	default:
 		return nil, err
 	}
 
-	envDetails, err := target.GetDetails()
+	older, err := target.reachOlderPath()
+	if err != nil {
+		return nil, target.olderPathFailure(err)
+	}
+	return older.repository, nil
+}
+
+// PushPath is which path a push or deploy takes to an environment's images.
+type PushPath string
+
+const (
+	// PushPathCredentialsEndpoint is a credential the stack issues, for
+	// whichever registry it keeps the environment's images in.
+	PushPathCredentialsEndpoint PushPath = "credentials-endpoint"
+	// PushPathOlder is the repository the environment's description names,
+	// in ECR, reached with AWS credentials the stack issues: how a stack older
+	// than the registry credentials endpoint has its images reached.
+	PushPathOlder PushPath = "older-path"
+	// PushPathNone is a push that fails before it reaches any registry.
+	PushPathNone PushPath = "none"
+)
+
+// pushPathFor is which path a push or deploy takes to an environment's images,
+// given what the registry credentials endpoint answered: the endpoint whenever
+// it serves, the older path only when it is not served at all, and neither on
+// any other failure, which is not a reason to fall back. ResolveImageRepository
+// and ProbeImageRegistry both decide by it, so a probe cannot report a path the
+// push it explains would not take.
+func pushPathFor(credentialsErr error) PushPath {
+	switch {
+	case credentialsErr == nil:
+		return PushPathCredentialsEndpoint
+	case errors.Is(credentialsErr, ErrRegistryCredentialsNotServed):
+		return PushPathOlder
+	default:
+		return PushPathNone
+	}
+}
+
+// errEnvironmentNotDescribed and errNoOlderRepository are the two ways the
+// older path finds nothing to reach, as opposed to failing to reach it.
+var (
+	errEnvironmentNotDescribed = errors.New("the stack has no description of this environment")
+	errNoOlderRepository       = errors.New("the environment names no repository of its own")
+)
+
+// olderPath is what the older path to an environment's images found.
+type olderPath struct {
+	// namedRepository is the repository the environment's description names,
+	// once the description has been read: what a failure to reach it was
+	// failing to reach.
+	namedRepository string
+
+	repository *EnvironmentImageRepository
+
+	// expiresAt is when ECR's authorization token expires, as ECR says.
+	expiresAt *time.Time
+}
+
+// reachOlderPath reaches an environment's images the way a stack older than
+// the registry credentials endpoint has them reached: the repository its
+// description names, in ECR, through AWS credentials the stack issues.
+//
+// Nothing cloud-shaped is fetched before the description is read, and finding
+// nothing there is told apart from failing to reach what it names.
+func (target *TargetEnvironment) reachOlderPath() (olderPath, error) {
+	// A 404 is handled here, as a description the stack does not have, so it
+	// is not logged as a failed request.
+	envDetails, err := target.getDetails(http.StatusNotFound)
 	if err != nil {
 		if isHTTPNotFound(err) {
-			// Neither request found anything: the environment is not on this
-			// stack at all. Reporting the deployments request would point the
-			// reader at a description that was never the problem.
-			return nil, clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
-				WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal")
+			return olderPath{}, errEnvironmentNotDescribed
 		}
-		return nil, clierrors.Wrap(err, "Failed to read the environment's details").
+		return olderPath{}, clierrors.Wrap(err, "Failed to read the environment's details").
 			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
 	}
-	if envDetails.Deployment.EcrRepo == "" {
-		return nil, clierrors.New("The environment has no image repository").
-			WithDetails("Its stack predates the registry credentials endpoint, and the environment names no repository of its own.").
-			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
+	found := olderPath{namedRepository: envDetails.Deployment.EcrRepo}
+	if found.namedRepository == "" {
+		return found, errNoOlderRepository
 	}
 
 	credentialsFailed := func(err error) error {
@@ -245,17 +309,38 @@ func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepo
 	}
 	client, err := target.newECRClient(envDetails)
 	if err != nil {
-		return nil, credentialsFailed(err)
+		return found, credentialsFailed(err)
 	}
-	dockerCredentials, err := ecrDockerCredentials(client)
+	dockerCredentials, expiresAt, err := ecrDockerCredentials(client)
 	if err != nil {
-		return nil, credentialsFailed(err)
+		return found, credentialsFailed(err)
 	}
 	// A stack this old names no Secret: its environments' images are all in
 	// ECR, which nodes pull from as themselves.
-	repository := newResolvedImageRepository(envDetails.Deployment.EcrRepo, dockerCredentials, "")
-	repository.ecr = newECRRepository(client, envDetails.Deployment.EcrRepo)
-	return repository, nil
+	found.repository = newResolvedImageRepository(found.namedRepository, dockerCredentials, "")
+	found.repository.ecr = newECRRepository(client, found.namedRepository)
+	found.expiresAt = expiresAt
+	return found, nil
+}
+
+// olderPathFailure is what a push that fell back to the older path fails with,
+// given what reaching it failed with. Shared with ProbeImageRegistry, so what
+// the probe says a push would fail with is what one does.
+func (target *TargetEnvironment) olderPathFailure(err error) error {
+	switch {
+	case errors.Is(err, errEnvironmentNotDescribed):
+		// Neither request found anything: the environment is not on this
+		// stack at all. Reporting the deployments request would point the
+		// reader at a description that was never the problem.
+		return clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
+			WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal")
+	case errors.Is(err, errNoOlderRepository):
+		return clierrors.New("The environment has no image repository").
+			WithDetails("Its stack predates the registry credentials endpoint, and the environment names no repository of its own.").
+			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
+	default:
+		return err
+	}
 }
 
 // newECRRepository is the ECR repository behind a qualified repository, as

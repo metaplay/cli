@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -264,9 +265,15 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 
 // Request details about an environment from the StackAPI.
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
+	return target.getDetails()
+}
+
+// getDetails is GetDetails, naming the non-2xx statuses the caller handles
+// itself, which are then not logged as failed requests.
+func (target *TargetEnvironment) getDetails(expectedStatuses ...int) (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
+	details, err := metahttp.RequestExpecting[DeploymentSecret](target.StackApiClient, http.MethodGet, path, nil, "", expectedStatuses...)
 	return &details, err
 }
 
@@ -530,19 +537,20 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 	return ecr.NewFromConfig(cfg), nil
 }
 
-// ecrDockerCredentials gets a docker login for ECR from its control plane.
-func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, error) {
+// ecrDockerCredentials gets a docker login for ECR from its control plane, and
+// when the token it is made of expires, where ECR says.
+func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, *time.Time, error) {
 	// Fetch the ECR docker authentication token
 	log.Debug().Msg("Fetch ECR login credentials from AWS")
 	response, err := client.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(response.AuthorizationData) == 0 ||
 		response.AuthorizationData[0].AuthorizationToken == nil ||
 		response.AuthorizationData[0].ProxyEndpoint == nil {
-		return nil, errors.New("received an empty authorization token response for ECR repository")
+		return nil, nil, errors.New("received an empty authorization token response for ECR repository")
 	}
 
 	// Parse username and password from the response (separated by a ':')
@@ -551,13 +559,13 @@ func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, error) {
 	authorization64 := *response.AuthorizationData[0].AuthorizationToken
 	decoded, err := base64.StdEncoding.DecodeString(authorization64)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	authorization := string(decoded)
 	username, password, ok := strings.Cut(authorization, ":")
 	if !ok {
-		return nil, errors.New("failed to parse authorization token")
+		return nil, nil, errors.New("failed to parse authorization token")
 	}
 
 	log.Debug().Msgf("ECR: username=%s, proxyEndpoint=%s", username, registryURL)
@@ -566,5 +574,5 @@ func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, error) {
 		Username:    username,
 		Password:    password,
 		RegistryURL: registryURL,
-	}, nil
+	}, response.AuthorizationData[0].ExpiresAt, nil
 }
