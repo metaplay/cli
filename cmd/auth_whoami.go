@@ -6,8 +6,10 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -107,7 +109,7 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Fetch user info...")
 	userInfo, err := auth.FetchUserInfo(authProvider, tokenSet)
 	if err != nil {
-		log.Panic().Msgf("Failed to fetch user info: %v", err)
+		return userInfoFetchError(err, authProvider, sessionState.UserType)
 	}
 
 	// Output based on format
@@ -115,7 +117,7 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 		// Pretty-print as JSON
 		userInfoJSON, err := json.MarshalIndent(userInfo, "", "  ")
 		if err != nil {
-			log.Panic().Msgf("Failed to marshal user info to JSON: %v", err)
+			return clierrors.Wrap(err, "Failed to marshal user info to JSON")
 		}
 		log.Info().Msg(string(userInfoJSON))
 	} else {
@@ -139,4 +141,25 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+// userInfoFetchError converts a FetchUserInfo failure into a CLI error. Only a
+// refused token gets a suggestion, and the portal one applies only to a human
+// user signed in with the default auth provider.
+func userInfoFetchError(err error, authProvider *auth.AuthProviderConfig, userType auth.UserType) error {
+	cliErr := clierrors.Wrap(err, "Failed to fetch user info")
+
+	userInfoErr, ok := errors.AsType[*auth.UserInfoError](err)
+	if !ok || !userInfoErr.IsUnauthorized() {
+		return cliErr
+	}
+
+	switch {
+	case userType == auth.UserTypeMachine:
+		return cliErr.WithSuggestion("Sign in again with 'metaplay auth machine-login'")
+	case isDefaultAuthProviderName(authProvider.Name):
+		return cliErr.WithSuggestion("If you signed up recently, sign in to the developer portal once in a browser to finish setting up your account, then run 'metaplay auth login' again")
+	default:
+		return cliErr.WithSuggestion("Sign in again with 'metaplay auth login'")
+	}
 }
