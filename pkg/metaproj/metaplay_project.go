@@ -281,8 +281,11 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "sharedCodeDir", config.SharedCodeDir); err != nil {
 		return err
 	}
-	if err := validateProjectDir(projectDir, "unityProjectDir", config.UnityProjectDir); err != nil {
-		return err
+	// Optional: only 'metaplay init project' uses the Unity project dir, and some projects have no Unity client.
+	if config.UnityProjectDir != "" {
+		if err := validateProjectDir(projectDir, "unityProjectDir", config.UnityProjectDir); err != nil {
+			return err
+		}
 	}
 
 	// Check project .NET version.

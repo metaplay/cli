@@ -5,6 +5,8 @@
 package metaproj
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -660,5 +662,48 @@ func TestApplyProjectConfigDefaults_StampsAuthProviderKeys(t *testing.T) {
 func TestApplyProjectConfigDefaults_NoAuthProviders(t *testing.T) {
 	if err := ApplyProjectConfigDefaults(&ProjectConfig{}); err != nil {
 		t.Fatalf("ApplyProjectConfigDefaults returned an error: %v", err)
+	}
+}
+
+// unityProjectDir is optional, but a value that is given must still point to a directory.
+func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, dir := range []string{"sdk", "Backend", "Shared", "Unity"} {
+		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	testCases := []struct {
+		name            string
+		unityProjectDir string
+		wantErr         bool
+	}{
+		{name: "missing", unityProjectDir: "", wantErr: false},
+		{name: "valid", unityProjectDir: "Unity", wantErr: false},
+		{name: "nonexistent", unityProjectDir: "NoSuchDir", wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := &ProjectConfig{
+				ProjectHumanID:        "test-project",
+				BuildRootDir:          ".",
+				SdkRootDir:            "sdk",
+				BackendDir:            "Backend",
+				SharedCodeDir:         "Shared",
+				UnityProjectDir:       tc.unityProjectDir,
+				DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
+				ServerChartVersion:    "0.9.0",
+				BotClientChartVersion: "0.9.0",
+			}
+			err := ValidateProjectConfig(projectDir, config)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected an error for unityProjectDir %q", tc.unityProjectDir)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for unityProjectDir %q: %v", tc.unityProjectDir, err)
+			}
+		})
 	}
 }

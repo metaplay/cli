@@ -488,7 +488,7 @@ func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplatePr
 // buildTemplateReplacements constructs the replacement map from a project config and
 // extra replacements. Used by both collectFromTemplate and collectFromTemplateInZip.
 func buildTemplateReplacements(config *metaproj.ProjectConfig, extraReplacements map[string]string) map[string]string {
-	unityProjectDir := config.UnityProjectDir
+	unityProjectDir := config.UnityProjectDir //nolint:staticcheck // Project init is the remaining legitimate use.
 	if unityProjectDir == "." {
 		unityProjectDir = ""
 	} else if unityProjectDir != "" && !strings.HasSuffix(unityProjectDir, "/") {
