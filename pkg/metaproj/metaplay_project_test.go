@@ -288,6 +288,44 @@ environments:
 	}
 }
 
+// User-provided paths and names must parse back unchanged, including characters that YAML
+// reads as null, comments, anchors or collections, or that HTML escaping would mangle.
+func TestRenderProjectConfigYAML_RoundTripsSpecialCharacters(t *testing.T) {
+	values := []string{".", "Unity", "null", "~", "yes", "#Unity", "Unity #2", "[Unity]", "&Unity", "Tom's Game", "R&D+1", "<Unity>"}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			envs := []portalapi.EnvironmentInfo{{Name: value, HumanID: "lovely-wombats-build-nimbly", Type: portalapi.EnvironmentTypeDevelopment, StackDomain: "dev.example.com"}}
+			sharedCodeDir := value + "/Assets/SharedCode"
+			yamlContent, config, err := RenderProjectConfigYAML(createTestSdkMetadata(), value, value+"/MetaplaySDK", sharedCodeDir, value+"/Backend", value+"/Dashboard", createTestProjectInfo("test-project"), envs)
+			if err != nil {
+				t.Fatalf("RenderProjectConfigYAML failed: %v", err)
+			}
+
+			got := map[string]string{
+				"unityProjectDir": config.UnityProjectDir,
+				"sdkRootDir":      config.SdkRootDir,
+				"sharedCodeDir":   config.SharedCodeDir,
+				"backendDir":      config.BackendDir,
+				"rootDir":         config.Features.Dashboard.RootDir,
+				"name":            config.Environments[0].Name,
+			}
+			want := map[string]string{
+				"unityProjectDir": value,
+				"sdkRootDir":      value + "/MetaplaySDK",
+				"sharedCodeDir":   sharedCodeDir,
+				"backendDir":      value + "/Backend",
+				"rootDir":         value + "/Dashboard",
+				"name":            value,
+			}
+			for field, wantValue := range want {
+				if got[field] != wantValue {
+					t.Errorf("%s: got %q, want %q\nFull YAML:\n%s", field, got[field], wantValue, yamlContent)
+				}
+			}
+		})
+	}
+}
+
 // Test validateAlias function
 func TestValidateAlias(t *testing.T) {
 	tests := []struct {
