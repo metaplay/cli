@@ -238,16 +238,19 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	}
 
 	// Update features.dashboard with new values.
-	_ = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
+	err = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})
+	if err != nil {
+		return "", nil, err
+	}
 
 	return projectConfigFilePath, []byte(root.String()), nil
 }
 
 // Replace a target node with 'value' (marshaled into YAML).
-// Note: If the 'path' doesn't exist, this function does nothing.
+// Returns an error if the 'path' doesn't exist.
 func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)
