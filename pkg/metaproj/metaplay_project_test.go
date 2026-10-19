@@ -5,12 +5,14 @@
 package metaproj
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"gopkg.in/yaml.v3"
@@ -786,5 +788,31 @@ func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
 				t.Errorf("unexpected error for unityProjectDir %q: %v", tc.unityProjectDir, err)
 			}
 		})
+	}
+}
+
+// A project whose SDK has not been installed yet must still load. The missing
+// SDK is reported when the metadata is needed, with a hint at the config.
+func TestSdkMetadata_MissingSdk(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	project, err := NewMetaplayProject(".", &ProjectConfig{SdkRootDir: "MetaplaySDK"})
+	if err != nil {
+		t.Fatalf("NewMetaplayProject returned an error: %v", err)
+	}
+
+	metadata, err := project.SdkMetadata()
+	if err == nil {
+		t.Fatalf("SdkMetadata() = %+v, want an error for the missing SDK", metadata)
+	}
+	if !errors.Is(err, ErrSdkNotFound) {
+		t.Errorf("SdkMetadata() error = %v, want it to wrap ErrSdkNotFound", err)
+	}
+	cliErr, ok := errors.AsType[*clierrors.CLIError](err)
+	if !ok {
+		t.Fatalf("SdkMetadata() error = %T, want *CLIError", err)
+	}
+	if !strings.Contains(cliErr.Suggestion, "sdkRootDir") {
+		t.Errorf("Suggestion = %q, want it to mention 'sdkRootDir'", cliErr.Suggestion)
 	}
 }

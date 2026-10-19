@@ -64,8 +64,10 @@ func newLLMDocsClient() (*llmDocsClient, *llmdocsclient.RequestMetadata, error) 
 		if id := project.Config.ProjectHumanID; id != "" {
 			reqMeta.ProjectId = &id
 		}
-		if project.VersionMetadata.SdkVersion != nil {
-			v := project.VersionMetadata.SdkVersion.String()
+		if sdkMetadata, err := project.SdkMetadata(); err != nil {
+			log.Debug().Msgf("llm-docs: skipping SDK version, SDK metadata failed to load: %v", err)
+		} else {
+			v := sdkMetadata.SdkVersion.String()
 			reqMeta.SdkVersion = &v
 		}
 	}

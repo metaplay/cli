@@ -174,14 +174,7 @@ func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 	}
 	log.Debug().Msgf("Project config loaded: %#v", projectConfig)
 
-	// Load version metadata from MetaplaySDK/version.yaml.
-	versionMetadata, err := metaproj.LoadSdkVersionMetadata(filepath.Join(projectDir, projectConfig.SdkRootDir))
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Version metadata loaded: %+v", versionMetadata)
-
-	return metaproj.NewMetaplayProject(projectDir, projectConfig, versionMetadata)
+	return metaproj.NewMetaplayProject(projectDir, projectConfig)
 }
 
 // Try to find the metaplay-project.yaml based on the --project flag, and load
