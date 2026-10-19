@@ -6,7 +6,6 @@ package metaproj
 
 import (
 	"fmt"
-	"html/template"
 	"io"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"text/template"
 
 	"github.com/hashicorp/go-version"
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -716,7 +716,17 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	return nil
 }
 
-var projectFileTemplate = template.Must(template.New("Metaplay project config").Parse(
+// yamlScalar renders a string as a YAML scalar, quoting it only when the plain form would
+// parse differently (e.g. 'null', '#dir', 'dir #2').
+func yamlScalar(value string) (string, error) {
+	out, err := yaml.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
+}
+
+var projectFileTemplate = template.Must(template.New("Metaplay project config").Funcs(template.FuncMap{"yaml": yamlScalar}).Parse(
 	`# Configure schema to use.
 # yaml-language-server: $schema={{.SdkRootDir}}/projectConfigSchema.json
 $schema: "{{.SdkRootDir}}/projectConfigSchema.json"
@@ -724,11 +734,11 @@ $schema: "{{.SdkRootDir}}/projectConfigSchema.json"
 # Configure project.
 projectID: {{.ProjectID}}
 buildRootDir: .
-sdkRootDir: {{.SdkRootDir}}
-backendDir: {{.BackendDir}}
-sharedCodeDir: {{.SharedCodeDir}}
+sdkRootDir: {{yaml .SdkRootDir}}
+backendDir: {{yaml .BackendDir}}
+sharedCodeDir: {{yaml .SharedCodeDir}}
 {{- if .UnityProjectDir}}
-unityProjectDir: {{.UnityProjectDir}}
+unityProjectDir: {{yaml .UnityProjectDir}}
 {{- end}}
 
 # Specify .NET runtime version to build project for, only '<major>.<minor>'.
@@ -743,11 +753,11 @@ features:
   # Configure LiveOps Dashboard.
   dashboard:
     useCustom: {{.UseCustomDashboard}}
-    rootDir: {{.CustomDashboardPath}}
+    rootDir: {{if .CustomDashboardPath}}{{yaml .CustomDashboardPath}}{{end}}
 
 # Project environments.
 environments:
-{{range .Environments}}  - name: {{.Name}}
+{{range .Environments}}  - name: {{yaml .Name}}
     humanId: {{.HumanID}}
     type: {{.Type}}
     stackDomain: {{.StackDomain}}
@@ -834,7 +844,7 @@ func GenerateProjectConfigFile(
 		environments,
 	)
 	if err != nil {
-		log.Panic().Msgf("%v", err)
+		return nil, err
 	}
 
 	// Write metaplay-project.yaml.
