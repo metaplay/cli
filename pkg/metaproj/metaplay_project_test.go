@@ -71,12 +71,14 @@ func TestRenderProjectConfigYAML(t *testing.T) {
 		name            string
 		environments    []portalapi.EnvironmentInfo
 		customDashboard string
+		unityProjectDir string
 		expected        string
 	}{
 		{
 			name:            "empty environments produces null, not empty list",
 			environments:    []portalapi.EnvironmentInfo{},
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -111,6 +113,7 @@ environments:
 			name:            "nil environments produces null, not empty list",
 			environments:    nil,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -145,6 +148,7 @@ environments:
 			name:            "single environment with correct indentation",
 			environments:    singleEnv,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -183,6 +187,7 @@ environments:
 			name:            "multiple environments with correct indentation",
 			environments:    multipleEnvs,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -229,6 +234,7 @@ environments:
 			name:            "custom dashboard enabled",
 			environments:    []portalapi.EnvironmentInfo{},
 			customDashboard: "CustomDashboard",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -259,13 +265,47 @@ features:
 environments:
 `,
 		},
+		{
+			name:            "empty unity project dir omits the field",
+			environments:    []portalapi.EnvironmentInfo{},
+			customDashboard: "",
+			unityProjectDir: "",
+			expected: `# Configure schema to use.
+# yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
+$schema: "MetaplaySDK/projectConfigSchema.json"
+
+# Configure project.
+projectID: test-project
+buildRootDir: .
+sdkRootDir: MetaplaySDK
+backendDir: Backend
+sharedCodeDir: SharedCode
+
+# Specify .NET runtime version to build project for, only '<major>.<minor>'.
+dotnetRuntimeVersion: "8.0"
+
+# Specify Helm chart versions to use for server and bot deployments.
+serverChartVersion: 1.0.0
+botClientChartVersion: 1.0.0
+
+# Customize Metaplay features used in the game.
+features:
+  # Configure LiveOps Dashboard.
+  dashboard:
+    useCustom: false
+    rootDir: 
+
+# Project environments.
+environments:
+`,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			yamlContent, config, err := RenderProjectConfigYAML(
 				sdkMetadata,
-				"Unity",
+				tc.unityProjectDir,
 				"MetaplaySDK",
 				"SharedCode",
 				"Backend",
@@ -283,6 +323,9 @@ environments:
 
 			if yamlContent != tc.expected {
 				t.Errorf("Output mismatch.\nExpected:\n%s\nGot:\n%s", tc.expected, yamlContent)
+			}
+			if config.UnityProjectDir != tc.unityProjectDir {
+				t.Errorf("unityProjectDir: got %q, want %q", config.UnityProjectDir, tc.unityProjectDir)
 			}
 		})
 	}

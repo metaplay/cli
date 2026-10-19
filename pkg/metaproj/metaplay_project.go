@@ -737,7 +737,9 @@ buildRootDir: .
 sdkRootDir: {{yaml .SdkRootDir}}
 backendDir: {{yaml .BackendDir}}
 sharedCodeDir: {{yaml .SharedCodeDir}}
+{{- if .UnityProjectDir}}
 unityProjectDir: {{yaml .UnityProjectDir}}
+{{- end}}
 
 # Specify .NET runtime version to build project for, only '<major>.<minor>'.
 dotnetRuntimeVersion: "{{.DotnetRuntimeVersion}}"
