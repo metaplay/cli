@@ -324,6 +324,9 @@ environments:
 			if yamlContent != tc.expected {
 				t.Errorf("Output mismatch.\nExpected:\n%s\nGot:\n%s", tc.expected, yamlContent)
 			}
+			if config.UnityProjectDir != tc.unityProjectDir {
+				t.Errorf("unityProjectDir: got %q, want %q", config.UnityProjectDir, tc.unityProjectDir)
+			}
 		})
 	}
 }
