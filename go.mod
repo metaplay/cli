@@ -11,6 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.66.4
+	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/dustin/go-humanize v1.1.0
@@ -79,7 +80,6 @@ require (
 	github.com/chai2010/gettext-go v1.0.3 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
-	github.com/charmbracelet/x/ansi v0.11.9 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
