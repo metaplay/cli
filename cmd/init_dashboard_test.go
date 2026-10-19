@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 )
 
@@ -92,6 +93,9 @@ func TestComputeProjectConfigDashboardUpdate(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got content:\n%s", content)
+				}
+				if cliErr, ok := clierrors.AsCLIError(err); !ok || cliErr.Suggestion == "" {
+					t.Errorf("expected a CLIError with a suggestion, got: %v", err)
 				}
 				return
 			}

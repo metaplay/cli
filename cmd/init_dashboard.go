@@ -164,7 +164,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Compute updated metaplay-project.yaml content
 	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
 	if err != nil {
-		return fmt.Errorf("failed to compute metaplay-project.yaml update: %w", err)
+		return err
 	}
 	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 
@@ -243,7 +243,8 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 		RootDir:   dashboardDir,
 	})
 	if err != nil {
-		return "", nil, err
+		return "", nil, clierrors.Wrap(err, "Failed to enable the custom dashboard in metaplay-project.yaml").
+			WithSuggestion("Add a 'features.dashboard' section to metaplay-project.yaml and run this command again")
 	}
 
 	return projectConfigFilePath, []byte(root.String()), nil
