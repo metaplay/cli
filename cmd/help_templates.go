@@ -6,9 +6,11 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/spf13/cobra"
 
 	"github.com/metaplay/cli/pkg/styles"
@@ -62,6 +64,54 @@ func initColoredHelpTemplates(rootCmd *cobra.Command) {
 	// Set the custom templates
 	rootCmd.SetUsageTemplate(customUsageTemplate)
 	rootCmd.SetHelpTemplate(customHelpTemplate)
+
+	// Help and flag-error usage are printed before PersistentPreRun applies --color.
+	defaultHelpFunc := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		styleForCurrentOutput(cmd, func() { defaultHelpFunc(cmd, args) })
+	})
+	defaultUsageFunc := rootCmd.UsageFunc()
+	rootCmd.SetUsageFunc(func(cmd *cobra.Command) (err error) {
+		styleForCurrentOutput(cmd, func() { err = defaultUsageFunc(cmd) })
+		return err
+	})
+}
+
+// styleForCurrentOutput runs fn with its output styled for --color: colored, or with
+// escape sequences stripped.
+func styleForCurrentOutput(cmd *cobra.Command, fn func()) {
+	useColors, err := resolveUseColors()
+	if err != nil {
+		// Show help anyway. PersistentPreRun reports the invalid mode when a command runs.
+		useColors = styles.DetectColorSupport()
+	}
+	styles.SetColorEnabled(useColors)
+	if useColors {
+		fn()
+		return
+	}
+
+	// Long descriptions are styled at package init, before --color is parsed.
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	cmd.SetOut(ansiStripWriter{out})
+	cmd.SetErr(ansiStripWriter{errOut})
+	defer func() {
+		cmd.SetOut(out)
+		cmd.SetErr(errOut)
+	}()
+	fn()
+}
+
+// ansiStripWriter removes ANSI escape sequences from everything written through it.
+type ansiStripWriter struct {
+	w io.Writer
+}
+
+func (s ansiStripWriter) Write(p []byte) (int, error) {
+	if _, err := io.WriteString(s.w, ansi.Strip(string(p))); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func styleFlags(text string) string {

@@ -60,19 +60,12 @@ var rootCmd = &cobra.Command{
 		hasTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 
 		// Determine whether to use colors.
-		colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
-		var useColors bool
-		if isTruthy(colorMode) {
-			useColors = true
-		} else if isFalsy(colorMode) {
-			useColors = false
-		} else {
-			if colorMode != "auto" {
-				fmt.Fprintf(os.Stderr, "ERROR: Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.\n", flagColorMode)
-				os.Exit(2)
-			}
-			useColors = hasTerminal
+		useColors, err := resolveUseColors()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(2)
 		}
+		styles.SetColorEnabled(useColors)
 
 		// Resolve whether using verbose mode
 		isVerbose := isTruthy(os.Getenv("METAPLAYCLI_VERBOSE")) || flagVerbose
@@ -284,8 +277,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 }
 
 // Initialize zerolog:
-// In verbose mode, the output includes timestamps and log levels. Colors are
-// always enabled.
+// In verbose mode, the output includes timestamps and log levels.
 // In non-verbose mode, the output is plain-text only, so its compatible with
 // piping to `jq` and other tools. Colors are auto-detected based on the TTY used.
 func initLogger(useColors, isVerbose bool) {
@@ -295,12 +287,14 @@ func initLogger(useColors, isVerbose bool) {
 		zerolog.TimeFieldFormat = "2006-01-02 15:04:05.000"
 		stdoutWriter := zerolog.ConsoleWriter{
 			Out:        os.Stdout,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		log.Logger = zerolog.New(stdoutWriter).With().Timestamp().Logger()
 
 		stderrWriter := zerolog.ConsoleWriter{
 			Out:        os.Stderr,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		stderrLogger = zerolog.New(stderrWriter).With().Timestamp().Logger()
@@ -574,6 +568,19 @@ func renderExample(str string) string {
 
 	// Return final result
 	return str
+}
+
+// Return whether output should be colored, or an error for an invalid color mode.
+func resolveUseColors() (bool, error) {
+	colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
+	if isTruthy(colorMode) {
+		return true, nil
+	} else if isFalsy(colorMode) {
+		return false, nil
+	} else if colorMode == "auto" {
+		return styles.DetectColorSupport(), nil
+	}
+	return false, clierrors.NewUsageErrorf("Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.", colorMode)
 }
 
 // Return true if the value is truthy ('yes', 'y', 'true', '1').
