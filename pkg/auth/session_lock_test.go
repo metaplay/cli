@@ -31,8 +31,8 @@ func TestLockSessionStore_WaitsForTheHolder(t *testing.T) {
 	}()
 
 	select {
-	case <-acquired:
-		t.Fatal("took the lock while it was held")
+	case err := <-acquired:
+		t.Fatalf("took the lock while it was held: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 
