@@ -5,8 +5,10 @@
 package metaproj
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -26,6 +28,9 @@ import (
 // CLI only supports Metaplay SDK versions 32.0 and above. The legacy metaplay-auth CLI
 // was used with earlier SDK versions.
 var OldestSupportedSdkVersion = version.Must(version.NewVersion("32.0.0"))
+
+// ErrSdkNotFound is returned when the Metaplay SDK directory does not exist.
+var ErrSdkNotFound = errors.New("SDK directory not found")
 
 // Reserved alias names that cannot be used for environment aliases.
 var reservedAliases = []string{
@@ -59,11 +64,31 @@ func validateAlias(alias string) error {
 }
 
 // Metaplay project: helper type to wrap the resolved project, including relative path to project,
-// parsed metaplay-project.yaml and parsed MetaplaySDK/version.yaml.
+// parsed metaplay-project.yaml and (lazily) parsed MetaplaySDK/version.yaml.
 type MetaplayProject struct {
-	Config          ProjectConfig
-	RelativeDir     string
-	VersionMetadata MetaplayVersionMetadata
+	Config      ProjectConfig
+	RelativeDir string
+
+	// SDK version metadata, loaded on the first SdkMetadata() call.
+	sdkMetadata    *MetaplayVersionMetadata
+	sdkMetadataErr error
+}
+
+// SdkMetadata returns the parsed MetaplaySDK/version.yaml, loading it on first use.
+// The result, including a failure, is cached.
+func (project *MetaplayProject) SdkMetadata() (*MetaplayVersionMetadata, error) {
+	if project.sdkMetadata == nil && project.sdkMetadataErr == nil {
+		project.sdkMetadata, project.sdkMetadataErr = LoadSdkVersionMetadata(project.GetSdkRootDir())
+		// Map well known errors to helpful errors
+		if errors.Is(project.sdkMetadataErr, ErrSdkNotFound) {
+			project.sdkMetadataErr = clierrors.Wrap(project.sdkMetadataErr, "Metaplay SDK not found").
+				WithSuggestion("Check that 'sdkRootDir' in metaplay-project.yaml points to the correct location")
+		}
+		if project.sdkMetadataErr == nil {
+			log.Debug().Msgf("Version metadata loaded: %+v", project.sdkMetadata)
+		}
+	}
+	return project.sdkMetadata, project.sdkMetadataErr
 }
 
 func (project *MetaplayProject) UsesCustomDashboard() bool {
@@ -169,8 +194,9 @@ func LoadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	return &projectConfig, nil
 }
 
-// Validate that a project-specific directory in 'metaplay-project.yaml' is valid.
-func validateProjectDir(projectDir, fieldName, dirValue string) error {
+// Validate that a project-specific path in 'metaplay-project.yaml' is well-formed,
+// without requiring it to exist.
+func validateProjectPath(fieldName, dirValue string) error {
 	// Directory must be specified.
 	if dirValue == "" {
 		return fmt.Errorf("required field '%s' is missing", fieldName)
@@ -179,6 +205,15 @@ func validateProjectDir(projectDir, fieldName, dirValue string) error {
 	// Check that path is not absolute.
 	if filepath.IsAbs(dirValue) {
 		return fmt.Errorf("field '%s' ('%s') specifies an absolute path: all paths must be relative", fieldName, dirValue)
+	}
+
+	return nil
+}
+
+// Validate that a project-specific directory in 'metaplay-project.yaml' is valid and exists.
+func validateProjectDir(projectDir, fieldName, dirValue string) error {
+	if err := validateProjectPath(fieldName, dirValue); err != nil {
+		return err
 	}
 
 	// Check that directory exists.
@@ -272,7 +307,10 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "buildRootDir", config.BuildRootDir); err != nil {
 		return err
 	}
-	if err := validateProjectDir(projectDir, "sdkRootDir", config.SdkRootDir); err != nil {
+	// Note the SDK directory may be missing if SDK is not yet installed but we have a
+	// metaplay-project.yaml, for example when cloning a sample project. We only check
+	// the path is well-formed.
+	if err := validateProjectPath("sdkRootDir", config.SdkRootDir); err != nil {
 		return err
 	}
 	if err := validateProjectDir(projectDir, "backendDir", config.BackendDir); err != nil {
@@ -530,6 +568,10 @@ func ParseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, 
 // Load the MetaplaySDK/version.yaml containing metadata about the Metaplay SDK version,
 // e.g., required .NET and Node/pnpm minimum versions.
 func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error) {
+	if _, err := os.Stat(sdkRootDir); errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w at '%s'", ErrSdkNotFound, sdkRootDir)
+	}
+
 	// Read MetaplaySDK/version.yaml content.
 	// If unable to read the file, try to determine the SDK version from the Dockerfile.server to
 	// identify earlier SDK packages.
@@ -556,17 +598,31 @@ func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error)
 	return ParseVersionMetadata(versionFileContent)
 }
 
-func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, versionMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+// NewMetaplayProject creates a project from path. Its version metadata will be loaded
+// on demand.
+func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig) (*MetaplayProject, error) {
 	if filepath.IsAbs(projectDir) {
 		return nil, fmt.Errorf("projectDir must be relative, got '%s'", projectDir)
 	}
 
 	// Return project.
 	return &MetaplayProject{
-		Config:          *projectConfig,
-		RelativeDir:     projectDir,
-		VersionMetadata: *versionMetadata,
+		Config:      *projectConfig,
+		RelativeDir: projectDir,
 	}, nil
+}
+
+// NewMetaplayProjectWithSdkMetadata creates a project with given version metadata.
+func NewMetaplayProjectWithSdkMetadata(projectDir string, projectConfig *ProjectConfig, sdkMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+	if sdkMetadata == nil {
+		return nil, fmt.Errorf("sdkMetadata must not be nil")
+	}
+	project, err := NewMetaplayProject(projectDir, projectConfig)
+	if err != nil {
+		return nil, err
+	}
+	project.sdkMetadata = sdkMetadata
+	return project, nil
 }
 
 // Find a matching environment from the project config.

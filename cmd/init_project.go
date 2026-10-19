@@ -320,8 +320,8 @@ func (o *initProjectOpts) Run(cmd *cobra.Command) error {
 
 	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 
-	// Create MetaplayProject for template and manifest operations.
-	project, err := metaproj.NewMetaplayProject(o.projectPath, projectConfig, sdkMetadata)
+	// Create MetaplayProject for template and manifest operations with the SDK's version metadata.
+	project, err := metaproj.NewMetaplayProjectWithSdkMetadata(o.projectPath, projectConfig, sdkMetadata)
 	if err != nil {
 		return err
 	}

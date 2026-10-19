@@ -127,13 +127,18 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 }
 
 func checkDashboardToolVersions(ctx context.Context, project *metaproj.MetaplayProject) error {
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(ctx, project.VersionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(ctx, sdkMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(ctx, project.VersionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(ctx, sdkMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 

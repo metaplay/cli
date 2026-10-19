@@ -121,6 +121,10 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	if err := checkDashboardToolVersions(ctx, project); err != nil {
 		return err
 	}
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
 
 	// Resolve project dashboard dir (only Backend/Dashboard supported for now)
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
@@ -145,7 +149,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// any R33 pre-release tag is included.
 	minSdkVersionPnpmAllowBuilds := version.Must(version.NewVersion("33.0.0-0"))
 	var allowBuildsPackages []string
-	if !project.VersionMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
+	if !sdkMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
 		allowBuildsPackages = []string{
 			"@parcel/watcher",
 			"bootstrap-vue",

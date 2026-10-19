@@ -79,8 +79,13 @@ func (o *devServerOpts) Run(cmd *cobra.Command) error {
 
 	ctx := cmd.Context()
 
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, sdkMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 
