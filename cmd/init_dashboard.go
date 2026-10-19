@@ -164,7 +164,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Compute updated metaplay-project.yaml content
 	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
 	if err != nil {
-		return fmt.Errorf("failed to compute metaplay-project.yaml update: %w", err)
+		return err
 	}
 	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 
@@ -238,16 +238,20 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	}
 
 	// Update features.dashboard with new values.
-	_ = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
+	err = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})
+	if err != nil {
+		return "", nil, clierrors.Wrap(err, "Failed to enable the custom dashboard in metaplay-project.yaml").
+			WithSuggestion("Add a 'features.dashboard' section to metaplay-project.yaml and run this command again")
+	}
 
 	return projectConfigFilePath, []byte(root.String()), nil
 }
 
 // Replace a target node with 'value' (marshaled into YAML).
-// Note: If the 'path' doesn't exist, this function does nothing.
+// Returns an error if the 'path' doesn't exist.
 func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)
