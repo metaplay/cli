@@ -90,9 +90,6 @@ func init() {
 
 			The 'dashboard' test only runs for projects with a custom dashboard ('features.dashboard.useCustom'
 			in metaplay-project.yaml). Without one, there are no dashboard tests to run.
-
-			Each test image is only built when a test that uses it runs: the Playwright TS image for
-			'dashboard' and the Playwright.NET image for 'system'.
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -104,7 +101,7 @@ func init() {
 			# Run only the 'bots' test.
 			metaplay test integration --test=bots
 
-			# Run the 'bots' and 'dashboard' tests. The Playwright.NET image for 'system' is not built.
+			# Run the 'bots' and 'dashboard' tests.
 			metaplay test integration --test=bots,dashboard
 
 			# Run with a custom timeout (e.g., 30 minutes)
@@ -144,16 +141,14 @@ func (o *testIntegrationOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// selectIntegrationTests returns the tests to run, in their fixed order: all of them, or the requested
-// ones. The dashboard tests are skipped for projects without a custom dashboard, because the test image
-// only runs them when the project has a pnpm workspace, which 'metaplay init dashboard' creates.
-// Requesting them explicitly for such a project is an error. dashboardSkipped reports that they were
-// left out without being requested.
+// selectIntegrationTests returns the tests the user selected, or all relevant tests if none were
+// selected. The dashboard tests are relevant only when the project declares a custom dashboard.
 func selectIntegrationTests(requested []string, usesCustomDashboard bool) (tests []integrationTest, dashboardSkipped bool, err error) {
 	for _, t := range integrationTests {
 		if len(requested) > 0 && !slices.Contains(requested, t.name) {
 			continue
 		}
+		// Build dashboard image only when the project has a custom dashboard.
 		if t.name == "dashboard" && !usesCustomDashboard {
 			if len(requested) > 0 {
 				return nil, false, clierrors.New("The project does not use a custom dashboard, so it has no dashboard tests to run").
@@ -563,12 +558,10 @@ func (o *testIntegrationOpts) debugNetworkConnectivity(ctx context.Context, proj
 	}
 }
 
-// buildDockerImages builds the Docker images used by integration tests. This includes
-// the server image, and additional testing images for Playwright.
+// buildDockerImages builds the server image and the requested Playwright test images for integration
+// tests.
 // Note: Docker builds are not subject to the --timeout flag as cancelling them mid-build
 // is complex and unreliable. Builds are typically fast when cached.
-// The Playwright TS image is only built if the dashboard tests are going to run, and the
-// Playwright.NET image only if the system tests are.
 func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *metaproj.MetaplayProject, serverImage, pwTsImage, pwNetImage string, buildPlaywrightTs, buildPlaywrightNet bool, integrationTestsConfig *metaproj.IntegrationTestsConfig) error {
 	// Determine build engine
 	// \todo allow specifying this with a flag?
