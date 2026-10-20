@@ -53,6 +53,9 @@ var integrationTests = []integrationTest{
 }
 
 type testIntegrationOpts struct {
+	UsePositionalArgs
+
+	extraArgs        []string
 	flagSkipBuild    bool
 	flagDebugNetwork bool
 	flagOutputDir    string
@@ -63,6 +66,9 @@ type testIntegrationOpts struct {
 func init() {
 	o := testIntegrationOpts{}
 
+	args := o.Arguments()
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build, after the project's integrationTests.docker.buildArgs.")
+
 	// Build the test list for the Long description from integrationTests.
 	var testListLines strings.Builder
 	for _, t := range integrationTests {
@@ -70,7 +76,7 @@ func init() {
 	}
 
 	cmd := &cobra.Command{
-		Use:     "integration",
+		Use:     "integration [flags] [-- EXTRA_ARGS]",
 		Aliases: []string{"i"},
 		Short:   "[preview] Run integration tests",
 		Run:     runCommand(&o),
@@ -90,6 +96,8 @@ func init() {
 
 			The 'dashboard' test only runs for projects with a custom dashboard ('features.dashboard.useCustom'
 			in metaplay-project.yaml). Without one, there are no dashboard tests to run.
+
+			{Arguments}
 		`),
 		Example: renderExample(`
 			# Run the full integration test pipeline
@@ -106,6 +114,9 @@ func init() {
 
 			# Run with a custom timeout (e.g., 30 minutes)
 			metaplay test integration --timeout=30m
+
+			# Pass a build argument to the image builds, e.g., to skip the SDK's own unit tests.
+			metaplay test integration -- --build-arg RUN_SDK_UNIT_TESTS=false
 		`),
 	}
 
@@ -570,11 +581,12 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 		buildEngine = "buildx"
 	}
 
-	// Get extra docker build args from config
+	// Get extra docker build args from config, followed by those from the command line
 	var extraBuildArgs []string
 	if integrationTestsConfig != nil && integrationTestsConfig.Docker != nil {
 		extraBuildArgs = integrationTestsConfig.Docker.BuildArgs
 	}
+	extraBuildArgs = slices.Concat(extraBuildArgs, o.extraArgs)
 
 	// Common build parameters
 	commonParams := buildDockerImageParams{
