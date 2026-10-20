@@ -67,7 +67,7 @@ func init() {
 	o := testIntegrationOpts{}
 
 	args := o.Arguments()
-	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build, after the project's integrationTests.docker.buildArgs, so they take precedence.")
+	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build, after the project's integrationTests.docker.buildArgs.")
 
 	// Build the test list for the Long description from integrationTests.
 	var testListLines strings.Builder
