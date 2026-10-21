@@ -58,7 +58,7 @@ func init() {
 			client first.
 
 			Configure web clients in the 'webClients' section of metaplay-project.yaml. For
-			example, with the blazor preset:
+			example, with the Metaplay SDK's preset for Blazor WebAssembly clients:
 
 			  webClients:
 			    - name: webclient
@@ -68,7 +68,11 @@ func init() {
 			Fields of a web client:
 			- name: identifies the web client in this command.
 			- sourceDir: directory of the built files, relative to metaplay-project.yaml.
-			- preset: built-in configuration to start from. Presets: `+strings.Join(sitedeploy.PresetNames(), ", ")+`.
+			- preset: the name of one of the Metaplay SDK's presets to start from: 'blazor'
+			  for Blazor WebAssembly clients. A preset is a YAML file of the fields below
+			  except prefix, and the SDK has its presets in <sdkRootDir>/WebClientPresets/.
+			- presetFile: a preset file of the project's own to start from, instead of an
+			  SDK preset, relative to metaplay-project.yaml.
 			- prefix: path under the environment's web client location to upload to, eg,
 			  'staging/'. Usually left out.
 			- files: rules for how the files in sourceDir become objects in the bucket. A
@@ -97,17 +101,18 @@ func init() {
 			  'no-cache'.
 			- entryFiles: globs of the objects to upload last, in this order, such as
 			  index.html. A page loaded during a deploy then finds the objects these name.
-			- endpointsFile: name of a JSON file to write next to the web client, eg,
-			  'metaplay-endpoints.json', for the client to read at startup. It holds the
-			  game server's address and the CDN's, as far as the environment reports them:
-			  serverHost, serverPortForWebSocket, enableTls, cdnBaseUrl and publicWebApiUrl.
-			  A field the environment does not report is left out, and no file is written
-			  where it reports no game server.
+			- endpointsFile: name of a JSON file to write next to the web client, for the
+			  client to read at startup. It holds the game server's address and the CDN's,
+			  as far as the environment reports them: serverHost, serverPortForWebSocket,
+			  enableTls, cdnBaseUrl and publicWebApiUrl. A field the environment does not
+			  report is left out, and no file is written where it reports no game server.
+			  The SDK's 'blazor' preset sets it to 'metaplay-endpoints.json', the name the
+			  SDK's client reads.
 
 			A rule matches by a glob (match) or a regular expression (matchRegex). A web
 			client's settings override its preset's: its files and headers rules are checked
-			before the preset's, and its entryFiles replace the preset's. Use --dry-run to see
-			the resulting configuration and the headers of each object.
+			before the preset's, and its entryFiles and endpointsFile replace the preset's.
+			Use --dry-run to see the resulting configuration and the headers of each object.
 
 			A deploy uploads only the files that changed since the last deploy, and never
 			deletes files from the bucket. It records the files it uploaded in
@@ -164,9 +169,10 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// The project config was validated when loaded.
-	config, err := webClient.Resolve()
+	config, err := webClient.Resolve(project.RelativeDir, project.GetSdkRootDir())
 	if err != nil {
-		return err
+		return clierrors.Wrapf(err, "Failed to apply the web client's preset").
+			WithSuggestion("Name one of the SDK's presets with 'preset', or point 'presetFile' at a file relative to metaplay-project.yaml")
 	}
 	opts, err := config.Options()
 	if err != nil {
@@ -188,12 +194,12 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to get the environment's details")
 	}
-	// Web clients are uploaded with the AWS credentials the stack issues, so
-	// only environments hosted on AWS are supported for now.
+	// Web clients are uploaded with the storage credentials the stack issues,
+	// which not every stack does yet.
 	s3Client, err := targetEnv.NewS3Client(envDetails)
-	if errors.Is(err, envapi.ErrNotOnAWS) {
-		return clierrors.Newf("Environment '%s' is not hosted on AWS: deploying web clients is supported only on environments hosted on AWS for now", envConfig.Name).
-			WithSuggestion("Deploy the web client to an environment hosted on AWS")
+	if errors.Is(err, envapi.ErrNoStorageCredentials) {
+		return clierrors.Newf("Environment '%s' issues no credentials for uploading to its public bucket", envConfig.Name).
+			WithDetails("Deploying web clients is not supported on this environment's infrastructure yet.")
 	}
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to access the environment's public bucket")

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -54,10 +55,15 @@ func blazorSite(t *testing.T) string {
 	})
 }
 
-// options compiles a webClients entry as the deploy command does.
+// testSdkRootDir stands in for the Metaplay SDK, with a copy of its Blazor
+// preset, relative to the package directory the tests run in.
+const testSdkRootDir = "testdata/sdk"
+
+// options compiles a webClients entry as the deploy command does, with the
+// package directory as the project's.
 func options(t *testing.T, config Config) Options {
 	t.Helper()
-	resolved, err := config.Resolve()
+	resolved, err := config.Resolve(".", testSdkRootDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,9 +293,48 @@ func TestConfig_ProjectSettingsGoBeforeThePresets(t *testing.T) {
 	}
 }
 
+// The preset names the endpoints file the client reads, so a project leaves it
+// out; one that sets it replaces the preset's.
+func TestConfig_EndpointsFileComesFromThePreset(t *testing.T) {
+	for _, tc := range []struct{ entry, want string }{
+		{entry: "", want: "metaplay-endpoints.json"},
+		{entry: "endpoints.json", want: "endpoints.json"},
+	} {
+		resolved, err := (&Config{Preset: "blazor", EndpointsFile: tc.entry}).Resolve(".", testSdkRootDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved.EndpointsFile != tc.want {
+			t.Errorf("entry's endpointsFile %q: resolved %q, want %q", tc.entry, resolved.EndpointsFile, tc.want)
+		}
+	}
+}
+
+// A project's own preset file is the same as the SDK's preset by name.
+func TestConfig_PresetFileIsRelativeToTheProject(t *testing.T) {
+	fromFile, err := (&Config{PresetFile: "sdk/WebClientPresets/blazor.yaml"}).Resolve("testdata", "no-sdk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName, err := (&Config{Preset: "blazor"}).Resolve("no-project", testSdkRootDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromFile.Files, byName.Files) || !reflect.DeepEqual(fromFile.EntryFiles, byName.EntryFiles) || fromFile.EndpointsFile != byName.EndpointsFile {
+		t.Errorf("presetFile resolved to %+v, want the same settings as preset 'blazor', %+v", fromFile, byName)
+	}
+}
+
 func TestConfig_RefusesInvalidSettings(t *testing.T) {
+	absolutePreset, err := filepath.Abs("testdata/sdk/WebClientPresets/blazor.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := map[string]Config{
-		"unknown preset":        {Preset: "nope"},
+		"both presets":          {Preset: "blazor", PresetFile: "preset.yaml"},
+		"preset path as name":   {Preset: "WebClientPresets/blazor.yaml"},
+		"preset in parent":      {Preset: "../blazor"},
+		"absolute presetFile":   {PresetFile: absolutePreset},
 		"two patterns":          {Headers: []HeaderRuleConfig{{Match: "*", MatchRegex: ".*", CacheControl: "no-store"}}},
 		"no pattern":            {Headers: []HeaderRuleConfig{{CacheControl: "no-store"}}},
 		"header with no effect": {Headers: []HeaderRuleConfig{{Match: "*"}}},
@@ -308,15 +353,24 @@ func TestConfig_RefusesInvalidSettings(t *testing.T) {
 	}
 }
 
-func TestPresets_LoadAndCompile(t *testing.T) {
-	names := PresetNames()
-	if len(names) == 0 {
-		t.Fatal("no presets")
-	}
-	for _, name := range names {
-		if err := (&Config{Preset: name}).Validate(); err != nil {
-			t.Errorf("preset %s: %v", name, err)
+// The preset file is read when the config is resolved, not when it is
+// validated, so a project loads without it.
+func TestConfig_ReadsThePresetOnlyWhenResolved(t *testing.T) {
+	for _, config := range []Config{{Preset: "missing"}, {PresetFile: "testdata/missing.yaml"}} {
+		if err := config.Validate(); err != nil {
+			t.Errorf("%+v: Validate = %v, want success for a preset that is not read yet", config, err)
 		}
+		if _, err := config.Resolve(".", testSdkRootDir); err == nil {
+			t.Errorf("%+v: Resolve succeeded with a missing preset, want an error", config)
+		}
+	}
+
+	invalid := filepath.Join(t.TempDir(), "preset.yaml")
+	if err := os.WriteFile(invalid, []byte("prefix: Client/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Config{PresetFile: filepath.Base(invalid)}).Resolve(filepath.Dir(invalid), testSdkRootDir); err == nil {
+		t.Error("Resolve succeeded with a preset that sets prefix, want an error")
 	}
 }
 

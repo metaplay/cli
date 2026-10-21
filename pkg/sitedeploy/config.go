@@ -6,24 +6,35 @@ package sitedeploy
 
 import (
 	"bytes"
-	"embed"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
-	"sort"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
+// SdkPresetDir is the directory of the Metaplay SDK's presets, relative to the
+// SDK's root: preset 'blazor' is <sdkRootDir>/WebClientPresets/blazor.yaml.
+const SdkPresetDir = "WebClientPresets"
+
+var presetNameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 // Config is how a site is uploaded, as a webClients entry of
 // metaplay-project.yaml has it. A preset is a Config of the same form, which
-// the entry builds on.
+// the entry builds on: one of the Metaplay SDK's, by name, or the project's own
+// file.
 type Config struct {
-	// Preset names the preset the config builds on.
+	// Preset is the name of the Metaplay SDK's preset the config builds on,
+	// eg, 'blazor'. At most one of Preset and PresetFile is set.
 	Preset string `yaml:"preset,omitempty"`
+
+	// PresetFile is the path of a preset file the config builds on, relative
+	// to metaplay-project.yaml.
+	PresetFile string `yaml:"presetFile,omitempty"`
 
 	// Prefix is a path under the environment's web client location to deploy
 	// the site to, usually empty. A preset does not set it.
@@ -65,55 +76,57 @@ type HeaderRuleConfig struct {
 	CacheControl string `yaml:"cacheControl,omitempty"`
 }
 
-//go:embed presets/*.yaml
-var presetFiles embed.FS
-
-// PresetNames lists the presets a config can build on.
-func PresetNames() []string {
-	entries, err := fs.ReadDir(presetFiles, "presets")
+// LoadPreset reads the preset file at path.
+func LoadPreset(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		panic(err)
-	}
-	var names []string
-	for _, entry := range entries {
-		names = append(names, strings.TrimSuffix(entry.Name(), ".yaml"))
-	}
-	sort.Strings(names)
-	return names
-}
-
-// LoadPreset reads a preset.
-func LoadPreset(name string) (*Config, error) {
-	data, err := presetFiles.ReadFile("presets/" + name + ".yaml")
-	if err != nil {
-		return nil, fmt.Errorf("unknown preset '%s', expecting one of: %s", name, strings.Join(PresetNames(), ", "))
+		return nil, fmt.Errorf("failed to read preset: %w", err)
 	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	var preset Config
 	if err := decoder.Decode(&preset); err != nil && !errors.Is(err, io.EOF) {
-		return nil, fmt.Errorf("failed to parse preset '%s': %w", name, err)
+		return nil, fmt.Errorf("failed to parse preset '%s': %w", path, err)
 	}
-	if preset.Preset != "" || preset.Prefix != "" {
-		return nil, fmt.Errorf("preset '%s' must not set preset or prefix", name)
+	if preset.Preset != "" || preset.PresetFile != "" || preset.Prefix != "" {
+		return nil, fmt.Errorf("preset '%s' must not set preset, presetFile or prefix", path)
 	}
 	return &preset, nil
+}
+
+// PresetPath is the path of the config's preset file, or empty when it has
+// none: an SDK preset is under sdkRootDir, and a presetFile is relative to
+// projectDir.
+func (c *Config) PresetPath(projectDir, sdkRootDir string) string {
+	switch {
+	case c.Preset != "":
+		return filepath.Join(sdkRootDir, SdkPresetDir, c.Preset+".yaml")
+	case c.PresetFile != "":
+		return filepath.Join(projectDir, filepath.FromSlash(c.PresetFile))
+	default:
+		return ""
+	}
 }
 
 // Resolve gives the config with its preset applied: the config's files and
 // headers rules go before the preset's, so they win for the files they match;
 // its entryFiles and endpointsFile replace the preset's where set.
-func (c *Config) Resolve() (*Config, error) {
-	if c.Preset == "" {
+func (c *Config) Resolve(projectDir, sdkRootDir string) (*Config, error) {
+	presetPath := c.PresetPath(projectDir, sdkRootDir)
+	if presetPath == "" {
 		resolved := *c
 		return &resolved, nil
 	}
-	preset, err := LoadPreset(c.Preset)
+	preset, err := LoadPreset(presetPath)
+	if c.Preset != "" && errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("the Metaplay SDK has no preset '%s': %s does not exist", c.Preset, presetPath)
+	}
 	if err != nil {
 		return nil, err
 	}
 	resolved := *preset
 	resolved.Preset = c.Preset
+	resolved.PresetFile = c.PresetFile
 	resolved.Prefix = c.Prefix
 	resolved.Files = append(append([]FileRuleConfig{}, c.Files...), preset.Files...)
 	resolved.Headers = append(append([]HeaderRuleConfig{}, c.Headers...), preset.Headers...)
@@ -126,7 +139,7 @@ func (c *Config) Resolve() (*Config, error) {
 	return &resolved, nil
 }
 
-// Options compiles a resolved config.
+// Options compiles the config's rules.
 func (c *Config) Options() (Options, error) {
 	opts := Options{}
 
@@ -189,8 +202,18 @@ func compilePattern(match, matchRegex string) (*regexp.Regexp, error) {
 	}
 }
 
-// Validate checks that the config resolves and compiles.
+// Validate checks the config without its preset, which is read only when the
+// config is resolved.
 func (c *Config) Validate() error {
+	if c.Preset != "" && c.PresetFile != "" {
+		return fmt.Errorf("set only one of preset and presetFile")
+	}
+	if c.Preset != "" && !presetNameRegex.MatchString(c.Preset) {
+		return fmt.Errorf("invalid preset '%s': name one of the Metaplay SDK's presets, eg, 'blazor', or use presetFile for a file of the project's own", c.Preset)
+	}
+	if filepath.IsAbs(c.PresetFile) {
+		return fmt.Errorf("presetFile '%s' is an absolute path: it must be relative to metaplay-project.yaml", c.PresetFile)
+	}
 	if _, err := NormalizePrefix(c.Prefix); err != nil {
 		return err
 	}
@@ -199,10 +222,6 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("invalid endpointsFile: %w", err)
 		}
 	}
-	resolved, err := c.Resolve()
-	if err != nil {
-		return err
-	}
-	_, err = resolved.Options()
+	_, err := c.Options()
 	return err
 }

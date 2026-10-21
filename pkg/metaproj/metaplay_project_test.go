@@ -794,7 +794,7 @@ func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
 
 // webClients entries are checked when the project loads, so a mistake in one is
 // reported before a deploy starts. Their sourceDir is build output and need not
-// exist yet.
+// exist yet, and their preset is read only by the deploy.
 func TestValidateProjectConfig_WebClients(t *testing.T) {
 	projectDir := t.TempDir()
 	for _, dir := range []string{"sdk", "Backend", "Shared"} {
@@ -817,7 +817,8 @@ func TestValidateProjectConfig_WebClients(t *testing.T) {
 		{name: "invalid name", webClients: []WebClientConfig{blazor("web client")}, wantErr: true},
 		{name: "duplicate name", webClients: []WebClientConfig{blazor("webclient"), blazor("webclient")}, wantErr: true},
 		{name: "missing sourceDir", webClients: []WebClientConfig{{Name: "webclient"}}, wantErr: true},
-		{name: "unknown preset", webClients: []WebClientConfig{{Name: "webclient", SourceDir: "x", Config: sitedeploy.Config{Preset: "nope"}}}, wantErr: true},
+		{name: "absolute presetFile", webClients: []WebClientConfig{{Name: "webclient", SourceDir: "x", Config: sitedeploy.Config{PresetFile: filepath.Join(projectDir, "preset.yaml")}}}, wantErr: true},
+		{name: "preset and presetFile", webClients: []WebClientConfig{{Name: "webclient", SourceDir: "x", Config: sitedeploy.Config{Preset: "blazor", PresetFile: "preset.yaml"}}}, wantErr: true},
 	}
 
 	for _, tc := range testCases {
