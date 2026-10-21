@@ -101,3 +101,51 @@ func TestResolveWebClientTarget_AnEnvironmentWithNoCDNHasNowhere(t *testing.T) {
 		}
 	}
 }
+
+// The endpoints file says what the environment reports and nothing more: the
+// client fills in a field left out, so a guess written here would only hide
+// the client's own.
+func TestWebClientEndpoints_HoldsOnlyWhatTheEnvironmentReports(t *testing.T) {
+	data, err := webClientEndpoints(&envapi.Deployment{
+		ServerHostname: "nimbly.p1.metaplay.io",
+		CdnS3Fqdn:      "nimbly-assets.p1.metaplay.io",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{
+  "serverHost": "nimbly.p1.metaplay.io",
+  "cdnBaseUrl": "https://nimbly-assets.p1.metaplay.io/"
+}`
+	if string(data) != want {
+		t.Errorf("endpoints file =\n%s\nwant\n%s", data, want)
+	}
+
+	data, err = webClientEndpoints(&envapi.Deployment{
+		ServerHostname:       "game.example.com",
+		ServerTLSCert:        "arn:aws:acm:eu-west-1:123:certificate/abc",
+		ServerWebSocketPorts: []int{9380},
+		CdnS3Fqdn:            "nimbly-assets.p1.metaplay.io",
+		PublicWebApiURL:      "https://api.example.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{
+  "serverHost": "game.example.com",
+  "serverPortForWebSocket": 9380,
+  "enableTls": true,
+  "cdnBaseUrl": "https://nimbly-assets.p1.metaplay.io/",
+  "publicWebApiUrl": "https://api.example.com/"
+}`
+	if string(data) != want {
+		t.Errorf("endpoints file =\n%s\nwant\n%s", data, want)
+	}
+}
+
+func TestWebClientEndpoints_NoGameServerNoFile(t *testing.T) {
+	data, err := webClientEndpoints(&envapi.Deployment{CdnS3Fqdn: "nimbly-assets.p1.metaplay.io"})
+	if err != nil || data != nil {
+		t.Errorf("endpoints file = %q, %v; want none", data, err)
+	}
+}

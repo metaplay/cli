@@ -39,6 +39,11 @@ type Config struct {
 
 	// EntryFiles are globs of the objects uploaded last, in this order.
 	EntryFiles []string `yaml:"entryFiles,omitempty"`
+
+	// EndpointsFile names the object the deploy writes with the game server's
+	// and the CDN's addresses, as far as the environment reports them, for the
+	// client to read at startup. Empty writes none.
+	EndpointsFile string `yaml:"endpointsFile,omitempty"`
 }
 
 // FileRuleConfig is a rule of a Config's files. It matches source files by a
@@ -97,7 +102,7 @@ func LoadPreset(name string) (*Config, error) {
 
 // Resolve gives the config with its preset applied: the config's files and
 // headers rules go before the preset's, so they win for the files they match;
-// its entryFiles replace the preset's where set.
+// its entryFiles and endpointsFile replace the preset's where set.
 func (c *Config) Resolve() (*Config, error) {
 	if c.Preset == "" {
 		resolved := *c
@@ -114,6 +119,9 @@ func (c *Config) Resolve() (*Config, error) {
 	resolved.Headers = append(append([]HeaderRuleConfig{}, c.Headers...), preset.Headers...)
 	if c.EntryFiles != nil {
 		resolved.EntryFiles = c.EntryFiles
+	}
+	if c.EndpointsFile != "" {
+		resolved.EndpointsFile = c.EndpointsFile
 	}
 	return &resolved, nil
 }
@@ -185,6 +193,11 @@ func compilePattern(match, matchRegex string) (*regexp.Regexp, error) {
 func (c *Config) Validate() error {
 	if _, err := NormalizePrefix(c.Prefix); err != nil {
 		return err
+	}
+	if c.EndpointsFile != "" {
+		if err := validateObjectName(c.EndpointsFile); err != nil {
+			return fmt.Errorf("invalid endpointsFile: %w", err)
+		}
 	}
 	resolved, err := c.Resolve()
 	if err != nil {

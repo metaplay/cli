@@ -144,6 +144,17 @@ func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, pre
 }
 
 func putFile(ctx context.Context, store ObjectStore, obj Object) error {
+	if obj.Data != nil {
+		return store.Put(ctx, PutRequest{
+			Key:             obj.Key,
+			Body:            bytes.NewReader(obj.Data),
+			Size:            obj.Size,
+			MD5:             obj.MD5,
+			ContentType:     obj.ContentType,
+			ContentEncoding: obj.ContentEncoding,
+			CacheControl:    obj.CacheControl,
+		})
+	}
 	file, err := os.Open(obj.LocalFile)
 	if err != nil {
 		return err

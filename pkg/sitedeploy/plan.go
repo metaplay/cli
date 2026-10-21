@@ -40,7 +40,8 @@ const (
 type Object struct {
 	Key             string // Bucket key, including the prefix.
 	Name            string // Name in the site, with forward slashes: the key without the prefix.
-	LocalFile       string // File whose bytes are uploaded, such as app.css.br for app.css.
+	LocalFile       string // File whose bytes are uploaded, such as app.css.br for app.css. Empty for a generated object.
+	Data            []byte // Bytes of a generated object, which no file in the site holds.
 	Size            int64
 	MD5             string // Hex MD5 of the uploaded bytes.
 	ContentType     string
@@ -86,15 +87,31 @@ func NormalizePrefix(prefix string) (string, error) {
 	return strings.TrimSuffix(prefix, "/") + "/", nil
 }
 
+// validateObjectName checks a name in the site: relative, with no empty, '.'
+// or '..' segments.
+func validateObjectName(name string) error {
+	if name == "" || strings.HasPrefix(name, "/") || strings.HasSuffix(name, "/") {
+		return fmt.Errorf("'%s' is not a relative file path", name)
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("'%s' has an empty, '.' or '..' segment", name)
+		}
+	}
+	return nil
+}
+
 // ManifestKey is where the manifest of a site at prefix is kept.
 func ManifestKey(prefix string) string {
 	return prefix + manifestFileName
 }
 
 // BuildPlan decides how each file under siteDir is uploaded to prefix, which
-// NormalizePrefix has checked. Files the previous deploy uploaded identically
-// are marked unchanged.
-func BuildPlan(siteDir, prefix string, opts Options, previous *Manifest) (*Plan, error) {
+// NormalizePrefix has checked, together with the generated objects, by name.
+// A generated object takes the place of a file that would be uploaded under
+// its name. Objects the previous deploy uploaded identically are marked
+// unchanged.
+func BuildPlan(siteDir, prefix string, opts Options, generated map[string][]byte, previous *Manifest) (*Plan, error) {
 	files, err := listSiteFiles(siteDir)
 	if err != nil {
 		return nil, err
@@ -144,23 +161,39 @@ func BuildPlan(siteDir, prefix string, opts Options, previous *Manifest) (*Plan,
 		sources[name] = source{sitePath: sitePath, rule: ruleNdx, encoding: encoding}
 	}
 
-	if _, ok := sources[manifestFileName]; ok {
+	names := map[string]bool{}
+	for name := range sources {
+		names[name] = true
+	}
+	for name := range generated {
+		if err := validateObjectName(name); err != nil {
+			return nil, fmt.Errorf("invalid generated object name: %w", err)
+		}
+		delete(sources, name)
+		names[name] = true
+	}
+	if names[manifestFileName] {
 		return nil, fmt.Errorf("the site must not upload an object named '%s': the deploy keeps its manifest there", manifestFileName)
 	}
-	if err := checkReservedNames(prefix, sources); err != nil {
+	if err := checkReservedNames(prefix, names); err != nil {
 		return nil, err
 	}
 
 	plan := &Plan{Prefix: prefix, ManifestKey: ManifestKey(prefix)}
-	for name, src := range sources {
+	for name := range names {
 		obj := Object{
-			Key:             prefix + name,
-			Name:            name,
-			LocalFile:       filepath.Join(siteDir, filepath.FromSlash(src.sitePath)),
-			ContentType:     contentTypeOf(name),
-			ContentEncoding: src.encoding,
-			CacheControl:    DefaultCacheControl,
-			Phase:           phaseContent,
+			Key:          prefix + name,
+			Name:         name,
+			ContentType:  contentTypeOf(name),
+			CacheControl: DefaultCacheControl,
+			Phase:        phaseContent,
+		}
+		if data, ok := generated[name]; ok {
+			obj.Data = data
+		} else {
+			src := sources[name]
+			obj.LocalFile = filepath.Join(siteDir, filepath.FromSlash(src.sitePath))
+			obj.ContentEncoding = src.encoding
 		}
 
 		contentTypeSet, cacheControlSet := false, false
@@ -186,9 +219,14 @@ func BuildPlan(siteDir, prefix string, opts Options, previous *Manifest) (*Plan,
 			}
 		}
 
-		obj.Size, obj.MD5, err = hashFile(obj.LocalFile)
-		if err != nil {
-			return nil, err
+		if obj.Data != nil {
+			sum := md5.Sum(obj.Data)
+			obj.Size, obj.MD5 = int64(len(obj.Data)), hex.EncodeToString(sum[:])
+		} else {
+			obj.Size, obj.MD5, err = hashFile(obj.LocalFile)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if previous != nil {
 			if prev, ok := previous.Objects[obj.Key]; ok {

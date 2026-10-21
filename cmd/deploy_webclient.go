@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -96,6 +97,12 @@ func init() {
 			  'no-cache'.
 			- entryFiles: globs of the objects to upload last, in this order, such as
 			  index.html. A page loaded during a deploy then finds the objects these name.
+			- endpointsFile: name of a JSON file to write next to the web client, eg,
+			  'metaplay-endpoints.json', for the client to read at startup. It holds the
+			  game server's address and the CDN's, as far as the environment reports them:
+			  serverHost, serverPortForWebSocket, enableTls, cdnBaseUrl and publicWebApiUrl.
+			  A field the environment does not report is left out, and no file is written
+			  where it reports no game server.
 
 			A rule matches by a glob (match) or a regular expression (matchRegex). A web
 			client's settings override its preset's: its files and headers rules are checked
@@ -211,7 +218,20 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	plan, err := sitedeploy.BuildPlan(siteDir, prefix, opts, previous)
+	generated := map[string][]byte{}
+	if config.EndpointsFile != "" {
+		endpoints, err := webClientEndpoints(&envDetails.Deployment)
+		if err != nil {
+			return err
+		}
+		if endpoints != nil {
+			generated[config.EndpointsFile] = endpoints
+		} else {
+			log.Warn().Msgf("Not writing %s: the environment reports no game server address", config.EndpointsFile)
+		}
+	}
+
+	plan, err := sitedeploy.BuildPlan(siteDir, prefix, opts, generated, previous)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to plan the upload")
 	}
@@ -247,8 +267,19 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 			if obj.ContentEncoding != "" {
 				encoding = ", " + obj.ContentEncoding
 			}
+			generatedNote := ""
+			if obj.Data != nil {
+				generatedNote = ", generated"
+			}
 			log.Info().Msgf("  %s %s %s", styles.RenderMuted(action), obj.Key,
-				styles.RenderMuted(fmt.Sprintf("(%d bytes, %s%s, %s)", obj.Size, obj.ContentType, encoding, obj.CacheControl)))
+				styles.RenderMuted(fmt.Sprintf("(%d bytes, %s%s, %s%s)", obj.Size, obj.ContentType, encoding, obj.CacheControl, generatedNote)))
+		}
+		for name, data := range generated {
+			log.Info().Msg("")
+			log.Info().Msgf("%s:", name)
+			for _, line := range strings.Split(string(data), "\n") {
+				log.Info().Msgf("  %s", line)
+			}
 		}
 		log.Info().Msg("")
 		log.Info().Msg(styles.RenderSuccess("✅ Dry run: nothing was uploaded"))
@@ -269,6 +300,41 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully deployed the web client"))
 	log.Info().Msgf("Open it at %s", styles.RenderTechnical(target.URL))
 	return nil
+}
+
+// webClientEndpointsFile is the endpoints file of a web client: how the client
+// reaches its game server and CDN. Its fields are those of the SDK's
+// ConnectionEndpointConfig.
+type webClientEndpointsFile struct {
+	ServerHost             string `json:"serverHost"`
+	ServerPortForWebSocket int    `json:"serverPortForWebSocket,omitempty"`
+	EnableTLS              *bool  `json:"enableTls,omitempty"`
+	CdnBaseURL             string `json:"cdnBaseUrl,omitempty"`
+	PublicWebAPIURL        string `json:"publicWebApiUrl,omitempty"`
+}
+
+// webClientEndpoints writes the endpoints file of a web client from what the
+// environment reports, and only that: a field it does not report is left out,
+// for the client to fill in itself. Nil where it reports no game server.
+func webClientEndpoints(deployment *envapi.Deployment) ([]byte, error) {
+	if deployment.ServerHostname == "" {
+		return nil, nil
+	}
+	endpoints := webClientEndpointsFile{ServerHost: deployment.ServerHostname}
+	if len(deployment.ServerWebSocketPorts) > 0 {
+		endpoints.ServerPortForWebSocket = deployment.ServerWebSocketPorts[0]
+	}
+	if deployment.ServerTLSCert != "" {
+		enableTLS := true
+		endpoints.EnableTLS = &enableTLS
+	}
+	if deployment.CdnS3Fqdn != "" {
+		endpoints.CdnBaseURL = "https://" + deployment.CdnS3Fqdn + "/"
+	}
+	if deployment.PublicWebApiURL != "" {
+		endpoints.PublicWebAPIURL = strings.TrimSuffix(deployment.PublicWebApiURL, "/") + "/"
+	}
+	return json.MarshalIndent(endpoints, "", "  ")
 }
 
 // errNoWebClientHosting reports an environment with nowhere to host a web
