@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -510,16 +511,16 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	return &awsCredentials, err
 }
 
-// newECRClient creates an authenticated ECR client for the environment.
-func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+// newAWSConfig creates an AWS config authenticated against the environment.
+func (target *TargetEnvironment) newAWSConfig(envDetails *DeploymentSecret) (aws.Config, error) {
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS credentials: %w", err)
+		return aws.Config{}, fmt.Errorf("failed to get AWS credentials: %w", err)
 	}
 
 	log.Debug().Msg("Create AWS config")
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+	return config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(envDetails.Deployment.AwsRegion),
 		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{
@@ -529,12 +530,39 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 			}, nil
 		})),
 	)
+}
+
+// newECRClient creates an authenticated ECR client for the environment.
+func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+	cfg, err := target.newAWSConfig(envDetails)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Debug().Msg("Create ECR client")
 	return ecr.NewFromConfig(cfg), nil
+}
+
+// ErrNotOnAWS reports that the environment is not hosted on AWS: its
+// deployment names no AWS region, or its stack issues no AWS credentials for it.
+var ErrNotOnAWS = errors.New("the environment is not hosted on AWS")
+
+// NewS3Client creates an S3 client authenticated against the environment, for
+// its buckets. Returns ErrNotOnAWS for an environment not hosted on AWS.
+func (target *TargetEnvironment) NewS3Client(envDetails *DeploymentSecret) (*s3.Client, error) {
+	if envDetails.Deployment.AwsRegion == "" {
+		return nil, ErrNotOnAWS
+	}
+	cfg, err := target.newAWSConfig(envDetails)
+	if isHTTPNotFound(err) {
+		return nil, ErrNotOnAWS
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug().Msg("Create S3 client")
+	return s3.NewFromConfig(cfg), nil
 }
 
 // ecrDockerCredentials gets a docker login for ECR from its control plane, and

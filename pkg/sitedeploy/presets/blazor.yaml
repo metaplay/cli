@@ -1,0 +1,26 @@
+# Blazor WebAssembly, as 'dotnet publish' writes it to bin/<Configuration>/<framework>/publish/wwwroot.
+
+# The publish writes a Brotli and a gzip copy next to each compressible file. The CDN serves each
+# object as it is and cannot pick an encoding per request, so the Brotli copy is uploaded under the
+# original's name, in its place. Browsers accept Brotli over HTTPS. Files the publish does not
+# compress, such as images and fonts, are uploaded as they are.
+files:
+  - match: "**/*.br"
+    stripSuffix: .br
+    contentEncoding: br
+  - match: "**/*.gz"
+    exclude: true
+
+headers:
+  # The framework files' names carry a ten-character content hash, eg, Client.su7785ecxb.wasm, so each
+  # build uploads new names and they can be cached forever. Files that keep their names across builds
+  # get the default Cache-Control: no-cache.
+  - matchRegex: '^_framework/[^/]+\.[a-z0-9]{10}\.[a-z]+$'
+    cacheControl: public, max-age=31536000, immutable
+
+# dotnet.js names the other framework files, and index.html loads the two loaders: they go up after
+# the files they name.
+entryFiles:
+  - _framework/dotnet.js
+  - _framework/blazor.webassembly.js
+  - index.html

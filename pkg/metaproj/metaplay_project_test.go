@@ -15,6 +15,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
+	"github.com/metaplay/cli/pkg/sitedeploy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -786,6 +787,58 @@ func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Errorf("unexpected error for unityProjectDir %q: %v", tc.unityProjectDir, err)
+			}
+		})
+	}
+}
+
+// webClients entries are checked when the project loads, so a mistake in one is
+// reported before a deploy starts. Their sourceDir is build output and need not
+// exist yet.
+func TestValidateProjectConfig_WebClients(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, dir := range []string{"sdk", "Backend", "Shared"} {
+		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blazor := func(name string) WebClientConfig {
+		return WebClientConfig{Name: name, SourceDir: "Client/publish/wwwroot", Config: sitedeploy.Config{Preset: "blazor"}}
+	}
+
+	testCases := []struct {
+		name       string
+		webClients []WebClientConfig
+		wantErr    bool
+	}{
+		{name: "none", webClients: nil, wantErr: false},
+		{name: "valid", webClients: []WebClientConfig{blazor("webclient"), blazor("other")}, wantErr: false},
+		{name: "missing name", webClients: []WebClientConfig{blazor("")}, wantErr: true},
+		{name: "invalid name", webClients: []WebClientConfig{blazor("web client")}, wantErr: true},
+		{name: "duplicate name", webClients: []WebClientConfig{blazor("webclient"), blazor("webclient")}, wantErr: true},
+		{name: "missing sourceDir", webClients: []WebClientConfig{{Name: "webclient"}}, wantErr: true},
+		{name: "unknown preset", webClients: []WebClientConfig{{Name: "webclient", SourceDir: "x", Config: sitedeploy.Config{Preset: "nope"}}}, wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := &ProjectConfig{
+				ProjectHumanID:        "test-project",
+				BuildRootDir:          ".",
+				SdkRootDir:            "sdk",
+				BackendDir:            "Backend",
+				SharedCodeDir:         "Shared",
+				DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
+				ServerChartVersion:    "0.9.0",
+				BotClientChartVersion: "0.9.0",
+				WebClients:            tc.webClients,
+			}
+			err := ValidateProjectConfig(projectDir, config)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected an error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}
