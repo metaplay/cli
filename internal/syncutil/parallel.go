@@ -14,13 +14,11 @@ func ParallelMap[In, Out any](items []In, maxConcurrency int, fn func(In) Out) [
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, maxConcurrency)
 	for i, item := range items {
-		wg.Add(1)
 		sem <- struct{}{}
-		go func(idx int, val In) {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
-			results[idx] = fn(val)
-		}(i, item)
+			results[i] = fn(item)
+		})
 	}
 	wg.Wait()
 	return results

@@ -5,15 +5,17 @@
 package metaproj
 
 import (
+	"errors"
 	"fmt"
-	"html/template"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"text/template"
 
 	"github.com/hashicorp/go-version"
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -26,6 +28,9 @@ import (
 // CLI only supports Metaplay SDK versions 32.0 and above. The legacy metaplay-auth CLI
 // was used with earlier SDK versions.
 var OldestSupportedSdkVersion = version.Must(version.NewVersion("32.0.0"))
+
+// ErrSdkNotFound is returned when the Metaplay SDK directory does not exist.
+var ErrSdkNotFound = errors.New("SDK directory not found")
 
 // Reserved alias names that cannot be used for environment aliases.
 var reservedAliases = []string{
@@ -59,11 +64,31 @@ func validateAlias(alias string) error {
 }
 
 // Metaplay project: helper type to wrap the resolved project, including relative path to project,
-// parsed metaplay-project.yaml and parsed MetaplaySDK/version.yaml.
+// parsed metaplay-project.yaml and (lazily) parsed MetaplaySDK/version.yaml.
 type MetaplayProject struct {
-	Config          ProjectConfig
-	RelativeDir     string
-	VersionMetadata MetaplayVersionMetadata
+	Config      ProjectConfig
+	RelativeDir string
+
+	// SDK version metadata, loaded on the first SdkMetadata() call.
+	sdkMetadata    *MetaplayVersionMetadata
+	sdkMetadataErr error
+}
+
+// SdkMetadata returns the parsed MetaplaySDK/version.yaml, loading it on first use.
+// The result, including a failure, is cached.
+func (project *MetaplayProject) SdkMetadata() (*MetaplayVersionMetadata, error) {
+	if project.sdkMetadata == nil && project.sdkMetadataErr == nil {
+		project.sdkMetadata, project.sdkMetadataErr = LoadSdkVersionMetadata(project.GetSdkRootDir())
+		// Map well known errors to helpful errors
+		if errors.Is(project.sdkMetadataErr, ErrSdkNotFound) {
+			project.sdkMetadataErr = clierrors.Wrap(project.sdkMetadataErr, "Metaplay SDK not found").
+				WithSuggestion("Check that 'sdkRootDir' in metaplay-project.yaml points to the correct location")
+		}
+		if project.sdkMetadataErr == nil {
+			log.Debug().Msgf("Version metadata loaded: %+v", project.sdkMetadata)
+		}
+	}
+	return project.sdkMetadata, project.sdkMetadataErr
 }
 
 func (project *MetaplayProject) UsesCustomDashboard() bool {
@@ -157,20 +182,21 @@ func LoadProjectConfigFile(projectDir string) (*ProjectConfig, error) {
 	// Apply defaults to project config.
 	err = ApplyProjectConfigDefaults(&projectConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to apply defaults to metaplay-project.yaml: %v", err)
+		return nil, fmt.Errorf("failed to apply defaults to metaplay-project.yaml: %w", err)
 	}
 
 	// Validate the project config.
 	err = ValidateProjectConfig(projectDir, &projectConfig)
 	if err != nil {
-		return nil, fmt.Errorf("failed to validate metaplay-project.yaml: %v", err)
+		return nil, fmt.Errorf("failed to validate metaplay-project.yaml: %w", err)
 	}
 
 	return &projectConfig, nil
 }
 
-// Validate that a project-specific directory in 'metaplay-project.yaml' is valid.
-func validateProjectDir(projectDir, fieldName, dirValue string) error {
+// Validate that a project-specific path in 'metaplay-project.yaml' is well-formed,
+// without requiring it to exist.
+func validateProjectPath(fieldName, dirValue string) error {
 	// Directory must be specified.
 	if dirValue == "" {
 		return fmt.Errorf("required field '%s' is missing", fieldName)
@@ -179,6 +205,15 @@ func validateProjectDir(projectDir, fieldName, dirValue string) error {
 	// Check that path is not absolute.
 	if filepath.IsAbs(dirValue) {
 		return fmt.Errorf("field '%s' ('%s') specifies an absolute path: all paths must be relative", fieldName, dirValue)
+	}
+
+	return nil
+}
+
+// Validate that a project-specific directory in 'metaplay-project.yaml' is valid and exists.
+func validateProjectDir(projectDir, fieldName, dirValue string) error {
+	if err := validateProjectPath(fieldName, dirValue); err != nil {
+		return err
 	}
 
 	// Check that directory exists.
@@ -194,9 +229,9 @@ func validateProjectDir(projectDir, fieldName, dirValue string) error {
 	return nil
 }
 
-// validateHelmChartRepositoryURL checks if the given input is a valid Helm chart repository URL.
+// ValidateHelmChartRepositoryURL checks if the given input is a valid Helm chart repository URL.
 // It returns nil if the URL is valid, or an error describing the issue if invalid.
-func validateHelmChartRepositoryURL(chartRepo string) error {
+func ValidateHelmChartRepositoryURL(chartRepo string) error {
 	// Empty repo is allowed (we use the default).
 	if chartRepo == "" {
 		return nil
@@ -204,17 +239,17 @@ func validateHelmChartRepositoryURL(chartRepo string) error {
 
 	parsedURL, err := url.Parse(chartRepo)
 	if err != nil {
-		return fmt.Errorf("invalid helmChartRepository URL: %w", err)
+		return fmt.Errorf("not a URL: %w", err)
 	}
 
 	// Check if the scheme is either "http" or "https"
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("invalid helmChartRepository URL scheme: %s (must be 'http' or 'https')", parsedURL.Scheme)
+		return fmt.Errorf("URL scheme is '%s', must be 'http' or 'https'", parsedURL.Scheme)
 	}
 
 	// Check if the host is not empty
 	if parsedURL.Host == "" {
-		return fmt.Errorf("invalid helmChartRepository URL: host is empty")
+		return fmt.Errorf("URL has no host")
 	}
 
 	return nil
@@ -241,6 +276,13 @@ func validateHelmChartVersion(fieldName string, chartVersion string) error {
 
 // Apply any defaults to the project config which are not required to be specified.
 func ApplyProjectConfigDefaults(config *ProjectConfig) error {
+	// Tell each auth provider the key it is filed under. The key identifies a provider,
+	// but the map value cannot see it, so errors raised in pkg/auth would otherwise have
+	// only the display name — which does not reliably resolve back to this provider.
+	for key, authProviderCfg := range config.AuthProviders {
+		authProviderCfg.SetProjectKey(key)
+	}
+
 	for ndx, envConfig := range config.Environments {
 		// Default value for hosting type depending on stack domain.
 		if envConfig.HostingType == "" {
@@ -265,7 +307,10 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "buildRootDir", config.BuildRootDir); err != nil {
 		return err
 	}
-	if err := validateProjectDir(projectDir, "sdkRootDir", config.SdkRootDir); err != nil {
+	// Note the SDK directory may be missing if SDK is not yet installed but we have a
+	// metaplay-project.yaml, for example when cloning a sample project. We only check
+	// the path is well-formed.
+	if err := validateProjectPath("sdkRootDir", config.SdkRootDir); err != nil {
 		return err
 	}
 	if err := validateProjectDir(projectDir, "backendDir", config.BackendDir); err != nil {
@@ -274,26 +319,32 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	if err := validateProjectDir(projectDir, "sharedCodeDir", config.SharedCodeDir); err != nil {
 		return err
 	}
-	if err := validateProjectDir(projectDir, "unityProjectDir", config.UnityProjectDir); err != nil {
-		return err
+	// Optional: only 'metaplay init project' uses the Unity project dir, and some projects have no Unity client.
+	if config.UnityProjectDir != "" {
+		if err := validateProjectDir(projectDir, "unityProjectDir", config.UnityProjectDir); err != nil {
+			return err
+		}
 	}
 
 	// Check project .NET version.
 	if config.DotnetRuntimeVersion == nil {
-		return fmt.Errorf("missing dotnetRuntimeVersion. Must specify the 'major.minor' for the .NET runtime framework to use, e.g., '9.0'.")
+		return clierrors.New("Missing dotnetRuntimeVersion in project config").
+			WithSuggestion("Specify the 'major.minor' .NET runtime framework version to use, e.g. '10.0'")
 	}
 	dotnetMajorVersion := config.DotnetRuntimeVersion.Segments()[0]
 	dotnetPatchVersion := config.DotnetRuntimeVersion.Segments()[2]
 	if dotnetMajorVersion < 8 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only versions 8.x or later are supported.", config.DotnetRuntimeVersion)
+		return clierrors.Newf("Invalid dotnetRuntimeVersion ('%s')", config.DotnetRuntimeVersion).
+			WithSuggestion("Only versions 8.x or later are supported")
 	}
 	if dotnetPatchVersion != 0 {
-		return fmt.Errorf("invalid dotnetRuntimeVersion ('%s'). Only specify 'major.minor' version, eg, '9.0'.", config.DotnetRuntimeVersion)
+		return clierrors.Newf("Invalid dotnetRuntimeVersion ('%s')", config.DotnetRuntimeVersion).
+			WithSuggestion("Specify only the 'major.minor' version, e.g. '10.0'")
 	}
 
 	// Helm charts.
-	if err := validateHelmChartRepositoryURL(config.HelmChartRepository); err != nil {
-		return err
+	if err := ValidateHelmChartRepositoryURL(config.HelmChartRepository); err != nil {
+		return fmt.Errorf("invalid helmChartRepository: %w", err)
 	}
 	if err := validateHelmChartVersion("serverChartVersion", config.ServerChartVersion); err != nil {
 		return err
@@ -330,7 +381,7 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			}
 			parsedURL, err := url.Parse(endpoint)
 			if err != nil {
-				return fmt.Errorf("authProviders[%s].%s is not a valid URL: %v", name, endpointName, err)
+				return fmt.Errorf("authProviders[%s].%s is not a valid URL: %w", name, endpointName, err)
 			}
 			if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 				return fmt.Errorf("authProviders[%s].%s must use http or https scheme", name, endpointName)
@@ -373,11 +424,11 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if err := validateProjectDir(projectDir, "features.dashboard.rootDir", dashboardConfig.RootDir); err != nil {
 			return err
 		}
-	} else {
-		// if dashboardConfig.RootDir != "" {
-		// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
-		// }
 	}
+	// \todo enable check later: when a custom dashboard is not used, rootDir must be empty.
+	// } else if dashboardConfig.RootDir != "" {
+	// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
+	// }
 
 	// Validate environments.
 	for endNdx, envConfig := range config.Environments {
@@ -398,13 +449,13 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
 		}
 		if envConfig.ServerValuesFile != "" {
-			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
+			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
 			if err != nil {
 				return fmt.Errorf("environment '%s' failed to validate 'serverValuesFile': %w", envName, err)
 			}
 		}
 		if envConfig.BotClientValuesFile != "" {
-			err := validateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
+			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.BotClientValuesFile))
 			if err != nil {
 				return fmt.Errorf("environment '%s' failed to validate 'botclientValuesFile': %w", envName, err)
 			}
@@ -517,6 +568,10 @@ func ParseVersionMetadata(versionFileContent []byte) (*MetaplayVersionMetadata, 
 // Load the MetaplaySDK/version.yaml containing metadata about the Metaplay SDK version,
 // e.g., required .NET and Node/pnpm minimum versions.
 func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error) {
+	if _, err := os.Stat(sdkRootDir); errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("%w at '%s'", ErrSdkNotFound, sdkRootDir)
+	}
+
 	// Read MetaplaySDK/version.yaml content.
 	// If unable to read the file, try to determine the SDK version from the Dockerfile.server to
 	// identify earlier SDK packages.
@@ -536,24 +591,38 @@ func LoadSdkVersionMetadata(sdkRootDir string) (*MetaplayVersionMetadata, error)
 		}
 
 		// Generic error when we don't know what went wrong.
-		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %v", readVersionErr)
+		return nil, fmt.Errorf("failed to read Metaplay SDK version metadata: %w", readVersionErr)
 	}
 
 	// Parse and validate the 'version.yaml' contents.
 	return ParseVersionMetadata(versionFileContent)
 }
 
-func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig, versionMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+// NewMetaplayProject creates a project from path. Its version metadata will be loaded
+// on demand.
+func NewMetaplayProject(projectDir string, projectConfig *ProjectConfig) (*MetaplayProject, error) {
 	if filepath.IsAbs(projectDir) {
 		return nil, fmt.Errorf("projectDir must be relative, got '%s'", projectDir)
 	}
 
 	// Return project.
 	return &MetaplayProject{
-		Config:          *projectConfig,
-		RelativeDir:     projectDir,
-		VersionMetadata: *versionMetadata,
+		Config:      *projectConfig,
+		RelativeDir: projectDir,
 	}, nil
+}
+
+// NewMetaplayProjectWithSdkMetadata creates a project with given version metadata.
+func NewMetaplayProjectWithSdkMetadata(projectDir string, projectConfig *ProjectConfig, sdkMetadata *MetaplayVersionMetadata) (*MetaplayProject, error) {
+	if sdkMetadata == nil {
+		return nil, fmt.Errorf("sdkMetadata must not be nil")
+	}
+	project, err := NewMetaplayProject(projectDir, projectConfig)
+	if err != nil {
+		return nil, err
+	}
+	project.sdkMetadata = sdkMetadata
+	return project, nil
 }
 
 // Find a matching environment from the project config.
@@ -670,7 +739,8 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 		return fmt.Errorf("environment ID '%s' contains invalid characters - only alphanumeric characters and dashes are allowed", id)
 	}
 
-	if hostingType == portalapi.HostingTypeMetaplayHosted {
+	switch hostingType {
+	case portalapi.HostingTypeMetaplayHosted:
 		// Split the string by dashes
 		parts := strings.Split(id, "-")
 
@@ -686,7 +756,7 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 				return fmt.Errorf("segment %d ('%s') in environment ID contains invalid characters - only lower-case ASCII alphanumeric characters (a-z, 0-9) are allowed", i+1, part)
 			}
 		}
-	} else if hostingType == portalapi.HostingTypeSelfHosted {
+	case portalapi.HostingTypeSelfHosted:
 		// Cannot start or end with a dash.
 		if strings.HasPrefix(id, "-") {
 			return fmt.Errorf("environment ID '%s' cannot start with a dash", id)
@@ -702,7 +772,17 @@ func ValidateEnvironmentID(hostingType portalapi.HostingType, id string) error {
 	return nil
 }
 
-var projectFileTemplate = template.Must(template.New("Metaplay project config").Parse(
+// yamlScalar renders a string as a YAML scalar, quoting it only when the plain form would
+// parse differently (e.g. 'null', '#dir', 'dir #2').
+func yamlScalar(value string) (string, error) {
+	out, err := yaml.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
+}
+
+var projectFileTemplate = template.Must(template.New("Metaplay project config").Funcs(template.FuncMap{"yaml": yamlScalar}).Parse(
 	`# Configure schema to use.
 # yaml-language-server: $schema={{.SdkRootDir}}/projectConfigSchema.json
 $schema: "{{.SdkRootDir}}/projectConfigSchema.json"
@@ -710,10 +790,12 @@ $schema: "{{.SdkRootDir}}/projectConfigSchema.json"
 # Configure project.
 projectID: {{.ProjectID}}
 buildRootDir: .
-sdkRootDir: {{.SdkRootDir}}
-backendDir: {{.BackendDir}}
-sharedCodeDir: {{.SharedCodeDir}}
-unityProjectDir: {{.UnityProjectDir}}
+sdkRootDir: {{yaml .SdkRootDir}}
+backendDir: {{yaml .BackendDir}}
+sharedCodeDir: {{yaml .SharedCodeDir}}
+{{- if .UnityProjectDir}}
+unityProjectDir: {{yaml .UnityProjectDir}}
+{{- end}}
 
 # Specify .NET runtime version to build project for, only '<major>.<minor>'.
 dotnetRuntimeVersion: "{{.DotnetRuntimeVersion}}"
@@ -727,11 +809,11 @@ features:
   # Configure LiveOps Dashboard.
   dashboard:
     useCustom: {{.UseCustomDashboard}}
-    rootDir: {{.CustomDashboardPath}}
+    rootDir: {{if .CustomDashboardPath}}{{yaml .CustomDashboardPath}}{{end}}
 
 # Project environments.
 environments:
-{{range .Environments}}  - name: {{.Name}}
+{{range .Environments}}  - name: {{yaml .Name}}
     humanId: {{.HumanID}}
     type: {{.Type}}
     stackDomain: {{.StackDomain}}
@@ -818,7 +900,7 @@ func GenerateProjectConfigFile(
 		environments,
 	)
 	if err != nil {
-		log.Panic().Msgf("%v", err)
+		return nil, err
 	}
 
 	// Write metaplay-project.yaml.
@@ -831,16 +913,14 @@ func GenerateProjectConfigFile(
 	return projectConfig, nil
 }
 
-func isValidEnvironmentType(envType portalapi.EnvironmentType) bool {
-	_, found := environmentTypeToFamilyMapping[envType]
-	return found
-}
-
-// validateHelmValuesFile validates the given Helm values file path.
-func validateHelmValuesFile(filePath string) error {
+// ValidateHelmValuesFile checks that filePath names a Helm values file: one
+// with a .yaml or .yml extension that can be read and parses as YAML. Unlike
+// ValidateHelmChartRepositoryURL, it refuses an empty path, so a caller with an
+// optional file checks for that first.
+func ValidateHelmValuesFile(filePath string) error {
 	// Check if the file has a .yaml or .yml suffix
 	if ext := filepath.Ext(filePath); ext != ".yaml" && ext != ".yml" {
-		return fmt.Errorf("file must have .yaml or .yml extension, got: %s", ext)
+		return fmt.Errorf("file must have .yaml or .yml extension, got: '%s'", ext)
 	}
 
 	// Check if the file exists and can be opened
@@ -848,7 +928,7 @@ func validateHelmValuesFile(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unable to open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Check if the file can be parsed as YAML
 	data, err := io.ReadAll(file)

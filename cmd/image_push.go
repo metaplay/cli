@@ -36,7 +36,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment ID, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+	args.AddStringArgument(&o.argImageName, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25'.")
 
 	cmd := &cobra.Command{
 		Use:   "push ENVIRONMENT IMAGE:TAG",
@@ -52,8 +52,8 @@ func init() {
 			- After pushing, the image can be deployed into the environment using 'metaplay deploy server ...'.
 		`),
 		Example: renderExample(`
-			# Push the docker image 'mygame:1a27c25753' into environment 'nimbly'.
-			metaplay image push nimbly mygame:1a27c25753
+			# Push the docker image 'mygame:20260601-153000-1a27c25' into environment 'nimbly'.
+			metaplay image push nimbly mygame:20260601-153000-1a27c25
 		`),
 	}
 	imageCmd.AddCommand(cmd)
@@ -63,8 +63,8 @@ func (o *imagePushOpts) Prepare(cmd *cobra.Command, args []string) error {
 	// Validate docker image name: must be a repository:tag pair.
 	if !strings.Contains(o.argImageName, ":") {
 		return clierrors.NewUsageErrorf("Invalid image name '%s'", o.argImageName).
-			WithDetails("Image name must include a tag (e.g., 'mygame:abc123')").
-			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:abc123'")
+			WithDetails("Image name must include a tag (e.g., 'mygame:20260601-153000-1a27c25')").
+			WithSuggestion("Use format NAME:TAG, for example 'metaplay image push develop mygame:20260601-153000-1a27c25'")
 	}
 
 	return nil
@@ -94,25 +94,22 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the image goes and what authenticates the push; which
+	// registry that is depends on the stack.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
 	// Use task runner to push the image.
 	taskRunner := tui.NewTaskRunner()
 
 	// Push the image to the remote repository.
+	imagePushed := false
 	taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-		return pushDockerImage(cmd.Context(), output, o.argImageName, envDetails.Deployment.EcrRepo, dockerCredentials)
+		pushed, err := pushDockerImage(cmd.Context(), output, o.argImageName, imageRepository)
+		imagePushed = pushed
+		return err
 	})
 
 	// Run the tasks.
@@ -121,7 +118,11 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	}
 
 	log.Info().Msg("")
-	log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	if imagePushed {
+		log.Info().Msg(styles.RenderSuccess("✅ Successfully pushed image!"))
+	} else {
+		log.Info().Msg(styles.RenderSuccess("✅ Image already present in repository; nothing to push."))
+	}
 	return nil
 }
 
@@ -137,37 +138,71 @@ func extractDockerImageTag(imageName string) (string, error) {
 	srcImageParts := strings.Split(imageName, ":")
 	if len(srcImageParts) != 2 || len(srcImageParts[0]) == 0 || len(srcImageParts[1]) == 0 {
 		return "", clierrors.NewUsageErrorf("Invalid docker image name '%s'", imageName).
-			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:abc123'")
+			WithSuggestion("Use format NAME:TAG, e.g., 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Return the tag part of the image name
 	return srcImageParts[1], nil
 }
 
-// Push a docker image from the local repo to a remote one.
-// Output progress into the task output.
-func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dstRepoName string, dockerCredentials *envapi.DockerCredentials) error {
+// pushDockerImage pushes a local image from the local repo to the environment's repository, with
+// that repository's credential, writing progress into the task output. The returned bool is true
+// if an image was actually pushed, and false if the push was skipped because the identical image
+// was already present in the repository.
+func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName string, dstRepository *envapi.EnvironmentImageRepository) (bool, error) {
+	dockerCredentials := dstRepository.Credentials
+
 	// Create a Docker client
 	cli, err := envapi.NewDockerClient()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Extract tag from source image.
 	imageTag, err := extractDockerImageTag(imageName)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Resolve source and destination image names.
 	srcImageName := imageName
-	dstImageName := fmt.Sprintf("%s:%s", dstRepoName, imageTag)
+	dstImageName := dstRepository.Reference(imageTag)
+
+	// Check whether the tag already exists in the remote repository. Image tags must be unique
+	// per build: re-using a tag (e.g. 'latest', a bare commit SHA, or any tag that has already
+	// been pushed) means a deployed environment can't reliably resolve which artifact it's
+	// running. We therefore refuse to overwrite a tag that already holds a different image.
+	remoteDigests, exists, err := envapi.FetchRemoteDockerImageDigests(dockerCredentials, dstImageName)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		// Resolve the local image's ID so we can tell apart "same image, re-pushed" (a harmless
+		// no-op we can skip) from "different image, same tag" (a hard error). The local image ID is
+		// the config digest under the legacy image store and the manifest digest under the
+		// containerd image store, so accept a match against either remote digest.
+		localImage, err := envapi.ReadLocalDockerImageMetadata(srcImageName)
+		if err != nil {
+			return false, err
+		}
+
+		if localImage.ImageID == remoteDigests.ConfigDigest || localImage.ImageID == remoteDigests.ManifestDigest {
+			// Identical image already in the repository: nothing to do.
+			output.AppendLinef("Image %s is already present in the repository (identical digest), skipping push", dstImageName)
+			return false, nil
+		}
+
+		// Same tag, different image content: refuse to overwrite.
+		return false, clierrors.Newf("Image tag '%s' already exists in the environment's repository with different content", imageTag).
+			WithDetails("Re-using an image tag is not supported: each build must be pushed with a unique tag.").
+			WithSuggestion("Rebuild with a unique tag and push that. A '<timestamp>-<commit>' tag (e.g. '20260601-153000-1a27c25') is recommended; 'metaplay build image' without a tag generates one automatically.")
+	}
 
 	// If names don't match, tag the source image as the destination.
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
 		if err := cli.ImageTag(ctx, srcImageName, dstImageName); err != nil {
-			return fmt.Errorf("failed to tag image: %w", err)
+			return false, fmt.Errorf("failed to tag image: %w", err)
 		}
 	}
 
@@ -180,7 +215,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 	}
 	authConfigBytes, err := json.Marshal(authConfig)
 	if err != nil {
-		return fmt.Errorf("failed to marshal auth config: %w", err)
+		return false, fmt.Errorf("failed to marshal auth config: %w", err)
 	}
 
 	// Encode with base64
@@ -190,9 +225,9 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to push docker image: %w", err)
+		return false, fmt.Errorf("failed to push docker image: %w", err)
 	}
-	defer pushResponseReader.Close()
+	defer func() { _ = pushResponseReader.Close() }()
 
 	// Follow push progress
 	decoder := json.NewDecoder(pushResponseReader)
@@ -205,7 +240,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("failed to decode push response: %w", err)
+			return false, fmt.Errorf("failed to decode push response: %w", err)
 		}
 
 		// Track progress by ID to show the latest status for each layer
@@ -219,7 +254,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 
 		// If progress has an error, return it
 		if progress.Error != nil {
-			return fmt.Errorf("error pushing image: %s", progress.Error.Message)
+			return false, fmt.Errorf("error pushing image: %s", progress.Error.Message)
 		}
 
 		// Update the output with current progress information (only in interactive mode).
@@ -228,7 +263,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName, dst
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.

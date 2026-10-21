@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -72,7 +73,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	// Construct redirect URI with the port.
 	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
@@ -83,15 +84,14 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	// Generate a random state for login.
 	state, err := generateRandomString(16)
 	if err != nil {
-		return fmt.Errorf("failed to generate random state: %v", err)
+		return fmt.Errorf("failed to generate random state: %w", err)
 	}
 
 	// Create a channel to signal server shutdown.
 	done := make(chan struct{})
 
 	// Create a new HTTP server.
-	var server *http.Server
-	server = &http.Server{
+	server := &http.Server{
 		Addr: listener.Addr().String(),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// OAuth2 callback handler
@@ -124,13 +124,13 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 				}
 
 				// Save tokens securely
-				err = SaveSessionState(authProvider.GetSessionID(), UserTypeHuman, tokenSet)
+				err = SaveSessionState(authProvider, UserTypeHuman, tokenSet)
 				if err != nil {
 					http.Error(w, "Failed to save tokens: "+err.Error(), http.StatusInternalServerError)
 					return
 				}
 
-				fmt.Fprintln(w, "Authentication successful! You can close this window.")
+				_, _ = fmt.Fprintln(w, "Authentication successful! You can close this window.")
 
 				// Signal that authentication is complete
 				close(done)
@@ -213,7 +213,7 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 	}
 
 	// Save tokens securely
-	err = SaveSessionState(authProvider.GetSessionID(), UserTypeMachine, &tokenSet)
+	err = SaveSessionState(authProvider, UserTypeMachine, &tokenSet)
 	if err != nil {
 		return fmt.Errorf("failed to save tokens: %w", err)
 	}
@@ -243,10 +243,70 @@ func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserI
 	}
 
 	if resp.IsError() {
-		return nil, fmt.Errorf("API error: %s", resp.Status())
+		// Keep the server's explanation: it says why the token was refused (for
+		// example, an account that exists in the auth server but not yet in the
+		// portal), and the status alone does not.
+		return nil, &UserInfoError{
+			StatusCode: resp.StatusCode(),
+			Status:     resp.Status(),
+			Message:    parseUserInfoErrorMessage(resp.Body()),
+		}
 	}
 
 	return &userinfo, nil
+}
+
+// UserInfoError is returned by FetchUserInfo when the userinfo endpoint
+// responds with a non-2xx status code. Callers can use errors.AsType to
+// inspect the status code.
+type UserInfoError struct {
+	StatusCode int    // HTTP status code, e.g. 401
+	Status     string // HTTP status line, e.g. "401 Unauthorized"
+	Message    string // Server's explanation from the response body, or empty
+}
+
+// Error implements the error interface.
+func (e *UserInfoError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("API error: %s", e.Status)
+	}
+	return fmt.Sprintf("API error: %s: %s", e.Status, e.Message)
+}
+
+// IsUnauthorized reports whether the server refused the access token.
+func (e *UserInfoError) IsUnauthorized() bool {
+	return e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden
+}
+
+// maxUserInfoErrorMessageLen limits how many characters of the response body
+// an error message can contain, so an HTML error page cannot flood the output.
+const maxUserInfoErrorMessageLen = 500
+
+// parseUserInfoErrorMessage extracts a readable message from a userinfo error
+// response. A JSON body with a known message field gives that field. Any other
+// body gives the raw text on one line, truncated on a character boundary.
+func parseUserInfoErrorMessage(body []byte) string {
+	// Decode into a map rather than a struct: the fields are not always strings
+	// (the portal sends "error": true), and a struct would reject the whole body.
+	var parsed map[string]any
+	text := ""
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		for _, key := range []string{"statusMessage", "message", "error_description", "error"} {
+			if candidate, ok := parsed[key].(string); ok && candidate != "" {
+				text = candidate
+				break
+			}
+		}
+	}
+	if text == "" {
+		text = string(body)
+	}
+
+	text = strings.Join(strings.Fields(strings.ToValidUTF8(text, "")), " ")
+	if runes := []rune(text); len(runes) > maxUserInfoErrorMessageLen {
+		text = string(runes[:maxUserInfoErrorMessageLen]) + "..."
+	}
+	return text
 }
 
 // Exchange the OAuth2 code for the token set.

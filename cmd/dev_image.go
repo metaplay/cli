@@ -26,7 +26,7 @@ func init() {
 	o := devImageOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageTag, "IMAGE:TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to 'docker run'.")
 
 	cmd := &cobra.Command{
@@ -45,7 +45,7 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Run the docker image (until terminated).
-			metaplay dev image mygame:test
+			metaplay dev image mygame:20260601-153000-1a27c25
 
 			# Run the latest built local docker image.
 			metaplay dev image latest-local
@@ -60,6 +60,8 @@ func (o *devImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *devImageOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Try to resolve the project & auth provider.
 	project, err := resolveProject()
 	if err != nil {
@@ -67,20 +69,21 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that docker is installed and running
-	if err := checkCommand("docker", "info"); err != nil {
+	if err := checkCommand(ctx, "docker", "info"); err != nil {
 		return clierrors.New("Failed to invoke Docker").
 			WithSuggestion("Ensure Docker Desktop is installed and running")
 	}
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
-	if o.argImageTag == "" {
+	switch o.argImageTag {
+	case "":
 		selectedImage, err := selectDockerImageInteractively("Select Image to Run Locally", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageTag = selectedImage.RepoTag
-	} else if o.argImageTag == "latest-local" {
+	case "latest-local":
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
@@ -123,7 +126,7 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Run the docker image.
-	if err := executeCommand(".", nil, "docker", dockerRunArgs...); err != nil {
+	if err := executeCommand(ctx, ".", nil, "docker", dockerRunArgs...); err != nil {
 		return clierrors.Wrap(err, "Docker run failed")
 	}
 

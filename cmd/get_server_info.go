@@ -188,7 +188,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	var portalInfo *portalapi.EnvironmentInfo
 	if authProviderName == "metaplay" {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
-		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err = portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			log.Debug().Err(err).Msg("Failed to fetch portal environment info")
 		}
@@ -216,10 +216,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 	var helmInfo *helmReleaseInfo
 	var imageInfo *deploymentImageInfo
 	if existingRelease != nil {
-		helmInfo, err = o.getHelmReleaseInfo(existingRelease)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get Helm release info: %w", err)
-		}
+		helmInfo = o.getHelmReleaseInfo(existingRelease)
 
 		imageInfo, err = o.getImageInfo(ctx, targetEnv, existingRelease)
 		if err != nil {
@@ -236,7 +233,7 @@ func (o *getServerInfoOpts) gatherDeployedServerInfo(ctx context.Context, target
 }
 
 // Extract the Helm release information from a release object into a simpler info class.
-func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*helmReleaseInfo, error) {
+func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) *helmReleaseInfo {
 	helmInfo := &helmReleaseInfo{
 		Name:         releaseInfo.Name,
 		Status:       releaseInfo.Info.Status.String(),
@@ -250,7 +247,7 @@ func (o *getServerInfoOpts) getHelmReleaseInfo(releaseInfo *release.Release) (*h
 		helmInfo.ChartVersion = releaseInfo.Chart.Metadata.Version
 	}
 
-	return helmInfo, nil
+	return helmInfo
 }
 
 // Extract information about the docker image used in the game server deployment.
@@ -276,20 +273,16 @@ func (o *getServerInfoOpts) getImageInfo(ctx context.Context, targetEnv *envapi.
 		return nil, fmt.Errorf("no image information found in Helm release")
 	}
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return nil, err
 	}
 
-	// Get docker credentials for the image registry.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return nil, err
-	}
-
-	// Fetch image metadata from the remote docker repository.
-	imageMetadata, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, fullImageRef)
+	// Fetch image metadata from the remote docker repository. The release names
+	// its image itself, so the credential goes only to the registry it was
+	// issued for; an image on any other registry is read anonymously.
+	imageMetadata, err := imageRepository.FetchImageMetadata(fullImageRef)
 	if err != nil {
 		return nil, err
 	}

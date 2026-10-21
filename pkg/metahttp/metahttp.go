@@ -10,8 +10,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/metaplay/cli/internal/version"
@@ -88,42 +91,69 @@ func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	}
 }
 
-// Download a file from the specified URL to the specified file path.
-// Note: The file gets created even if the request fails.
-func Download(c *Client, url string, filePath string) (*resty.Response, error) {
-	// Perform the request: download directly to a file.
-	response, err := c.Resty.R().SetOutput(filePath).Get(url)
+// Download a file from the specified URL to the specified file path. If
+// onProgress is non-nil it is called periodically with the number of bytes
+// downloaded so far and the total size (0 if unknown).
+//
+// Retries transient failures (connection errors before the first byte, or
+// stream interruptions mid-body such as unexpected EOF) with exponential
+// backoff. Local I/O failures and HTTP error statuses are not retried.
+func Download(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+	const maxAttempts = 4
+	backoff := 1 * time.Second
 
-	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
+	var resp *resty.Response
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		var streamErr error
+		resp, streamErr, lastErr = downloadOnce(c, url, filePath, onProgress)
+
+		// Non-retryable: success, HTTP error status, or local I/O failure.
+		if streamErr == nil {
+			return resp, lastErr
+		}
+
+		// Transient streaming/network error — retry unless we're out of attempts.
+		if attempt == maxAttempts {
+			return resp, fmt.Errorf("download from %s%s failed after %d attempts: %w", c.BaseURL, url, maxAttempts, streamErr)
+		}
+
+		log.Warn().Msgf("Download from %s%s interrupted (attempt %d/%d), retrying in %v: %v", c.BaseURL, url, attempt, maxAttempts, backoff, streamErr)
+		time.Sleep(backoff)
+		backoff *= 2
 	}
 
-	return response, nil
+	return resp, lastErr
 }
 
-// DownloadWithProgress downloads a file from the specified URL to the specified
-// file path, calling onProgress periodically with the number of bytes downloaded
-// and the total size (0 if unknown).
-func DownloadWithProgress(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error) {
+// downloadOnce performs a single download attempt. Returns
+// (resp, streamErr, terminalErr):
+//   - streamErr != nil indicates a transient network/streaming failure the
+//     caller should retry. resp may be nil.
+//   - terminalErr is the final error to return to the caller and is never
+//     retried (covers local I/O failures; nil on success and on HTTP error
+//     statuses, where the caller inspects resp.StatusCode()).
+func downloadOnce(c *Client, url string, filePath string, onProgress func(downloaded, total int64)) (*resty.Response, error, error) {
 	// Use SetDoNotParseResponse to get raw response body for streaming.
 	resp, err := c.Resty.R().SetDoNotParseResponse(true).Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to download file from %s%s: %w", c.BaseURL, url, err)
+		return nil, fmt.Errorf("failed to reach %s%s: %w", c.BaseURL, url, err), nil
 	}
 
 	rawBody := resp.RawBody()
-	defer rawBody.Close()
+	defer func() { _ = rawBody.Close() }()
 
 	// On HTTP error, return the response without a Go error so the caller can
 	// inspect resp.StatusCode() and produce a domain-specific error message.
 	if resp.IsError() {
-		return resp, nil
+		return resp, nil, nil
 	}
 
-	// Create the output file.
+	// Create the output file (local error — not retryable).
 	outFile, err := os.Create(filePath)
 	if err != nil {
-		return resp, fmt.Errorf("Failed to create output file %s: %w", filePath, err)
+		return resp, nil, fmt.Errorf("failed to create output file %s: %w", filePath, err)
 	}
 
 	// Determine total size from Content-Length header.
@@ -140,13 +170,14 @@ func DownloadWithProgress(c *Client, url string, filePath string, onProgress fun
 	}
 
 	_, copyErr := io.Copy(outFile, pr)
-	outFile.Close()
+	_ = outFile.Close()
 	if copyErr != nil {
-		os.Remove(filePath)
-		return resp, fmt.Errorf("Failed to write downloaded file %s: %w", filePath, copyErr)
+		// Partial file is unusable; remove so the next attempt starts fresh.
+		_ = os.Remove(filePath)
+		return resp, fmt.Errorf("failed to write downloaded file %s: %w", filePath, copyErr), nil
 	}
 
-	return resp, nil
+	return resp, nil, nil
 }
 
 // progressReader wraps an io.Reader and reports progress via a callback.
@@ -168,6 +199,14 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 
 // Make a HTTP request to the target URL with the specified method and body, and unmarshal the response into the specified type.
 func Request[TResponse any](c *Client, method string, url string, body any, contentType string) (TResponse, error) {
+	return RequestExpecting[TResponse](c, method, url, body, contentType)
+}
+
+// Make a HTTP request like Request, naming the non-2xx statuses the caller
+// handles itself. Those are still returned as an *HTTPError, but logged at
+// Debug rather than Error: the CLI recovers from them, so a failed-request line
+// would only be noise.
+func RequestExpecting[TResponse any](c *Client, method string, url string, body any, contentType string, expectedStatuses ...int) (TResponse, error) {
 	var result TResponse
 
 	// Perform the request
@@ -230,9 +269,10 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 		// Debug level to avoid doubling the output. Otherwise the body is
 		// opaque (unknown format, HTML intercepted by a proxy, legacy
 		// endpoints, ...) and the user's only reliable diagnostic signal
-		// is the raw log, so keep it at Error level.
+		// is the raw log, so keep it at Error level. An expected status is
+		// not a failure, so it stays at Debug whatever its body looks like.
 		rawLogLine := fmt.Sprintf("Request failed with status code %d (%s %s): %s", response.StatusCode(), method, requestURL, string(errorBody))
-		if structured {
+		if structured || slices.Contains(expectedStatuses, response.StatusCode()) {
 			log.Debug().Msg(rawLogLine)
 		} else {
 			log.Error().Msg(rawLogLine)
@@ -253,12 +293,18 @@ func Request[TResponse any](c *Client, method string, url string, body any, cont
 	} else {
 		// For complex types, get the body as JSON and unmarshal into TResult.
 		rawBody := response.Body()
-		err = json.Unmarshal(rawBody, &result)
-		if err != nil {
-			log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
-			return result, err
+		if len(rawBody) == 0 {
+			// Empty body is only valid when TResponse is any (interface{}); all other types require a response body.
+			if reflect.TypeFor[TResponse]().Kind() != reflect.Interface {
+				return result, fmt.Errorf("server returned an empty response body where JSON was expected")
+			}
+		} else {
+			err = json.Unmarshal(rawBody, &result)
+			if err != nil {
+				log.Error().Msgf("Failed to unmarshal response: %v, raw body: %s", err, rawBody)
+				return result, err
+			}
 		}
-
 	}
 
 	return result, nil
@@ -274,6 +320,12 @@ func Get[TResponse any](c *Client, url string) (TResponse, error) {
 // URL should start with a slash, e.g. "/v0/credentials/123/k8s"
 func Post[TResponse any](c *Client, url string, body any, contentType string) (TResponse, error) {
 	return Request[TResponse](c, http.MethodPost, url, body, contentType)
+}
+
+// Make a HTTP POST like Post, naming the non-2xx statuses the caller handles
+// itself. See RequestExpecting.
+func PostExpecting[TResponse any](c *Client, url string, body any, contentType string, expectedStatuses ...int) (TResponse, error) {
+	return RequestExpecting[TResponse](c, http.MethodPost, url, body, contentType, expectedStatuses...)
 }
 
 // Make a HTTP PUT to the target URL with the specified body and unmarshal the response into the specified type.

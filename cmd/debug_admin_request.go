@@ -11,7 +11,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/metaplay/cli/pkg/envapi"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -106,6 +106,17 @@ func (o *debugAdminRequestOpts) Prepare(cmd *cobra.Command, args []string) error
 		return fmt.Errorf("invalid HTTP method: %s. Must be one of: GET, POST, DELETE, PUT", o.argMethod)
 	}
 
+	// Detect MSYS/Git-Bash path mangling: when a bash arg starts with '/', MSYS
+	// rewrites it to a Windows path like "C:/Program Files/Git/api/hello". No
+	// legitimate admin API path starts with a drive letter, so this is unambiguous.
+	if len(o.argPath) >= 3 && o.argPath[1] == ':' &&
+		(o.argPath[2] == '/' || o.argPath[2] == '\\') &&
+		((o.argPath[0] >= 'A' && o.argPath[0] <= 'Z') || (o.argPath[0] >= 'a' && o.argPath[0] <= 'z')) {
+		return clierrors.NewUsageErrorf("PATH argument looks like it was rewritten by MSYS/Git-Bash: %q", o.argPath).
+			WithSuggestion(fmt.Sprintf("Drop the leading slash — the CLI adds it automatically. For example:\n  metaplay debug admin-request %s %s api/<your-path>", o.argEnvironment, o.argMethod)).
+			WithDetails("MSYS/Git-Bash rewrites bash args starting with '/' into Windows paths. You can also prefix the invocation with MSYS_NO_PATHCONV=1 to disable this conversion.")
+	}
+
 	// Ensure path starts with a slash
 	if !strings.HasPrefix(o.argPath, "/") {
 		o.argPath = "/" + o.argPath
@@ -143,23 +154,15 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
-
-	// Get environment details for admin API hostname
-	envDetails, err := targetEnv.GetDetails()
-	if err != nil {
-		return err
-	}
-
-	// Create a client for the game server admin API
-	adminAPIBaseURL := fmt.Sprintf("https://%s", envDetails.Deployment.AdminHostname)
+	// Admin hostname follows the infra-modules convention: <humanID>-admin.<stackDomain>.
+	// Avoids a privileged StackAPI /v0/deployments call just to learn the public hostname.
+	adminAPIBaseURL := fmt.Sprintf("https://%s-admin.%s", envConfig.HumanID, envConfig.StackDomain)
 	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
 
 	// Prepare request body if needed
 	var requestBody any
 
-	var contentType string = o.flagContentType
+	var contentType = o.flagContentType
 
 	if o.flagBody != "" {
 		// Use raw body content
@@ -167,12 +170,14 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 		// Detect if passed string is JSON, otherwise fallback to default resty behavior
 		if o.flagContentType == "" && IsJSON(o.flagBody) {
 			contentType = "application/json"
+		} else if o.flagContentType == "application/json" && !IsJSON(o.flagBody) {
+			log.Warn().Msg(styles.RenderWarning("⚠️ Content-Type is application/json but --body does not appear to be valid JSON"))
 		}
 	} else if o.flagFile != "" {
 		// Read content from file
 		fileContent, err := os.ReadFile(o.flagFile)
 		if err != nil {
-			return fmt.Errorf("failed to read file %s: %v", o.flagFile, err)
+			return fmt.Errorf("failed to read file %s: %w", o.flagFile, err)
 		}
 		requestBody = fileContent
 
@@ -216,14 +221,14 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 
 		response, err := request.Execute(o.argMethod, o.argPath)
 		if err != nil {
-			return fmt.Errorf("request failed: %v", err)
+			return fmt.Errorf("request failed: %w", err)
 		}
 		if response.StatusCode() < http.StatusOK || response.StatusCode() >= http.StatusMultipleChoices {
 			return fmt.Errorf("request failed with status %d: %s", response.StatusCode(), response.String())
 		}
 
 		if err := os.WriteFile(o.flagOutput, response.Body(), 0644); err != nil {
-			return fmt.Errorf("failed to write output file: %v", err)
+			return fmt.Errorf("failed to write output file: %w", err)
 		}
 
 		log.Info().Msgf("Saved response to %s (%d bytes)", o.flagOutput, len(response.Body()))
@@ -248,7 +253,13 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	}
 
 	if requestErr != nil {
-		return fmt.Errorf("request failed: %v", requestErr)
+		return fmt.Errorf("request failed: %w", requestErr)
+	}
+
+	// If no response body was returned, print something to acknowledge the result
+	if response == nil {
+		log.Info().Msg(styles.RenderSuccess("✅ Request successful!"))
+		return nil
 	}
 
 	// Format and display the response

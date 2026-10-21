@@ -13,11 +13,7 @@ import (
 
 func TestGitignoreMatching(t *testing.T) {
 	// Create a temporary directory structure that mimics MetaplaySDK
-	tmpDir, err := os.MkdirTemp("", "sdk-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Create .gitignore at root with patterns similar to MetaplaySDK
 	gitignoreContent := `# Build results
@@ -101,11 +97,7 @@ node_modules/
 
 func TestGitignoreNestedFiles(t *testing.T) {
 	// Create a temporary directory with nested .gitignore files
-	tmpDir, err := os.MkdirTemp("", "sdk-nested-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Root .gitignore
 	rootGitignore := `bin/
@@ -165,11 +157,7 @@ temp/
 
 func TestGitignoreEmptyDirectory(t *testing.T) {
 	// Create a temporary directory with no .gitignore files
-	tmpDir, err := os.MkdirTemp("", "sdk-no-gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	matcher := buildGitignoreMatcherForDir(tmpDir)
 
@@ -188,20 +176,6 @@ func TestGitignoreEmptyDirectory(t *testing.T) {
 			t.Errorf("isIgnored(%q, isDir=%v) = true, expected false (no gitignore)", tc.path, tc.isDir)
 		}
 	}
-}
-
-// containsString checks if a string contains a substring
-func containsString(s, substr string) bool {
-	return len(substr) > 0 && len(s) >= len(substr) && findSubstr(s, substr)
-}
-
-func findSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 func TestGenerateUnifiedDiff_NewFile(t *testing.T) {
@@ -236,22 +210,22 @@ func TestGenerateUnifiedDiff_NewFile(t *testing.T) {
 			result := generateUnifiedDiff(tc.path, nil, []byte(tc.newContent), true, false)
 
 			// Check for git diff header
-			if !containsString(result, "diff --git a/"+tc.path+" b/"+tc.path) {
+			if !strings.Contains(result, "diff --git a/"+tc.path+" b/"+tc.path) {
 				t.Errorf("missing diff header, got:\n%s", result)
 			}
 
 			// Check for new file marker
-			if !containsString(result, "new file mode 100644") {
+			if !strings.Contains(result, "new file mode 100644") {
 				t.Errorf("missing 'new file mode' marker, got:\n%s", result)
 			}
 
 			// Check for /dev/null in old file
-			if !containsString(result, "--- /dev/null") {
+			if !strings.Contains(result, "--- /dev/null") {
 				t.Errorf("missing '--- /dev/null', got:\n%s", result)
 			}
 
 			// Check hunk header format (must be -0,0 for new files)
-			if !containsString(result, tc.wantHunk) {
+			if !strings.Contains(result, tc.wantHunk) {
 				t.Errorf("expected hunk header %q, got:\n%s", tc.wantHunk, result)
 			}
 		})
@@ -284,17 +258,17 @@ func TestGenerateUnifiedDiff_DeletedFile(t *testing.T) {
 			result := generateUnifiedDiff(tc.path, []byte(tc.oldContent), nil, false, true)
 
 			// Check for deleted file marker
-			if !containsString(result, "deleted file mode 100644") {
+			if !strings.Contains(result, "deleted file mode 100644") {
 				t.Errorf("missing 'deleted file mode' marker, got:\n%s", result)
 			}
 
 			// Check for /dev/null in new file
-			if !containsString(result, "+++ /dev/null") {
+			if !strings.Contains(result, "+++ /dev/null") {
 				t.Errorf("missing '+++ /dev/null', got:\n%s", result)
 			}
 
 			// Check hunk header format (must be +0,0 for deleted files)
-			if !containsString(result, tc.wantHunk) {
+			if !strings.Contains(result, tc.wantHunk) {
 				t.Errorf("expected hunk header %q, got:\n%s", tc.wantHunk, result)
 			}
 		})
@@ -341,24 +315,24 @@ func TestGenerateUnifiedDiff_ModifiedFile(t *testing.T) {
 			result := generateUnifiedDiff(tc.path, []byte(tc.oldContent), []byte(tc.newContent), false, false)
 
 			// Should NOT have new/deleted file markers
-			if containsString(result, "new file mode") {
+			if strings.Contains(result, "new file mode") {
 				t.Errorf("should not have 'new file mode' for modification, got:\n%s", result)
 			}
-			if containsString(result, "deleted file mode") {
+			if strings.Contains(result, "deleted file mode") {
 				t.Errorf("should not have 'deleted file mode' for modification, got:\n%s", result)
 			}
 
 			// Check for proper file headers (not /dev/null)
-			if !containsString(result, "--- a/"+tc.path) {
+			if !strings.Contains(result, "--- a/"+tc.path) {
 				t.Errorf("missing '--- a/%s', got:\n%s", tc.path, result)
 			}
-			if !containsString(result, "+++ b/"+tc.path) {
+			if !strings.Contains(result, "+++ b/"+tc.path) {
 				t.Errorf("missing '+++ b/%s', got:\n%s", tc.path, result)
 			}
 
 			// Check for minus/plus lines
-			hasMinus := containsString(result, "\n-")
-			hasPlus := containsString(result, "\n+")
+			hasMinus := strings.Contains(result, "\n-")
+			hasPlus := strings.Contains(result, "\n+")
 
 			if tc.wantMinus && !hasMinus {
 				t.Errorf("expected - lines in diff, got:\n%s", result)
@@ -418,7 +392,7 @@ func TestGenerateUnifiedDiff_IdenticalContent(t *testing.T) {
 	result := generateUnifiedDiff("test.txt", content, content, false, false)
 
 	// Identical content should produce no hunks
-	if containsString(result, "@@") {
+	if strings.Contains(result, "@@") {
 		t.Errorf("identical content should not produce hunks, got:\n%s", result)
 	}
 }
@@ -428,7 +402,7 @@ func TestGenerateUnifiedDiff_EmptyToContent(t *testing.T) {
 	result := generateUnifiedDiff("test.txt", []byte{}, []byte("new content\n"), false, false)
 
 	// Should produce a valid diff
-	if !containsString(result, "+new content") {
+	if !strings.Contains(result, "+new content") {
 		t.Errorf("expected '+new content' line, got:\n%s", result)
 	}
 }
@@ -438,7 +412,7 @@ func TestGenerateUnifiedDiff_ContentToEmpty(t *testing.T) {
 	result := generateUnifiedDiff("test.txt", []byte("old content\n"), []byte{}, false, false)
 
 	// Should produce a valid diff
-	if !containsString(result, "-old content") {
+	if !strings.Contains(result, "-old content") {
 		t.Errorf("expected '-old content' line, got:\n%s", result)
 	}
 }
@@ -799,13 +773,13 @@ func TestGenerateUnifiedDiff_LineIntegrity(t *testing.T) {
 			result := generateUnifiedDiff("test.txt", []byte(tc.oldContent), []byte(tc.newContent), false, false)
 
 			for _, want := range tc.wantLines {
-				if !containsString(result, want) {
+				if !strings.Contains(result, want) {
 					t.Errorf("expected diff to contain %q, got:\n%s", want, result)
 				}
 			}
 
 			for _, reject := range tc.rejectLines {
-				if containsString(result, reject) {
+				if strings.Contains(result, reject) {
 					t.Errorf("diff must not contain %q (broken line boundary), got:\n%s", reject, result)
 				}
 			}
@@ -855,7 +829,7 @@ func TestGenerateUnifiedDiff_HunkHeaders(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			result := generateUnifiedDiff("test.txt", []byte(tc.oldContent), []byte(tc.newContent), false, false)
-			if !containsString(result, tc.wantHeader) {
+			if !strings.Contains(result, tc.wantHeader) {
 				t.Errorf("expected hunk header %q, got:\n%s", tc.wantHeader, result)
 			}
 		})
@@ -889,16 +863,53 @@ func TestGenerateUnifiedDiff_MultipleHunks(t *testing.T) {
 	}
 
 	// Verify both changes appear
-	if !containsString(result, "-old_first\n") {
+	if !strings.Contains(result, "-old_first\n") {
 		t.Errorf("missing -old_first in:\n%s", result)
 	}
-	if !containsString(result, "+new_first\n") {
+	if !strings.Contains(result, "+new_first\n") {
 		t.Errorf("missing +new_first in:\n%s", result)
 	}
-	if !containsString(result, "-old_last\n") {
+	if !strings.Contains(result, "-old_last\n") {
 		t.Errorf("missing -old_last in:\n%s", result)
 	}
-	if !containsString(result, "+new_last\n") {
+	if !strings.Contains(result, "+new_last\n") {
 		t.Errorf("missing +new_last in:\n%s", result)
+	}
+}
+
+func TestIsSdkPathInDirs(t *testing.T) {
+	dirs := []string{"MetaplaySDK/PrebuiltDashboard"}
+
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"MetaplaySDK/PrebuiltDashboard", true},
+		{"MetaplaySDK/PrebuiltDashboard/", true},
+		{"MetaplaySDK/PrebuiltDashboard/index.html", true},
+		{"MetaplaySDK/PrebuiltDashboard/assets/index-abc123.js", true},
+		{"MetaplaySDK/PrebuiltDashboardOther/index.html", false},
+		{"MetaplaySDK/Frontend/PrebuiltDashboard/index.html", false},
+		{"MetaplaySDK/Backend/Server/Program.cs", false},
+		{"PrebuiltDashboard/index.html", false},
+		{"MetaplaySamples/PrebuiltDashboard/index.html", false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			if result := isSdkPathInDirs(tc.path, dirs); result != tc.expected {
+				t.Errorf("isSdkPathInDirs(%q) = %v, expected %v", tc.path, result, tc.expected)
+			}
+		})
+	}
+
+	// A trailing slash on a dir is tolerated.
+	if !isSdkPathInDirs("MetaplaySDK/PrebuiltDashboard/index.html", []string{"MetaplaySDK/PrebuiltDashboard/"}) {
+		t.Error("isSdkPathInDirs() should tolerate a trailing slash on a dir")
+	}
+
+	// No dirs means no match.
+	if isSdkPathInDirs("MetaplaySDK/PrebuiltDashboard/index.html", nil) {
+		t.Error("isSdkPathInDirs() with no dirs should return false")
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/release"
 )
 
@@ -43,7 +44,7 @@ type deployBotClientOpts struct {
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
-	flagHelmValuesPath      string
+	flagHelmValuesPaths     []string
 }
 
 func init() {
@@ -51,7 +52,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '364cff09'.")
+	args.AddStringArgument(&o.argImageTag, "IMAGE_TAG", "Docker image name and tag, eg, '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
@@ -75,8 +76,8 @@ func init() {
 			- 'metaplay debug shell ...' to debug a running server pod.
 		`),
 		Example: renderExample(`
-			# Deploy bots into environment nimbly with the docker image tag 364cff09.
-			metaplay deploy botclient nimbly 364cff09
+			# Deploy bots into environment nimbly with the docker image tag 20260601-153000-1a27c25.
+			metaplay deploy botclient nimbly 20260601-153000-1a27c25
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -86,7 +87,7 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-loadtest chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-loadtest chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.4.2'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-botclients.yaml'")
+	flags.StringArrayVarP(&o.flagHelmValuesPaths, "values", "f", nil, "Path to a Helm values file, relative to the current directory, to use in place of the environment's botclientValuesFile in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-botclients.yaml' (repeatable, the later overriding the earlier)")
 }
 
 func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -95,10 +96,19 @@ func (o *deployBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 		log.Panic().Msgf("Positional argument IMAGE_TAG is empty")
 	}
 	if strings.Contains(o.argImageTag, ":") {
-		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '364cff092af8646bd'")
+		return fmt.Errorf("IMAGE_TAG must contain only the tag (not the repository prefix), eg, '20260601-153000-1a27c25'")
 	}
 
-	return nil
+	// Refuse a local chart that is not the loadtest chart, and a chart
+	// repository or values files the project config would refuse in their
+	// place, before Run resolves the environment, which may ask to log in first.
+	if err := validateLocalChartPath(o.flagHelmChartLocalPath, metaplayLoadTestChartName); err != nil {
+		return err
+	}
+	if err := validateChartRepository(o.flagHelmChartRepository); err != nil {
+		return err
+	}
+	return validateValuesPaths(o.flagHelmValuesPaths)
 }
 
 func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
@@ -121,14 +131,10 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Validate Helm chart reference.
+	// Resolve Helm chart version constraints. A local chart was validated in
+	// Prepare and is used as-is.
 	var chartVersionConstraints version.Constraints = nil
-	if o.flagHelmChartLocalPath != "" {
-		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath)
-		if err != nil {
-			return fmt.Errorf("invalid --helm-chart-path: %v", err)
-		}
-	} else {
+	if o.flagHelmChartLocalPath == "" {
 		// Resolve Helm chart version to use, either from config file or command line override
 		helmChartVersion := project.Config.BotClientChartVersion
 		if o.flagHelmChartVersion != "" {
@@ -141,27 +147,29 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			// Parse Helm chart semver range.
 			chartVersionConstraints, err = version.NewConstraint(helmChartVersion)
 			if err != nil {
-				return fmt.Errorf("invalid Helm chart version: %v", err)
+				return fmt.Errorf("invalid Helm chart version: %w", err)
 			}
 			log.Debug().Msgf("Accepted Helm chart semver constraints: %v", chartVersionConstraints)
 		}
 	}
 
-	// Get environment details.
+	// Resolve where the environment's images live, and a credential for them.
+	// This goes first because it is what says so when the environment is not
+	// on this stack at all.
+	imageRepository, err := targetEnv.ResolveImageRepository()
+	if err != nil {
+		return err
+	}
+
+	// Get environment details, for the game server's hostname and the CDN the
+	// bots are pointed at. Its images are reached through the stack above.
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return err
 	}
 
-	// Get docker credentials to fetch image metadata.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return clierrors.Wrap(err, "Failed to get Docker credentials")
-	}
-
 	// Fetch SDK version from the remote docker image to determine actual SDK version being deployed.
-	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
-	imageInfo, err := envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+	imageInfo, err := imageRepository.FetchImageMetadata(imageRepository.Reference(o.argImageTag))
 	if err != nil {
 		return clierrors.Newf("Image '%s' not found in the environment's container registry", o.argImageTag).
 			WithSuggestion("Push the image first with 'metaplay image push'").
@@ -193,7 +201,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
-		helmChartRepo := coalesceString(project.Config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
+		helmChartRepo := helmChartRepository(o.flagHelmChartRepository, project.Config.HelmChartRepository)
 		minChartVersion, _ := version.NewVersion("0.4.0")
 		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayLoadTestChartName, minChartVersion, chartVersionConstraints)
 		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayLoadTestChartName, useHelmChartVersion)
@@ -202,8 +210,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		}
 	}
 
-	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.GetBotClientValuesFiles(envConfig)
+	// Resolve Helm values file paths, relative to the current directory.
+	valuesFiles := helmValuesFiles(o.flagHelmValuesPaths, project.GetBotClientValuesFiles(envConfig))
 
 	// Get kubeconfig to access the environment.
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()
@@ -215,7 +223,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeconfigPayload, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Determine if there's an existing release deployed.
@@ -235,13 +243,10 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			"botsPerPod":         10,
 			"botSpawnRate":       5,
 			"botSessionDuration": "00:00:20",
-			"image": map[string]any{
-				"repository": envDetails.Deployment.EcrRepo,
-				"tag":        o.argImageTag,
-			},
-			"targetHost":       serverHostname,
-			"targetTlsEnabled": true,
-			"cdnBaseUrl":       fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
+			"image":              botClientImageValues(imageRepository, o.argImageTag),
+			"targetHost":         serverHostname,
+			"targetTlsEnabled":   true,
+			"cdnBaseUrl":         fmt.Sprintf("https://%s", envDetails.Deployment.CdnS3Fqdn),
 		},
 		"prometheus": map[string]any{
 			"enabled": true,
@@ -261,7 +266,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	helmRequiredValues := map[string]any{
 		"botclients": map[string]any{
 			"image": map[string]any{
-				"repository": envDetails.Deployment.EcrRepo,
+				"repository": imageRepository.QualifiedRepository,
 				"tag":        o.argImageTag,
 			},
 		},
@@ -292,6 +297,9 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Deployment info:")
 	log.Info().Msgf("  Helm release name:  %s %s", styles.RenderTechnical(helmReleaseName), helmReleaseNameBadge)
 	log.Info().Msgf("  Helm values files:  %s", styles.RenderTechnical(coalesceString(strings.Join(valuesFiles, ", "), "none")))
+	if imageRepository.PullSecret != "" {
+		log.Info().Msgf("  Image pull secret:  %s", styles.RenderTechnical(imageRepository.PullSecret))
+	}
 	log.Info().Msg("")
 
 	// Check if the existing release is in some kind of pending state
@@ -299,9 +307,11 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
 		if releaseStatus == release.StatusUninstalling {
-			return fmt.Errorf("Helm release %s is in state 'uninstalling'; try again later or manually uninstall the botclient with 'metaplay remove botclient'", releaseName)
+			return clierrors.Newf("Helm release %s is in state 'uninstalling'", releaseName).
+				WithSuggestion("Try again later, or manually uninstall the botclient with 'metaplay remove botclient'")
 		} else if releaseStatus.IsPending() {
-			return fmt.Errorf("Helm release %s is in state '%s'; you can manually uninstall the botclient with 'metaplay remove botclient'", releaseName, releaseStatus)
+			return clierrors.Newf("Helm release %s is in state '%s'", releaseName, releaseStatus).
+				WithSuggestion("Manually uninstall the botclient with 'metaplay remove botclient'")
 		}
 		log.Debug().Msgf("Existing Helm release info: %+v", existingRelease.Info)
 	}
@@ -329,7 +339,8 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
-			true)
+			true,
+			checkBotClientChart(imageRepository.PullSecret, o.flagHelmChartLocalPath))
 		return err
 	})
 
@@ -348,4 +359,54 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderSuccess("✅ Successfully deployed bots"))
 
 	return nil
+}
+
+// botClientImageValues are the chart values naming the image the bots run, from
+// the environment's repository, and the Secret they pull it with where the
+// environment names one.
+//
+// The bots run the game server image, from the same repository, but nothing
+// gives their pods the credential the operator gives the game server's. Where
+// the environment names no Secret, as where nodes pull from ECR as themselves,
+// the chart is told nothing and renders what it always did.
+func botClientImageValues(repository *envapi.EnvironmentImageRepository, tag string) map[string]any {
+	values := map[string]any{
+		"repository": repository.QualifiedRepository,
+		"tag":        tag,
+	}
+	if repository.PullSecret != "" {
+		values["pullSecrets"] = []any{repository.PullSecret}
+	}
+	return values
+}
+
+// checkBotClientChart refuses a loadtest chart that cannot name the Secret the
+// environment's images are pulled with, where the environment names one.
+//
+// Such a chart ignores the value, installs cleanly, and leaves its pods pulling
+// anonymously until the registry's refusals run the deploy into its timeout.
+// It is told apart by whether it declares the value rather than by its version,
+// so no version number here has to be kept in step with the chart's releases.
+// A chart from localChartPath ignores the project's chart version and
+// --helm-chart-version alike, so the suggestion names the path instead.
+func checkBotClientChart(pullSecret string, localChartPath string) func(*chart.Chart) error {
+	return func(loadedChart *chart.Chart) error {
+		if pullSecret == "" {
+			return nil
+		}
+		botclients, _ := loadedChart.Values["botclients"].(map[string]any)
+		image, _ := botclients["image"].(map[string]any)
+		if _, ok := image["pullSecrets"]; ok {
+			return nil
+		}
+		suggestion := "Use a newer metaplay-loadtest chart: raise botClientChartVersion in metaplay-project.yaml, or pass --helm-chart-version"
+		if localChartPath != "" {
+			suggestion = fmt.Sprintf("Point --local-chart-path at a newer metaplay-loadtest chart than the one in '%s', one whose values declare botclients.image.pullSecrets", localChartPath)
+		}
+		return clierrors.Newf("The %s chart %s cannot give the bots a credential to pull their image with", loadedChart.Name(), loadedChart.Metadata.Version).
+			WithDetails(
+				fmt.Sprintf("This environment's registry wants a credential, held in the Secret '%s'.", pullSecret),
+				"Without it the bots cannot pull the image, and the deploy waits until it times out.").
+			WithSuggestion(suggestion)
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
+	"github.com/hashicorp/go-version"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/filesetwriter"
@@ -31,8 +32,8 @@ func init() {
 	cmd := &cobra.Command{
 		Use:     "dashboard [flags]",
 		Aliases: []string{"dash"},
-		Short:   "Initializes custom LiveOps Dashboard for the project",
-		Run:   runCommand(&o),
+		Short:   "Initialize a custom LiveOps Dashboard for the project",
+		Run:     runCommand(&o),
 		Long: renderLong(&o, `
 			Setup the development environment for a custom LiveOps Dashboard in your project.
 
@@ -64,16 +65,36 @@ func (o *initDashboardOpts) Prepare(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// renderPnpmWorkspaceContent renders a pnpm-workspace.yaml with the given package entries.
-func renderPnpmWorkspaceContent(entries []string) ([]byte, error) {
+// renderPnpmWorkspaceContent renders a pnpm-workspace.yaml with the given package
+// entries. If allowBuildsPackages is non-empty, also emits an 'allowBuilds:'
+// block listing those packages (required by pnpm 11 to permit their build
+// scripts).
+func renderPnpmWorkspaceContent(entries []string, allowBuildsPackages []string) ([]byte, error) {
 	log.Debug().Msgf("Render pnpm-workspace.yaml with entries:")
 	for _, entry := range entries {
 		log.Debug().Msgf("  %s", entry)
 	}
+
+	if len(allowBuildsPackages) == 0 {
+		data := struct {
+			Packages []string `yaml:"packages"`
+		}{
+			Packages: entries,
+		}
+		return yaml.Marshal(data)
+	}
+
+	allowBuilds := make(map[string]bool, len(allowBuildsPackages))
+	for _, pkg := range allowBuildsPackages {
+		allowBuilds[pkg] = true
+	}
+
 	data := struct {
-		Packages []string `yaml:"packages"`
+		Packages    []string        `yaml:"packages"`
+		AllowBuilds map[string]bool `yaml:"allowBuilds"`
 	}{
-		Packages: entries,
+		Packages:    entries,
+		AllowBuilds: allowBuilds,
 	}
 	return yaml.Marshal(data)
 }
@@ -96,7 +117,12 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that required dashboard tools are installed and satisfy version requirements.
-	if err := checkDashboardToolVersions(project); err != nil {
+	ctx := cmd.Context()
+	if err := checkDashboardToolVersions(ctx, project); err != nil {
+		return err
+	}
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
 		return err
 	}
 
@@ -112,11 +138,28 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to collect dashboard template files: %w", err)
 	}
 
-	// Render pnpm-workspace.yaml content
+	// Render pnpm-workspace.yaml content. SDK R37 introduced pnpm 11, which
+	// fails install if native-build deps aren't listed in 'allowBuilds:'.
+	// We also emit the block on R33-R36 as forward-proofing in case someone
+	// upgrades their local pnpm. R32 ships a pnpm too old to honor the field.
+	// The package list below is for SDK 37.x; revisit when bumping pnpm or
+	// when the scaffolded dashboard's dep tree changes.
+	// '33.0.0-0' is the lowest possible pre-release of 33.0.0 per SemVer 2.0
+	// (numeric pre-release identifiers sort below all alphanumeric ones), so
+	// any R33 pre-release tag is included.
+	minSdkVersionPnpmAllowBuilds := version.Must(version.NewVersion("33.0.0-0"))
+	var allowBuildsPackages []string
+	if !sdkMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
+		allowBuildsPackages = []string{
+			"@parcel/watcher",
+			"bootstrap-vue",
+			"esbuild",
+		}
+	}
 	pnpmContent, err := renderPnpmWorkspaceContent([]string{
 		filepath.ToSlash(filepath.Join(project.Config.SdkRootDir, "Frontend", "*")),
 		filepath.ToSlash(dashboardDirRelative),
-	})
+	}, allowBuildsPackages)
 	if err != nil {
 		return fmt.Errorf("failed to render pnpm-workspace.yaml: %w", err)
 	}
@@ -125,7 +168,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Compute updated metaplay-project.yaml content
 	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
 	if err != nil {
-		return fmt.Errorf("failed to compute metaplay-project.yaml update: %w", err)
+		return err
 	}
 	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 
@@ -164,7 +207,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msgf("Running %s to install dashboard dependencies...", styles.RenderTechnical("pnpm install"))
 	pathToDashboardDir := filepath.Join(project.RelativeDir, dashboardDirRelative)
-	if err := execChildInteractive(pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
+	if err := execChildInteractive(ctx, pathToDashboardDir, "pnpm", []string{"install"}, nil); err != nil {
 		return clierrors.Wrap(err, "Failed to run 'pnpm install'").
 			WithSuggestion("Check that pnpm is installed and try running 'pnpm install' manually")
 	}
@@ -189,26 +232,30 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to read project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to read project config file: %w", err)
 	}
 
 	// Parse the YAML to AST
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to parse project config file: %w", err)
 	}
 
 	// Update features.dashboard with new values.
-	updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
+	err = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})
+	if err != nil {
+		return "", nil, clierrors.Wrap(err, "Failed to enable the custom dashboard in metaplay-project.yaml").
+			WithSuggestion("Add a 'features.dashboard' section to metaplay-project.yaml and run this command again")
+	}
 
 	return projectConfigFilePath, []byte(root.String()), nil
 }
 
 // Replace a target node with 'value' (marshaled into YAML).
-// Note: If the 'path' doesn't exist, this function does nothing.
+// Returns an error if the 'path' doesn't exist.
 func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)

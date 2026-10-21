@@ -103,7 +103,7 @@ func (o *secretsListOpts) Run(cmd *cobra.Command) error {
 	if o.flagFormat == "json" {
 		secretsJSON, err := json.MarshalIndent(secrets, "", "  ")
 		if err != nil {
-			return fmt.Errorf("failed to marshal secrets as JSON: %v", err)
+			return fmt.Errorf("failed to marshal secrets as JSON: %w", err)
 		}
 
 		log.Info().Msgf("%s", string(secretsJSON))
@@ -162,7 +162,7 @@ func formatAge(duration time.Duration) string {
 }
 
 func logSecret(secret *corev1.Secret, showValues bool) {
-	age := time.Now().Sub(secret.CreationTimestamp.Time)
+	age := time.Since(secret.CreationTimestamp.Time)
 	log.Info().Msgf("Name: %s", styles.RenderTechnical(secret.Name))
 	log.Info().Msgf("Age:  %s", styles.RenderTechnical(formatAge(age)))
 	log.Info().Msgf("Data:")

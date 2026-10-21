@@ -29,11 +29,11 @@ func TestBuildHealthCheckPacket(t *testing.T) {
 
 func TestParseProtocolHeader(t *testing.T) {
 	tests := []struct {
-		name      string
-		data      []byte
-		wantErr   bool
-		version   byte
-		status    byte
+		name    string
+		data    []byte
+		wantErr bool
+		version byte
+		status  byte
 	}{
 		{
 			name:    "valid header",
@@ -149,4 +149,3 @@ func TestValidateProtocolHeader(t *testing.T) {
 		})
 	}
 }
-

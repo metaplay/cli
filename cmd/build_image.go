@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,7 +44,7 @@ func init() {
 	o := buildImageOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:20260601-153000-1a27c25' or '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build.")
 
 	cmd := &cobra.Command{
@@ -64,36 +65,35 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Build Docker image, produces image named '<projectID>:YYYYMMDD-HHMMSS-COMMIT_ID'.
-			# Only recommended when building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
-			# Specify only the tag, produces image named '<projectID>:364cff09'.
-			metaplay build image 364cff09
+			# Specify only the tag, produces image named '<projectID>:20260601-153000-1a27c25'.
+			metaplay build image 20260601-153000-1a27c25
 
 			# Build a project from another directory.
 			metaplay -p ../MyProject build image
 
-			# Build docker image with commit ID and build number specified.
-			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
-
-			# Build using docker's BuildKit engine (in case buildx isn't available).
-			metaplay build image mygame:364cff09 --engine=buildkit
+			# In CI, generate the tag in the same YYYYMMDD-HHMMSS-COMMIT_ID format and pass it
+			# explicitly, so that later steps can refer to it. Tags in this format are unique, and
+			# sort in the order the images were built.
+			export IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)-$COMMIT_ID"
+			metaplay build image mygame:$IMAGE_TAG --commit-id=$COMMIT_ID --build-number=$BUILD_NUMBER
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build image mygame:364cff09 --architecture=arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=arm64
 
 			# Build a multi-arch image for both amd64 and arm64 (only supported with 'buildx').
-			metaplay build image mygame:364cff09 --architecture=amd64,arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=amd64,arm64
 
 			# Pass extra arguments to the docker build.
-			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
+			metaplay build image mygame:20260601-153000-1a27c25 -- --build-arg FOO=BAR
 		`),
 	}
 
 	buildCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVar(&o.flagBuildEngine, "engine", "", "Docker build engine to use ('buildx' or 'buildkit'), auto-detected if not specified")
+	flags.StringVar(&o.flagBuildEngine, "engine", "buildx", "Docker build engine to use ('buildx' or 'buildkit' [deprecated])")
 	flags.StringSliceVar(&o.flagArchitectures, "architecture", []string{"amd64"}, "Architectures of build targets (comma-separated), eg, 'amd64' or 'amd64,arm64'")
 	flags.StringVar(&o.flagCommitID, "commit-id", "", "Git commit SHA hash or similar, eg, '7d1ebc858b'")
 	flags.StringVar(&o.flagBuildNumber, "build-number", "", "Number identifying this build, eg, '715'")
@@ -114,12 +114,17 @@ func (o *buildImageOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *buildImageOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Build Docker Image"))
 	log.Info().Msg("")
 
 	// Find & load the project config file.
 	project, err := resolveProject()
+	if err != nil {
+		return err
+	}
+	sdkMetadata, err := project.SdkMetadata()
 	if err != nil {
 		return err
 	}
@@ -179,18 +184,18 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	if strings.HasSuffix(imageName, ":latest") {
 		return clierrors.New("Cannot build image with tag 'latest'").
-			WithSuggestion("Use a unique tag like 'mygame:20250131-133012'")
+			WithSuggestion("Use a unique tag like 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check that docker is available")
-	err = checkDockerAvailable()
+	err = checkDockerAvailable(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Check Docker version: warn if using old versions
-	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion()
+	dockerVersionInfo, dockerUpgradeRecommended, err := checkDockerVersion(ctx)
 	if err != nil {
 		log.Warn().Msgf("Warning: Failed to check Docker version: %v", err)
 	}
@@ -200,11 +205,15 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 	buildEngine, err := resolveBuildEngine(o.flagBuildEngine)
 	if err != nil {
 		return clierrors.Wrap(err, "Invalid Docker build engine").
-			WithSuggestion("Use --engine=buildx or --engine=buildkit")
+			WithSuggestion("Use --engine=buildx (buildkit is deprecated)")
+	}
+
+	if o.flagBuildEngine == "buildkit" {
+		log.Warn().Msgf("%s --engine=buildkit is deprecated and will be removed in a future release. Migrate to buildx (the default).", styles.RenderWarning("Deprecation:"))
 	}
 
 	// Check that the build engine is available.
-	err = checkBuildEngineAvailable(buildEngine)
+	err = checkBuildEngineAvailable(ctx, buildEngine)
 	if err != nil {
 		return err
 	}
@@ -235,22 +244,26 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		platforms = append(platforms, fmt.Sprintf("linux/%s", arch))
 	}
 
-	// Resolve Docker version badge and show update recommendation
+	// Resolve Docker version string and badge for the build summary.
+	dockerVersionStr := "unknown"
 	dockerVersionBadge := ""
 	if dockerVersionInfo == nil {
 		dockerVersionBadge = styles.RenderWarning("[unable to check version]")
-	} else if dockerUpgradeRecommended {
-		dockerVersionBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+	} else {
+		dockerVersionStr = dockerVersionInfo.Server.Version
+		if dockerUpgradeRecommended {
+			dockerVersionBadge = styles.RenderWarning("[version is old; upgrade recommended]")
+		}
 	}
 
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
-	log.Info().Msgf("Metaplay SDK:        %s", styles.RenderTechnical(project.VersionMetadata.SdkVersion.String()))
+	log.Info().Msgf("Metaplay SDK:        %s", styles.RenderTechnical(sdkMetadata.SdkVersion.String()))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
 	log.Info().Msgf("Target platform(s):  %s", styles.RenderTechnical(strings.Join(platforms, ", ")))
-	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionInfo.Server.Version), dockerVersionBadge)
+	log.Info().Msgf("Docker version:      %s %s", styles.RenderTechnical(dockerVersionStr), dockerVersionBadge)
 	log.Info().Msgf("Docker build engine: %s", styles.RenderTechnical(buildEngine))
 
 	// Build the Docker image using the extracted function
@@ -264,7 +277,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 		extraArgs:   o.extraArgs,
 	}
 
-	if err := buildDockerImage(buildParams); err != nil {
+	if err := buildDockerImage(ctx, buildParams); err != nil {
 		return err
 	}
 
@@ -297,16 +310,7 @@ func detectEnvVar(keys []string) string {
 func resolveBuildEngine(engine string) (string, error) {
 	validBuildEngines := []string{"buildx", "buildkit"}
 
-	// If not specified, auto-detect
-	if engine == "" {
-		// Bitbucket doesn't support buildx, fall back to buildkit
-		if _, exists := os.LookupEnv("BITBUCKET_PIPELINE_UUID"); exists {
-			return "buildkit", nil
-		}
-		return "buildx", nil
-	}
-
-	// Check validity if specified
+	// Check that the specified engine is valid
 	if slices.Contains(validBuildEngines, engine) {
 		return engine, nil
 	}
@@ -314,22 +318,45 @@ func resolveBuildEngine(engine string) (string, error) {
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
 }
 
-func checkCommand(command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+func checkCommand(ctx context.Context, command string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("command failed: %v", err)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		trimmed := strings.TrimSpace(stderr.String())
+		if trimmed != "" {
+			return fmt.Errorf("%w: %s", err, truncateForLog(trimmed, 500))
+		}
+		return fmt.Errorf("command failed: %w", err)
 	}
 	return nil
 }
 
 // executeCommand runs a command with the given arguments in the specified working directory.
-func executeCommand(workingDir string, env []string, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+func executeCommand(ctx context.Context, workingDir string, env []string, command string, args ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, command, args...)
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Dir = workingDir
-	return cmd.Run()
+	// startCmd installs a no-op Cancel + 10s WaitDelay so docker CLI can
+	// forward SIGTERM to its --rm container and drain a daemon-side build
+	// cancel before being force-killed.
+	cleanup, err := startCmd(cmd)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	return cmd.Wait()
 }
 
 // rebasePath calculates a new path for `targetPath` such that it is relative
@@ -360,7 +387,11 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 // Check if docker is available and running. Uses a short timeout as 'docker' invocation
 // can sometimes hang indefinitely. In CI environments, uses a longer timeout to account
 // for slower daemon startup.
-func checkDockerAvailable() error {
+func checkDockerAvailable(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Use a longer timeout in CI where Docker daemon startup can be slower.
 	// GitHub Actions in particular is known to have long Docker init latencies.
 	timeout := 10 * time.Second
@@ -372,7 +403,7 @@ func checkDockerAvailable() error {
 	// indefinitely in some cases).
 	done := make(chan error)
 	go func() {
-		done <- checkCommand("docker", "info")
+		done <- checkCommand(ctx, "docker", "info")
 	}()
 
 	// Wait for docker to respond, printing a waiting message after 1sec.
@@ -383,6 +414,8 @@ func checkDockerAvailable() error {
 				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 		}
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-time.After(time.Second):
 		log.Info().Msgf("Waiting for docker daemon to respond...")
 	}
@@ -400,6 +433,8 @@ func checkDockerAvailable() error {
 					WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
 			}
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-tick.C:
 			log.Info().Msgf("Still waiting for docker daemon to respond...")
 		case <-deadline:
@@ -410,12 +445,12 @@ func checkDockerAvailable() error {
 }
 
 // Check that the specified docker build engine is available.
-func checkBuildEngineAvailable(buildEngine string) error {
+func checkBuildEngineAvailable(ctx context.Context, buildEngine string) error {
 	log.Debug().Msgf("Check that build engine %s is available", buildEngine)
 
 	switch buildEngine {
 	case "buildx":
-		err := checkCommand("docker", "buildx", "version")
+		err := checkCommand(ctx, "docker", "buildx", "version")
 		if err != nil {
 			return clierrors.Wrap(err, "Docker buildx is not available").
 				WithSuggestion("Install Docker buildx or use --engine=buildkit instead")
@@ -452,18 +487,42 @@ type dockerVersionInfo struct {
 	} `json:"Server"`
 }
 
+// truncateForLog shortens s to at most n runes, adding an ellipsis suffix when truncated.
+func truncateForLog(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
+}
+
 // Check Docker version and return parsed server version
-func checkDockerVersion() (*dockerVersionInfo, bool, error) {
+func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	// Get Docker version in JSON format to access server version
-	cmd := exec.Command("docker", "version", "--format", "json")
+	// Use the explicit Go template syntax instead of the `json` shorthand —
+	// the shorthand was added in Docker CLI 22.06 and older clients render
+	// it as the literal string "json".
+	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{json .}}")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, false, ctxErr
+		}
+		log.Debug().Err(err).Str("stderr", stderr.String()).Msgf("'docker version --format json' failed")
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
 	}
 
 	var versionInfo dockerVersionInfo
 	if err := json.Unmarshal(output, &versionInfo); err != nil {
-		log.Debug().Err(err).Msgf("Could not parse Docker version JSON output")
+		log.Debug().
+			Err(err).
+			Str("stdout", truncateForLog(string(output), 500)).
+			Str("stderr", truncateForLog(stderr.String(), 500)).
+			Msgf("Could not parse Docker version JSON output")
 		return nil, false, nil // Don't fail the build if we can't parse the version
 	}
 
@@ -493,7 +552,7 @@ type buildDockerImageParams struct {
 }
 
 // buildDockerImage builds a Docker image with the given parameters.
-func buildDockerImage(params buildDockerImageParams) error {
+func buildDockerImage(ctx context.Context, params buildDockerImageParams) error {
 	// Resolve docker build root directory. All other paths need to be made relative to it.
 	buildRootDir := params.project.GetBuildRootDir()
 
@@ -554,12 +613,13 @@ func buildDockerImage(params buildDockerImageParams) error {
 
 	// Handle build engine differences.
 	var buildEngineArgs []string
-	if params.buildEngine == "buildkit" {
+	switch params.buildEngine {
+	case "buildkit":
 		dockerEnv = append(dockerEnv, "DOCKER_BUILDKIT=1")
 		buildEngineArgs = []string{"build"}
-	} else if params.buildEngine == "buildx" {
+	case "buildx":
 		buildEngineArgs = []string{"buildx", "build", "--load"}
-	} else {
+	default:
 		log.Panic().Msgf("Unsupported docker build engine: %s", params.buildEngine)
 	}
 
@@ -568,7 +628,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
 
 	// Resolve final docker build invocation
-	dockerArgs := append(
+	dockerArgs := slices.Concat(
 		buildEngineArgs,
 		[]string{
 			"--pull",
@@ -582,7 +642,7 @@ func buildDockerImage(params buildDockerImageParams) error {
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", params.project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", params.buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", params.commitID),
-		}...,
+		},
 	)
 
 	// If target platform is specified, set it explicitly.
@@ -603,10 +663,54 @@ func buildDockerImage(params buildDockerImageParams) error {
 	log.Info().Msg("")
 
 	// Execute the docker build
-	if err := executeCommand(buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
+	if err := executeCommand(ctx, buildRootDir, dockerEnv, "docker", dockerArgs...); err != nil {
+		printBitbucketRequirementsBanner()
 		return clierrors.Wrap(err, "Docker build failed").
 			WithSuggestion("Check the build output above for details")
 	}
 
 	return nil
+}
+
+// printBitbucketRequirementsBanner prints a prominent banner reminding the user
+// of Metaplay's Bitbucket Pipelines requirements (runtime v3, default-image:5).
+// These cannot be detected from inside the build, so we surface them on failure
+// as a hint about the most likely cause.
+func printBitbucketRequirementsBanner() {
+	// BITBUCKET_PIPELINE_UUID can be empty/missing on some runs — check several
+	// well-known Bitbucket env vars to reliably detect Pipelines.
+	bbVars := []string{"BITBUCKET_BUILD_NUMBER", "BITBUCKET_COMMIT", "BITBUCKET_REPO_SLUG", "BITBUCKET_PIPELINE_UUID"}
+	inBitbucket := false
+	for _, v := range bbVars {
+		if val, ok := os.LookupEnv(v); ok && val != "" {
+			inBitbucket = true
+			break
+		}
+	}
+	if !inBitbucket {
+		return
+	}
+	bar := strings.Repeat("─", 70)
+	log.Warn().Msg("")
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msgf("  %s", styles.RenderAttention("Bitbucket Pipelines: required configuration"))
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msg("  This build is running in Bitbucket Pipelines. The Metaplay CLI")
+	log.Warn().Msg("  requires the following in your bitbucket-pipelines.yml:")
+	log.Warn().Msg("")
+	log.Warn().Msgf("    - %s   (per-step, required for docker buildx)", styles.RenderTechnical("runtime: { cloud: { version: 3 } }"))
+	log.Warn().Msgf("    - image: %s", styles.RenderTechnical("atlassian/default-image:5"))
+	log.Warn().Msg("")
+	log.Warn().Msg("  To regenerate your project's bitbucket-pipelines.yml with the")
+	log.Warn().Msg("  correct config, run:")
+	log.Warn().Msgf("    %s", styles.RenderTechnical("metaplay init ci --provider=bitbucket"))
+	log.Warn().Msg("")
+	log.Warn().Msg("  Verify both are set in your pipeline config if the build above")
+	log.Warn().Msgf("  failed with %s", styles.RenderTechnical("--privileged=true is not allowed"))
+	log.Warn().Msg("  or any other 'docker buildx' related error.")
+	log.Warn().Msg("")
+	log.Warn().Msgf("  If you can't update the runtime, fall back to the legacy engine")
+	log.Warn().Msgf("  with %s (deprecated, will be removed).", styles.RenderTechnical("--engine=buildkit"))
+	log.Warn().Msgf("%s", styles.RenderAttention(bar))
+	log.Warn().Msg("")
 }

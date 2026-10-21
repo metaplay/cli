@@ -58,6 +58,21 @@
       automerge: true,
       automergeType: 'branch',
     },
+    // VHS only records the README GIF (images/cli-build/record.sh), so no CI covers it.
+    {
+      matchManagers: [
+        'dockerfile',
+      ],
+      matchPackageNames: [
+        'ghcr.io/charmbracelet/vhs',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'patch',
+      ],
+      automerge: true,
+      automergeType: 'branch',
+    },
   ],
   labels: [
     'dependencies',

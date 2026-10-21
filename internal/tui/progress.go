@@ -19,8 +19,11 @@ import (
 // In non-interactive mode: logs at start and completion.
 func RunWithProgressBar(label string, work func(update func(current, total int64)) error) error {
 	start := time.Now()
+	// The progress line is drawn on stderr, so it is redrawn in place only
+	// where stderr is a terminal.
+	interactive := IsInteractiveTerminal(os.Stderr)
 
-	if !isInteractiveMode {
+	if !interactive {
 		log.Info().Msgf("%s...", label)
 	}
 
@@ -32,7 +35,7 @@ func RunWithProgressBar(label string, work func(update func(current, total int64
 		lastCurrent = current
 		lastTotal = total
 
-		if !isInteractiveMode {
+		if !interactive {
 			return
 		}
 
@@ -52,7 +55,7 @@ func RunWithProgressBar(label string, work func(update func(current, total int64
 	err := work(update)
 	elapsed := time.Since(start)
 
-	if isInteractiveMode {
+	if interactive {
 		// Clear the progress line.
 		fmt.Fprintf(os.Stderr, "\r\033[K")
 	}

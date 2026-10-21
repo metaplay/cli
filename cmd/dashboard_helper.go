@@ -6,7 +6,7 @@ package cmd
 
 import (
 	"bytes"
-	"errors"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,21 +14,30 @@ import (
 	"strings"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
 
 // Checks if Node.js is installed and verifies the version
-func checkNodeVersion(recommendedVersion *version.Version) error {
+func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'node --version' command
-	cmd := exec.Command("node", "--version")
+	cmd := exec.CommandContext(ctx, "node", "--version")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 
 	if err := cmd.Run(); err != nil {
-		return errors.New("Node.js is not installed or not in PATH. Please install Node.js from: https://nodejs.org/")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return clierrors.New("Node.js is not installed or not in PATH").
+			WithSuggestion("Install Node.js from https://nodejs.org/")
 	}
 
 	// Node.js version output starts with 'v' (e.g., "v22.13.1"), so strip it
@@ -38,12 +47,13 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 	// Parse installed Node version
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse Node.js version from '%s': %s", installedVersionStr, err)
+		return fmt.Errorf("failed to parse Node.js version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if version older than recommended.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("Node.js version %s or higher is required, but found %s. Please upgrade Node.js: https://nodejs.org/", recommendedVersion, installedVersionStr)
+		return clierrors.Newf("Node.js version %s or higher is required, but found %s", recommendedVersion, installedVersionStr).
+			WithSuggestion("Upgrade Node.js (e.g. via your version manager such as nvm, fnm, or volta)")
 	}
 
 	// Print the info.
@@ -53,7 +63,7 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 	requiredMajorVersion := recommendedVersion.Segments()[0]
 	requiredMinorVersion := recommendedVersion.Segments()[1]
 	if installedMajorVersion > requiredMajorVersion {
-		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%d.x.y; downgrade if you encounter any problems]", requiredMajorVersion))
+		badge = badge + " " + styles.RenderWarning(fmt.Sprintf("[warning: major version is more recent than expected v%s; downgrade if you encounter any problems]", recommendedVersion))
 	} else if installedMinorVersion > requiredMinorVersion {
 		badge = badge + " " + styles.RenderWarning("[warning: minor version is more recent; downgrade if you encounter any problems]")
 	}
@@ -64,26 +74,34 @@ func checkNodeVersion(recommendedVersion *version.Version) error {
 }
 
 // Checks if pnpm is installed and verifies the version
-func checkPnpmVersion(recommendedVersion *version.Version) error {
+func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Run the 'pnpm --version' command
-	cmd := exec.Command("pnpm", "--version")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	cmd := exec.CommandContext(ctx, "pnpm", "--version")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
-		return errors.New("pnpm is not installed or not in PATH. Please install pnpm: https://pnpm.io/installation")
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return clierrors.New("pnpm is not installed or not in PATH").
+			WithSuggestion("Install pnpm from https://pnpm.io/installation")
 	}
 
 	// Parse pnpm version
-	installedVersionStr := strings.TrimSpace(out.String())
+	installedVersionStr := strings.TrimSpace(stdout.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse pnpm version from '%s': %v", installedVersionStr, err)
+		return fmt.Errorf("failed to parse pnpm version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if installed version is older than required.
 	if installedVersion.LessThan(recommendedVersion) {
-		return fmt.Errorf("pnpm version %s or higher is required, but found %s. Please upgrade pnpm!", recommendedVersion, installedVersion)
+		return clierrors.Newf("pnpm version %s or higher is required, but found %s", recommendedVersion, installedVersion).
+			WithSuggestion("Upgrade pnpm (e.g. 'pnpm self-update', or via corepack)")
 	}
 
 	// Grab versions.
@@ -94,7 +112,7 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 
 	// If installed major version is more recent than expected, fail.
 	if installedMajorVersion > requiredMajorVersion {
-		return fmt.Errorf("detected pnpm version %s is too recent; expecting version v%d.x.y", installedVersion, requiredMajorVersion)
+		return fmt.Errorf("detected pnpm version %s is too recent; expecting v%s", installedVersion, recommendedVersion)
 	}
 
 	// Print the info.
@@ -108,14 +126,19 @@ func checkPnpmVersion(recommendedVersion *version.Version) error {
 	return nil
 }
 
-func checkDashboardToolVersions(project *metaproj.MetaplayProject) error {
+func checkDashboardToolVersions(ctx context.Context, project *metaproj.MetaplayProject) error {
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(project.VersionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(ctx, sdkMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(project.VersionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(ctx, sdkMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 

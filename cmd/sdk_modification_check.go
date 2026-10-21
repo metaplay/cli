@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,18 @@ var ignoredFilePrefixes = []string{
 	"._", // macOS resource fork files
 }
 
+// isSdkPathInDirs returns true if archivePath is one of the dirs or below one. Both are
+// paths within the SDK archive, e.g. "MetaplaySDK/Foo/bar.txt" is in "MetaplaySDK/Foo".
+func isSdkPathInDirs(archivePath string, dirs []string) bool {
+	for _, dir := range dirs {
+		dir = strings.TrimSuffix(dir, "/")
+		if archivePath == dir || strings.HasPrefix(archivePath, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // shouldIgnoreFile returns true if the file should be ignored during comparison.
 func shouldIgnoreFile(filename string) bool {
 	// Check exact matches
@@ -83,17 +96,19 @@ type gitignoreMatcher struct {
 func buildGitignoreMatcherForDir(rootDir string) *gitignoreMatcher {
 	matcher := &gitignoreMatcher{}
 
-	// Walk the directory tree to find all .gitignore files
-	filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	// Walk the directory tree to find all .gitignore files. The callback handles
+	// per-entry errors itself (returning nil to continue), so WalkDir never returns
+	// a non-nil error here; gitignore matching is best-effort, so discard it.
+	_ = filepath.WalkDir(rootDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // Continue on errors
 		}
 
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
 
-		if info.Name() == ".gitignore" {
+		if entry.Name() == ".gitignore" {
 			// Read the file content and use NewGitIgnoreFromReader
 			// This avoids issues with NewGitIgnore's base path handling
 			content, err := os.ReadFile(path)
@@ -180,28 +195,13 @@ func (m *gitignoreMatcher) isPathIgnored(relativePath string, isDir bool) bool {
 	return false
 }
 
-// computeFileChecksum computes SHA256 checksum of a file on disk.
-func computeFileChecksum(filePath string) (string, error) {
-	f, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
 // computeZipFileChecksum computes SHA256 checksum of a file within a zip archive.
 func computeZipFileChecksum(file *zip.File) (string, error) {
 	rc, err := file.Open()
 	if err != nil {
 		return "", err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, rc); err != nil {
@@ -222,7 +222,7 @@ func readZipFileContent(file *zip.File) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	return io.ReadAll(rc)
 }
 
@@ -264,7 +264,7 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	diffs = dmp.DiffCharsToLines(diffs, lineArray)
 
 	// Write git-style header
-	buf.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", pathInPatch, pathInPatch))
+	fmt.Fprintf(&buf, "diff --git a/%s b/%s\n", pathInPatch, pathInPatch)
 	if isNew {
 		buf.WriteString("new file mode 100644\n")
 	} else if isDeleted {
@@ -274,13 +274,13 @@ func generateUnifiedDiff(pathInPatch string, oldContent, newContent []byte, isNe
 	if isNew {
 		buf.WriteString("--- /dev/null\n")
 	} else {
-		buf.WriteString(fmt.Sprintf("--- a/%s\n", pathInPatch))
+		fmt.Fprintf(&buf, "--- a/%s\n", pathInPatch)
 	}
 
 	if isDeleted {
 		buf.WriteString("+++ /dev/null\n")
 	} else {
-		buf.WriteString(fmt.Sprintf("+++ b/%s\n", pathInPatch))
+		fmt.Fprintf(&buf, "+++ b/%s\n", pathInPatch)
 	}
 
 	// Generate unified diff content from the diffs
@@ -442,7 +442,7 @@ func formatDiffsAsUnifiedHunks(diffs []diffmatchpatch.Diff, contextLines int) st
 		}
 
 		// Write hunk header
-		buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount))
+		fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
 
 		// Write hunk lines
 		for _, line := range hunkLines {
@@ -460,7 +460,7 @@ func downloadSdkZipOnly(tokenSet *auth.TokenSet, versionID string) (string, erro
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
 
-	sdkZipPath, err := portalClient.DownloadSdkByVersionID(tmpDir, versionID)
+	sdkZipPath, err := portalClient.DownloadSdkByVersionID(tmpDir, versionID, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to download SDK: %w", err)
 	}
@@ -476,7 +476,8 @@ type zipFileEntry struct {
 
 // DetectSdkModificationsWithPatch compares the local SDK directory against the original
 // SDK zip file and returns both the list of modifications and a git-compatible patch.
-func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*SdkModificationResult, error) {
+// Directories listed in excludedDirs are ignored on both sides.
+func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string, excludedDirs []string) (*SdkModificationResult, error) {
 	// Build gitignore matcher by scanning the SDK directory for all .gitignore files
 	gitMatcher := buildGitignoreMatcherForDir(sdkRootDir)
 
@@ -485,7 +486,7 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	if err != nil {
 		return nil, fmt.Errorf("failed to open SDK zip: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Build a map of relativePath -> {checksum, *zip.File} for all files in MetaplaySDK/ within the zip
 	zipEntries := make(map[string]zipFileEntry)
@@ -511,6 +512,11 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 			continue
 		}
 
+		// Skip excluded directories
+		if isSdkPathInDirs(file.Name, excludedDirs) {
+			continue
+		}
+
 		// Skip files ignored by .gitignore (path relative to SDK root)
 		if gitMatcher.isIgnored(relPath, false) {
 			continue
@@ -533,13 +539,13 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	var patchBuf bytes.Buffer
 
 	// Walk the local SDK directory - detect and generate diff in one pass
-	err = filepath.Walk(sdkRootDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(sdkRootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip directories
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 
@@ -554,6 +560,12 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 
 		// Skip ignored files (OS-specific)
 		if shouldIgnoreFile(filepath.Base(relPath)) {
+			return nil
+		}
+
+		// Skip excluded directories. The excludedDirs are canonical MetaplaySDK/-rooted
+		// paths.
+		if isSdkPathInDirs("MetaplaySDK/"+relPath, excludedDirs) {
 			return nil
 		}
 
@@ -648,15 +660,16 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	}, nil
 }
 
-// countBinaryFiles returns the number of binary files in the modifications list.
-func countBinaryFiles(modifications []ModifiedFile) int {
-	count := 0
+// binaryModifiedFiles returns the binary files in the modifications list.
+// These cannot be included in the patch and must be restored manually.
+func binaryModifiedFiles(modifications []ModifiedFile) []ModifiedFile {
+	var binaries []ModifiedFile
 	for _, m := range modifications {
 		if m.IsBinary {
-			count++
+			binaries = append(binaries, m)
 		}
 	}
-	return count
+	return binaries
 }
 
 // printModifiedFilesList prints the list of modified files to the log.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -98,14 +99,30 @@ func findProjectDirectory() (string, error) {
 	}
 }
 
+// isDefaultAuthProviderName reports whether providerName names the default
+// provider: 'metaplay' and the empty name both do, meaning Metaplay Auth, or the
+// provider METAPLAYCLI_AUTH_PROVIDER_FILE replaces it with.
+func isDefaultAuthProviderName(providerName string) bool {
+	return providerName == "" || providerName == "metaplay"
+}
+
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
-	if providerName == "" || providerName == "metaplay" {
-		log.Debug().Msgf("Using built-in provider 'metaplay'")
-		return auth.NewMetaplayAuthProvider(), nil
+	if isDefaultAuthProviderName(providerName) {
+		log.Debug().Msgf("Resolving the default auth provider")
+		return auth.NewDefaultAuthProvider()
 	} else {
 		log.Debug().Msgf("Resolving auth provider '%s'", providerName)
+	}
+
+	// Any other name can only come from the project, so there has to be one. Commands
+	// reach here with a nil project when run outside a project directory, because
+	// tryResolveProject() reports "no project found" as (nil, nil).
+	if project == nil {
+		return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
+			WithDetails("Custom auth providers are defined in metaplay-project.yaml, and no project was found").
+			WithSuggestion("Run this in your project directory (or pass --project=<path>), or use the default 'metaplay' provider")
 	}
 
 	// If have a project, return its auth provider.
@@ -115,11 +132,27 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 			WithSuggestion("Use the default 'metaplay' provider, or add custom providers to metaplay-project.yaml")
 	}
 
-	// Find the matching provider (by ID or name).
+	// An exact id match wins.
+	if provider, found := project.Config.AuthProviders[providerName]; found {
+		return provider, nil
+	}
+
+	// Otherwise fall back to the display name, but only when it identifies exactly one
+	// provider. Ranging over the map and taking the first hit would resolve a duplicated
+	// name differently from run to run, because Go randomizes map iteration order.
+	nameMatches := []string{}
 	for providerID, provider := range project.Config.AuthProviders {
-		if providerID == providerName || provider.Name == providerName {
-			return provider, nil
+		if provider.Name == providerName {
+			nameMatches = append(nameMatches, providerID)
 		}
+	}
+	sort.Strings(nameMatches)
+	if len(nameMatches) == 1 {
+		return project.Config.AuthProviders[nameMatches[0]], nil
+	} else if len(nameMatches) > 1 {
+		return nil, clierrors.Newf("Auth provider name '%s' is ambiguous", providerName).
+			WithDetails(fmt.Sprintf("Providers %v all use this name", nameMatches)).
+			WithSuggestion("Name the provider by its id in metaplay-project.yaml instead")
 	}
 
 	// Provider not found, return an error.
@@ -127,6 +160,7 @@ func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*a
 	for providerID := range project.Config.AuthProviders {
 		existingAuthProviders = append(existingAuthProviders, providerID)
 	}
+	sort.Strings(existingAuthProviders)
 	return nil, clierrors.Newf("Auth provider '%s' not found", providerName).
 		WithDetails(fmt.Sprintf("Available providers: %v", existingAuthProviders))
 }
@@ -140,14 +174,7 @@ func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 	}
 	log.Debug().Msgf("Project config loaded: %#v", projectConfig)
 
-	// Load version metadata from MetaplaySDK/version.yaml.
-	versionMetadata, err := metaproj.LoadSdkVersionMetadata(filepath.Join(projectDir, projectConfig.SdkRootDir))
-	if err != nil {
-		return nil, err
-	}
-	log.Debug().Msgf("Version metadata loaded: %+v", versionMetadata)
-
-	return metaproj.NewMetaplayProject(projectDir, projectConfig, versionMetadata)
+	return metaproj.NewMetaplayProject(projectDir, projectConfig)
 }
 
 // Try to find the metaplay-project.yaml based on the --project flag, and load
@@ -238,9 +265,12 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		return envConfig, tokenSet, nil
 	}
 
-	// If no metaplay-project.yaml can be located, we know we are using Metaplay auth provider.
+	// If no metaplay-project.yaml can be located, we know we are using the default auth provider.
 	// \todo store in project config instead?
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Ensure the user is logged in.
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
@@ -297,11 +327,40 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 				WithSuggestion("If the name is a custom environment alias, the CLI must be invoked from the folder (or a subfolder) where metaplay-project.yaml is located. Otherwise, use the full environment ID (e.g., 'lovely-wombats-build-nimbly').")
 		}
 
-		// Try to resolve the environment from the portal by its human ID.
-		var err error
-		portalEnv, err = portalClient.FetchEnvironmentInfoByHumanID(environment)
+		// Resolve the environment from the portal by its human ID. The same human ID can
+		// legitimately exist on multiple stacks (self-hosted environments are unique per
+		// stack), and without a metaplay-project.yaml we have no stack domain to filter by,
+		// so disambiguate interactively when the portal returns more than one match.
+		environments, err := portalClient.FetchEnvironmentsByHumanID(environment, "")
 		if err != nil {
 			return nil, nil, err
+		}
+
+		switch len(environments) {
+		case 0:
+			return nil, nil, clierrors.Newf("Environment '%s' not found", environment).
+				WithSuggestion("Check available environments at https://portal.metaplay.dev")
+		case 1:
+			portalEnv = &environments[0]
+		default:
+			if !tui.IsInteractiveMode() {
+				return nil, nil, clierrors.Newf("Multiple environments match '%s'", environment).
+					WithDetails(fmt.Sprintf("Found %d environments across different stacks", len(environments))).
+					WithSuggestion("Run in interactive mode to choose, or invoke the CLI from a project directory whose metaplay-project.yaml pins the stack domain")
+			}
+
+			portalEnv, err = tui.ChooseFromListDialog[portalapi.EnvironmentInfo](
+				"Select Target Environment",
+				environments,
+				func(env *portalapi.EnvironmentInfo) (string, string) {
+					return env.Name, fmt.Sprintf("[%s on %s]", env.HumanID, env.StackDomain)
+				},
+			)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), portalEnv.Name, styles.RenderMuted(fmt.Sprintf("[%s on %s]", portalEnv.HumanID, portalEnv.StackDomain)))
 		}
 	}
 
@@ -314,24 +373,6 @@ func resolveEnvironment(ctx context.Context, project *metaproj.MetaplayProject, 
 		AuthProvider: "metaplay",
 	}
 	return envConfig, tokenSet, nil
-}
-
-// Helper for resolving both the MetaplayProject and a specific environment at the same time.
-// This operation is common enough to justify its own method.
-func resolveProjectAndEnvironment(environment string) (*metaproj.MetaplayProject, *metaproj.ProjectEnvironmentConfig, error) {
-	// Resolve the project.
-	project, err := resolveProject()
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Find target environment.
-	envConfig, err := project.Config.FindEnvironmentConfig(environment)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return project, envConfig, nil
 }
 
 // Choose target project either with human ID provided (still validated against the portal-returned data) or

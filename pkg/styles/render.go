@@ -6,17 +6,27 @@ package styles
 
 import (
 	"strings"
+
+	"charm.land/lipgloss/v2"
 )
 
-func RenderBright(str string) string    { return StyleBright.Render(str) }
-func RenderTitle(str string) string     { return StyleTitle.Render(str) }
-func RenderError(str string) string     { return StyleError.Render(str) }
-func RenderWarning(str string) string   { return StyleWarning.Render(str) }
-func RenderTechnical(str string) string { return StyleTitle.Render(str) }
-func RenderAttention(str string) string { return StyleWarning.Render(str) }
-func RenderSuccess(str string) string   { return StyleSuccess.Render(str) }
-func RenderMuted(str string) string     { return StyleMuted.Render(str) }
-func RenderPrompt(str string) string    { return StylePrompt.Render(str) }
+func render(style lipgloss.Style, str string) string {
+	// lipgloss v2 styles always emit escape sequences, even bold with no color.
+	if !colorEnabled {
+		return str
+	}
+	return style.Render(str)
+}
+
+func RenderBright(str string) string    { return render(StyleBright, str) }
+func RenderTitle(str string) string     { return render(StyleTitle, str) }
+func RenderError(str string) string     { return render(StyleError, str) }
+func RenderWarning(str string) string   { return render(StyleWarning, str) }
+func RenderTechnical(str string) string { return render(StyleTitle, str) }
+func RenderAttention(str string) string { return render(StyleWarning, str) }
+func RenderSuccess(str string) string   { return render(StyleSuccess, str) }
+func RenderMuted(str string) string     { return render(StyleMuted, str) }
+func RenderPrompt(str string) string    { return render(StylePrompt, str) }
 
 func RenderListTechnical(list []string) string {
 	// Build comma-separated list of keys with technical styling
@@ -29,5 +39,5 @@ func RenderListTechnical(list []string) string {
 
 // RenderComment renders text in a comment style (darker green).
 func RenderComment(text string) string {
-	return StyleComment.Render(text)
+	return render(StyleComment, text)
 }

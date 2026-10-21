@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"reflect"
@@ -19,6 +20,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
@@ -58,19 +60,12 @@ var rootCmd = &cobra.Command{
 		hasTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 
 		// Determine whether to use colors.
-		colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
-		var useColors bool
-		if isTruthy(colorMode) {
-			useColors = true
-		} else if isFalsy(colorMode) {
-			useColors = false
-		} else {
-			if colorMode != "auto" {
-				fmt.Fprintf(os.Stderr, "ERROR: Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.\n", flagColorMode)
-				os.Exit(2)
-			}
-			useColors = hasTerminal
+		useColors, err := resolveUseColors()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(2)
 		}
+		styles.SetColorEnabled(useColors)
 
 		// Resolve whether using verbose mode
 		isVerbose := isTruthy(os.Getenv("METAPLAYCLI_VERBOSE")) || flagVerbose
@@ -111,15 +106,41 @@ var rootCmd = &cobra.Command{
 		// Show CLI version & whether in interactive mode
 		stderrLogger.Info().Msgf(styles.RenderMuted("Metaplay CLI %s, %s"), version.AppVersion, modeStr)
 
-		// Log about non-default portal being used.
-		if common.PortalBaseURL != common.DefaultPortalBaseURL {
+		// Log about non-default portal being used. Trailing slashes are trimmed before
+		// comparing, because reading 'https://portal.metaplay.dev/' as an override
+		// would silence the warning below for the one case that needs it.
+		isDefaultPortal := strings.TrimRight(common.PortalBaseURL, "/") == strings.TrimRight(common.DefaultPortalBaseURL, "/")
+		if !isDefaultPortal {
 			stderrLogger.Info().Msgf(styles.RenderMuted("Portal base URL: %s"), common.PortalBaseURL)
+		}
+
+		// Log about which auth provider the session will come from. Only one direction
+		// warns. A provider file with the default portal has no valid use: the portal
+		// rejects another platform's tokens, so the command is about to send one to a
+		// service that is not its audience.
+		//
+		// The reverse is a supported setup — a local portal in front of Metaplay Auth,
+		// which pkg/common/config.go documents — so it is muted like the portal line
+		// above. Warning on it taught developers to ignore the direction that is real.
+		//
+		// It says *default* provider because that is all the variables determine. An
+		// environment naming its own authProvider uses that instead, and nothing here
+		// can know.
+		if authProviderFile := os.Getenv(auth.AuthProviderFileEnvVar); authProviderFile != "" {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider file: %s"), authProviderFile)
+			if isDefaultPortal {
+				stderrLogger.Warn().Msgf("%s Auth provider file is set, but the portal is still %s; set %s to the matching platform's portal",
+					styles.RenderWarning("⚠️"), common.DefaultPortalBaseURL, common.PortalBaseURLEnvVar)
+			}
+		} else if !isDefaultPortal {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Default auth provider: Metaplay Auth (set %s to sign in to another platform)"),
+				auth.AuthProviderFileEnvVar)
 		}
 
 		// Check for new CLI version available.
 		isUpdateCliCmd := parentCmd != nil && parentCmd.Name() == "update" && cmd.Use == "cli"
 		if !skipAppVersionCheck && !isUpdateCliCmd {
-			version.CheckVersion(&stderrLogger)
+			version.CheckVersion(cmd.Context(), &stderrLogger)
 		}
 	},
 }
@@ -220,7 +241,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 	message, _ := event["message"].(string)
 
 	// Determine color based on level
-	var color string = ""
+	var color = ""
 	switch level {
 	case "trace":
 		// color = "\033[95m" // Bright Magenta
@@ -256,8 +277,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 }
 
 // Initialize zerolog:
-// In verbose mode, the output includes timestamps and log levels. Colors are
-// always enabled.
+// In verbose mode, the output includes timestamps and log levels.
 // In non-verbose mode, the output is plain-text only, so its compatible with
 // piping to `jq` and other tools. Colors are auto-detected based on the TTY used.
 func initLogger(useColors, isVerbose bool) {
@@ -267,12 +287,14 @@ func initLogger(useColors, isVerbose bool) {
 		zerolog.TimeFieldFormat = "2006-01-02 15:04:05.000"
 		stdoutWriter := zerolog.ConsoleWriter{
 			Out:        os.Stdout,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		log.Logger = zerolog.New(stdoutWriter).With().Timestamp().Logger()
 
 		stderrWriter := zerolog.ConsoleWriter{
 			Out:        os.Stderr,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		stderrLogger = zerolog.New(stderrWriter).With().Timestamp().Logger()
@@ -341,13 +363,15 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 				displayError(err)
 				os.Exit(clierrors.GetExitCode(err))
 			}
-		} else {
-			// \todo implement me: expect no args provided
 		}
+		// \todo implement me: when no UsePositionalArgs, expect no args provided
 
 		// Prepare the command.
 		err := opts.Prepare(cmd, args)
 		if err != nil {
+			if wasInterrupted(cmd, err) {
+				exitInterrupted()
+			}
 			// Show usage help for Prepare errors that are either explicit usage errors
 			// or plain Go errors (which are assumed to be usage errors since Prepare
 			// validates arguments). CLIErrors with ExitRuntime skip usage text.
@@ -361,6 +385,9 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
+			if wasInterrupted(cmd, err) {
+				exitInterrupted()
+			}
 			// Only show usage for explicit usage errors from Run()
 			if clierrors.IsUsageError(err) {
 				stderrLogger.Info().Msgf("%s", cmd.UsageString())
@@ -369,6 +396,46 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 			os.Exit(clierrors.GetExitCode(err))
 		}
 	}
+}
+
+// wasInterrupted reports whether the error is a side-effect of the user
+// interrupting the CLI (Ctrl+C / SIGTERM). When true, callers should exit
+// silently with the POSIX SIGINT convention (128 + 2) rather than printing
+// the error — a signal-killed child can otherwise surface as a misleading
+// message (e.g. `exec.Command("pnpm", "--version").Run()` failing during
+// interrupt looks identical to "pnpm not installed").
+//
+// We check three signals in order of specificity:
+//  1. the root context was canceled via SIGINT/SIGTERM (matches signal.NotifyContext);
+//  2. the error chain itself carries context.Canceled (e.g. an interactive prompt);
+//  3. a SignaledError from execChildInteractive (defensive — covers the case
+//     where a forwarded signal killed the child but didn't reach our context).
+func wasInterrupted(cmd *cobra.Command, err error) bool {
+	if errors.Is(cmd.Context().Err(), context.Canceled) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if _, ok := errors.AsType[*SignaledError](err); ok {
+		return true
+	}
+	return false
+}
+
+// exitInterrupted prints a clean trailing acknowledgement and exits with
+// the POSIX SIGINT convention (128 + 2). The trailing line gives the user
+// closure after subprocess output — e.g. docker prints
+// "ERROR: failed to build: failed to solve: Canceled: context canceled"
+// on its way out and that shouldn't be the last thing the user sees.
+//
+// We write directly to os.Stderr rather than through stderrLogger so
+// verbose mode doesn't decorate the trailing line with timestamp and
+// level prefixes.
+func exitInterrupted() {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
+	os.Exit(130)
 }
 
 // isCLIError checks if the error is a CLIError type.
@@ -483,7 +550,7 @@ func renderLong(opts CommandOptions, str string) string {
 	}
 
 	// Highlight important keywords
-	for _, keyword := range []string{"Note:", "Warning:", "Important:"} {
+	for _, keyword := range []string{"Note:", "Warning:", "Important:", "PREVIEW:"} {
 		str = strings.ReplaceAll(str, keyword, styles.RenderAttention(keyword))
 	}
 
@@ -501,6 +568,19 @@ func renderExample(str string) string {
 
 	// Return final result
 	return str
+}
+
+// Return whether output should be colored, or an error for an invalid color mode.
+func resolveUseColors() (bool, error) {
+	colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
+	if isTruthy(colorMode) {
+		return true, nil
+	} else if isFalsy(colorMode) {
+		return false, nil
+	} else if colorMode == "auto" {
+		return styles.DetectColorSupport(), nil
+	}
+	return false, clierrors.NewUsageErrorf("Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.", colorMode)
 }
 
 // Return true if the value is truthy ('yes', 'y', 'true', '1').

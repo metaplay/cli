@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,10 +25,11 @@ import (
 )
 
 type updateSdkOpts struct {
-	flagToVersion          string // Target SDK version (non-interactive mode)
-	flagAutoAgreeContracts bool   // Automatically agree to contracts
-	flagYes                bool   // Skip confirmation prompts
-	flagSkipPatch          bool   // Skip patch file generation
+	flagToVersion                string // Target SDK version (non-interactive mode)
+	flagAutoAgreeContracts       bool   // Automatically agree to contracts
+	flagYes                      bool   // Skip confirmation prompts
+	flagSkipPatch                bool   // Skip patch file generation
+	flagRestorePrebuiltDashboard bool   // Restore MetaplaySDK/PrebuiltDashboard/ if it was removed
 }
 
 func init() {
@@ -80,6 +82,7 @@ func init() {
 	flags.BoolVar(&o.flagAutoAgreeContracts, "auto-agree", false, "Automatically agree to privacy policy and terms & conditions")
 	flags.BoolVar(&o.flagYes, "yes", false, "Skip confirmation prompts")
 	flags.BoolVar(&o.flagSkipPatch, "skip-patch", false, "Skip patch file generation for SDK modifications")
+	flags.BoolVar(&o.flagRestorePrebuiltDashboard, "restore-prebuilt-dashboard", false, "Restore MetaplaySDK/PrebuiltDashboard/ if it was removed")
 
 	updateCmd.AddCommand(cmd)
 }
@@ -131,8 +134,17 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Authenticate
-	authProvider := auth.NewMetaplayAuthProvider()
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 	tokenSet, err := tui.RequireLoggedIn(ctx, authProvider)
+	if err != nil {
+		return err
+	}
+
+	// Resolve what to do with the PrebuiltDashboard.
+	prebuiltDashboardPlan, err := o.resolvePrebuiltDashboardPlan(ctx, sdkRootDirAbs)
 	if err != nil {
 		return err
 	}
@@ -160,9 +172,9 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 			return clierrors.Wrap(err, "Failed to download current SDK for modification comparison").
 				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
 		}
-		defer os.Remove(sdkZipPath)
+		defer func() { _ = os.Remove(sdkZipPath) }()
 
-		result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath)
+		result, err := DetectSdkModificationsWithPatch(sdkRootDirAbs, sdkZipPath, prebuiltDashboardPlan.modificationExcludedDirs)
 		if err != nil {
 			return clierrors.Wrap(err, "Failed to check for SDK modifications").
 				WithSuggestion("Use --skip-patch to skip modification detection and proceed with the update")
@@ -176,6 +188,9 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 	log.Info().Msgf("Current SDK version:  %s", styles.RenderTechnical(currentVersion.String()))
 	log.Info().Msgf("SDK location:         %s", styles.RenderTechnical(sdkRootDirAbs))
+	if prebuiltDashboardPlan.status != "" {
+		log.Info().Msgf("PrebuiltDashboard:    %s", prebuiltDashboardPlan.status)
+	}
 	if modificationCheckDone {
 		if len(modifications) > 0 {
 			log.Info().Msgf("Modifications to SDK: %s", styles.RenderWarning(fmt.Sprintf("%d file(s)", len(modifications))))
@@ -200,10 +215,13 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 
 		// Warn about binary files that cannot be included in the patch
-		binaryCount := countBinaryFiles(modifications)
-		if binaryCount > 0 {
-			log.Info().Msg(styles.RenderWarning(fmt.Sprintf("WARNING: %d binary file(s) cannot be included in the patch and WILL BE LOST!", binaryCount)))
-			log.Info().Msg("         You must manually back up and restore these files.")
+		binaryFiles := binaryModifiedFiles(modifications)
+		if len(binaryFiles) > 0 {
+			log.Info().Msg(styles.RenderWarning("WARNING: Binary files cannot be included in the patch and WILL BE OVERWRITTEN!"))
+			log.Info().Msg("         Back up these files if you want to keep your changes:")
+			for _, m := range binaryFiles {
+				log.Info().Msgf("           [%s] %s", m.ModType, m.RelativePath)
+			}
 			log.Info().Msg("")
 		}
 
@@ -241,7 +259,6 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 		if patchContent != "" {
 			if err := os.WriteFile(patchPath, []byte(patchContent), 0644); err != nil {
 				log.Warn().Msgf("Could not save patch file: %v", err)
-				patchPath = "" // Clear path so we don't show restore instructions
 			}
 		}
 	}
@@ -304,7 +321,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Validate the target SDK version is supported
-	if _, err := parseAndValidateSdkVersion(targetVersion.Version); err != nil {
+	if err := parseAndValidateSdkVersion(targetVersion.Version); err != nil {
 		return err
 	}
 
@@ -322,7 +339,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	// Download and extract new SDK
 	log.Info().Msgf("  Downloading and extracting SDK %s...", styles.RenderTechnical(targetVersion.Version))
 	parentDir := filepath.Dir(sdkRootDirAbs)
-	if _, err := downloadAndExtractSdk(tokenSet, parentDir, targetVersion); err != nil {
+	if err := downloadAndExtractSdk(tokenSet, parentDir, targetVersion, prebuiltDashboardPlan.extractExcludedDirs); err != nil {
 		return fmt.Errorf("failed to download and extract SDK: %w", err)
 	}
 
@@ -349,6 +366,63 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+// What the SDK update does with MetaplaySDK/PrebuiltDashboard/.
+type prebuiltDashboardPlan struct {
+	modificationExcludedDirs []string // Excluded from modification detection
+	extractExcludedDirs      []string // Excluded from extraction
+	status                   string   // Rendered summary line, or empty when updated normally
+}
+
+// Resolves what to do with MetaplaySDK/PrebuiltDashboard/. A missing PrebuiltDashboard/
+// is restored only if the user opts in.
+func (o *updateSdkOpts) resolvePrebuiltDashboardPlan(ctx context.Context, sdkRootDirAbs string) (prebuiltDashboardPlan, error) {
+	// The pre-built LiveOps Dashboard that ships inside the SDK. Projects may remove the
+	// PrebuiltDashboard from their SDK copy if they use their own Dashboard. In this case,
+	// we don't update the Dashboard unless the user explicitly requests it.
+	const prebuiltDashboardSdkPath = "MetaplaySDK/PrebuiltDashboard"
+	update := prebuiltDashboardPlan{}
+	restore := prebuiltDashboardPlan{
+		modificationExcludedDirs: []string{prebuiltDashboardSdkPath},
+		status:                   styles.RenderAttention("will be restored"),
+	}
+	skip := prebuiltDashboardPlan{
+		modificationExcludedDirs: []string{prebuiltDashboardSdkPath},
+		extractExcludedDirs:      []string{prebuiltDashboardSdkPath},
+		status:                   styles.RenderMuted("will not be updated"),
+	}
+
+	// Dashboard exists. Update.
+	prebuiltDashboardPath := filepath.Join(sdkRootDirAbs, "PrebuiltDashboard")
+	_, err := os.Stat(prebuiltDashboardPath)
+	if err == nil {
+		return update, nil
+	}
+	if !os.IsNotExist(err) {
+		return prebuiltDashboardPlan{}, clierrors.Wrapf(err, "Failed to check for %s", prebuiltDashboardPath)
+	}
+
+	// Restore requested via command line
+	if o.flagRestorePrebuiltDashboard {
+		return restore, nil
+	}
+
+	// Dashboard doesn't exist. Only update if the user opts in.
+	if tui.IsInteractiveMode() && !o.flagYes {
+		log.Info().Msgf("%s is missing. It was likely removed on purpose, so it will not be restored.", styles.RenderTechnical(prebuiltDashboardSdkPath+"/"))
+		confirmed, err := tui.DoConfirmQuestionDefaultNo(ctx, "Restore it anyway?")
+		if err != nil {
+			return prebuiltDashboardPlan{}, err
+		}
+		if confirmed {
+			return restore, nil
+		}
+		return skip, nil
+	}
+
+	log.Info().Msgf("%s is missing. It was likely removed on purpose, so it will not be restored. Use --restore-prebuilt-dashboard to override.", styles.RenderTechnical(prebuiltDashboardSdkPath+"/"))
+	return skip, nil
 }
 
 // resolveTargetVersion resolves the --to-version flag to a specific SDK version.
@@ -513,7 +587,7 @@ func formatMajorList(majors []int) string {
 	for i, m := range majors {
 		strs[i] = fmt.Sprintf("%d", m)
 	}
-	return fmt.Sprintf("%s", joinWithCommaAnd(strs))
+	return joinWithCommaAnd(strs)
 }
 
 // joinWithCommaAnd joins strings with commas and "and" for the last item.
@@ -654,7 +728,7 @@ func findLatestMajorUpdate(versions []portalapi.SdkVersionInfo, currentMajor int
 // findLatestForMajor finds the latest version for a specific major version number.
 func findLatestForMajor(versions []portalapi.SdkVersionInfo, majorStr string) *portalapi.SdkVersionInfo {
 	var targetMajor int
-	fmt.Sscanf(majorStr, "%d", &targetMajor)
+	_, _ = fmt.Sscanf(majorStr, "%d", &targetMajor)
 
 	var best *portalapi.SdkVersionInfo
 	var bestParsed *version.Version

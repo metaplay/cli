@@ -6,12 +6,18 @@ else
   BIN_SUFFIX=
 endif
 
-.PHONY: all clean build test
+# Keep in sync with the version pinned in .github/workflows/build.yaml.
+GOLANGCI_LINT_VERSION ?= v2.13.2
 
-all: build
+.PHONY: all clean build lint test
+
+all: lint build
 
 build:
 	go build -o dist/metaplay$(BIN_SUFFIX) .
+
+lint:
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
 
 clean:
 	rm -rf dist
@@ -19,6 +25,7 @@ clean:
 fix:
 	go mod tidy
 	go fix ./...
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) fmt
 	go build -o dist/metaplay$(BIN_SUFFIX) .
 
 test:

@@ -46,7 +46,7 @@ func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Con
 	// Create SPDY executor
 	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", requestURL)
 	if err != nil {
-		return fmt.Errorf("failed to create SPDY executor: %v", err)
+		return fmt.Errorf("failed to create SPDY executor: %w", err)
 	}
 
 	// Helper function for common streaming logic

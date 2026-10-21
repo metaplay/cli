@@ -12,7 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,8 +23,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-const metaplayGameServerChartName = "metaplay-gameserver"
 
 // \todo is there an official k8s type for this?
 type GameServerPodPhase string
@@ -146,8 +144,8 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 	}
 
 	// Sort the shard sets by name to ensure consistent order in output.
-	sort.Slice(ownedSets, func(i, j int) bool {
-		return ownedSets[i].Name < ownedSets[j].Name
+	slices.SortFunc(ownedSets, func(a, b appsv1.StatefulSet) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	log.Debug().Msgf("Found %d matching StatefulSets", len(ownedSets))
@@ -281,7 +279,7 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 				Message: "Pod is Pending",
 			}
 		}
-		if pod.Status.ContainerStatuses == nil || len(pod.Status.ContainerStatuses) == 0 {
+		if len(pod.Status.ContainerStatuses) == 0 {
 			return GameServerPodStatus{
 				Phase:   PhaseUnknown,
 				Message: "ContainerStatuses is empty",
@@ -517,7 +515,7 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	if err != nil {
 		return "", fmt.Errorf("failed to get pod logs: %w", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	builder := &strings.Builder{}
 	_, err = io.Copy(builder, stream)
@@ -550,7 +548,7 @@ func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout ti
 			return fmt.Errorf("could not resolve domain %s before timeout", hostname)
 		}
 
-		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 			output.AppendLinef("Attempt %d failed: %v", attemptNdx+1, dnsErr)
 		} else {
 			output.AppendLinef("Failed to resolve %s: %v. Retrying...", hostname, err)
@@ -615,28 +613,28 @@ func attemptTLSConnection(hostname string, port int) error {
 		ServerName: hostname,
 	})
 	if err != nil {
-		return fmt.Errorf("TLS connection failed: %v", err)
+		return fmt.Errorf("TLS connection failed: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).
 	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	healthCheckPacket := buildHealthCheckPacket()
 	if _, err := conn.Write(healthCheckPacket); err != nil {
-		return fmt.Errorf("failed to send HealthCheck packet: %v", err)
+		return fmt.Errorf("failed to send HealthCheck packet: %w", err)
 	}
 
 	// Read the protocol header from the server.
 	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buffer := make([]byte, protocolHeaderSize)
 	totalRead := 0
 	for totalRead < protocolHeaderSize {
 		n, err := conn.Read(buffer[totalRead:])
 		if err != nil {
-			return fmt.Errorf("error reading protocol header from server (got %d/%d bytes): %v", totalRead, protocolHeaderSize, err)
+			return fmt.Errorf("error reading protocol header from server (got %d/%d bytes): %w", totalRead, protocolHeaderSize, err)
 		}
 		totalRead += n
 	}
@@ -651,12 +649,12 @@ func attemptTLSConnection(hostname string, port int) error {
 	// Parse and validate the protocol header.
 	header, err := parseProtocolHeader(buffer[:totalRead])
 	if err != nil {
-		return fmt.Errorf("failed to parse protocol header: %v", err)
+		return fmt.Errorf("failed to parse protocol header: %w", err)
 	}
 	log.Debug().Msgf("Protocol header: version=%d, status=%d, magic=%x", header.Version, header.Status, header.Magic)
 
 	if err := validateProtocolHeader(header); err != nil {
-		return fmt.Errorf("protocol header validation failed: %v", err)
+		return fmt.Errorf("protocol header validation failed: %w", err)
 	}
 
 	return nil
@@ -686,7 +684,7 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
 		default:
 			// Create a new request with headers
-			req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 			if err != nil {
 				output.AppendLinef("Error creating request for %s: %v. Retrying...", url, err)
 				break
@@ -704,17 +702,17 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 				switch {
 				case resp.StatusCode >= 200 && resp.StatusCode < 300:
 					// Accept 2xx (Success) status codes.
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
 					return nil
 				case resp.StatusCode >= 300 && resp.StatusCode < 400:
 					// Accept 3xx (Redirection) status codes.
-					resp.Body.Close()
+					_ = resp.Body.Close()
 					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
 					return nil
 				}
 				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		}
 

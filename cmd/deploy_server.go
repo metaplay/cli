@@ -16,6 +16,7 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
+	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -24,7 +25,6 @@ import (
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
-const metaplayGameServerPodLabelSelector = "app=metaplay-server"
 
 // Deploy a game server to the target environment with specified docker image version.
 type deployGameServerOpts struct {
@@ -37,7 +37,7 @@ type deployGameServerOpts struct {
 	flagHelmChartLocalPath  string
 	flagHelmChartRepository string
 	flagHelmChartVersion    string
-	flagHelmValuesPath      string
+	flagHelmValuesPaths     []string
 	flagDryRun              bool
 }
 
@@ -46,7 +46,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageNameTag, "[IMAGE:]TAG", "Docker image name and tag, eg, 'mygame:20260601-153000-1a27c25' or '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to Helm.")
 
 	cmd := &cobra.Command{
@@ -65,9 +65,10 @@ func init() {
 			- Admin domain name resolves correctly.
 			- Admin endpoint responds with a success code.
 
-			When a full docker image tag is specified (eg, 'mygame:364cff09'), the image is first
-			pushed to the environment's registry. If only a tag is specified (eg, '364cff09'), the
-			image is assumed to be present in the remote registry already.
+			When a full docker image tag is specified (eg, 'mygame:20260601-153000-1a27c25'), the
+			image is first pushed to the environment's registry. If only a tag is specified (eg,
+			'20260601-153000-1a27c25'), the image is assumed to be present in the remote registry
+			already.
 
 			{Arguments}
 
@@ -79,25 +80,25 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Push the local image and deploy to the environment nimbly.
-			metaplay deploy server nimbly mygame:364cff09
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25
 
 			# Deploy an image that has already been pushed into the environment.
-			metaplay deploy server nimbly 364cff09
+			metaplay deploy server nimbly 20260601-153000-1a27c25
 
 			# Deploy the latest locally built image for this project.
 			metaplay deploy server nimbly latest-local
 
 			# Pass extra arguments to Helm.
-			metaplay deploy server nimbly mygame:364cff09 -- --set-string config.image.pullPolicy=Always
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 -- --set-string config.image.pullPolicy=Always
 
 			# Use Helm chart from the local disk.
-			metaplay deploy server nimbly mygame:364cff09 --local-chart-path=/path/to/metaplay-gameserver
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --local-chart-path=/path/to/metaplay-gameserver
 
 			# Override the Helm chart repository and version.
-			metaplay deploy server nimbly mygame:364cff09 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --helm-chart-repo=https://custom-repo.domain.com --helm-chart-version=0.7.0
 
 			# Override the Helm release name.
-			metaplay deploy server nimbly mygame:364cff09 --helm-release-name=my-release-name
+			metaplay deploy server nimbly mygame:20260601-153000-1a27c25 --helm-release-name=my-release-name
 		`),
 	}
 	deployCmd.AddCommand(cmd)
@@ -107,12 +108,21 @@ func init() {
 	flags.StringVar(&o.flagHelmChartLocalPath, "local-chart-path", "", "Path to a local version of the metaplay-gameserver chart (repository and version are ignored if this is set)")
 	flags.StringVar(&o.flagHelmChartRepository, "helm-chart-repo", "", "Override for Helm chart repository to use for the metaplay-gameserver chart")
 	flags.StringVar(&o.flagHelmChartVersion, "helm-chart-version", "", "Override for Helm chart version to use, eg, '0.7.0'")
-	flags.StringVarP(&o.flagHelmValuesPath, "values", "f", "", "Override for path to the Helm values file, e.g., 'Backend/Deployments/develop-server.yaml'")
+	flags.StringArrayVarP(&o.flagHelmValuesPaths, "values", "f", nil, "Path to a Helm values file, relative to the current directory, to use in place of the environment's serverValuesFile in metaplay-project.yaml, e.g., 'Backend/Deployments/develop-server.yaml' (repeatable, the later overriding the earlier)")
 	flags.BoolVar(&o.flagDryRun, "dry-run", false, "Show what would be deployed without actually performing the deployment")
 }
 
 func (o *deployGameServerOpts) Prepare(cmd *cobra.Command, args []string) error {
-	return nil
+	// Refuse a local chart that is not the game server chart, and a chart
+	// repository or values files the project config would refuse in their
+	// place, before Run resolves the environment, which may ask to log in first.
+	if err := validateLocalChartPath(o.flagHelmChartLocalPath, metaplayGameServerChartName); err != nil {
+		return err
+	}
+	if err := validateChartRepository(o.flagHelmChartRepository); err != nil {
+		return err
+	}
+	return validateValuesPaths(o.flagHelmValuesPaths)
 }
 
 func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
@@ -133,19 +143,15 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Check that docker is installed and running
 	log.Debug().Msgf("Check if docker is available")
-	err = checkDockerAvailable()
+	err = checkDockerAvailable(cmd.Context())
 	if err != nil {
 		return err
 	}
 
-	// Validate Helm chart reference.
+	// Resolve Helm chart version constraints. A local chart was validated in
+	// Prepare and is used as-is.
 	var chartVersionConstraints version.Constraints = nil
-	if o.flagHelmChartLocalPath != "" {
-		err = helmutil.ValidateLocalHelmChart(o.flagHelmChartLocalPath)
-		if err != nil {
-			return fmt.Errorf("invalid --helm-chart-path: %v", err)
-		}
-	} else {
+	if o.flagHelmChartLocalPath == "" {
 		// Resolve Helm chart version to use, either from config file or command line override
 		helmChartVersion := project.Config.ServerChartVersion
 		if o.flagHelmChartVersion != "" {
@@ -158,34 +164,30 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			// Parse Helm chart semver range.
 			chartVersionConstraints, err = version.NewConstraint(helmChartVersion)
 			if err != nil {
-				return fmt.Errorf("invalid Helm chart version: %v", err)
+				return fmt.Errorf("invalid Helm chart version: %w", err)
 			}
 			log.Debug().Msgf("Accepted Helm chart semver constraints: %v", chartVersionConstraints)
 		}
 	}
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	// The chart is told this repository; a push resolves again right before
+	// it goes, and is held to the same one.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
 
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return fmt.Errorf("failed to get docker credentials: %v", err)
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
-
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
-	if o.argImageNameTag == "" {
+	switch o.argImageNameTag {
+	case "":
 		selectedImage, err := selectDockerImageInteractively("Select Image to Deploy", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageNameTag = selectedImage.RepoTag
-	} else if o.argImageNameTag == "latest-local" {
+	case "latest-local":
 		// Resolve the local docker images matching project human ID.
 		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
 		if err != nil {
@@ -222,8 +224,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		imageTag = o.argImageNameTag
 
 		// Fetch the image info from the remote docker image.
-		remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)
-		imageInfo, err = envapi.FetchRemoteDockerImageMetadata(dockerCredentials, remoteImageName)
+		imageInfo, err = imageRepository.FetchImageMetadata(imageRepository.Reference(imageTag))
 		if err != nil {
 			return err
 		}
@@ -238,7 +239,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		useHelmChartVersion = "local"
 	} else {
 		// Determine the Helm chart repo and version to use.
-		helmChartRepo := coalesceString(project.Config.HelmChartRepository, o.flagHelmChartRepository, "https://charts.metaplay.dev")
+		helmChartRepo := helmChartRepository(o.flagHelmChartRepository, project.Config.HelmChartRepository)
 		minChartVersion, _ := version.NewVersion("0.7.0")
 		useHelmChartVersion, err = helmutil.ResolveBestMatchingHelmVersion(helmChartRepo, metaplayGameServerChartName, minChartVersion, chartVersionConstraints)
 		helmChartPath = helmutil.GetHelmChartPath(helmChartRepo, metaplayGameServerChartName, useHelmChartVersion)
@@ -248,8 +249,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	}
 	log.Debug().Msgf("Helm chart path: %s", helmChartPath)
 
-	// Resolve Helm values file path relative to current directory.
-	valuesFiles := project.GetServerValuesFiles(envConfig)
+	// Resolve Helm values file paths, relative to the current directory.
+	valuesFiles := helmValuesFiles(o.flagHelmValuesPaths, project.GetServerValuesFiles(envConfig))
 
 	// Create a Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
@@ -260,7 +261,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Determine if there's an existing release deployed.
@@ -275,26 +276,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil && existingRelease.Chart != nil && existingRelease.Chart.Metadata != nil {
 		log.Debug().Msgf("Existing Helm release '%s' found with chart version %s", existingRelease.Name, existingRelease.Chart.Metadata.Version)
 
-		// Parse the new chart version.
-		newVersion, err := semver.NewVersion(useHelmChartVersion)
+		uninstallExisting, err = mustUninstallExistingRelease(existingRelease.Chart.Metadata.Version, useHelmChartVersion)
 		if err != nil {
-			return fmt.Errorf("failed to parse Helm chart version '%s': %v", useHelmChartVersion, err)
-		}
-
-		// Parse existing chart version.
-		existingVersion, err := semver.NewVersion(existingRelease.Chart.Metadata.Version)
-		if err != nil {
-			log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingRelease.Chart.Metadata.Version)
-			uninstallExisting = true
-		}
-
-		// Check if crossing the v0.8.0 threshold (in either direction).
-		threshold := semver.MustParse("0.8.0")
-		newAboveV080 := newVersion.GreaterThanEqual(threshold)
-		existingAboveV080 := existingVersion.GreaterThanEqual(threshold)
-		if newAboveV080 != existingAboveV080 {
-			log.Info().Msgf("Going from Helm chart v%s to v%s. Must uninstall existing release before installing new one.", existingRelease.Chart.Metadata.Version, useHelmChartVersion)
-			uninstallExisting = true
+			return err
 		}
 	}
 
@@ -304,7 +288,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		portalClient := portalapi.NewClient(targetEnv.TokenSet)
 
 		// Fetch info from the portal.
-		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID)
+		portalInfo, err := portalClient.FetchEnvironmentInfoByHumanID(envConfig.HumanID, envConfig.StackDomain)
 		if err != nil {
 			return err
 		}
@@ -377,7 +361,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	helmRequiredValues := map[string]any{
 		"image": map[string]any{
 			"tag":        imageTag,
-			"repository": envDetails.Deployment.EcrRepo,
+			"repository": imageRepository.QualifiedRepository,
 		},
 	}
 
@@ -415,7 +399,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	if useLocalImage {
 		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(o.argImageNameTag))
 	} else {
-		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, imageTag)))
+		log.Info().Msgf("  Image name:         %s", styles.RenderTechnical(imageRepository.Reference(imageTag)))
 	}
 	log.Info().Msgf("  Build number:       %s", styles.RenderTechnical(imageInfo.BuildNumber))
 	log.Info().Msgf("  Commit ID:          %s", styles.RenderTechnical(imageInfo.CommitID))
@@ -476,19 +460,26 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If using local image, add task to push it.
 	if useLocalImage {
 		taskRunner.AddTask("Push docker image to environment repository", func(output *tui.TaskOutput) error {
-			return pushDockerImage(cmd.Context(), output, o.argImageNameTag, envDetails.Deployment.EcrRepo, dockerCredentials)
+			// Refreshed here, since the credential resolved above may have
+			// expired while the deploy waited at the image picker.
+			pushTo, err := targetEnv.RefreshImageRepository(imageRepository)
+			if err != nil {
+				return err
+			}
+			_, err = pushDockerImage(cmd.Context(), output, o.argImageNameTag, pushTo)
+			return err
 		})
 	}
 
 	// If there's a pending release, uninstall it first.
 	if uninstallExistingRelease {
-		taskRunner.AddTask(fmt.Sprintf("Uninstall existing Helm release"), func(output *tui.TaskOutput) error {
+		taskRunner.AddTask("Uninstall existing Helm release", func(output *tui.TaskOutput) error {
 			output.SetHeaderLines([]string{
 				fmt.Sprintf("Release status: %s", existingRelease.Info.Status),
 			})
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			if err != nil {
-				return fmt.Errorf("failed to uninstall Helm release %s: %v", existingRelease.Name, err)
+				return fmt.Errorf("failed to uninstall Helm release %s: %w", existingRelease.Name, err)
 			}
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
 			return nil
@@ -569,7 +560,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			cliSetValues,
 			helmRequiredValues,
 			5*time.Minute,
-			validateJsonSchema)
+			validateJsonSchema,
+			nil)
 		return err
 	})
 
@@ -667,6 +659,52 @@ func selectDockerImageInteractively(title string, projectHumanID string) (*envap
 	return selectedImage, nil
 }
 
+// mustUninstallExistingRelease tells whether an existing release of chart
+// version existingVersion must be uninstalled before the chart of version
+// newVersion is installed over it: crossing chart v0.8.0, in either direction,
+// would leave the old and the new operator modifying the same resources. An
+// existing version that does not parse is assumed to be the old operator. A
+// local chart, of version 'local', has no version to compare, and is assumed
+// recent, as for the schema validation.
+func mustUninstallExistingRelease(existingVersion string, newVersion string) (bool, error) {
+	threshold := semver.MustParse("0.8.0")
+
+	newAboveV080 := true
+	newChart := "the local chart"
+	if newVersion != "local" {
+		parsed, err := semver.NewVersion(newVersion)
+		if err != nil {
+			return false, fmt.Errorf("failed to parse Helm chart version '%s': %w", newVersion, err)
+		}
+		newAboveV080 = parsed.GreaterThanEqual(threshold)
+		newChart = "v" + newVersion
+	}
+
+	existing, err := semver.NewVersion(existingVersion)
+	if err != nil {
+		log.Warn().Err(err).Msgf("Failed to parse existing Helm chart version '%s'. Assuming it might be the old operator, proceeding with deploy carefully.", existingVersion)
+		return true, nil
+	}
+	if newAboveV080 != existing.GreaterThanEqual(threshold) {
+		log.Info().Msgf("Going from Helm chart v%s to %s. Must uninstall existing release before installing new one.", existingVersion, newChart)
+		return true, nil
+	}
+	return false, nil
+}
+
+// validateLocalChartPath refuses a --local-chart-path that is not a local copy
+// of chartName, the chart the command installs. An unset flag is accepted.
+func validateLocalChartPath(localChartPath string, chartName string) error {
+	if localChartPath == "" {
+		return nil
+	}
+	if err := helmutil.ValidateLocalHelmChart(localChartPath, chartName); err != nil {
+		return clierrors.WrapUsageError(err, "Invalid --local-chart-path").
+			WithSuggestion(fmt.Sprintf("Pass the directory of a local copy of the %s chart, the one holding its Chart.yaml", chartName))
+	}
+	return nil
+}
+
 // Return the first non-empty string in the provided arguments.
 func coalesceString(values ...string) string {
 	for _, value := range values {
@@ -675,4 +713,43 @@ func coalesceString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// helmChartRepository is the Helm chart repository to deploy from: the
+// --helm-chart-repo flag where given, then the project config's, then
+// Metaplay's own.
+func helmChartRepository(flagRepository string, configRepository string) string {
+	return coalesceString(flagRepository, configRepository, "https://charts.metaplay.dev")
+}
+
+// helmValuesFiles is the Helm values files to deploy with: those given with
+// --values, in their order, in place of the environment's from the project
+// config.
+func helmValuesFiles(flagValuesPaths []string, configValuesFiles []string) []string {
+	if len(flagValuesPaths) > 0 {
+		return flagValuesPaths
+	}
+	return configValuesFiles
+}
+
+// validateChartRepository refuses a --helm-chart-repo that the project config
+// would refuse as its helmChartRepository. An unset flag is accepted.
+func validateChartRepository(chartRepository string) error {
+	if err := metaproj.ValidateHelmChartRepositoryURL(chartRepository); err != nil {
+		return clierrors.WrapUsageError(err, fmt.Sprintf("Invalid --helm-chart-repo '%s'", chartRepository)).
+			WithSuggestion("Pass the http or https URL of a Helm chart repository, e.g., 'https://charts.metaplay.dev'")
+	}
+	return nil
+}
+
+// validateValuesPaths refuses a --values that the project config would refuse
+// as an environment's values file. An unset flag is accepted.
+func validateValuesPaths(valuesPaths []string) error {
+	for _, valuesPath := range valuesPaths {
+		if err := metaproj.ValidateHelmValuesFile(valuesPath); err != nil {
+			return clierrors.WrapUsageError(err, fmt.Sprintf("Invalid --values '%s'", valuesPath)).
+				WithSuggestion("Pass the path to a .yaml or .yml Helm values file, relative to the current directory")
+		}
+	}
+	return nil
 }

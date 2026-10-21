@@ -144,7 +144,7 @@ func calculateLocalFileMD5(filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hash := md5.New()
 	if _, err := io.Copy(hash, file); err != nil {
@@ -206,7 +206,7 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 			}
 		} else {
 			log.Debug().Msgf("SPDY stream completed normally after %v", elapsed)
-			outStream.Close()
+			_ = outStream.Close()
 		}
 	}()
 
@@ -280,7 +280,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 				log.Debug().Msgf("Remote command stderr (non-fatal): %s", strings.TrimSpace(stderrBuf.String()))
 			}
 			log.Debug().Msgf("SPDY stream completed normally after %v", elapsed)
-			outStream.Close()
+			_ = outStream.Close()
 		}
 	}()
 
@@ -292,7 +292,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 		// Create gzip reader for decompression
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("failed to create gzip reader: %v", err)
+			return nil, nil, 0, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		tarReader = tar.NewReader(gzReader)
 		closer = func() error { return gzReader.Close() }
@@ -309,8 +309,8 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 			break
 		}
 		if err != nil {
-			closer()
-			return nil, nil, 0, fmt.Errorf("failed to read tar header: %v", err)
+			_ = closer()
+			return nil, nil, 0, fmt.Errorf("failed to read tar header: %w", err)
 		}
 		if hdr.Name != filepath.Base(fileName) {
 			continue
@@ -318,7 +318,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 		// Return the reader for this file, plus a closer
 		return tarReader, closer, hdr.Size, nil
 	}
-	closer()
+	_ = closer()
 	return nil, nil, 0, fmt.Errorf("file %s not found in tar stream", fileName)
 }
 
@@ -351,16 +351,16 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 		destFile, err = os.Create(destPath)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to create destination file: %v", err)
+		return 0, fmt.Errorf("failed to create destination file: %w", err)
 	}
-	defer destFile.Close()
+	defer func() { _ = destFile.Close() }()
 
 	// Stream from offset using dd
 	reader, closer, err := streamFileFromOffset(ctx, kubeCli, podName, containerName, srcPath, offset, true)
 	if err != nil {
 		return 0, err
 	}
-	defer closer()
+	defer func() { _ = closer() }()
 
 	remainingBytes := fileSize - offset
 
@@ -447,7 +447,7 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 	// Create the destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %v", err)
+		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
 	// Use forward slash for remote Linux path (not filepath.Join which uses OS-specific separators)
@@ -489,7 +489,7 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 				} else if remoteMD5 != localMD5 {
 					// MD5 mismatch - file is corrupted, start fresh
 					output.AppendLinef("Integrity check failed (MD5 mismatch), retrying from scratch...")
-					os.Remove(destPath)
+					_ = os.Remove(destPath)
 					state.bytesTransferred = 0
 					lastErr = fmt.Errorf("integrity check failed: remote=%s, local=%s", remoteMD5, localMD5)
 					continue
@@ -521,7 +521,7 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 	}
 
 	// All attempts failed, clean up partial file
-	os.Remove(destPath)
+	_ = os.Remove(destPath)
 	return fmt.Errorf("file copy failed after %d attempts without progress: %w", numAttempts, lastErr)
 }
 
@@ -533,7 +533,7 @@ func ReadFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, c
 	if err != nil {
 		return nil, err
 	}
-	defer closer()
+	defer func() { _ = closer() }()
 
 	// Read the full payload
 	return io.ReadAll(tr)

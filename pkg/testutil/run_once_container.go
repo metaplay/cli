@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
 
-	dockercontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	dockercontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/rs/zerolog/log"
 	tc "github.com/testcontainers/testcontainers-go"
 )
@@ -44,7 +45,7 @@ func NewRunOnceContainer(opts RunOnceContainerOptions) *RunOnceContainer {
 	if opts.LogPrefix == "" {
 		opts.LogPrefix = "[container] "
 	}
-	if opts.AutoRemove == false && opts.ContainerName == "" {
+	if !opts.AutoRemove && opts.ContainerName == "" {
 		// Default to auto-remove if no explicit name is set
 		opts.AutoRemove = true
 	}
@@ -54,10 +55,10 @@ func NewRunOnceContainer(opts RunOnceContainerOptions) *RunOnceContainer {
 // Run starts the container, streams logs, waits for completion, and returns the exit code.
 func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 	// Build port bindings if any ports are exposed
-	portBindings := nat.PortMap{}
+	portBindings := network.PortMap{}
 	for _, p := range r.opts.ExposedPorts {
-		port := nat.Port(p)
-		portBindings[port] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}}
+		port := network.MustParsePort(p)
+		portBindings[port] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}}
 	}
 
 	// Build container request
@@ -95,7 +96,7 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 			if req.HostConfigModifier == nil {
 				req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
 					if hc.PortBindings == nil {
-						hc.PortBindings = nat.PortMap{}
+						hc.PortBindings = network.PortMap{}
 					}
 					maps.Copy(hc.PortBindings, portBindings)
 				}
@@ -104,7 +105,7 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 				req.HostConfigModifier = func(hc *dockercontainer.HostConfig) {
 					originalModifier(hc)
 					if hc.PortBindings == nil {
-						hc.PortBindings = nat.PortMap{}
+						hc.PortBindings = network.PortMap{}
 					}
 					maps.Copy(hc.PortBindings, portBindings)
 				}
@@ -205,9 +206,9 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 		}
 	}
 
-	exitCode := int(state.ExitCode)
+	exitCode := state.ExitCode
 
-	r.exitCode = int(exitCode)
+	r.exitCode = exitCode
 	r.completed = true
 
 	log.Debug().Msgf("Container completed with exit code: %d", r.exitCode)
@@ -270,7 +271,7 @@ func (r *RunOnceContainer) drainAllLogs(ctx context.Context, consumer *container
 	if err != nil {
 		return err
 	}
-	defer logReader.Close()
+	defer func() { _ = logReader.Close() }()
 	// Pipe logs to the consumer using io.Copy for simplicity and efficiency.
 	_, _ = io.Copy(consumer, logReader)
 	return nil

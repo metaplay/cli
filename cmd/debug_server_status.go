@@ -80,19 +80,6 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
-	if err != nil {
-		return err
-	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return fmt.Errorf("failed to get docker credentials: %v", err)
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
-
 	// Create a Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
@@ -102,7 +89,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %v", err)
+		return fmt.Errorf("failed to initialize Helm config: %w", err)
 	}
 
 	// Determine if there's an existing release deployed.

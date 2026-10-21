@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -38,18 +39,18 @@ func isDirectory(path string) bool {
 // Hidden directories (starting with a dot) are skipped.
 func findSubDirectory(name, rootPath string, predicateFunc func(path string, relPath string) (bool, error)) (string, error) {
 	var foundPath string
-	err := filepath.Walk(rootPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(rootPath, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip non-directories.
-		if !info.IsDir() {
+		if !entry.IsDir() {
 			return nil
 		}
 
 		// Skip dot directories (eg, .git).
-		if strings.HasPrefix(info.Name(), ".") {
+		if strings.HasPrefix(entry.Name(), ".") {
 			// log.Debug().Msgf("Skip directory: %s", path)
 			return filepath.SkipDir
 		}
@@ -116,7 +117,7 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("unity project path does not exist: %s", unityProjectPathAbs)
 		}
-		return fmt.Errorf("error accessing unity project path: %v", err)
+		return fmt.Errorf("error accessing unity project path: %w", err)
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("unity project path must be a directory: %s", unityProjectPathAbs)
@@ -136,7 +137,7 @@ func validateUnityProjectPath(rootPath string, unityProjectPath string) error {
 			if os.IsNotExist(err) {
 				return fmt.Errorf("%s does not appear to be a Unity project (no %s found): %s", unityProjectPathAbs, description, path)
 			}
-			return fmt.Errorf("error accessing Unity project's %s: %v", description, err)
+			return fmt.Errorf("error accessing Unity project's %s: %w", description, err)
 		}
 	}
 
@@ -202,7 +203,7 @@ func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.
 
 	err := tui.RunWithProgressBar(label, func(update func(current, total int64)) error {
 		var dlErr error
-		sdkZipPath, dlErr = portalClient.DownloadSdkByVersionIDWithProgress(tmpDir, sdkVersionInfo.ID, update)
+		sdkZipPath, dlErr = portalClient.DownloadSdkByVersionID(tmpDir, sdkVersionInfo.ID, update)
 		return dlErr
 	})
 	if err != nil {
@@ -213,9 +214,9 @@ func downloadSdkWithProgress(tokenSet *auth.TokenSet, sdkVersionInfo *portalapi.
 	return sdkZipPath, nil
 }
 
-// Download the SDK (into the OS temp directory) and extract to the targetProjectPath.
-// Downloads the version specified by versionInfo.
-func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo) (*metaproj.MetaplayVersionMetadata, error) {
+// Download the SDK version specified by versionInfo and extract it to the
+// targetProjectPath. Directories listed in excludedDirs are not extracted.
+func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, versionInfo *portalapi.SdkVersionInfo, excludedDirs []string) error {
 	// Download the SDK archive to temp directory.
 	tmpDir := os.TempDir()
 	portalClient := portalapi.NewClient(tokenSet)
@@ -224,26 +225,26 @@ func downloadAndExtractSdk(tokenSet *auth.TokenSet, targetProjectPath string, ve
 	var err error
 
 	// Download the specific version
-	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID)
+	sdkZipPath, err = portalClient.DownloadSdkByVersionID(tmpDir, versionInfo.ID, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
+		return fmt.Errorf("failed to download SDK version '%s': %w", versionInfo.Version, err)
 	}
 	log.Debug().Msgf("Downloaded SDK version '%s' (ID: %s)", versionInfo.Version, versionInfo.ID)
-	defer os.Remove(sdkZipPath)
+	defer func() { _ = os.Remove(sdkZipPath) }()
 
 	// Validate the SDK archive file.
 	sdkMetadata, err := validateSdkZipFile(sdkZipPath)
 	if err != nil {
-		return nil, fmt.Errorf("invalid Metaplay SDK archive: %v", err)
+		return fmt.Errorf("invalid Metaplay SDK archive: %w", err)
 	}
 	log.Debug().Msgf("Use downloaded SDK archive: %s (v%s)", sdkZipPath, sdkMetadata.SdkVersion)
 
 	// Extract SDK into target directory.
-	if err := extractSdkFromZip(targetProjectPath, sdkZipPath); err != nil {
-		return nil, fmt.Errorf("failed to extract SDK archive: %w", err)
+	if err := extractSdkFromZip(targetProjectPath, sdkZipPath, excludedDirs); err != nil {
+		return fmt.Errorf("failed to extract SDK archive: %w", err)
 	}
 
-	return sdkMetadata, nil
+	return nil
 }
 
 func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.MetaplayVersionMetadata, error) {
@@ -252,7 +253,7 @@ func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.Me
 		// Refer (don't copy) to the specified MetaplaySDK directory.
 		relativePathToSdk, err := filepath.Rel(targetProjectPath, sdkSource)
 		if err != nil {
-			return "", nil, fmt.Errorf("failed to construct relative path to MetaplaySDK: %v", err)
+			return "", nil, fmt.Errorf("failed to construct relative path to MetaplaySDK: %w", err)
 		}
 
 		// Ensure the SDK directory is valid.
@@ -266,13 +267,13 @@ func resolveSdkSource(targetProjectPath, sdkSource string) (string, *metaproj.Me
 		// Validate the SDK archive file.
 		sdkMetadata, err := validateSdkZipFile(sdkSource)
 		if err != nil {
-			return "", nil, fmt.Errorf("invalid Metaplay SDK archive: %v", err)
+			return "", nil, fmt.Errorf("invalid Metaplay SDK archive: %w", err)
 		}
 		log.Debug().Msgf("Use local SDK archive file: %s (v%s)", sdkSource, sdkMetadata.SdkVersion)
 
 		// Extract SDK into target directory.
-		if err := extractSdkFromZip(targetProjectPath, sdkSource); err != nil {
-			return "", nil, fmt.Errorf("failed to extract SDK archive: %v", err)
+		if err := extractSdkFromZip(targetProjectPath, sdkSource, nil); err != nil {
+			return "", nil, fmt.Errorf("failed to extract SDK archive: %w", err)
 		}
 
 		return "MetaplaySDK", sdkMetadata, nil
@@ -298,7 +299,7 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("SDK archive file does not exist: %s", sdkZipPath)
 		}
-		return nil, fmt.Errorf("error accessing SDK archive file: %v", err)
+		return nil, fmt.Errorf("error accessing SDK archive file: %w", err)
 	}
 
 	// Check if it's a regular file (not a directory)
@@ -314,9 +315,9 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	// Open and validate ZIP archive
 	reader, err := zip.OpenReader(sdkZipPath)
 	if err != nil {
-		return nil, fmt.Errorf("invalid ZIP archive: %v", err)
+		return nil, fmt.Errorf("invalid ZIP archive: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Find and read version.yaml from the ZIP
 	var versionFile *zip.File
@@ -333,13 +334,13 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	// Open and read the version.yaml file
 	rc, err := versionFile.Open()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open version.yaml in ZIP: %v", err)
+		return nil, fmt.Errorf("failed to open version.yaml in ZIP: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	content, err := io.ReadAll(rc)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read version.yaml from ZIP: %v", err)
+		return nil, fmt.Errorf("failed to read version.yaml from ZIP: %w", err)
 	}
 
 	// Parse the version metadata
@@ -351,29 +352,34 @@ func validateSdkZipFile(sdkZipPath string) (*metaproj.MetaplayVersionMetadata, e
 	return versionMetadata, nil
 }
 
-// Extract the MetaplaySDK/ directory from the release zip into the target
-// project directory. The MetaplaySamples/ is ignored.
-func extractSdkFromZip(targetDir string, sdkZipPath string) error {
+// Extract only the MetaplaySDK/ directory from the release zip into the target
+// project directory. Directories listed in excludedDirs are skipped.
+func extractSdkFromZip(targetDir string, sdkZipPath string, excludedDirs []string) error {
 	// Open the zip archive
 	reader, err := zip.OpenReader(sdkZipPath)
 	if err != nil {
-		return fmt.Errorf("failed to open ZIP archive: %v", err)
+		return fmt.Errorf("failed to open ZIP archive: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	log.Debug().Msgf("Extracting SDK to: %s", targetDir)
 
-	// Check that MetaplaySDK/ doesn't exist in target
-	metaplaySdkPath := filepath.Join(targetDir, "MetaplaySDK")
-	if _, err := os.Stat(metaplaySdkPath); err == nil {
-		// \todo enable check later -- just override files for now
-		// return fmt.Errorf("MetaplaySDK directory already exists in target: %s", metaplaySdkPath)
-	}
+	// \todo enable check later -- just override files for now: refuse to extract if
+	// MetaplaySDK/ already exists in the target directory.
+	// metaplaySdkPath := filepath.Join(targetDir, "MetaplaySDK")
+	// if _, err := os.Stat(metaplaySdkPath); err == nil {
+	// 	return fmt.Errorf("MetaplaySDK directory already exists in target: %s", metaplaySdkPath)
+	// }
 
 	// Extract only files from MetaplaySDK directory
 	for _, file := range reader.File {
 		// Only process files that are within the MetaplaySDK directory
 		if !strings.HasPrefix(file.Name, "MetaplaySDK/") {
+			continue
+		}
+
+		// Skip excluded directories
+		if isSdkPathInDirs(file.Name, excludedDirs) {
 			continue
 		}
 
@@ -383,35 +389,35 @@ func extractSdkFromZip(targetDir string, sdkZipPath string) error {
 		if file.FileInfo().IsDir() {
 			// Create directory
 			if err := os.MkdirAll(targetPath, 0755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %v", targetPath, err)
+				return fmt.Errorf("failed to create directory %s: %w", targetPath, err)
 			}
 			continue
 		}
 
 		// Create parent directories if they don't exist
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-			return fmt.Errorf("failed to create parent directory for %s: %v", targetPath, err)
+			return fmt.Errorf("failed to create parent directory for %s: %w", targetPath, err)
 		}
 
 		// Create the file
 		outFile, err := os.Create(targetPath)
 		if err != nil {
-			return fmt.Errorf("failed to create file %s: %v", targetPath, err)
+			return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 		}
 
 		// Open the zip file
 		rc, err := file.Open()
 		if err != nil {
-			outFile.Close()
-			return fmt.Errorf("failed to open zip file %s: %v", file.Name, err)
+			_ = outFile.Close()
+			return fmt.Errorf("failed to open zip file %s: %w", file.Name, err)
 		}
 
 		// Copy the contents
 		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+		_ = rc.Close()
+		_ = outFile.Close()
 		if err != nil {
-			return fmt.Errorf("failed to write file %s: %v", targetPath, err)
+			return fmt.Errorf("failed to write file %s: %w", targetPath, err)
 		}
 	}
 
@@ -446,7 +452,7 @@ func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplatePr
 		// Resolve destination path (fill in templates)
 		fileDstPath, err := applyReplacements(filepath.Join(dstRoot, file.Path), replacements)
 		if err != nil {
-			return fmt.Errorf("failed to apply replacements to file path %s: %v", file.Path, err)
+			return fmt.Errorf("failed to apply replacements to file path %s: %w", file.Path, err)
 		}
 
 		// Unity .meta files are skipped on conflict to preserve existing GUIDs
@@ -456,7 +462,7 @@ func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplatePr
 		if file.Text != "" {
 			content, err := applyReplacements(file.Text, replacements)
 			if err != nil {
-				return fmt.Errorf("failed to apply replacements to file content %s: %v", file.Path, err)
+				return fmt.Errorf("failed to apply replacements to file content %s: %w", file.Path, err)
 			}
 			if isMetaFile {
 				plan.AddSkipExisting(fileDstPath, []byte(content), 0644)
@@ -466,7 +472,7 @@ func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplatePr
 		} else if file.Bytes != "" {
 			bytes, err := base64.StdEncoding.DecodeString(file.Bytes)
 			if err != nil {
-				return fmt.Errorf("failed to decode base64 string for file %s: %v", fileDstPath, err)
+				return fmt.Errorf("failed to decode base64 string for file %s: %w", fileDstPath, err)
 			}
 			if isMetaFile {
 				plan.AddSkipExisting(fileDstPath, bytes, 0644)
@@ -482,7 +488,7 @@ func processTemplateFiles(plan *filesetwriter.Plan, template installerTemplatePr
 // buildTemplateReplacements constructs the replacement map from a project config and
 // extra replacements. Used by both collectFromTemplate and collectFromTemplateInZip.
 func buildTemplateReplacements(config *metaproj.ProjectConfig, extraReplacements map[string]string) map[string]string {
-	unityProjectDir := config.UnityProjectDir
+	unityProjectDir := config.UnityProjectDir //nolint:staticcheck // Project init is the remaining legitimate use.
 	if unityProjectDir == "." {
 		unityProjectDir = ""
 	} else if unityProjectDir != "" && !strings.HasSuffix(unityProjectDir, "/") {
@@ -514,19 +520,19 @@ func collectFromTemplate(plan *filesetwriter.Plan, project *metaproj.MetaplayPro
 	// Resolve path to installer template file
 	templatePath := filepath.Join(project.GetSdkRootDir(), "Installer", templateFileName)
 	if _, err := os.Stat(templatePath); err != nil {
-		return fmt.Errorf("unable to find template file at %s: %v", templatePath, err)
+		return fmt.Errorf("unable to find template file at %s: %w", templatePath, err)
 	}
 
 	// Read the template file
 	templateJSON, err := os.ReadFile(templatePath)
 	if err != nil {
-		return fmt.Errorf("failed to read template file: %v", err)
+		return fmt.Errorf("failed to read template file: %w", err)
 	}
 
 	// Parse the template
 	var template installerTemplateProject
 	if err := json.Unmarshal(templateJSON, &template); err != nil {
-		return fmt.Errorf("failed to parse template file: %v", err)
+		return fmt.Errorf("failed to parse template file: %w", err)
 	}
 
 	if template.Version != 1 {
@@ -549,9 +555,9 @@ func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, template
 	// Open the zip archive.
 	reader, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return fmt.Errorf("failed to open zip archive: %v", err)
+		return fmt.Errorf("failed to open zip archive: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Find the template file inside the zip.
 	entryName := "MetaplaySDK/Installer/" + templateFileName
@@ -569,19 +575,19 @@ func collectFromTemplateInZip(plan *filesetwriter.Plan, zipPath string, template
 	// Read the template JSON from the zip.
 	rc, err := templateFile.Open()
 	if err != nil {
-		return fmt.Errorf("failed to open template file in zip: %v", err)
+		return fmt.Errorf("failed to open template file in zip: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	templateJSON, err := io.ReadAll(rc)
 	if err != nil {
-		return fmt.Errorf("failed to read template file from zip: %v", err)
+		return fmt.Errorf("failed to read template file from zip: %w", err)
 	}
 
 	// Parse the template.
 	var template installerTemplateProject
 	if err := json.Unmarshal(templateJSON, &template); err != nil {
-		return fmt.Errorf("failed to parse template file: %v", err)
+		return fmt.Errorf("failed to parse template file: %w", err)
 	}
 
 	if template.Version != 1 {
@@ -630,4 +636,3 @@ func computeManifestUpdate(project *metaproj.MetaplayProject) (string, []byte, e
 	log.Debug().Msgf("Successfully computed manifest.json update: \"%s\" from \"%s\"", packageName, clientRef)
 	return manifestPath, updatedManifest, nil
 }
-

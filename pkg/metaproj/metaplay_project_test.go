@@ -5,10 +5,15 @@
 package metaproj
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/go-version"
+	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"gopkg.in/yaml.v3"
 )
@@ -68,12 +73,14 @@ func TestRenderProjectConfigYAML(t *testing.T) {
 		name            string
 		environments    []portalapi.EnvironmentInfo
 		customDashboard string
+		unityProjectDir string
 		expected        string
 	}{
 		{
 			name:            "empty environments produces null, not empty list",
 			environments:    []portalapi.EnvironmentInfo{},
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -108,6 +115,7 @@ environments:
 			name:            "nil environments produces null, not empty list",
 			environments:    nil,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -142,6 +150,7 @@ environments:
 			name:            "single environment with correct indentation",
 			environments:    singleEnv,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -180,6 +189,7 @@ environments:
 			name:            "multiple environments with correct indentation",
 			environments:    multipleEnvs,
 			customDashboard: "",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -226,6 +236,7 @@ environments:
 			name:            "custom dashboard enabled",
 			environments:    []portalapi.EnvironmentInfo{},
 			customDashboard: "CustomDashboard",
+			unityProjectDir: "Unity",
 			expected: `# Configure schema to use.
 # yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
 $schema: "MetaplaySDK/projectConfigSchema.json"
@@ -256,13 +267,47 @@ features:
 environments:
 `,
 		},
+		{
+			name:            "empty unity project dir omits the field",
+			environments:    []portalapi.EnvironmentInfo{},
+			customDashboard: "",
+			unityProjectDir: "",
+			expected: `# Configure schema to use.
+# yaml-language-server: $schema=MetaplaySDK/projectConfigSchema.json
+$schema: "MetaplaySDK/projectConfigSchema.json"
+
+# Configure project.
+projectID: test-project
+buildRootDir: .
+sdkRootDir: MetaplaySDK
+backendDir: Backend
+sharedCodeDir: SharedCode
+
+# Specify .NET runtime version to build project for, only '<major>.<minor>'.
+dotnetRuntimeVersion: "8.0"
+
+# Specify Helm chart versions to use for server and bot deployments.
+serverChartVersion: 1.0.0
+botClientChartVersion: 1.0.0
+
+# Customize Metaplay features used in the game.
+features:
+  # Configure LiveOps Dashboard.
+  dashboard:
+    useCustom: false
+    rootDir: 
+
+# Project environments.
+environments:
+`,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			yamlContent, config, err := RenderProjectConfigYAML(
 				sdkMetadata,
-				"Unity",
+				tc.unityProjectDir,
 				"MetaplaySDK",
 				"SharedCode",
 				"Backend",
@@ -280,6 +325,47 @@ environments:
 
 			if yamlContent != tc.expected {
 				t.Errorf("Output mismatch.\nExpected:\n%s\nGot:\n%s", tc.expected, yamlContent)
+			}
+			if config.UnityProjectDir != tc.unityProjectDir {
+				t.Errorf("unityProjectDir: got %q, want %q", config.UnityProjectDir, tc.unityProjectDir)
+			}
+		})
+	}
+}
+
+// User-provided paths and names must parse back unchanged, including characters that YAML
+// reads as null, comments, anchors or collections, or that HTML escaping would mangle.
+func TestRenderProjectConfigYAML_RoundTripsSpecialCharacters(t *testing.T) {
+	values := []string{".", "Unity", "null", "~", "yes", "#Unity", "Unity #2", "[Unity]", "&Unity", "Tom's Game", "R&D+1", "<Unity>"}
+	for _, value := range values {
+		t.Run(value, func(t *testing.T) {
+			envs := []portalapi.EnvironmentInfo{{Name: value, HumanID: "lovely-wombats-build-nimbly", Type: portalapi.EnvironmentTypeDevelopment, StackDomain: "dev.example.com"}}
+			sharedCodeDir := value + "/Assets/SharedCode"
+			yamlContent, config, err := RenderProjectConfigYAML(createTestSdkMetadata(), value, value+"/MetaplaySDK", sharedCodeDir, value+"/Backend", value+"/Dashboard", createTestProjectInfo("test-project"), envs)
+			if err != nil {
+				t.Fatalf("RenderProjectConfigYAML failed: %v", err)
+			}
+
+			got := map[string]string{
+				"unityProjectDir": config.UnityProjectDir,
+				"sdkRootDir":      config.SdkRootDir,
+				"sharedCodeDir":   config.SharedCodeDir,
+				"backendDir":      config.BackendDir,
+				"rootDir":         config.Features.Dashboard.RootDir,
+				"name":            config.Environments[0].Name,
+			}
+			want := map[string]string{
+				"unityProjectDir": value,
+				"sdkRootDir":      value + "/MetaplaySDK",
+				"sharedCodeDir":   sharedCodeDir,
+				"backendDir":      value + "/Backend",
+				"rootDir":         value + "/Dashboard",
+				"name":            value,
+			}
+			for field, wantValue := range want {
+				if got[field] != wantValue {
+					t.Errorf("%s: got %q, want %q\nFull YAML:\n%s", field, got[field], wantValue, yamlContent)
+				}
 			}
 		})
 	}
@@ -628,5 +714,105 @@ integrationTests:
 			}
 			tc.validate(t, &config)
 		})
+	}
+}
+
+// The authProviders key identifies a provider, but the map value cannot see it.
+// Stamping it on load lets an error raised in pkg/auth name the argument that
+// resolves back to this provider.
+func TestApplyProjectConfigDefaults_StampsAuthProviderKeys(t *testing.T) {
+	config := &ProjectConfig{
+		AuthProviders: map[string]*auth.AuthProviderConfig{
+			"corp": {Name: "Corp SSO", ClientID: "corp-client"},
+			"alt":  {Name: "Corp SSO", ClientID: "alt-client"},
+		},
+	}
+
+	if err := ApplyProjectConfigDefaults(config); err != nil {
+		t.Fatalf("ApplyProjectConfigDefaults returned an error: %v", err)
+	}
+
+	// Both share a display name, so only the key tells them apart.
+	if got := config.AuthProviders["corp"].LoginCommand(); got != "metaplay auth login corp" {
+		t.Errorf("LoginCommand() = %q, want it to name the key 'corp'", got)
+	}
+	if got := config.AuthProviders["alt"].LoginCommand(); got != "metaplay auth login alt" {
+		t.Errorf("LoginCommand() = %q, want it to name the key 'alt'", got)
+	}
+}
+
+// A nil map is the common case for a project that defines no providers of its own.
+func TestApplyProjectConfigDefaults_NoAuthProviders(t *testing.T) {
+	if err := ApplyProjectConfigDefaults(&ProjectConfig{}); err != nil {
+		t.Fatalf("ApplyProjectConfigDefaults returned an error: %v", err)
+	}
+}
+
+// unityProjectDir is optional, but a value that is given must still point to a directory.
+func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, dir := range []string{"sdk", "Backend", "Shared", "Unity"} {
+		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	testCases := []struct {
+		name            string
+		unityProjectDir string
+		wantErr         bool
+	}{
+		{name: "missing", unityProjectDir: "", wantErr: false},
+		{name: "valid", unityProjectDir: "Unity", wantErr: false},
+		{name: "nonexistent", unityProjectDir: "NoSuchDir", wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			config := &ProjectConfig{
+				ProjectHumanID:        "test-project",
+				BuildRootDir:          ".",
+				SdkRootDir:            "sdk",
+				BackendDir:            "Backend",
+				SharedCodeDir:         "Shared",
+				UnityProjectDir:       tc.unityProjectDir,
+				DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
+				ServerChartVersion:    "0.9.0",
+				BotClientChartVersion: "0.9.0",
+			}
+			err := ValidateProjectConfig(projectDir, config)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected an error for unityProjectDir %q", tc.unityProjectDir)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for unityProjectDir %q: %v", tc.unityProjectDir, err)
+			}
+		})
+	}
+}
+
+// A project whose SDK has not been installed yet must still load. The missing
+// SDK is reported when the metadata is needed, with a hint at the config.
+func TestSdkMetadata_MissingSdk(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	project, err := NewMetaplayProject(".", &ProjectConfig{SdkRootDir: "MetaplaySDK"})
+	if err != nil {
+		t.Fatalf("NewMetaplayProject returned an error: %v", err)
+	}
+
+	metadata, err := project.SdkMetadata()
+	if err == nil {
+		t.Fatalf("SdkMetadata() = %+v, want an error for the missing SDK", metadata)
+	}
+	if !errors.Is(err, ErrSdkNotFound) {
+		t.Errorf("SdkMetadata() error = %v, want it to wrap ErrSdkNotFound", err)
+	}
+	cliErr, ok := errors.AsType[*clierrors.CLIError](err)
+	if !ok {
+		t.Fatalf("SdkMetadata() error = %T, want *CLIError", err)
+	}
+	if !strings.Contains(cliErr.Suggestion, "sdkRootDir") {
+		t.Errorf("Suggestion = %q, want it to mention 'sdkRootDir'", cliErr.Suggestion)
 	}
 }

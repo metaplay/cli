@@ -3,7 +3,7 @@ import argparse
 import re
 import subprocess
 import sys
-from typing import List, Tuple, Set
+from typing import List
 
 # Regex for tags like:
 #  - 1.6.2
@@ -52,47 +52,36 @@ def main(dry_run: bool = True):
         print("No tags found.")
         return
 
-    # 2) Filter to version-like tags and categorise
-    official_versions: Set[Tuple[int, int, int]] = set()
+    # 2) Filter to dev tags and group them by (major, minor, patch)
     dev_tags_by_version = {}  # (major, minor, patch) -> [tag, ...]
 
     for tag in tags:
         parsed = parse_tag(tag)
         if not parsed:
-            # Ignore any non-matching tags
             continue
         major, minor, patch, dev_num = parsed
-        ver_key = (major, minor, patch)
         if dev_num is None:
-            # Official release tag, e.g. 1.6.2
-            official_versions.add(ver_key)
-        else:
-            # Dev tag, e.g. 1.6.2-dev.10
-            dev_tags_by_version.setdefault(ver_key, []).append(tag)
+            continue
+        dev_tags_by_version.setdefault((major, minor, patch), []).append(tag)
 
-    if not official_versions:
-        print("No official release tags found (x.y.z). Nothing to do.")
+    if not dev_tags_by_version:
+        print("No dev tags found. Nothing to do.")
         return
 
-    # 3) Sort official releases and pick last two
-    sorted_official = sorted(official_versions)  # lexicographic (major, minor, patch)
-    latest_two = sorted_official[-2:] if len(sorted_official) >= 2 else sorted_official
+    # 3) Sort dev version lines and pick the latest two
+    sorted_dev_versions = sorted(dev_tags_by_version.keys())  # sorts numerically by (major, minor, patch)
+    latest_two = sorted_dev_versions[-2:]
 
-    latest_official = sorted_official[-1]
-
-    print("Official releases found (sorted):")
-    for v in sorted_official:
+    print("Dev version lines found (sorted):")
+    for v in sorted_dev_versions:
         print(f"  {v[0]}.{v[1]}.{v[2]}")
 
-    # 4) Determine dev tags to delete/keep
-    # Keep dev tags for: latest two official releases + any version newer than latest official
+    # 4) Keep dev tags for the two latest dev version lines; prune the rest.
     tags_to_delete: List[str] = []
     tags_to_keep: List[str] = []
     for ver_key, dev_tag_list in dev_tags_by_version.items():
         if ver_key in latest_two:
-            tags_to_keep.extend(dev_tag_list)  # Keep dev tags for latest two official releases
-        elif ver_key > latest_official:
-            tags_to_keep.extend(dev_tag_list)  # Keep dev tags for versions newer than latest official (in development)
+            tags_to_keep.extend(dev_tag_list)
         else:
             tags_to_delete.extend(dev_tag_list)
 
@@ -113,17 +102,30 @@ def main(dry_run: bool = True):
         print("\nDry-run mode: no tags have been deleted.")
         return
 
-    # 6) Delete tags locally and on remote
+    # 5) Delete tags locally and on remote
     for t in tags_to_delete:
         print(f"Deleting tag: {t}")
-        run_git(["tag", "-d", t])
-        run_git(["push", "--delete", "origin", t])
+        local = subprocess.run(["git", "tag", "-d", t], capture_output=True, text=True)
+        if local.returncode != 0:
+            if "not found" in local.stderr.lower():
+                print("  (local tag already gone)")
+            else:
+                print(f"  local delete failed: {local.stderr.strip()}", file=sys.stderr)
+                sys.exit(local.returncode)
+
+        remote = subprocess.run(["git", "push", "--delete", "origin", t], capture_output=True, text=True)
+        if remote.returncode != 0:
+            if "remote ref does not exist" in remote.stderr.lower():
+                print("  (remote tag already gone)")
+            else:
+                print(f"  remote delete failed: {remote.stderr.strip()}", file=sys.stderr)
+                sys.exit(remote.returncode)
 
     print("\nDone. Deleted old dev tags (local and origin).")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Prune old -dev git tags, keeping dev tags only for the two latest official releases.",
+        description="Prune old -dev git tags, keeping dev tags only for the two latest dev version lines.",
     )
     parser.add_argument(
         "--dry-run",

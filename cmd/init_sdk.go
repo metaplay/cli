@@ -88,8 +88,11 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 	targetSdkDirAbs := abs
 	parentDir := filepath.Dir(targetSdkDirAbs)
 
-	// Ensure the user is logged in (Metaplay auth provider).
-	authProvider := auth.NewMetaplayAuthProvider()
+	// Ensure the user is logged in (default auth provider).
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err
@@ -111,7 +114,7 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Ensure that the SDK version is valid and supported.
-	_, err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
+	err = parseAndValidateSdkVersion(sdkVersionInfo.Version)
 	if err != nil {
 		return err
 	}
@@ -178,7 +181,7 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 
 	// Download and extract the SDK.
 	// Pass the parent directory since the extractor creates MetaplaySDK/ within it
-	if _, err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo); err != nil {
+	if err := downloadAndExtractSdk(tokenSet, parentDir, sdkVersionInfo, nil); err != nil {
 		return err
 	}
 

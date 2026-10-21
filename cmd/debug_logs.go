@@ -277,7 +277,7 @@ func readPodLogs(ctx context.Context, source *podLogSource, cutoffTime *time.Tim
 		log.Error().Msgf("Failed to open stream for pod %s: %v", source.prefix, err)
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Kubernetes logs with 'Timestamps: true' are of the format "<timestamp> <message>",
 	// for example: "2024-12-23T15:04:05.999999999Z some log text".

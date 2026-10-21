@@ -6,7 +6,9 @@ package envapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,8 +22,17 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/rs/zerolog/log"
+)
+
+// The labels a Metaplay server image carries about itself.
+const (
+	labelProjectID   = "io.metaplay.project_id"
+	labelSdkVersion  = "io.metaplay.sdk_version"
+	labelCommitID    = "io.metaplay.commit_id"
+	labelBuildNumber = "io.metaplay.build_number"
 )
 
 // Metadata about a Metaplay docker image.
@@ -41,24 +52,24 @@ type MetaplayImageInfo struct {
 
 func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string, createdTime time.Time, os string, architecture string) (*MetaplayImageInfo, error) {
 	// Extract required labels for a valid Metaplay server image.
-	projectID, ok := labels["io.metaplay.project_id"]
+	projectID, ok := labels[labelProjectID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.project_id' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelProjectID, imageID, repoTag)
 	}
 
-	sdkVersion, ok := labels["io.metaplay.sdk_version"]
+	sdkVersion, ok := labels[labelSdkVersion]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.sdk_version' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelSdkVersion, imageID, repoTag)
 	}
 
-	commitID, ok := labels["io.metaplay.commit_id"]
+	commitID, ok := labels[labelCommitID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.commit_id' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelCommitID, imageID, repoTag)
 	}
 
-	buildNumber, ok := labels["io.metaplay.build_number"]
+	buildNumber, ok := labels[labelBuildNumber]
 	if !ok {
-		return nil, fmt.Errorf("missing required label 'io.metaplay.build_number' in image %s (tag %s)", imageID, repoTag)
+		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelBuildNumber, imageID, repoTag)
 	}
 
 	// Create and return the MetaplayImageInfo
@@ -97,7 +108,7 @@ func NewDockerClient() (*client.Client, error) {
 	// If connection failed, decide if we should try a fallback.
 	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" {
 		log.Debug().Msg("Docker connection with default settings failed, trying Docker Desktop socket path as a fallback...")
-		dockerClient.Close() // Close the failed client.
+		_ = dockerClient.Close() // Close the failed client.
 
 		homeDir, homeErr := os.UserHomeDir()
 		if homeErr != nil {
@@ -115,7 +126,7 @@ func NewDockerClient() (*client.Client, error) {
 		// Ping again to verify the fallback connection.
 		pingResponse, err = dockerClient.Ping(context.Background())
 		if err != nil {
-			dockerClient.Close()
+			_ = dockerClient.Close()
 			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
 				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
 		}
@@ -126,9 +137,10 @@ func NewDockerClient() (*client.Client, error) {
 
 	// For non-connection errors, or non-macOS systems, return the original error.
 	dockerSuggestion := "Start Docker Desktop"
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
-	} else if runtime.GOOS == "windows" {
+	case "windows":
 		dockerSuggestion = "Start Docker Desktop from the Start menu"
 	}
 	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
@@ -142,7 +154,7 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
-	defer dockerClient.Close()
+	defer func() { _ = dockerClient.Close() }()
 
 	// Parse the image reference string (e.g., "myimage:latest" or "image-id")
 	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
@@ -162,21 +174,102 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect)
 }
 
+// RemoteDockerImageDigests holds the two content digests that can identify a remote image. Which
+// one matches a local image's reported ID depends on the local Docker daemon's image store:
+// the legacy store reports the config digest as the image ID, while the containerd store reports
+// the manifest digest. Both are preserved across push/pull, so comparing a local ID against both
+// detects an identical already-pushed image regardless of the store backend.
+type RemoteDockerImageDigests struct {
+	ConfigDigest   string // Digest of the image config blob (the legacy image-store ID).
+	ManifestDigest string // Digest of the image manifest (the containerd image-store ID).
+}
+
+// FetchRemoteDockerImageDigests returns the config and manifest digests of the image at the given
+// reference in a remote Docker registry.
+//
+// The 'exists' return value is false (with a nil error) when no image exists at the reference.
+func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (digests *RemoteDockerImageDigests, exists bool, err error) {
+	log.Debug().Msgf("Fetch digests of remote container image: %s", imageRef)
+	if imageRef == "" {
+		return nil, false, fmt.Errorf("empty image reference")
+	}
+
+	// Create a registry authenticator using the provided credentials.
+	authenticator := authn.FromConfig(authn.AuthConfig{
+		Username: creds.Username,
+		Password: creds.Password,
+	})
+
+	// Parse the image reference (name + tag or digest).
+	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
+	}
+
+	// Fetch the image descriptor. A 'not found' response means the tag is free.
+	desc, err := remote.Get(ref, remote.WithAuth(authenticator))
+	if err != nil {
+		if isRemoteImageNotFound(err) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to query remote docker image '%s': %w", imageRef, err)
+	}
+
+	// Resolve the image and read its config digest. The descriptor digest is the manifest digest.
+	img, err := desc.Image()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get remote docker image from descriptor '%s': %w", imageRef, err)
+	}
+	cfgName, err := img.ConfigName()
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get config digest for remote docker image '%s': %w", imageRef, err)
+	}
+
+	return &RemoteDockerImageDigests{
+		ConfigDigest:   cfgName.String(),
+		ManifestDigest: desc.Digest.String(),
+	}, true, nil
+}
+
+// isRemoteImageNotFound reports whether err from a remote registry query indicates that no image
+// exists at the requested reference (as opposed to a transport/auth/other failure).
+func isRemoteImageNotFound(err error) bool {
+	if transportErr, ok := errors.AsType[*transport.Error](err); ok {
+		for _, code := range transportErr.Errors {
+			if code.Code == transport.ManifestUnknownErrorCode || code.Code == transport.NameUnknownErrorCode {
+				return true
+			}
+		}
+		if transportErr.StatusCode == http.StatusNotFound {
+			return true
+		}
+	}
+	return false
+}
+
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
+//
+// creds is nil for a registry the caller holds no credential for, which is read
+// anonymously. EnvironmentImageRepository.FetchImageMetadata answers which it is.
 func FetchRemoteDockerImageMetadata(creds *DockerCredentials, imageRef string) (*MetaplayImageInfo, error) {
 	log.Debug().Msgf("Fetch image metadata for a remote container image: %s", imageRef)
 	if imageRef == "" {
 		return nil, fmt.Errorf("empty image reference")
 	}
 
-	// Create a registry authenticator using the provided credentials
-	authenticator := authn.FromConfig(authn.AuthConfig{
-		Username: creds.Username,
-		Password: creds.Password,
-	})
+	// Create a registry authenticator using the provided credentials, if any.
+	authenticator := authn.Anonymous
+	var parseOptions []name.Option
+	if creds != nil {
+		authenticator = authn.FromConfig(authn.AuthConfig{
+			Username: creds.Username,
+			Password: creds.Password,
+		})
+		parseOptions = append(parseOptions, name.WithDefaultRegistry(creds.RegistryURL))
+	}
 
 	// Parse the image reference (name + tag or digest)
-	ref, err := name.ParseReference(imageRef, name.WithDefaultRegistry(creds.RegistryURL))
+	ref, err := name.ParseReference(imageRef, parseOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse remote docker image reference '%s': %w", imageRef, err)
 	}
@@ -254,11 +347,11 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
-	defer dockerClient.Close()
+	defer func() { _ = dockerClient.Close() }()
 
 	// Create filter for the project ID label
 	filterArgs := filters.NewArgs()
-	filterArgs.Add("label", fmt.Sprintf("io.metaplay.project_id=%s", projectID))
+	filterArgs.Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID))
 
 	// List all images from the local Docker daemon with the filter
 	images, err := dockerClient.ImageList(context.Background(), image.ListOptions{

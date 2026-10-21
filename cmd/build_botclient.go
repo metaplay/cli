@@ -55,6 +55,8 @@ func (o *buildBotClientOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+
 	// Load project config.
 	project, err := resolveProject()
 	if err != nil {
@@ -65,8 +67,13 @@ func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderTitle("Build Bot Client Locally"))
 	log.Info().Msg("")
 
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for .NET SDK installation and required version (based on SDK version).
-	if err := checkDotnetSdkVersion(project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, sdkMetadata.MinDotnetSdkVersion); err != nil {
 		return clierrors.Wrap(err, "Failed to verify .NET SDK version").
 			WithSuggestion("Install the required .NET SDK version")
 	}
@@ -75,7 +82,7 @@ func (o *buildBotClientOpts) Run(cmd *cobra.Command) error {
 	botClientPath := project.GetBotClientDir()
 
 	// Build the project
-	if err := execChildTask(botClientPath, "dotnet", []string{"build"}); err != nil {
+	if err := execChildTask(ctx, botClientPath, "dotnet", []string{"build"}); err != nil {
 		return clierrors.Wrap(err, "Failed to build BotClient .NET project").
 			WithSuggestion("Check the build output above for details")
 	}

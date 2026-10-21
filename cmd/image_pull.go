@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -37,7 +36,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgument(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgument(&o.argImageTag, "TAG", "Docker image tag to pull, eg, '364cff09'.")
+	args.AddStringArgument(&o.argImageTag, "TAG", "Docker image tag to pull, eg, '20260601-153000-1a27c25'.")
 
 	cmd := &cobra.Command{
 		Use:   "pull ENVIRONMENT TAG",
@@ -53,8 +52,8 @@ func init() {
 			- After pulling, the image can be used locally or potentially deployed elsewhere.
 		`),
 		Example: renderExample(`
-			# Pull the docker image with tag '1a27c25753' from environment 'lovely-wombats-build-nimbly'.
-			metaplay image pull lovely-wombats-build-nimbly 1a27c25753
+			# Pull the docker image with tag '20260601-153000-1a27c25' from environment 'lovely-wombats-build-nimbly'.
+			metaplay image pull lovely-wombats-build-nimbly 20260601-153000-1a27c25
 		`),
 	}
 	imageCmd.AddCommand(cmd)
@@ -65,7 +64,7 @@ func (o *imagePullOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.argImageTag == "" || strings.Contains(o.argImageTag, ":") {
 		return clierrors.NewUsageErrorf("Invalid TAG '%s'", o.argImageTag).
 			WithDetails("Tag must be a valid docker tag (cannot be empty or contain ':')").
-			WithSuggestion("Use just the tag, for example 'metaplay image pull lovely-wombats-build-nimbly 364cff09'")
+			WithSuggestion("Use just the tag, for example 'metaplay image pull lovely-wombats-build-nimbly 20260601-153000-1a27c25'")
 	}
 	return nil
 }
@@ -94,28 +93,21 @@ func (o *imagePullOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Get environment details.
-	envDetails, err := targetEnv.GetDetails()
+	// Resolve where the environment's images live, and a credential for them.
+	imageRepository, err := targetEnv.ResolveImageRepository()
 	if err != nil {
 		return err
 	}
-
-	// Get docker credentials.
-	dockerCredentials, err := targetEnv.GetDockerCredentials(envDetails)
-	if err != nil {
-		return err
-	}
-	log.Debug().Msgf("Got docker credentials: username=%s", dockerCredentials.Username)
 
 	// Construct the full remote image name
-	remoteImageName := fmt.Sprintf("%s:%s", envDetails.Deployment.EcrRepo, o.argImageTag)
+	remoteImageName := imageRepository.Reference(o.argImageTag)
 
 	// Use task runner to pull the image.
 	taskRunner := tui.NewTaskRunner()
 
 	// Pull the image from the remote repository.
 	taskRunner.AddTask("Pull docker image from environment repository", func(output *tui.TaskOutput) error {
-		return pullDockerImage(cmd.Context(), output, remoteImageName, dockerCredentials)
+		return pullDockerImage(cmd.Context(), output, remoteImageName, imageRepository.Credentials)
 	})
 
 	// Run the tasks.
@@ -164,7 +156,7 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 		return clierrors.Wrap(err, "Failed to pull docker image").
 			WithSuggestion("Make sure Docker Desktop is running")
 	}
-	defer pullResponseReader.Close()
+	defer func() { _ = pullResponseReader.Close() }()
 
 	// Follow pull progress
 	decoder := json.NewDecoder(pullResponseReader)
@@ -209,4 +201,3 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 
 	return nil
 }
-

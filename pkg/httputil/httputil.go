@@ -5,6 +5,7 @@
 package httputil
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -66,8 +67,15 @@ func GetBytesWithRetry(url string) ([]byte, error) {
 // PostFormWithRetry performs a form-encoded POST to the specified URL without authentication.
 // Returns the response body as bytes and the HTTP status code. Includes retry logic for transient errors.
 func PostFormWithRetry(url string, formData string) ([]byte, int, error) {
+	return PostFormWithRetryContext(context.Background(), url, formData)
+}
+
+// PostFormWithRetryContext is PostFormWithRetry, giving up, retries and all,
+// once ctx is done.
+func PostFormWithRetryContext(ctx context.Context, url string, formData string) ([]byte, int, error) {
 	client := NewRetryClient()
 	resp, err := client.R().
+		SetContext(ctx).
 		SetHeader("Content-Type", "application/x-www-form-urlencoded").
 		SetBody(formData).
 		Post(url)

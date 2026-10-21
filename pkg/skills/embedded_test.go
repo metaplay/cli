@@ -1,0 +1,155 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package skills
+
+import (
+	"errors"
+	"testing"
+)
+
+// These tests verify that the skill payload bundled with this package
+// loads cleanly and meets the constraints AI coding harnesses impose
+// (e.g. description length). The engine itself is tested separately against
+// synthetic fstest.MapFS data in skill_test.go.
+
+func TestEmbedded_LoadsBundledSkills(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(loaded) != 4 {
+		t.Fatalf("expected 4 skills, got %d", len(loaded))
+	}
+	wantIDs := []string{"metaplay-develop", "metaplay-devops", "metaplay-docs", "metaplay-troubleshoot"}
+	for i, want := range wantIDs {
+		if loaded[i].ID != want {
+			t.Errorf("skill[%d].ID = %q, want %q", i, loaded[i].ID, want)
+		}
+		if loaded[i].Frontmatter.Name() != want {
+			t.Errorf("skill[%d].Frontmatter.Name() = %q, want %q", i, loaded[i].Frontmatter.Name(), want)
+		}
+	}
+}
+
+func TestEmbedded_SubSkillsLoaded(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	develop := FindByID(loaded, "metaplay-develop")
+	if develop == nil {
+		t.Fatal("metaplay-develop not found")
+	}
+	wantDevelopSubSkills := map[string]bool{
+		"main":              true,
+		"code-review":       true,
+		"game-logic":        true,
+		"incident-analysis": true,
+		"update-sdk":        true,
+		"local-development": true,
+		"init-project":      true,
+		"init-dashboard":    true,
+	}
+	for subSkillID := range wantDevelopSubSkills {
+		if _, ok := develop.SubSkills[subSkillID]; !ok {
+			t.Errorf("metaplay-develop missing sub-skill %q", subSkillID)
+		}
+	}
+	if len(develop.SubSkills) != len(wantDevelopSubSkills) {
+		t.Errorf("metaplay-develop sub-skill count = %d, want %d (%v)", len(develop.SubSkills), len(wantDevelopSubSkills), develop.SubSkills)
+	}
+
+	devops := FindByID(loaded, "metaplay-devops")
+	if devops == nil {
+		t.Fatal("metaplay-devops not found")
+	}
+	wantDevopsSubSkills := map[string]bool{
+		"main":             true,
+		"deploy-server":    true,
+		"diagnose-server":  true,
+		"view-logs":        true,
+		"cpu-profiling":    true,
+		"memory-profiling": true,
+		"secrets":          true,
+	}
+	for subSkillID := range wantDevopsSubSkills {
+		if _, ok := devops.SubSkills[subSkillID]; !ok {
+			t.Errorf("metaplay-devops missing sub-skill %q", subSkillID)
+		}
+	}
+	if len(devops.SubSkills) != len(wantDevopsSubSkills) {
+		t.Errorf("metaplay-devops sub-skill count = %d, want %d (%v)", len(devops.SubSkills), len(wantDevopsSubSkills), devops.SubSkills)
+	}
+
+	docs := FindByID(loaded, "metaplay-docs")
+	if docs == nil {
+		t.Fatal("metaplay-docs not found")
+	}
+	if _, ok := docs.SubSkills["main"]; !ok {
+		t.Errorf("metaplay-docs missing sub-skill \"main\"")
+	}
+}
+
+func TestEmbedded_ResolveSkillRoot(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	got, err := Resolve(loaded, "metaplay-docs")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(got) == 0 {
+		t.Errorf("empty content")
+	}
+}
+
+func TestEmbedded_ResolveSubSkill(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	got, err := Resolve(loaded, "metaplay-develop-code-review")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(got) == 0 {
+		t.Errorf("empty content")
+	}
+}
+
+func TestEmbedded_ResolveUnknownSkill(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	_, err := Resolve(loaded, "nonexistent")
+	if !errors.Is(err, ErrSkillNotFound) {
+		t.Errorf("expected ErrSkillNotFound, got %v", err)
+	}
+}
+
+func TestEmbedded_ResolveUnknownSubSkill(t *testing.T) {
+	loaded, _ := LoadAll(EmbeddedFS())
+	_, err := Resolve(loaded, "metaplay-develop-nonexistent")
+	if !errors.Is(err, ErrSubSkillNotFound) {
+		t.Errorf("expected ErrSubSkillNotFound, got %v", err)
+	}
+}
+
+func TestEmbedded_DescriptionUnderLimit(t *testing.T) {
+	loaded, err := LoadAll(EmbeddedFS())
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	for _, s := range loaded {
+		desc := s.Frontmatter.Description()
+		if len(desc) > MaxDescriptionLength {
+			t.Errorf("skill %q: description is %d chars, exceeds %d-char limit (Codex CLI rejects, Claude Code warns)",
+				s.ID, len(desc), MaxDescriptionLength)
+		}
+		for subSkillID, sub := range s.SubSkills {
+			if subSkillID == "main" {
+				continue
+			}
+			d := sub.Frontmatter.Description()
+			if len(d) > MaxDescriptionLength {
+				t.Errorf("sub-skill %s/%s: description is %d chars, exceeds %d-char limit (matters if ever promoted to a standalone skill)",
+					s.ID, subSkillID, len(d), MaxDescriptionLength)
+			}
+		}
+	}
+}

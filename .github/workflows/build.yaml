@@ -1,8 +1,16 @@
 name: Build CLI
 
+# 'pull_request' also gates PRs from forks: a fork's push lands on the fork, so a
+# bare 'push' trigger never runs them here. 'push' is narrowed to the long-lived
+# branches so PR branches don't build twice; for a branch with no PR yet, use
+# workflow_dispatch.
 on:
   workflow_dispatch:
+  pull_request:
   push:
+    branches:
+      - main
+      - dev
 
 run-name: Build from ${{ github.head_ref || github.ref_name }}
 
@@ -15,15 +23,20 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           show-progress: false # suppress the noisy progress status output
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26'
+          go-version: '1.27'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
 
       - name: Check go mod tidy
         run: |
@@ -40,3 +53,30 @@ jobs:
 
       - name: Run unit tests
         run: go test ./...
+
+  # The self-update path is Windows-specific: the binary swap, the ACL probe in
+  # internal/version/update_windows.go and the path handling in internal/pathutil/windows.go are
+  # all guarded by //go:build windows, so the Linux job above never compiles them.
+  test-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          show-progress: false # suppress the noisy progress status output
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+
+      - name: Run unit tests
+        run: go test ./...
+
+      # Report the self-update tests individually. Several of them need an ACL the runner may not
+      # be able to express, in which case they skip — and a skip is invisible without -v, so this
+      # job would look like it covered them when it did not.
+      - name: Report self-update test results
+        run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'
