@@ -25,6 +25,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -510,16 +511,16 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	return &awsCredentials, err
 }
 
-// newECRClient creates an authenticated ECR client for the environment.
-func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+// newAWSConfig creates an AWS config authenticated against the environment.
+func (target *TargetEnvironment) newAWSConfig(envDetails *DeploymentSecret) (aws.Config, error) {
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS credentials: %w", err)
+		return aws.Config{}, fmt.Errorf("failed to get AWS credentials: %w", err)
 	}
 
 	log.Debug().Msg("Create AWS config")
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+	return config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(envDetails.Deployment.AwsRegion),
 		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{
@@ -529,12 +530,94 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 			}, nil
 		})),
 	)
+}
+
+// newECRClient creates an authenticated ECR client for the environment.
+func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+	cfg, err := target.newAWSConfig(envDetails)
 	if err != nil {
 		return nil, err
 	}
 
 	log.Debug().Msg("Create ECR client")
 	return ecr.NewFromConfig(cfg), nil
+}
+
+// ErrNoStorageCredentials reports that the environment's stack issues no
+// credentials for the environment's buckets.
+var ErrNoStorageCredentials = errors.New("the environment's stack issues no credentials for its storage")
+
+// storageAccess is how to reach an environment's buckets over the S3 API, on
+// AWS S3 or on an S3-compatible service.
+type storageAccess struct {
+	// Endpoint is the URL of an S3-compatible service, or empty for AWS S3.
+	Endpoint string
+	// Region signs the requests.
+	Region string
+	// UsePathStyle addresses a bucket in the URL's path rather than its host
+	// name, as many S3-compatible services need.
+	UsePathStyle bool
+	Credentials  aws.CredentialsProvider
+}
+
+// NewS3Client creates an S3 client authenticated against the environment, for
+// its buckets. Returns ErrNoStorageCredentials for an environment whose stack
+// issues none.
+func (target *TargetEnvironment) NewS3Client(envDetails *DeploymentSecret) (*s3.Client, error) {
+	access, err := target.getStorageAccess(envDetails)
+	if err != nil {
+		return nil, err
+	}
+	return newS3Client(access)
+}
+
+// getStorageAccess asks the stack for access to the environment's buckets.
+// Stacks issue it only for buckets on AWS S3 for now, as the credentials of
+// the environment's gameserver-admin role, and answer 404 elsewhere.
+func (target *TargetEnvironment) getStorageAccess(envDetails *DeploymentSecret) (*storageAccess, error) {
+	if envDetails.Deployment.AwsRegion == "" {
+		return nil, ErrNoStorageCredentials
+	}
+	credentials, err := target.GetAWSCredentials()
+	if isHTTPNotFound(err) {
+		return nil, ErrNoStorageCredentials
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get storage credentials: %w", err)
+	}
+	return &storageAccess{
+		Region: envDetails.Deployment.AwsRegion,
+		Credentials: aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			return aws.Credentials{
+				AccessKeyID:     credentials.AccessKeyID,
+				SecretAccessKey: credentials.SecretAccessKey,
+				SessionToken:    credentials.SessionToken,
+			}, nil
+		}),
+	}, nil
+}
+
+// newS3Client creates an S3 client from the access to an environment's buckets.
+func newS3Client(access *storageAccess) (*s3.Client, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(access.Region),
+		config.WithCredentialsProvider(access.Credentials),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Debug().Msg("Create S3 client")
+	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if access.Endpoint != "" {
+			o.BaseEndpoint = aws.String(access.Endpoint)
+			o.UsePathStyle = access.UsePathStyle
+			// S3-compatible services do not all take the checksums AWS S3 does,
+			// so send and check them only where an operation requires them.
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		}
+	}), nil
 }
 
 // ecrDockerCredentials gets a docker login for ECR from its control plane, and

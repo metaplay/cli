@@ -34,6 +34,20 @@ type Deployment struct {
 	ServerPorts              []int  `json:"server_ports"`
 	ServerTLSCert            string `json:"server_tls_cert"`
 
+	// Where the environment hosts web clients: the URL they are served at, and
+	// the bucket and key prefix behind it. Only stacks that host web clients
+	// apart from the public CDN's root report these; elsewhere they are empty.
+	// The names are as proposed to the infra team, not yet served by any stack.
+	ClientS3Bucket string `json:"client_s3_bucket,omitempty"`
+	ClientS3Prefix string `json:"client_s3_prefix,omitempty"`
+	ClientURL      string `json:"client_url,omitempty"`
+
+	// How a web client reaches the game server, where the stack reports it:
+	// the WebSocket ports of ServerHostname, and the PublicWebApi's URL. Not
+	// yet served by any stack, under names as proposed to the infra team.
+	ServerWebSocketPorts []int  `json:"server_websocket_ports,omitempty"`
+	PublicWebApiURL      string `json:"public_web_api_url,omitempty"`
+
 	// Deprecated fields -- still included in the response but should not be used!
 	// MetaplayRequiredSdkVersion     string   `json:"metaplay_required_sdk_version"`
 	// MetaplaySupportedChartVersions []string `json:"metaplay_supported_chart_versions"`
