@@ -19,6 +19,7 @@ import (
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
 
@@ -69,7 +70,14 @@ type DockerCredentials struct {
 }
 
 func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
-	return NewTargetEnvironmentAtStackAPI(tokenSet, fmt.Sprintf("https://infra.%s/stackapi", stackDomain), humanID)
+	var stackApiBaseURL string
+	if common.StackApiBaseURLOverride != "" {
+		stackApiBaseURL = common.StackApiBaseURLOverride
+		log.Debug().Msgf("Using StackAPI base URL override %s (set via METAPLAYCLI_STACKAPI_BASEURL)", stackApiBaseURL)
+	} else {
+		stackApiBaseURL = fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	}
+	return NewTargetEnvironmentAtStackAPI(tokenSet, stackApiBaseURL, humanID)
 }
 
 // NewTargetEnvironmentAtStackAPI is NewTargetEnvironment for a caller that
