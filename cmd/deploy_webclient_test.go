@@ -103,8 +103,7 @@ func TestResolveWebClientTarget_AnEnvironmentWithNoCDNHasNowhere(t *testing.T) {
 }
 
 // The endpoints file says what the environment reports and nothing more: the
-// client fills in a field left out, so a guess written here would only hide
-// the client's own.
+// client uses its defaults for a field left out.
 func TestWebClientEndpoints_HoldsOnlyWhatTheEnvironmentReports(t *testing.T) {
 	data, err := webClientEndpoints(&envapi.Deployment{
 		ServerHostname: "nimbly.p1.metaplay.io",
@@ -114,6 +113,7 @@ func TestWebClientEndpoints_HoldsOnlyWhatTheEnvironmentReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{
+  "format": 1,
   "serverHost": "nimbly.p1.metaplay.io",
   "cdnBaseUrl": "https://nimbly-assets.p1.metaplay.io/"
 }`
@@ -132,6 +132,7 @@ func TestWebClientEndpoints_HoldsOnlyWhatTheEnvironmentReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	want = `{
+  "format": 1,
   "serverHost": "game.example.com",
   "serverPortForWebSocket": 9380,
   "enableTls": true,
@@ -143,9 +144,15 @@ func TestWebClientEndpoints_HoldsOnlyWhatTheEnvironmentReports(t *testing.T) {
 	}
 }
 
-func TestWebClientEndpoints_NoGameServerNoFile(t *testing.T) {
-	data, err := webClientEndpoints(&envapi.Deployment{CdnS3Fqdn: "nimbly-assets.p1.metaplay.io"})
-	if err != nil || data != nil {
-		t.Errorf("endpoints file = %q, %v; want none", data, err)
+// The client cannot connect without both, so there is no file to write.
+func TestWebClientEndpoints_NoGameServerOrCdnNoFile(t *testing.T) {
+	for name, deployment := range map[string]envapi.Deployment{
+		"no game server": {CdnS3Fqdn: "nimbly-assets.p1.metaplay.io"},
+		"no CDN":         {ServerHostname: "nimbly.p1.metaplay.io"},
+	} {
+		data, err := webClientEndpoints(&deployment)
+		if err != nil || data != nil {
+			t.Errorf("%s: endpoints file = %q, %v; want none", name, data, err)
+		}
 	}
 }

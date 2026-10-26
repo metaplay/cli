@@ -102,10 +102,11 @@ func init() {
 			- entryFiles: globs of the objects to upload last, in this order, such as
 			  index.html. A page loaded during a deploy then finds the objects these name.
 			- endpointsFile: name of a JSON file to write next to the web client, for the
-			  client to read at startup. It holds the game server's address and the CDN's,
-			  as far as the environment reports them: serverHost, serverPortForWebSocket,
-			  enableTls, cdnBaseUrl and publicWebApiUrl. A field the environment does not
-			  report is left out, and no file is written where it reports no game server.
+			  client to read at startup. It holds the file's format and the game server's
+			  and the CDN's addresses, as far as the environment reports them: format,
+			  serverHost, serverPortForWebSocket, enableTls, cdnBaseUrl and publicWebApiUrl.
+			  A field the environment does not report is left out, and no file is written
+			  where it reports no game server or CDN.
 			  The SDK's 'blazor' preset sets it to 'metaplay-endpoints.json', the name the
 			  SDK's client reads.
 
@@ -233,7 +234,7 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 		if endpoints != nil {
 			generated[config.EndpointsFile] = endpoints
 		} else {
-			log.Warn().Msgf("Not writing %s: the environment reports no game server address", config.EndpointsFile)
+			log.Warn().Msgf("Not writing %s: the environment reports no game server or CDN address", config.EndpointsFile)
 		}
 	}
 
@@ -312,30 +313,37 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 // reaches its game server and CDN. Its fields are those of the SDK's
 // ConnectionEndpointConfig.
 type webClientEndpointsFile struct {
+	Format                 int    `json:"format"`
 	ServerHost             string `json:"serverHost"`
 	ServerPortForWebSocket int    `json:"serverPortForWebSocket,omitempty"`
 	EnableTLS              *bool  `json:"enableTls,omitempty"`
-	CdnBaseURL             string `json:"cdnBaseUrl,omitempty"`
+	CdnBaseURL             string `json:"cdnBaseUrl"`
 	PublicWebAPIURL        string `json:"publicWebApiUrl,omitempty"`
 }
+
+// webClientEndpointsFormat is the endpoints file format the CLI writes. The
+// SDK's client reads only the format it knows, so change it only when older
+// clients would misread the file, not when the file gains optional fields.
+const webClientEndpointsFormat = 1
 
 // webClientEndpoints writes the endpoints file of a web client from what the
 // environment reports, and only that: a field it does not report is left out,
 // for the client to fill in itself. Nil where it reports no game server.
 func webClientEndpoints(deployment *envapi.Deployment) ([]byte, error) {
-	if deployment.ServerHostname == "" {
+	if deployment.ServerHostname == "" || deployment.CdnS3Fqdn == "" {
 		return nil, nil
 	}
-	endpoints := webClientEndpointsFile{ServerHost: deployment.ServerHostname}
+	endpoints := webClientEndpointsFile{
+		Format:     webClientEndpointsFormat,
+		ServerHost: deployment.ServerHostname,
+		CdnBaseURL: "https://" + deployment.CdnS3Fqdn + "/",
+	}
 	if len(deployment.ServerWebSocketPorts) > 0 {
 		endpoints.ServerPortForWebSocket = deployment.ServerWebSocketPorts[0]
 	}
 	if deployment.ServerTLSCert != "" {
 		enableTLS := true
 		endpoints.EnableTLS = &enableTLS
-	}
-	if deployment.CdnS3Fqdn != "" {
-		endpoints.CdnBaseURL = "https://" + deployment.CdnS3Fqdn + "/"
 	}
 	if deployment.PublicWebApiURL != "" {
 		endpoints.PublicWebAPIURL = strings.TrimSuffix(deployment.PublicWebApiURL, "/") + "/"
