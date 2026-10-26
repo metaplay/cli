@@ -176,11 +176,10 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Build the web client first")
 	}
 
-	// The project config was validated when loaded.
 	config, err := webClient.Resolve(project.RelativeDir, project.GetSdkRootDir())
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to apply the web client's preset").
-			WithSuggestion("Name one of the SDK's presets with 'preset', or point 'presetFile' at a file relative to metaplay-project.yaml")
+			WithSuggestion("Check the web client's 'preset' or 'presetFile' in metaplay-project.yaml")
 	}
 	opts, err := config.Options()
 	if err != nil {
@@ -214,8 +213,7 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	}
 	target, err := resolveWebClientTarget(&envDetails.Deployment, config.Prefix)
 	if errors.Is(err, errNoWebClientHosting) {
-		return clierrors.Newf("Environment '%s' has no public bucket and CDN to deploy to", envConfig.Name).
-			WithSuggestion("Deploy the web client to a main environment: edge environments have no CDN")
+		return clierrors.Newf("Environment '%s' has no public bucket and CDN to deploy to", envConfig.Name)
 	}
 	if err != nil {
 		return err

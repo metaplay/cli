@@ -25,11 +25,10 @@ const manifestFileName = ".metaplay-site.json"
 
 const manifestFormat = 1
 
-// Manifest records the objects deploys of a site have uploaded. A deploy
-// skips files it already uploaded identically, and only ever removes objects
-// a manifest names, so nothing else in the bucket can be touched. It is
-// public, next to the site, so that it also tells others, such as the
-// developer portal, that a site is deployed there and when.
+// Manifest records the objects deploys of a site have uploaded, so that a
+// deploy can skip files it already uploaded identically. It is public, next
+// to the site, so that it also tells others, such as the developer portal,
+// that a site is deployed there and when.
 type Manifest struct {
 	Format     int                       `json:"format"`
 	Name       string                    `json:"name"` // The web client's name in metaplay-project.yaml.
