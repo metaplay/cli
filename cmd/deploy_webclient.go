@@ -28,11 +28,11 @@ import (
 type deployWebClientOpts struct {
 	UsePositionalArgs
 
-	argEnvironment  string
-	argName         string
-	flagForce       bool
-	flagDryRun      bool
-	flagConcurrency int
+	argEnvironment    string
+	argName           string
+	flagResetManifest bool
+	flagDryRun        bool
+	flagConcurrency   int
 }
 
 func init() {
@@ -117,7 +117,9 @@ func init() {
 
 			A deploy uploads only the files that changed since the last deploy, and never
 			deletes files from the bucket. It records the files it uploaded in
-			'<prefix>.metaplay-site.json'.
+			'<prefix>.metaplay-site.json', and before skipping a file, checks that the bucket
+			still holds it as recorded. A file that an interrupted deploy, or a change made
+			outside a deploy, left different is uploaded again.
 
 			The bucket also holds the game server's files, so the command refuses to upload
 			under the names the game server uses, such as GameConfig/ and Volatile/.
@@ -141,7 +143,7 @@ func init() {
 	deployCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.BoolVar(&o.flagForce, "force", false, "Upload all files, ignoring what the last deploy uploaded")
+	flags.BoolVar(&o.flagResetManifest, "reset-manifest", false, "Ignore the last deploy's manifest: upload all files and start a new one")
 	flags.BoolVar(&o.flagDryRun, "dry-run", false, "Show what would be uploaded without uploading anything")
 	flags.IntVar(&o.flagConcurrency, "concurrency", 16, "Number of files to upload at once")
 }
@@ -217,11 +219,11 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	store := sitedeploy.NewS3Store(s3Client, target.Bucket)
 
 	var previous *sitedeploy.Manifest
-	if !o.flagForce {
+	if !o.flagResetManifest {
 		previous, err = sitedeploy.ReadManifest(cmd.Context(), store, prefix)
 		if err != nil {
 			return clierrors.Wrap(err, "Failed to read what the last deploy uploaded").
-				WithSuggestion("Use --force to upload all files and start a new manifest")
+				WithSuggestion("Use --reset-manifest to upload all files and start a new manifest")
 		}
 	}
 
@@ -241,6 +243,13 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	plan, err := sitedeploy.BuildPlan(siteDir, prefix, opts, generated, previous)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to plan the upload")
+	}
+	stale, err := sitedeploy.VerifyUnchanged(cmd.Context(), store, plan, previous, o.flagConcurrency)
+	if err != nil {
+		return clierrors.Wrap(err, "Failed to check the files the last deploy uploaded")
+	}
+	if stale > 0 {
+		log.Warn().Msgf("%d files in the bucket are not what the last deploy recorded, such as after an interrupted deploy: uploading them again", stale)
 	}
 
 	log.Info().Msg("Target environment:")

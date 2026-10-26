@@ -6,6 +6,7 @@ package sitedeploy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -442,16 +443,29 @@ func TestBuildPlan_GeneratedObjectsReplaceFilesOfTheirName(t *testing.T) {
 	}
 }
 
-// fakeStore records the order of uploads.
+// fakeStore records the order of uploads. Each upload gets a new tag, as an
+// object store's tag changes when an object is written.
 type fakeStore struct {
 	mu      sync.Mutex
 	objects map[string][]byte
 	headers map[string]PutRequest
+	tags    map[string]string
+	puts    int
 	order   []string
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{objects: map[string][]byte{}, headers: map[string]PutRequest{}}
+	return &fakeStore{objects: map[string][]byte{}, headers: map[string]PutRequest{}, tags: map[string]string{}}
+}
+
+func (s *fakeStore) Head(ctx context.Context, key string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tag, ok := s.tags[key]
+	if !ok {
+		return "", ErrNotFound
+	}
+	return tag, nil
 }
 
 func (s *fakeStore) Get(ctx context.Context, key string) ([]byte, error) {
@@ -464,18 +478,72 @@ func (s *fakeStore) Get(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-func (s *fakeStore) Put(ctx context.Context, req PutRequest) error {
+func (s *fakeStore) Put(ctx context.Context, req PutRequest) (string, error) {
 	data, err := io.ReadAll(req.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.puts++
+	tag := fmt.Sprintf("tag-%d", s.puts)
 	s.objects[req.Key] = data
+	s.tags[req.Key] = tag
 	req.Body = nil
 	s.headers[req.Key] = req
 	s.order = append(s.order, req.Key)
-	return nil
+	return tag, nil
+}
+
+// An interrupted deploy leaves objects in the bucket that the manifest does
+// not describe. Redeploying the previous version, the manifest says those are
+// unchanged, so they are checked against the bucket and uploaded again, as is
+// an object removed outside a deploy.
+func TestVerifyUnchanged_UploadsWhatTheBucketNoLongerHoldsAsRecorded(t *testing.T) {
+	store := newFakeStore()
+	siteDir := blazorSite(t)
+	first := blazorPlan(t, siteDir, "", nil)
+	if _, err := Deploy(context.Background(), store, "webclient", first, nil, time.Unix(1000, 0).UTC(), 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := ReadManifest(context.Background(), store, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := previous.Objects["app.css"].StoreTag; got == "" || got != store.tags["app.css"] {
+		t.Fatalf("manifest records app.css with tag %q, want the store's %q", got, store.tags["app.css"])
+	}
+
+	// The next deploy got as far as app.css before it was stopped, and
+	// art/den.webp was removed by hand.
+	if _, err := store.Put(context.Background(), PutRequest{Key: "app.css", Body: strings.NewReader("br:body{color:red}")}); err != nil {
+		t.Fatal(err)
+	}
+	delete(store.tags, "art/den.webp")
+
+	rollback := blazorPlan(t, siteDir, "", previous)
+	if rollback.UploadCount() != 0 {
+		t.Fatalf("plan of the same site uploads %d files before the check, want none", rollback.UploadCount())
+	}
+	stale, err := VerifyUnchanged(context.Background(), store, rollback, previous, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale != 2 || rollback.UploadCount() != 2 || objectByKey(t, rollback, "app.css").Unchanged || objectByKey(t, rollback, "art/den.webp").Unchanged {
+		t.Errorf("check found %d stale files, plan uploads %d; want app.css and art/den.webp", stale, rollback.UploadCount())
+	}
+
+	store.order = nil
+	manifest, err := Deploy(context.Background(), store, "webclient", rollback, previous, time.Unix(2000, 0).UTC(), 4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(store.objects["app.css"]); got != "br:body{}" {
+		t.Errorf("app.css after the rollback = %q, want the first deploy's bytes", got)
+	}
+	if manifest.Objects["app.css"].StoreTag != store.tags["app.css"] || manifest.Objects["index.html"].StoreTag != previous.Objects["index.html"].StoreTag {
+		t.Errorf("manifest tags = %+v, want the new upload's for app.css and the first deploy's for index.html", manifest.Objects)
+	}
 }
 
 func TestDeploy_UploadsInPlanOrderThenTheManifest(t *testing.T) {

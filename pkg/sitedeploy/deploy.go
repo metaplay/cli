@@ -45,6 +45,11 @@ type ManifestObject struct {
 	ContentEncoding string    `json:"contentEncoding,omitempty"`
 	CacheControl    string    `json:"cacheControl"`
 	DeployedAt      time.Time `json:"deployedAt"` // The last deploy whose site had the file.
+
+	// StoreTag is the store's tag for the bytes it holds, such as S3's ETag.
+	// It is only compared for equality, to check that the store still holds
+	// what the deploy uploaded.
+	StoreTag string `json:"storeTag"`
 }
 
 // ErrNotFound is what an ObjectStore returns for a key that has no object.
@@ -64,7 +69,12 @@ type PutRequest struct {
 // ObjectStore is the bucket a site is deployed to.
 type ObjectStore interface {
 	Get(ctx context.Context, key string) ([]byte, error)
-	Put(ctx context.Context, req PutRequest) error
+
+	// Head gives the store's tag for the object at key, or ErrNotFound.
+	Head(ctx context.Context, key string) (string, error)
+
+	// Put uploads an object and gives the store's tag for it.
+	Put(ctx context.Context, req PutRequest) (string, error)
 }
 
 // ReadManifest reads the manifest of the site at prefix, or nil where nothing
@@ -87,6 +97,40 @@ func ReadManifest(ctx context.Context, store ObjectStore, prefix string) (*Manif
 	return &manifest, nil
 }
 
+// VerifyUnchanged checks that the store still holds the objects the plan
+// skips as the previous deploy recorded them, and plans an upload for each
+// that it does not. An interrupted deploy leaves the manifest behind the
+// bucket, and so does a change made outside a deploy. It gives how many
+// objects it planned an upload for.
+func VerifyUnchanged(ctx context.Context, store ObjectStore, plan *Plan, previous *Manifest, concurrency int) (int, error) {
+	if previous == nil {
+		return 0, nil
+	}
+	var stale atomic.Int64
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(concurrency)
+	for i := range plan.Objects {
+		obj := &plan.Objects[i]
+		if !obj.Unchanged {
+			continue
+		}
+		recorded := previous.Objects[obj.Key].StoreTag
+		group.Go(func() error {
+			tag, err := store.Head(groupCtx, obj.Key)
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("failed to check %s: %w", obj.Key, err)
+			}
+			if err != nil || recorded == "" || tag != recorded {
+				obj.Unchanged = false
+				stale.Add(1)
+			}
+			return nil
+		})
+	}
+	err := group.Wait()
+	return int(stale.Load()), err
+}
+
 // Deploy uploads the plan's changed objects phase by phase, each phase
 // finished before the next starts, and then the manifest of the site called
 // name. onUploaded is called after each upload with how many of the plan's
@@ -94,6 +138,7 @@ func ReadManifest(ctx context.Context, store ObjectStore, prefix string) (*Manif
 func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, previous *Manifest, now time.Time, concurrency int, onUploaded func(done, total int)) (*Manifest, error) {
 	total := plan.UploadCount()
 	var done atomic.Int64
+	tags := make([]string, len(plan.Objects))
 
 	for start := 0; start < len(plan.Objects); {
 		end := start
@@ -103,14 +148,17 @@ func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, pre
 
 		group, groupCtx := errgroup.WithContext(ctx)
 		group.SetLimit(concurrency)
-		for _, obj := range plan.Objects[start:end] {
+		for i := start; i < end; i++ {
+			obj := plan.Objects[i]
 			if obj.Unchanged {
 				continue
 			}
 			group.Go(func() error {
-				if err := putFile(groupCtx, store, obj); err != nil {
+				tag, err := putFile(groupCtx, store, obj)
+				if err != nil {
 					return fmt.Errorf("failed to upload %s: %w", obj.Key, err)
 				}
+				tags[i] = tag
 				if onUploaded != nil {
 					onUploaded(int(done.Add(1)), total)
 				}
@@ -123,13 +171,13 @@ func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, pre
 		start = end
 	}
 
-	manifest := nextManifest(name, previous, plan, now)
+	manifest := nextManifest(name, previous, plan, tags, now)
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return nil, err
 	}
 	sum := md5.Sum(data)
-	err = store.Put(ctx, PutRequest{
+	_, err = store.Put(ctx, PutRequest{
 		Key:          plan.ManifestKey,
 		Body:         bytes.NewReader(data),
 		Size:         int64(len(data)),
@@ -143,7 +191,7 @@ func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, pre
 	return manifest, nil
 }
 
-func putFile(ctx context.Context, store ObjectStore, obj Object) error {
+func putFile(ctx context.Context, store ObjectStore, obj Object) (string, error) {
 	if obj.Data != nil {
 		return store.Put(ctx, PutRequest{
 			Key:             obj.Key,
@@ -157,7 +205,7 @@ func putFile(ctx context.Context, store ObjectStore, obj Object) error {
 	}
 	file, err := os.Open(obj.LocalFile)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = file.Close() }()
 	return store.Put(ctx, PutRequest{
@@ -173,15 +221,20 @@ func putFile(ctx context.Context, store ObjectStore, obj Object) error {
 
 // nextManifest records the plan's objects on top of the previous manifest's:
 // a deploy deletes nothing, so the objects of earlier deploys are still in the
-// bucket and stay on record.
-func nextManifest(name string, previous *Manifest, plan *Plan, now time.Time) *Manifest {
+// bucket and stay on record. tags are the store's tags of the plan's uploads,
+// by their index in the plan.
+func nextManifest(name string, previous *Manifest, plan *Plan, tags []string, now time.Time) *Manifest {
 	manifest := &Manifest{Format: manifestFormat, Name: name, DeployedAt: now, Objects: map[string]ManifestObject{}}
 	if previous != nil {
 		for key, obj := range previous.Objects {
 			manifest.Objects[key] = obj
 		}
 	}
-	for _, obj := range plan.Objects {
+	for i, obj := range plan.Objects {
+		tag := tags[i]
+		if obj.Unchanged {
+			tag = previous.Objects[obj.Key].StoreTag
+		}
 		manifest.Objects[obj.Key] = ManifestObject{
 			Size:            obj.Size,
 			MD5:             obj.MD5,
@@ -189,6 +242,7 @@ func nextManifest(name string, previous *Manifest, plan *Plan, now time.Time) *M
 			ContentEncoding: obj.ContentEncoding,
 			CacheControl:    obj.CacheControl,
 			DeployedAt:      now,
+			StoreTag:        tag,
 		}
 	}
 	return manifest
