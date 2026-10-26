@@ -9,9 +9,9 @@
 // content negotiation, so each file is uploaded with the Content-Type,
 // Content-Encoding and Cache-Control it is served with. A Config's files rules
 // decide which source file becomes which object, such as app.css.br uploaded
-// as app.css with Content-Encoding: br, and its headers rules set the objects'
-// headers. A preset is a Config for one kind of build that a project's Config
-// builds on.
+// as app.css with Content-Encoding: br, and its objects rules set the objects'
+// headers and the order they are uploaded in. A preset is a Config for one kind
+// of build that a project's Config builds on.
 package sitedeploy
 
 import (
@@ -40,24 +40,24 @@ type FileRule struct {
 	Exclude bool
 }
 
-// HeaderRule sets the headers of the objects whose name in the site matches
-// Pattern. An object takes each header from the first rule that sets it.
-type HeaderRule struct {
+// ObjectRule sets properties of the objects whose name in the site matches
+// Pattern. An object takes each property from the first rule that sets it.
+type ObjectRule struct {
 	Pattern      *regexp.Regexp
 	ContentType  string
 	CacheControl string
+
+	// UploadOrder is when the object is uploaded: objects go up in ascending
+	// upload order, each order's uploads finished before the next starts. Nil
+	// leaves it to a later rule, or to the default of 0.
+	UploadOrder *int
 }
 
 // Options decide how the files of a site are uploaded. Config.Options
 // compiles them from a webClients entry of metaplay-project.yaml.
 type Options struct {
 	FileRules   []FileRule
-	HeaderRules []HeaderRule
-
-	// EntryPatterns name the objects a page loads first and that name the
-	// rest, such as index.html. They are uploaded last, in the order given, so
-	// a page never loads an entry point that names objects not yet uploaded.
-	EntryPatterns []*regexp.Regexp
+	ObjectRules []ObjectRule
 }
 
 const (

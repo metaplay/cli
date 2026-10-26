@@ -131,9 +131,9 @@ func VerifyUnchanged(ctx context.Context, store ObjectStore, plan *Plan, previou
 	return int(stale.Load()), err
 }
 
-// Deploy uploads the plan's changed objects phase by phase, each phase
-// finished before the next starts, and then the manifest of the site called
-// name. onUploaded is called after each upload with how many of the plan's
+// Deploy uploads the plan's changed objects in ascending upload order, each
+// order's uploads finished before the next starts, and then the manifest of the site
+// called name. onUploaded is called after each upload with how many of the plan's
 // uploads are done.
 func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, previous *Manifest, now time.Time, concurrency int, onUploaded func(done, total int)) (*Manifest, error) {
 	total := plan.UploadCount()
@@ -142,7 +142,7 @@ func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, pre
 
 	for start := 0; start < len(plan.Objects); {
 		end := start
-		for end < len(plan.Objects) && plan.Objects[end].Phase == plan.Objects[start].Phase {
+		for end < len(plan.Objects) && plan.Objects[end].UploadOrder == plan.Objects[start].UploadOrder {
 			end++
 		}
 

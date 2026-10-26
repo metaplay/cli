@@ -44,12 +44,9 @@ type Config struct {
 	// each file.
 	Files []FileRuleConfig `yaml:"files,omitempty"`
 
-	// Headers set the objects' headers by their name, the first matching rule
-	// each header.
-	Headers []HeaderRuleConfig `yaml:"headers,omitempty"`
-
-	// EntryFiles are globs of the objects uploaded last, in this order.
-	EntryFiles []string `yaml:"entryFiles,omitempty"`
+	// Objects set the objects' headers and upload order by their name, the
+	// first matching rule each property.
+	Objects []ObjectRuleConfig `yaml:"objects,omitempty"`
 
 	// EndpointsFile names the object the deploy writes with the game server's
 	// and the CDN's addresses, as far as the environment reports them, for the
@@ -67,13 +64,14 @@ type FileRuleConfig struct {
 	Exclude         bool   `yaml:"exclude,omitempty"`
 }
 
-// HeaderRuleConfig is a rule of a Config's headers. It matches objects by a
+// ObjectRuleConfig is a rule of a Config's objects. It matches objects by a
 // glob or a regular expression over their name in the site.
-type HeaderRuleConfig struct {
+type ObjectRuleConfig struct {
 	Match        string `yaml:"match,omitempty"`
 	MatchRegex   string `yaml:"matchRegex,omitempty"`
 	ContentType  string `yaml:"contentType,omitempty"`
 	CacheControl string `yaml:"cacheControl,omitempty"`
+	UploadOrder  *int   `yaml:"uploadOrder,omitempty"`
 }
 
 // LoadPreset reads the preset file at path.
@@ -109,8 +107,8 @@ func (c *Config) PresetPath(projectDir, sdkRootDir string) string {
 }
 
 // Resolve gives the config with its preset applied: the config's files and
-// headers rules go before the preset's, so they win for the files they match;
-// its entryFiles and endpointsFile replace the preset's where set.
+// objects rules go before the preset's, so they win for the files they match;
+// its endpointsFile replaces the preset's where set.
 func (c *Config) Resolve(projectDir, sdkRootDir string) (*Config, error) {
 	presetPath := c.PresetPath(projectDir, sdkRootDir)
 	if presetPath == "" {
@@ -129,10 +127,7 @@ func (c *Config) Resolve(projectDir, sdkRootDir string) (*Config, error) {
 	resolved.PresetFile = c.PresetFile
 	resolved.Prefix = c.Prefix
 	resolved.Files = append(append([]FileRuleConfig{}, c.Files...), preset.Files...)
-	resolved.Headers = append(append([]HeaderRuleConfig{}, c.Headers...), preset.Headers...)
-	if c.EntryFiles != nil {
-		resolved.EntryFiles = c.EntryFiles
-	}
+	resolved.Objects = append(append([]ObjectRuleConfig{}, c.Objects...), preset.Objects...)
 	if c.EndpointsFile != "" {
 		resolved.EndpointsFile = c.EndpointsFile
 	}
@@ -162,27 +157,20 @@ func (c *Config) Options() (Options, error) {
 		})
 	}
 
-	for i, ruleConfig := range c.Headers {
+	for i, ruleConfig := range c.Objects {
 		pattern, err := compilePattern(ruleConfig.Match, ruleConfig.MatchRegex)
 		if err != nil {
-			return Options{}, fmt.Errorf("invalid headers[%d]: %w", i, err)
+			return Options{}, fmt.Errorf("invalid objects[%d]: %w", i, err)
 		}
-		if ruleConfig.ContentType == "" && ruleConfig.CacheControl == "" {
-			return Options{}, fmt.Errorf("invalid headers[%d]: set contentType or cacheControl", i)
+		if ruleConfig.ContentType == "" && ruleConfig.CacheControl == "" && ruleConfig.UploadOrder == nil {
+			return Options{}, fmt.Errorf("invalid objects[%d]: set contentType, cacheControl or uploadOrder", i)
 		}
-		opts.HeaderRules = append(opts.HeaderRules, HeaderRule{
+		opts.ObjectRules = append(opts.ObjectRules, ObjectRule{
 			Pattern:      pattern,
 			ContentType:  ruleConfig.ContentType,
 			CacheControl: ruleConfig.CacheControl,
+			UploadOrder:  ruleConfig.UploadOrder,
 		})
-	}
-
-	for _, entry := range c.EntryFiles {
-		pattern, err := Glob(entry)
-		if err != nil {
-			return Options{}, fmt.Errorf("invalid entryFiles glob '%s': %w", entry, err)
-		}
-		opts.EntryPatterns = append(opts.EntryPatterns, pattern)
 	}
 	return opts, nil
 }

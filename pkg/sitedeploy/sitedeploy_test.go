@@ -191,10 +191,10 @@ func TestBlazorPlan_CachesOnlyFingerprintedFilesForever(t *testing.T) {
 	}
 }
 
-// The new build's fingerprinted files go up first, the files overwritten in
-// place next, and the entry points last, index.html the very last: a page
-// loaded mid-deploy finds every file its entry points name.
-func TestBlazorPlan_OrdersEntryPointsLast(t *testing.T) {
+// The preset's upload orders put the new build's fingerprinted files first,
+// the files overwritten in place next, and the files that name others last,
+// index.html the very last: a page loaded mid-deploy finds every file they name.
+func TestBlazorPlan_UploadsFilesBeforeTheFilesThatNameThem(t *testing.T) {
 	plan := blazorPlan(t, blazorSite(t), "", nil)
 	want := []string{
 		"_framework/Client.su7785ecxb.wasm",
@@ -242,13 +242,13 @@ func TestBuildPlan_RefusesTheGameServersNames(t *testing.T) {
 	}
 }
 
-// A project's headers rules go before its preset's, so they set the headers of
+// A project's objects rules go before its preset's, so they set the headers of
 // the objects they match and leave the rest to the preset. They match the
 // object's name, after the files rules renamed it.
 func TestConfig_ProjectRulesOverrideThePresetForTheFilesTheyMatch(t *testing.T) {
 	opts := options(t, Config{
 		Preset: "blazor",
-		Headers: []HeaderRuleConfig{
+		Objects: []ObjectRuleConfig{
 			{Match: "_framework/Client.*.wasm", CacheControl: "max-age=60"},
 			{Match: "art/**", ContentType: "image/x-test"},
 		},
@@ -269,12 +269,13 @@ func TestConfig_ProjectRulesOverrideThePresetForTheFilesTheyMatch(t *testing.T) 
 }
 
 // A project's files rules go before the preset's, so it can, for example,
-// leave out the Brotli copies; its entryFiles replace the preset's.
+// leave out the Brotli copies, and its objects rules can change the preset's
+// upload order.
 func TestConfig_ProjectSettingsGoBeforeThePresets(t *testing.T) {
 	opts := options(t, Config{
-		Preset:     "blazor",
-		Files:      []FileRuleConfig{{Match: "**/*.br", Exclude: true}},
-		EntryFiles: []string{"index.html"},
+		Preset:  "blazor",
+		Files:   []FileRuleConfig{{Match: "**/*.br", Exclude: true}},
+		Objects: []ObjectRuleConfig{{Match: "_framework/dotnet.js", UploadOrder: intPtr(0)}},
 	})
 	plan, err := BuildPlan(blazorSite(t), "", opts, nil, nil)
 	if err != nil {
@@ -289,8 +290,8 @@ func TestConfig_ProjectSettingsGoBeforeThePresets(t *testing.T) {
 		}
 	}
 	keys := planKeys(plan)
-	if keys[len(keys)-1] != "index.html" || objectByKey(t, plan, "_framework/dotnet.js").Phase != phaseContent {
-		t.Errorf("upload order = %v, want only index.html as an entry point", keys)
+	if keys[len(keys)-1] != "index.html" || objectByKey(t, plan, "_framework/dotnet.js").UploadOrder != 0 {
+		t.Errorf("upload order = %v, want dotnet.js moved to order 0 and index.html still last", keys)
 	}
 }
 
@@ -321,7 +322,7 @@ func TestConfig_PresetFileIsRelativeToTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(fromFile.Files, byName.Files) || !reflect.DeepEqual(fromFile.EntryFiles, byName.EntryFiles) || fromFile.EndpointsFile != byName.EndpointsFile {
+	if !reflect.DeepEqual(fromFile.Files, byName.Files) || !reflect.DeepEqual(fromFile.Objects, byName.Objects) || fromFile.EndpointsFile != byName.EndpointsFile {
 		t.Errorf("presetFile resolved to %+v, want the same settings as preset 'blazor', %+v", fromFile, byName)
 	}
 }
@@ -336,14 +337,13 @@ func TestConfig_RefusesInvalidSettings(t *testing.T) {
 		"preset path as name":   {Preset: "WebClientPresets/blazor.yaml"},
 		"preset in parent":      {Preset: "../blazor"},
 		"absolute presetFile":   {PresetFile: absolutePreset},
-		"two patterns":          {Headers: []HeaderRuleConfig{{Match: "*", MatchRegex: ".*", CacheControl: "no-store"}}},
-		"no pattern":            {Headers: []HeaderRuleConfig{{CacheControl: "no-store"}}},
-		"header with no effect": {Headers: []HeaderRuleConfig{{Match: "*"}}},
+		"two patterns":          {Objects: []ObjectRuleConfig{{Match: "*", MatchRegex: ".*", CacheControl: "no-store"}}},
+		"no pattern":            {Objects: []ObjectRuleConfig{{CacheControl: "no-store"}}},
+		"object with no effect": {Objects: []ObjectRuleConfig{{Match: "*"}}},
 		"file with no effect":   {Files: []FileRuleConfig{{Match: "*"}}},
 		"excluded and renamed":  {Files: []FileRuleConfig{{Match: "*.br", StripSuffix: ".br", Exclude: true}}},
-		"invalid regex":         {Headers: []HeaderRuleConfig{{MatchRegex: "(", CacheControl: "no-store"}}},
+		"invalid regex":         {Objects: []ObjectRuleConfig{{MatchRegex: "(", CacheControl: "no-store"}}},
 		"absolute prefix":       {Prefix: "/Client"},
-		"empty entry file glob": {EntryFiles: []string{""}},
 		"absolute endpoints":    {EndpointsFile: "/metaplay-endpoints.json"},
 		"endpoints in parent":   {EndpointsFile: "../metaplay-endpoints.json"},
 	}
@@ -382,7 +382,7 @@ func TestBuildPlan_CompressedFilesCanKeepTheirNames(t *testing.T) {
 	siteDir := writeSite(t, map[string]string{"index.html": "<html>", "Build/game.wasm.br": "br:wasm"})
 	opts := options(t, Config{
 		Files:   []FileRuleConfig{{Match: "Build/*.br", ContentEncoding: "br"}},
-		Headers: []HeaderRuleConfig{{Match: "Build/*.wasm.br", ContentType: "application/wasm"}},
+		Objects: []ObjectRuleConfig{{Match: "Build/*.wasm.br", ContentType: "application/wasm"}},
 	})
 	plan, err := BuildPlan(siteDir, "", opts, nil, nil)
 	if err != nil {
@@ -417,8 +417,8 @@ func TestBuildPlan_GeneratedObjectsReplaceFilesOfTheirName(t *testing.T) {
 	if string(obj.Data) != `{"serverHost":"nimbly.p1.metaplay.io"}` || obj.LocalFile != "" {
 		t.Errorf("endpoints file = %q from %q, want the generated bytes", obj.Data, obj.LocalFile)
 	}
-	if obj.ContentType != "application/json; charset=utf-8" || obj.CacheControl != DefaultCacheControl || obj.Phase != phaseContent {
-		t.Errorf("endpoints file = %+v, want JSON, revalidated, uploaded before the entry points", obj)
+	if obj.ContentType != "application/json; charset=utf-8" || obj.CacheControl != DefaultCacheControl || obj.UploadOrder != 0 {
+		t.Errorf("endpoints file = %+v, want JSON, revalidated, in the default upload order", obj)
 	}
 
 	// Generated objects are planned like files: unchanged when the last deploy
@@ -621,7 +621,7 @@ func TestDeploy_SkipsUnchangedFilesAndKeepsEarlierObjectsOnRecord(t *testing.T) 
 	}
 
 	// Changed headers on the same bytes are an upload too.
-	opts := options(t, Config{Preset: "blazor", Headers: []HeaderRuleConfig{{Match: "art/**", CacheControl: "max-age=60"}}})
+	opts := options(t, Config{Preset: "blazor", Objects: []ObjectRuleConfig{{Match: "art/**", CacheControl: "max-age=60"}}})
 	third, err := BuildPlan(siteDir, "", opts, nil, manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -630,3 +630,5 @@ func TestDeploy_SkipsUnchangedFilesAndKeepsEarlierObjectsOnRecord(t *testing.T) 
 		t.Errorf("plan with a new Cache-Control for art uploads %d files, want only art/den.webp", third.UploadCount())
 	}
 }
+
+func intPtr(v int) *int { return &v }

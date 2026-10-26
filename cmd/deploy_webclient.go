@@ -90,17 +90,21 @@ func init() {
 			      - match: "**/*.gz"
 			        exclude: true
 
-			- headers: rules that set the Content-Type and Cache-Control of the objects whose
-			  name they match. For each header, the first matching rule that sets it wins:
+			- objects: rules that set the Content-Type (contentType), Cache-Control
+			  (cacheControl) and upload order (uploadOrder) of the objects whose name they
+			  match. For each of these, the first matching rule that sets it wins:
 
-			    headers:
+			    objects:
 			      - match: "art/**"
 			        cacheControl: public, max-age=86400
+			      - match: index.html
+			        uploadOrder: 1
 
-			  Without a rule, Content-Type comes from the object's name and Cache-Control is
-			  'no-cache'.
-			- entryFiles: globs of the objects to upload last, in this order, such as
-			  index.html. A page loaded during a deploy then finds the objects these name.
+			  Without a rule, Content-Type comes from the object's name, Cache-Control is
+			  'no-cache' and uploadOrder is 0. Objects are uploaded in ascending
+			  uploadOrder, each order's uploads finished before the next starts, so a file
+			  that names others, such as index.html, can go up after them. A page loaded
+			  during a deploy then finds the objects it names.
 			- endpointsFile: name of a JSON file to write next to the web client, for the
 			  client to read at startup. It holds the file's format and the game server's
 			  and the CDN's addresses, as far as the environment reports them: format,
@@ -111,9 +115,10 @@ func init() {
 			  SDK's client reads.
 
 			A rule matches by a glob (match) or a regular expression (matchRegex). A web
-			client's settings override its preset's: its files and headers rules are checked
-			before the preset's, and its entryFiles and endpointsFile replace the preset's.
-			Use --dry-run to see the resulting configuration and the headers of each object.
+			client's settings override its preset's: its files and objects rules are checked
+			before the preset's, and its endpointsFile replaces the preset's. Use --dry-run
+			to see the resulting configuration, and the headers and upload order of each
+			object.
 
 			A deploy uploads only the files that changed since the last deploy, and never
 			deletes files from the bucket. It records the files it uploaded in
@@ -288,7 +293,7 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 				generatedNote = ", generated"
 			}
 			log.Info().Msgf("  %s %s %s", styles.RenderMuted(action), obj.Key,
-				styles.RenderMuted(fmt.Sprintf("(%d bytes, %s%s, %s%s)", obj.Size, obj.ContentType, encoding, obj.CacheControl, generatedNote)))
+				styles.RenderMuted(fmt.Sprintf("(%d bytes, %s%s, %s, upload order %d%s)", obj.Size, obj.ContentType, encoding, obj.CacheControl, obj.UploadOrder, generatedNote)))
 		}
 		for name, data := range generated {
 			log.Info().Msg("")

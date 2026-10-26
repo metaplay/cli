@@ -28,14 +28,6 @@ var reservedTopLevelNames = []string{
 	"ClientBuilds",               // Client builds uploaded by the samples' CI.
 }
 
-// Upload phases, in the order they run. Each phase finishes before the next
-// starts.
-const (
-	phaseImmutable = 0 // Content-addressed files: new names in each build, so safe to add first.
-	phaseContent   = 1 // Everything else, overwritten in place.
-	phaseEntry     = 2 // Entry points, phaseEntry+i for the i'th entry pattern.
-)
-
 // Object is a file of the site and how it is uploaded.
 type Object struct {
 	Key             string // Bucket key, including the prefix.
@@ -47,7 +39,7 @@ type Object struct {
 	ContentType     string
 	ContentEncoding string
 	CacheControl    string
-	Phase           int
+	UploadOrder     int  // When the object is uploaded, see ObjectRule.UploadOrder.
 	Unchanged       bool // The last deploy uploaded the same bytes with the same headers.
 }
 
@@ -186,7 +178,6 @@ func BuildPlan(siteDir, prefix string, opts Options, generated map[string][]byte
 			Name:         name,
 			ContentType:  contentTypeOf(name),
 			CacheControl: DefaultCacheControl,
-			Phase:        phaseContent,
 		}
 		if data, ok := generated[name]; ok {
 			obj.Data = data
@@ -196,8 +187,8 @@ func BuildPlan(siteDir, prefix string, opts Options, generated map[string][]byte
 			obj.ContentEncoding = src.encoding
 		}
 
-		contentTypeSet, cacheControlSet := false, false
-		for _, rule := range opts.HeaderRules {
+		contentTypeSet, cacheControlSet, uploadOrderSet := false, false, false
+		for _, rule := range opts.ObjectRules {
 			if !rule.Pattern.MatchString(name) {
 				continue
 			}
@@ -207,15 +198,8 @@ func BuildPlan(siteDir, prefix string, opts Options, generated map[string][]byte
 			if rule.CacheControl != "" && !cacheControlSet {
 				obj.CacheControl, cacheControlSet = rule.CacheControl, true
 			}
-		}
-
-		if strings.Contains(obj.CacheControl, "immutable") {
-			obj.Phase = phaseImmutable
-		}
-		for i, pattern := range opts.EntryPatterns {
-			if pattern.MatchString(name) {
-				obj.Phase = phaseEntry + i
-				break
+			if rule.UploadOrder != nil && !uploadOrderSet {
+				obj.UploadOrder, uploadOrderSet = *rule.UploadOrder, true
 			}
 		}
 
@@ -240,8 +224,8 @@ func BuildPlan(siteDir, prefix string, opts Options, generated map[string][]byte
 
 	sort.Slice(plan.Objects, func(i, j int) bool {
 		a, b := plan.Objects[i], plan.Objects[j]
-		if a.Phase != b.Phase {
-			return a.Phase < b.Phase
+		if a.UploadOrder != b.UploadOrder {
+			return a.UploadOrder < b.UploadOrder
 		}
 		return a.Key < b.Key
 	})
