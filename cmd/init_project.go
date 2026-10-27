@@ -136,16 +136,16 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 	if o.flagUnityProjectPath == "" {
 		relativeUnityPath, err := findUnityProjectPath(o.absoluteProjectPath)
 		if err != nil {
-			return err
+			return clierrors.Wrap(err, "No Unity project found").
+				WithSuggestion("Run this in your game's root directory, or specify the Unity project with --unity-project=<path>")
 		}
 		o.relativeUnityProjectPath = relativeUnityPath
 	} else {
+		// Validate the explicitly specified Unity project path.
+		if err := validateUnityProjectPath(o.absoluteProjectPath, o.flagUnityProjectPath); err != nil {
+			return clierrors.WrapUsageError(err, "Invalid --unity-project path")
+		}
 		o.relativeUnityProjectPath = o.flagUnityProjectPath
-	}
-
-	// Validate the Unity project path
-	if err := validateUnityProjectPath(o.absoluteProjectPath, o.relativeUnityProjectPath); err != nil {
-		return err
 	}
 
 	// Must be either in interactive mode or specify --yes.
