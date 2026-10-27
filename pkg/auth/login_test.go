@@ -18,16 +18,18 @@ import (
 
 func TestFetchUserInfo_ReturnsUserInfoError(t *testing.T) {
 	tests := []struct {
-		name        string
-		status      int
-		body        string
-		wantMessage string
+		name          string
+		status        int
+		body          string
+		wantMessage   string
+		wantFromField bool
 	}{
 		{
-			name:        "unauthorized with explanation",
-			status:      http.StatusUnauthorized,
-			body:        `{"error":true,"statusCode":401,"statusMessage":"User not found with Metaplay Auth ID"}`,
-			wantMessage: "User not found with Metaplay Auth ID",
+			name:          "unauthorized with explanation",
+			status:        http.StatusUnauthorized,
+			body:          `{"error":true,"statusCode":401,"statusMessage":"User not found with Metaplay Auth ID"}`,
+			wantMessage:   "User not found with Metaplay Auth ID",
+			wantFromField: true,
 		},
 		{
 			name:        "forbidden with empty body",
@@ -64,6 +66,9 @@ func TestFetchUserInfo_ReturnsUserInfoError(t *testing.T) {
 			if userInfoErr.Message != tt.wantMessage {
 				t.Errorf("Message = %q, want %q", userInfoErr.Message, tt.wantMessage)
 			}
+			if userInfoErr.MessageIsField != tt.wantFromField {
+				t.Errorf("MessageIsField = %v, want %v", userInfoErr.MessageIsField, tt.wantFromField)
+			}
 			if !strings.Contains(err.Error(), http.StatusText(tt.status)) {
 				t.Errorf("error %q does not contain the status", err.Error())
 			}
@@ -73,29 +78,30 @@ func TestFetchUserInfo_ReturnsUserInfoError(t *testing.T) {
 
 func TestParseUserInfoErrorMessage(t *testing.T) {
 	tests := []struct {
-		name string
-		body string
-		want string
+		name          string
+		body          string
+		want          string
+		wantFromField bool
 	}{
-		{"empty", "", ""},
-		{"whitespace only", " \n\t ", ""},
-		{"statusMessage field", `{"statusMessage":"User not found"}`, "User not found"},
-		{"portal error shape with non-string fields", `{"error":true,"url":"/api/external/userinfo","statusCode":401,"statusMessage":"User not found with Metaplay Auth ID","message":"User not found with Metaplay Auth ID"}`, "User not found with Metaplay Auth ID"},
-		{"non-string error field is skipped", `{"error":true}`, `{"error":true}`},
-		{"message field", `{"message":"Token expired"}`, "Token expired"},
-		{"oauth error_description wins over error", `{"error":"invalid_token","error_description":"Token revoked"}`, "Token revoked"},
-		{"oauth error only", `{"error":"invalid_token"}`, "invalid_token"},
-		{"json without known fields is kept raw", `{"code":42}`, `{"code":42}`},
-		{"plain text is trimmed", "  Access denied\n", "Access denied"},
-		{"html is collapsed to one line", "<html>\n  <body>Bad Gateway</body>\n</html>", "<html> <body>Bad Gateway</body> </html>"},
-		{"invalid utf-8 is dropped", "bad\xffbyte", "badbyte"},
+		{"empty", "", "", false},
+		{"whitespace only", " \n\t ", "", false},
+		{"statusMessage field", `{"statusMessage":"User not found"}`, "User not found", true},
+		{"portal error shape with non-string fields", `{"error":true,"url":"/api/external/userinfo","statusCode":401,"statusMessage":"User not found with Metaplay Auth ID","message":"User not found with Metaplay Auth ID"}`, "User not found with Metaplay Auth ID", true},
+		{"non-string error field is skipped", `{"error":true}`, `{"error":true}`, false},
+		{"message field", `{"message":"Token expired"}`, "Token expired", true},
+		{"oauth error_description wins over error", `{"error":"invalid_token","error_description":"Token revoked"}`, "Token revoked", true},
+		{"oauth error only", `{"error":"invalid_token"}`, "invalid_token", true},
+		{"json without known fields is kept raw", `{"code":42}`, `{"code":42}`, false},
+		{"plain text is trimmed", "  Access denied\n", "Access denied", false},
+		{"html is collapsed to one line", "<html>\n  <body>Bad Gateway</body>\n</html>", "<html> <body>Bad Gateway</body> </html>", false},
+		{"invalid utf-8 is dropped", "bad\xffbyte", "badbyte", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseUserInfoErrorMessage([]byte(tt.body))
-			if got != tt.want {
-				t.Errorf("parseUserInfoErrorMessage(%q) = %q, want %q", tt.body, got, tt.want)
+			got, fromField := parseUserInfoErrorMessage([]byte(tt.body))
+			if got != tt.want || fromField != tt.wantFromField {
+				t.Errorf("parseUserInfoErrorMessage(%q) = %q, %v, want %q, %v", tt.body, got, fromField, tt.want, tt.wantFromField)
 			}
 		})
 	}
@@ -113,7 +119,7 @@ func TestParseUserInfoErrorMessage_Truncation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseUserInfoErrorMessage([]byte(tt.body))
+			got, _ := parseUserInfoErrorMessage([]byte(tt.body))
 			if !utf8.ValidString(got) {
 				t.Errorf("result is not valid UTF-8: %q", got)
 			}
@@ -168,7 +174,7 @@ func TestConfirmSignIn(t *testing.T) {
 		message string
 	}{
 		{"unknown identity", http.StatusUnauthorized, "User not found"},
-		{"whitelist refusal", http.StatusForbidden, "Your email is not allowed to sign in"},
+		{"email not allowed", http.StatusForbidden, "Your email is not allowed to sign in"},
 		{"email conflict", http.StatusConflict, "Another account already uses this email"},
 	}
 	for _, tt := range refusals {
@@ -213,7 +219,7 @@ func TestExplainUserInfoError(t *testing.T) {
 	}{
 		{
 			name:           "unknown identity suggests signing in again",
-			err:            &UserInfoError{StatusCode: 401, Status: "401 Unauthorized", Message: "User not found"},
+			err:            &UserInfoError{StatusCode: 401, Status: "401 Unauthorized", Message: "User not found", MessageIsField: true},
 			userType:       UserTypeHuman,
 			wantMessage:    "User not found",
 			wantSuggestion: "Sign in again with 'metaplay auth login'",
@@ -221,24 +227,31 @@ func TestExplainUserInfoError(t *testing.T) {
 		},
 		{
 			name:           "unknown machine user suggests machine-login",
-			err:            &UserInfoError{StatusCode: 401, Status: "401 Unauthorized", Message: "User not found"},
+			err:            &UserInfoError{StatusCode: 401, Status: "401 Unauthorized", Message: "User not found", MessageIsField: true},
 			userType:       UserTypeMachine,
 			wantMessage:    "User not found",
 			wantSuggestion: "Sign in again with 'metaplay auth machine-login'",
 		},
 		{
-			name:        "whitelist refusal is the server's message alone",
-			err:         &UserInfoError{StatusCode: 403, Status: "403 Forbidden", Message: "Your email is not allowed to sign in"},
+			name:        "email not allowed is the server's message alone",
+			err:         &UserInfoError{StatusCode: 403, Status: "403 Forbidden", Message: "Your email is not allowed to sign in", MessageIsField: true},
 			userType:    UserTypeHuman,
 			wantMessage: "Your email is not allowed to sign in",
 			wantDetail:  "403 Forbidden",
 		},
 		{
 			name:        "email conflict is the server's message alone",
-			err:         &UserInfoError{StatusCode: 409, Status: "409 Conflict", Message: "Another account already uses this email"},
+			err:         &UserInfoError{StatusCode: 409, Status: "409 Conflict", Message: "Another account already uses this email", MessageIsField: true},
 			userType:    UserTypeHuman,
 			wantMessage: "Another account already uses this email",
 			wantDetail:  "409 Conflict",
+		},
+		{
+			name:        "refusal with a raw body does not lead with it",
+			err:         &UserInfoError{StatusCode: 403, Status: "403 Forbidden", Message: "<html><title>403 Forbidden</title></html>"},
+			userType:    UserTypeHuman,
+			wantMessage: "Failed to fetch user info",
+			wantCause:   true,
 		},
 		{
 			name:        "refusal without a message falls back to the status",
@@ -249,7 +262,7 @@ func TestExplainUserInfoError(t *testing.T) {
 		},
 		{
 			name:           "unavailable server suggests trying again",
-			err:            &UserInfoError{StatusCode: 503, Status: "503 Service Unavailable", Message: "Metaplay Auth is unreachable"},
+			err:            &UserInfoError{StatusCode: 503, Status: "503 Service Unavailable", Message: "Metaplay Auth is unreachable", MessageIsField: true},
 			userType:       UserTypeHuman,
 			wantMessage:    "Failed to fetch user info, the server is temporarily unavailable",
 			wantSuggestion: "Try again in a moment",
@@ -321,6 +334,7 @@ func TestDescribeUser(t *testing.T) {
 		{"name only", UserInfoResponse{Name: "Ada Lovelace"}, "Ada Lovelace"},
 		{"blank name", UserInfoResponse{Name: "  ", Email: "ada@example.com"}, "<ada@example.com>"},
 		{"subject only", UserInfoResponse{Subject: "abc-123"}, "abc-123"},
+		{"nothing known", UserInfoResponse{}, ""},
 	}
 
 	for _, tt := range tests {
@@ -329,5 +343,9 @@ func TestDescribeUser(t *testing.T) {
 				t.Errorf("describeUser() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+
+	if got := describeUser(nil); got != "" {
+		t.Errorf("describeUser(nil) = %q, want empty", got)
 	}
 }
