@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 )
 
@@ -29,7 +30,8 @@ func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig)
 
 	// If not in interactive shell, bail out immediately.
 	if !isInteractiveMode {
-		return nil, fmt.Errorf("login required, use 'metaplay auth machine-login' to login in non-interactive environments")
+		return nil, clierrors.New("Login required").
+			WithSuggestion("Sign in with 'metaplay auth login', or with 'metaplay auth machine-login' for non-interactive environments")
 	}
 
 	// Confirm the login operation with the user.
