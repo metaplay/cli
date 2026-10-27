@@ -71,6 +71,9 @@ type PersistedSessionState struct {
 // Represents the config.json persisted on disk.
 type PersistedConfig struct {
 	Sessions map[string]PersistedSessionState `json:"sessions"` // Persisted sessions, use sessionID as key.
+
+	// Logins started with 'auth login --no-browser' and not yet finished, use sessionID as key.
+	PendingLogins map[string]PersistedPendingLogin `json:"pendingLogins,omitempty"`
 }
 
 func newPersistedConfig() *PersistedConfig {

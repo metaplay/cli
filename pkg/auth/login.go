@@ -151,15 +151,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		}
 	}()
 
-	// Construct authorization URL with proper encoding
-	authURL := fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256&scope=%s&audience=%s&state=%s",
-		authProvider.AuthEndpoint,
-		authProvider.ClientID,
-		url.QueryEscape(redirectURI),
-		codeChallenge,
-		url.QueryEscape(authProvider.Scopes),
-		url.QueryEscape(authProvider.Audience),
-		url.QueryEscape(state))
+	authURL := buildAuthorizeURL(authProvider, redirectURI, codeChallenge, state)
 
 	// Log the authorization URL for manual fallback
 	log.Info().Msgf("Opening a browser to log in. If a browser did not open up, you can copy-paste the following URL to authenticate: %s", styles.RenderMuted(authURL))
@@ -167,6 +159,12 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	if err != nil {
 		log.Warn().Msgf("Unable to open browser: %v", err)
 		log.Info().Msg(styles.RenderAttention("Please open the URL above in your browser."))
+	}
+
+	// The callback only reaches a browser on this machine, which is not where the
+	// URL ends up when the CLI runs over SSH, in a container or under an agent.
+	if authProvider.NoBrowserRedirectURI != "" {
+		log.Info().Msgf("If your browser is on another machine, stop this and run %s instead.", styles.RenderPrompt(authProvider.LoginCommand()+" --no-browser"))
 	}
 
 	// Wait for authentication to complete or timeout.
@@ -183,6 +181,25 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		log.Warn().Msgf("Server shutdown error: %v", err)
 	}
 
+	return reportSignIn(authProvider, tokenSet)
+}
+
+// buildAuthorizeURL constructs the authorization URL for a PKCE login that
+// returns to redirectURI.
+func buildAuthorizeURL(authProvider *AuthProviderConfig, redirectURI, codeChallenge, state string) string {
+	return fmt.Sprintf("%s?response_type=code&client_id=%s&redirect_uri=%s&code_challenge=%s&code_challenge_method=S256&scope=%s&audience=%s&state=%s",
+		authProvider.AuthEndpoint,
+		authProvider.ClientID,
+		url.QueryEscape(redirectURI),
+		codeChallenge,
+		url.QueryEscape(authProvider.Scopes),
+		url.QueryEscape(authProvider.Audience),
+		url.QueryEscape(state))
+}
+
+// reportSignIn confirms the user behind freshly saved tokens and says who
+// signed in.
+func reportSignIn(authProvider *AuthProviderConfig, tokenSet *TokenSet) error {
 	// Having tokens does not yet mean the provider knows the user, so ask it
 	// before reporting success.
 	userinfo, err := confirmSignIn(authProvider, tokenSet)

@@ -51,6 +51,11 @@ type AuthProviderConfig struct {
 	Scopes           string `yaml:"scopes"`           // Eg, "openid profile email offline_access"
 	Audience         string `yaml:"audience"`         // Eg, "managed-gameservers"
 
+	// Optional. Redirect URI of a page that shows the authorization code for the user
+	// to paste into the CLI, which is how 'auth login --no-browser' signs in when the
+	// browser cannot reach the CLI's loopback callback. Eg, "https://auth-ui.metaplay.dev/cli/code".
+	NoBrowserRedirectURI string `yaml:"noBrowserRedirectUri"`
+
 	// Set when this provider came from AuthProviderFileEnvVar rather than from the
 	// built-in definition or metaplay-project.yaml. Unexported, so YAML decoding of a
 	// provider file cannot set it.
@@ -153,6 +158,8 @@ func NewMetaplayAuthProvider() *AuthProviderConfig {
 		UserInfoEndpoint: "https://portal.metaplay.dev/api/external/userinfo",
 		Scopes:           defaultAuthScopes,
 		Audience:         "", // not used?
+
+		NoBrowserRedirectURI: "https://auth-ui.metaplay.dev/cli/code",
 	}
 }
 
@@ -215,15 +222,19 @@ func validateAuthProviderConfig(provider *AuthProviderConfig) error {
 	endpoints := []struct {
 		fieldName string
 		value     string
+		optional  bool
 	}{
-		{"authEndpoint", provider.AuthEndpoint},
-		{"tokenEndpoint", provider.TokenEndpoint},
-		{"revokeEndpoint", provider.RevokeEndpoint},
-		{"userInfoEndpoint", provider.UserInfoEndpoint},
+		{"authEndpoint", provider.AuthEndpoint, false},
+		{"tokenEndpoint", provider.TokenEndpoint, false},
+		{"revokeEndpoint", provider.RevokeEndpoint, false},
+		{"userInfoEndpoint", provider.UserInfoEndpoint, false},
+		{"noBrowserRedirectUri", provider.NoBrowserRedirectURI, true},
 	}
 	for _, endpoint := range endpoints {
 		if endpoint.value == "" {
-			problems = append(problems, fmt.Sprintf("required field '%s' is missing", endpoint.fieldName))
+			if !endpoint.optional {
+				problems = append(problems, fmt.Sprintf("required field '%s' is missing", endpoint.fieldName))
+			}
 			continue
 		}
 		parsed, err := url.Parse(endpoint.value)
@@ -233,8 +244,8 @@ func validateAuthProviderConfig(provider *AuthProviderConfig) error {
 		}
 		// Cleartext is only ever acceptable when the traffic does not leave the
 		// machine. Everything these endpoints carry is a secret: the authorization
-		// code exchange, every refresh, the revoke call, and the bearer token sent
-		// to userInfoEndpoint.
+		// code exchange, every refresh, the revoke call, the bearer token sent
+		// to userInfoEndpoint, and the code redirected to noBrowserRedirectUri.
 		if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
 			problems = append(problems, fmt.Sprintf("field '%s' ('%s') must use https; plain http is allowed only for loopback hosts (localhost, *.localhost, 127.0.0.1, ::1)", endpoint.fieldName, endpoint.value))
 		}

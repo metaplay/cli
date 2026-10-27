@@ -417,6 +417,14 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 			}
 		}
 
+		// Optional: where a login without a browser is redirected to, to show a code.
+		if authProviderCfg.NoBrowserRedirectURI != "" {
+			parsedURL, err := url.Parse(authProviderCfg.NoBrowserRedirectURI)
+			if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+				return fmt.Errorf("authProviders[%s].noBrowserRedirectUri must be an http(s) URL with a host", name)
+			}
+		}
+
 		// Validate scopes.
 		if authProviderCfg.Scopes == "" {
 			return fmt.Errorf("authProviders[%s].scopes are required", name)
