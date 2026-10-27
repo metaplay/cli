@@ -88,6 +88,28 @@ func TestGetAuthProvider_ProjectProvider(t *testing.T) {
 	}
 }
 
+// No project found from the current directory is (nil, nil), but a --project
+// path that does not resolve is an error.
+func TestTryResolveProject_ErrorsOnlyForExplicitPath(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Cleanup(func() { flagProjectConfigPath = "" })
+
+	flagProjectConfigPath = ""
+	if project, err := tryResolveProject(); project != nil || err != nil {
+		t.Errorf("without --project: project = %v, err = %v; want nil, nil", project, err)
+	}
+
+	flagProjectConfigPath = filepath.Join(t.TempDir(), "does-not-exist")
+	if _, err := tryResolveProject(); err == nil {
+		t.Error("with a bad --project path: got no error")
+	}
+
+	flagProjectConfigPath = t.TempDir()
+	if _, err := tryResolveProject(); err == nil {
+		t.Error("with a --project directory without metaplay-project.yaml: got no error")
+	}
+}
+
 // Commands run outside a project directory pass a nil project, because
 // tryResolveProject() reports "no project found" as (nil, nil). Naming a provider
 // there must be an error, not a nil dereference.

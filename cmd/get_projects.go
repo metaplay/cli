@@ -7,6 +7,7 @@ package cmd
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -159,11 +160,11 @@ func (o *getProjectsOpts) Run(cmd *cobra.Command) error {
 // given with --project is, as it is for other commands.
 func findCurrentProjectID() (string, error) {
 	projectDir, err := findProjectDirectory()
-	if err != nil {
-		if flagProjectConfigPath != "" {
-			return "", err
-		}
+	if errors.Is(err, errProjectNotFound) {
 		return "", nil
+	}
+	if err != nil {
+		return "", err
 	}
 	config, err := metaproj.LoadProjectConfigFile(projectDir)
 	if err != nil {
