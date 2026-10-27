@@ -30,8 +30,9 @@ func init() {
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
 
 	cmd := &cobra.Command{
-		Use:   "whoami [AUTH_PROVIDER]",
-		Short: "Show information about the signed in user",
+		Use:     "whoami [AUTH_PROVIDER]",
+		Aliases: []string{"status"},
+		Short:   "Show information about the signed in user",
 		Long: renderLong(&o, `
 			Show information about the signed in user.
 
