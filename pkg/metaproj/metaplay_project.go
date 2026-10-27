@@ -132,6 +132,32 @@ func (project *MetaplayProject) GetDashboardDir() string {
 	return filepath.Join(project.RelativeDir, dashboardConfig.RootDir)
 }
 
+// FindWebClient finds a web client by name, or the only one when name is empty.
+func (project *MetaplayProject) FindWebClient(name string) (*WebClientConfig, error) {
+	webClients := project.Config.WebClients
+	if len(webClients) == 0 {
+		return nil, clierrors.New("The project has no web clients").
+			WithSuggestion("Add a 'webClients' entry to metaplay-project.yaml")
+	}
+	var names []string
+	for ndx := range webClients {
+		if webClients[ndx].Name == name || (name == "" && len(webClients) == 1) {
+			return &webClients[ndx], nil
+		}
+		names = append(names, webClients[ndx].Name)
+	}
+	if name == "" {
+		return nil, clierrors.Newf("The project has several web clients: %s", strings.Join(names, ", ")).
+			WithSuggestion("Name the web client to deploy")
+	}
+	return nil, clierrors.Newf("The project has no web client '%s'", name).
+		WithSuggestion(fmt.Sprintf("Use one of: %s", strings.Join(names, ", ")))
+}
+
+func (project *MetaplayProject) GetWebClientSourceDir(webClient *WebClientConfig) string {
+	return filepath.Join(project.RelativeDir, webClient.SourceDir)
+}
+
 func (project *MetaplayProject) GetServerValuesFiles(envConfig *ProjectEnvironmentConfig) []string {
 	if envConfig.ServerValuesFile != "" {
 		return []string{
@@ -429,6 +455,28 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	// } else if dashboardConfig.RootDir != "" {
 	// 	return fmt.Errorf("when custom dashboard is not used, rootDir must be empty")
 	// }
+
+	// Validate web clients. Their source directories are build output, so may
+	// not exist yet.
+	webClientNames := map[string]bool{}
+	for ndx, webClient := range config.WebClients {
+		if webClient.Name == "" {
+			return fmt.Errorf("web client at index %d did not specify required field 'name'", ndx)
+		}
+		if !regexp.MustCompile(`^[a-zA-Z0-9_-]+$`).MatchString(webClient.Name) {
+			return fmt.Errorf("invalid web client name '%s': must contain only alphanumeric characters, underscores, and hyphens", webClient.Name)
+		}
+		if webClientNames[webClient.Name] {
+			return fmt.Errorf("web client name '%s' is used more than once", webClient.Name)
+		}
+		webClientNames[webClient.Name] = true
+		if err := validateProjectPath(fmt.Sprintf("webClients[%s].sourceDir", webClient.Name), webClient.SourceDir); err != nil {
+			return err
+		}
+		if err := webClient.Validate(); err != nil {
+			return fmt.Errorf("invalid web client '%s': %w", webClient.Name, err)
+		}
+	}
 
 	// Validate environments.
 	for endNdx, envConfig := range config.Environments {
