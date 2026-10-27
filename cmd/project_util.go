@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,10 +22,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// errProjectNotFound marks the case where no metaplay-project.yaml was found
+// from the current directory upwards. Useful for detecting when a command was
+// not run in a project directory.
+var errProjectNotFound = errors.New("metaplay-project.yaml not found")
+
 // Locate the Metaplay project directory, i.e., where metaplay-project.yaml is located.
 // If flagProjectConfigPath is given, use it as the directory or project file path.
 // Otherwise, try to locate the config file from the current directory.
 // The (relative or absolute) path to the project directory is returned.
+// If no project is found from the current directory, the error wraps errProjectNotFound.
 // \todo Does not handle case mismatches well, eg: -p ..\samples\idler breaks in docker build on Windows
 func findProjectDirectory() (string, error) {
 	// If the flag is provided, check if it's a valid directory or file path
@@ -90,7 +97,8 @@ func findProjectDirectory() (string, error) {
 		// Check if we've reached the root directory
 		if parentDir == absCurrentDir {
 			// We've reached the root and didn't find the config file
-			return "", clierrors.New("Cannot find metaplay-project.yaml").
+			return "", clierrors.New("Not in a Metaplay project directory").
+				WithCause(errProjectNotFound).
 				WithSuggestion("Make sure you are in the right directory, or use --project=<path> to specify the project directory")
 		}
 
@@ -178,12 +186,16 @@ func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 }
 
 // Try to find the metaplay-project.yaml based on the --project flag, and load
-// it if found. Returns nil, nil if not found.
+// it if found. Returns nil, nil if not found from the current directory.
+// Note: A path given with --project that does not resolve is an error.
 func tryResolveProject() (*metaproj.MetaplayProject, error) {
 	// Check if we can find the project file.
 	projectDir, err := findProjectDirectory()
-	if err != nil {
+	if errors.Is(err, errProjectNotFound) {
 		return nil, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// If found the project file, load it.
