@@ -49,7 +49,7 @@ func init() {
 		Short: "Initialize Metaplay SDK in an existing Unity project",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			Integrate Metaplay SDK into an existing project.
+			Integrate Metaplay SDK into an existing Unity project.
 
 			By default, this command downloads the latest Metaplay SDK from the portal. You must be
 			logged in (using 'metaplay auth login') and have signed the SDK terms and conditions in
@@ -66,6 +66,7 @@ func init() {
 			3. Add reference to the Metaplay Client SDK to your Unity project package.json.
 
 			Related commands:
+			- 'metaplay init sdk' only downloads the SDK, for Metaplay samples and templates.
 			- 'metaplay build image' builds a docker image to be deployed to the cloud.
 			- 'metaplay update project-environments' updates the environments list in metaplay-project.yaml from the cloud.
 			- 'metaplay init dashboard' initializes custom LiveOps Dashboard in the project.
@@ -129,7 +130,11 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 	configFilePath := filepath.Join(o.projectPath, metaproj.ConfigFileName)
 	if _, err := os.Stat(configFilePath); err == nil {
 		return clierrors.Newf("Project already initialized at %s", configFilePath).
-			WithSuggestion("To re-initialize, first remove the existing metaplay-project.yaml file")
+			WithDetails(
+				"To upgrade the SDK, use 'metaplay update sdk'",
+				"To download the SDK for a Metaplay sample or template, use 'metaplay init sdk'",
+				"To re-initialize, first remove the existing metaplay-project.yaml file",
+			)
 	}
 
 	// If Unity project path is not specified, try to find it within the project.
