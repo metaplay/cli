@@ -87,8 +87,10 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		return fmt.Errorf("failed to generate random state: %w", err)
 	}
 
-	// Create a channel to signal server shutdown.
-	done := make(chan struct{})
+	// The handler hands over the saved tokens to signal that authentication is
+	// complete. Only the first callback is taken: opening the login URL twice
+	// gives a second valid code, and that must not race or block.
+	tokens := make(chan *TokenSet, 1)
 
 	// Create a new HTTP server.
 	server := &http.Server{
@@ -116,15 +118,15 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 					return
 				}
 
-				// Exchange authorization code for tokenSet
-				tokenSet, err := exchangeCodeForTokens(code, codeVerifier, redirectURI, authProvider)
+				// Exchange authorization code for tokens
+				newTokenSet, err := exchangeCodeForTokens(code, codeVerifier, redirectURI, authProvider)
 				if err != nil {
 					http.Error(w, "Token exchange failed: "+err.Error(), http.StatusInternalServerError)
 					return
 				}
 
 				// Save tokens securely
-				err = SaveSessionState(authProvider, UserTypeHuman, tokenSet)
+				err = SaveSessionState(authProvider, UserTypeHuman, newTokenSet)
 				if err != nil {
 					http.Error(w, "Failed to save tokens: "+err.Error(), http.StatusInternalServerError)
 					return
@@ -133,7 +135,10 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 				_, _ = fmt.Fprintln(w, "Authentication successful! You can close this window.")
 
 				// Signal that authentication is complete
-				close(done)
+				select {
+				case tokens <- newTokenSet:
+				default:
+				}
 			}
 		}),
 	}
@@ -165,10 +170,9 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	}
 
 	// Wait for authentication to complete or timeout.
+	var tokenSet *TokenSet
 	select {
-	case <-done:
-		log.Info().Msg("")
-		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
+	case tokenSet = <-tokens:
 	case <-time.After(5 * time.Minute):
 		return clierrors.New("Authentication timed out after 5 minutes").
 			WithSuggestion("Log in again")
@@ -179,7 +183,63 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 		log.Warn().Msgf("Server shutdown error: %v", err)
 	}
 
+	// Having tokens does not yet mean the provider knows the user, so ask it
+	// before reporting success.
+	userinfo, err := confirmSignIn(authProvider, tokenSet)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Msg("")
+	if who := describeUser(userinfo); who != "" {
+		log.Info().Msg(styles.RenderSuccess("✅ Signed in as " + who))
+	} else {
+		log.Info().Msg(styles.RenderSuccess("✅ Authenticated successfully!"))
+	}
+
 	return nil
+}
+
+// confirmSignIn asks the provider's userinfo endpoint who the new tokens belong
+// to. On the Metaplay portal, this first call is also what creates the portal
+// user if the sign-up did not. The saved tokens are kept whatever the answer, so
+// a failure here can be retried without signing in again. A provider without a
+// userinfo endpoint is not asked, and gives a nil user. Provider validation
+// requires the endpoint today, so that case is defensive.
+func confirmSignIn(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserInfoResponse, error) {
+	if authProvider.UserInfoEndpoint == "" {
+		return nil, nil
+	}
+
+	userinfo, err := FetchUserInfo(authProvider, tokenSet)
+	if err != nil {
+		return nil, ExplainUserInfoError(err, authProvider, UserTypeHuman)
+	}
+	return userinfo, nil
+}
+
+// describeUser names a user for display, as "Name <email>" when both are known,
+// or gives an empty string when nothing is known.
+func describeUser(userinfo *UserInfoResponse) string {
+	if userinfo == nil {
+		return ""
+	}
+
+	name := strings.TrimSpace(userinfo.Name)
+	if name == "" {
+		name = strings.TrimSpace(userinfo.GivenName + " " + userinfo.FamilyName)
+	}
+
+	switch {
+	case name != "" && userinfo.Email != "":
+		return fmt.Sprintf("%s <%s>", name, userinfo.Email)
+	case userinfo.Email != "":
+		return fmt.Sprintf("<%s>", userinfo.Email)
+	case name != "":
+		return name
+	default:
+		return userinfo.Subject
+	}
 }
 
 func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret string) error {
@@ -221,7 +281,7 @@ func MachineLogin(authProvider *AuthProviderConfig, clientID, clientSecret strin
 	// Fetch the user info.
 	userinfo, err := FetchUserInfo(authProvider, &tokenSet)
 	if err != nil {
-		return err
+		return ExplainUserInfoError(err, authProvider, UserTypeMachine)
 	}
 
 	log.Info().Msgf("You are now logged in with machine user %s %s (clientId=%s) and can execute other commands.", userinfo.GivenName, userinfo.FamilyName, userinfo.Subject)
@@ -246,10 +306,12 @@ func FetchUserInfo(authProvider *AuthProviderConfig, tokenSet *TokenSet) (*UserI
 		// Keep the server's explanation: it says why the token was refused (for
 		// example, an account that exists in the auth server but not yet in the
 		// portal), and the status alone does not.
+		message, fromField := parseUserInfoErrorMessage(resp.Body())
 		return nil, &UserInfoError{
-			StatusCode: resp.StatusCode(),
-			Status:     resp.Status(),
-			Message:    parseUserInfoErrorMessage(resp.Body()),
+			StatusCode:     resp.StatusCode(),
+			Status:         resp.Status(),
+			Message:        message,
+			MessageIsField: fromField,
 		}
 	}
 
@@ -263,6 +325,10 @@ type UserInfoError struct {
 	StatusCode int    // HTTP status code, e.g. 401
 	Status     string // HTTP status line, e.g. "401 Unauthorized"
 	Message    string // Server's explanation from the response body, or empty
+
+	// MessageIsField reports whether Message came from a message field of a JSON
+	// body, rather than being the raw body, such as a proxy's HTML error page.
+	MessageIsField bool
 }
 
 // Error implements the error interface.
@@ -273,9 +339,50 @@ func (e *UserInfoError) Error() string {
 	return fmt.Sprintf("API error: %s: %s", e.Status, e.Message)
 }
 
-// IsUnauthorized reports whether the server refused the access token.
-func (e *UserInfoError) IsUnauthorized() bool {
-	return e.StatusCode == http.StatusUnauthorized || e.StatusCode == http.StatusForbidden
+// ExplainUserInfoError converts a FetchUserInfo failure into a CLI error. When
+// the server refused the user, the error leads with the server's own message,
+// which says why (an unknown identity, an email that is not allowed, or one
+// already taken by another account). userType picks how to sign in again.
+func ExplainUserInfoError(err error, authProvider *AuthProviderConfig, userType UserType) error {
+	userInfoErr, ok := errors.AsType[*UserInfoError](err)
+	if !ok {
+		return clierrors.Wrap(err, "Failed to fetch user info")
+	}
+
+	answered := fmt.Sprintf("%s answered %s", authProvider.UserInfoEndpoint, userInfoErr.Status)
+
+	switch userInfoErr.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict:
+		// The status goes into the details rather than the error being kept as
+		// the cause, because the cause is printed too and would repeat the message.
+		// Only a message field is fit to lead: a raw body can be an HTML page.
+		var cliErr *clierrors.CLIError
+		if !userInfoErr.MessageIsField {
+			cliErr = clierrors.Wrap(err, "Failed to fetch user info")
+		} else {
+			cliErr = clierrors.New(userInfoErr.Message).WithDetails(answered)
+		}
+
+		if userInfoErr.StatusCode == http.StatusUnauthorized {
+			if userType == UserTypeMachine {
+				cliErr = cliErr.WithSuggestion("Sign in again with 'metaplay auth machine-login'")
+			} else {
+				cliErr = cliErr.WithSuggestion("Sign in again with 'metaplay auth login'")
+			}
+		}
+		return cliErr
+	}
+
+	if userInfoErr.StatusCode >= http.StatusInternalServerError {
+		cliErr := clierrors.New("Failed to fetch user info, the server is temporarily unavailable").
+			WithSuggestion("Try again in a moment")
+		if userInfoErr.Message != "" {
+			cliErr = cliErr.WithDetails(userInfoErr.Message)
+		}
+		return cliErr.WithDetails(answered)
+	}
+
+	return clierrors.Wrap(err, "Failed to fetch user info")
 }
 
 // maxUserInfoErrorMessageLen limits how many characters of the response body
@@ -283,9 +390,10 @@ func (e *UserInfoError) IsUnauthorized() bool {
 const maxUserInfoErrorMessageLen = 500
 
 // parseUserInfoErrorMessage extracts a readable message from a userinfo error
-// response. A JSON body with a known message field gives that field. Any other
-// body gives the raw text on one line, truncated on a character boundary.
-func parseUserInfoErrorMessage(body []byte) string {
+// response. A JSON body with a known message field gives that field, and
+// fromField true. Any other body gives the raw text on one line, truncated on a
+// character boundary.
+func parseUserInfoErrorMessage(body []byte) (message string, fromField bool) {
 	// Decode into a map rather than a struct: the fields are not always strings
 	// (the portal sends "error": true), and a struct would reject the whole body.
 	var parsed map[string]any
@@ -294,6 +402,7 @@ func parseUserInfoErrorMessage(body []byte) string {
 		for _, key := range []string{"statusMessage", "message", "error_description", "error"} {
 			if candidate, ok := parsed[key].(string); ok && candidate != "" {
 				text = candidate
+				fromField = true
 				break
 			}
 		}
@@ -306,7 +415,7 @@ func parseUserInfoErrorMessage(body []byte) string {
 	if runes := []rune(text); len(runes) > maxUserInfoErrorMessageLen {
 		text = string(runes[:maxUserInfoErrorMessageLen]) + "..."
 	}
-	return text
+	return text, fromField
 }
 
 // Exchange the OAuth2 code for the token set.
