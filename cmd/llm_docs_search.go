@@ -30,7 +30,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "search QUERY --keywords KEYWORDS",
-		Short: "Submit an end-user search and fetch relevant documentation (machine use only)",
+		Short: "Search documentation with a free-form query and --keywords (machine use only)",
 		Long: renderLong(&o, `
 			Submit an end-user search, plus pre-extracted keywords, to the
 			llm-docs service and print the response.
@@ -50,11 +50,15 @@ func init() {
 	llmDocsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVarP(&o.flagKeywords, "keywords", "k", "", "Comma-separated list of pre-extracted keywords for the query")
-	_ = cmd.MarkFlagRequired("keywords")
+	flags.StringVarP(&o.flagKeywords, "keywords", "k", "", "Required: Comma-separated list of pre-extracted keywords for the query")
 }
 
 func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
+	// Keep error message brief for AI agents.
+	if o.flagKeywords == "" {
+		return clierrors.New("Missing required flag --keywords").
+			WithSuggestion("Pass the query's keywords as a comma-separated list, eg, --keywords guilds,social,multiplayer")
+	}
 	for k := range strings.SplitSeq(o.flagKeywords, ",") {
 		k = strings.TrimSpace(k)
 		if k != "" {
@@ -62,7 +66,8 @@ func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if len(o.keywords) == 0 {
-		return clierrors.NewUsageError("--keywords must contain at least one non-empty keyword")
+		return clierrors.New("--keywords must contain at least one non-empty keyword").
+			WithSuggestion("Pass the query's keywords as a comma-separated list, eg, --keywords guilds,social,multiplayer")
 	}
 	return nil
 }

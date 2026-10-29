@@ -7,8 +7,6 @@ package cmd
 import (
 	"reflect"
 	"testing"
-
-	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 func TestLLMDocsSearchOptsPrepare(t *testing.T) {
@@ -61,9 +59,6 @@ func TestLLMDocsSearchOptsPrepare(t *testing.T) {
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
-				}
-				if !clierrors.IsUsageError(err) {
-					t.Errorf("expected usage error, got %v", err)
 				}
 				return
 			}

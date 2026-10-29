@@ -149,6 +149,11 @@ var rootCmd = &cobra.Command{
 // It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func ExecuteContext(ctx context.Context) {
+	if err := checkUnknownSubcommand(rootCmd, os.Args[1:]); err != nil {
+		displayCobraError(err)
+		os.Exit(2)
+	}
+
 	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		// Handle Cobra errors (unknown flags, missing arguments, etc.)
@@ -156,6 +161,33 @@ func ExecuteContext(ctx context.Context) {
 		displayCobraError(err)
 		os.Exit(2)
 	}
+}
+
+// checkUnknownSubcommand returns an error if args invoke an unknown subcommand of a command
+// group, eg, 'metaplay auth foo'.
+func checkUnknownSubcommand(root *cobra.Command, args []string) error {
+	cmd, rest, err := root.Find(args)
+	if err != nil || cmd == root || cmd.Runnable() || !cmd.HasSubCommands() {
+		return nil
+	}
+
+	// Parse the flags to separate them from positional args. Cobra parses them again on execute.
+	if err := cmd.ParseFlags(rest); err != nil {
+		return nil // Let Cobra report flag errors
+	}
+	posArgs := cmd.Flags().Args()
+	if len(posArgs) == 0 {
+		return nil
+	}
+
+	msg := fmt.Sprintf("unknown command %q for %q", posArgs[0], cmd.CommandPath())
+	if cmd.SuggestionsMinimumDistance <= 0 {
+		cmd.SuggestionsMinimumDistance = 2 // Same default as Cobra uses for the root command
+	}
+	if suggestions := cmd.SuggestionsFor(posArgs[0]); len(suggestions) > 0 {
+		msg += "\n\nDid you mean this?\n\t" + strings.Join(suggestions, "\n\t")
+	}
+	return errors.New(msg)
 }
 
 // displayCobraError formats Cobra's built-in errors (flag parsing, unknown commands, etc.)

@@ -35,7 +35,7 @@ func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig)
 		if authProvider.NoBrowserRedirectURI != "" {
 			suggestion += fmt.Sprintf(", or '%s --no-browser' if not", authProvider.LoginCommand())
 		}
-		return nil, clierrors.New("Signing in is required").
+		return nil, clierrors.New("Login required").
 			WithSuggestion(suggestion + ". For CI and other unattended use, run 'metaplay auth machine-login'")
 	}
 
