@@ -67,7 +67,8 @@ func LoginWithoutBrowser(authProvider *AuthProviderConfig, codeInput io.Reader) 
 	log.Info().Msg("The page then shows a code. Paste it here, or finish later with " + styles.RenderPrompt(completeCommand) + ".")
 	fmt.Print("Code: ")
 	pasted, err := bufio.NewReader(codeInput).ReadString('\n')
-	if err != nil && !(errors.Is(err, io.EOF) && pasted != "") {
+	// A last line without a newline still counts, as when stdin ends after the paste.
+	if err != nil && (!errors.Is(err, io.EOF) || pasted == "") {
 		return clierrors.Wrap(err, "Failed to read the code").
 			WithSuggestion(fmt.Sprintf("Finish signing in with '%s'", completeCommand))
 	}
