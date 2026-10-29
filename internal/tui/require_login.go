@@ -28,10 +28,15 @@ func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig)
 
 	// If not yet logged in, ask if we should do it.
 
-	// If not in interactive shell, bail out immediately.
+	// If not in interactive shell, bail out immediately. This is where a coding
+	// agent ends up, so say how a person signs in as well as a machine.
 	if !isInteractiveMode {
+		suggestion := fmt.Sprintf("Run '%s' if a browser can open on this machine", authProvider.LoginCommand())
+		if authProvider.NoBrowserRedirectURI != "" {
+			suggestion += fmt.Sprintf(", or '%s --no-browser' if not", authProvider.LoginCommand())
+		}
 		return nil, clierrors.New("Login required").
-			WithSuggestion("Sign in with 'metaplay auth login', or with 'metaplay auth machine-login' for non-interactive environments")
+			WithSuggestion(suggestion + ". For CI and other unattended use, run 'metaplay auth machine-login'")
 	}
 
 	// Confirm the login operation with the user.
@@ -53,7 +58,7 @@ func RequireLoggedIn(ctx context.Context, authProvider *auth.AuthProviderConfig)
 	}
 
 	// User wants to log in.
-	err = auth.LoginWithBrowser(ctx, authProvider)
+	err = auth.LoginWithBrowser(ctx, authProvider, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to login: %w", err)
 	}

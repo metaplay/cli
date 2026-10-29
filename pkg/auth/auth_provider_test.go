@@ -305,6 +305,22 @@ userInfoEndpoint: https://portal.example.com/api/external/userinfo
 			wantErrPart: "must use https",
 		},
 		{
+			name: "no-browser redirect URI is read",
+			yamlData: validProviderYAML + `noBrowserRedirectUri: https://auth-ui.example.com/cli/code
+`,
+			check: func(t *testing.T, provider *AuthProviderConfig) {
+				if provider.NoBrowserRedirectURI != "https://auth-ui.example.com/cli/code" {
+					t.Errorf("NoBrowserRedirectURI = %q, want the URI from the file", provider.NoBrowserRedirectURI)
+				}
+			},
+		},
+		{
+			name: "no-browser redirect URI over plain http to a remote host",
+			yamlData: validProviderYAML + `noBrowserRedirectUri: http://auth-ui.example.com/cli/code
+`,
+			wantErrPart: "noBrowserRedirectUri",
+		},
+		{
 			name:        "malformed yaml",
 			yamlData:    "name: [unterminated\n",
 			wantErrPart: "YAML",

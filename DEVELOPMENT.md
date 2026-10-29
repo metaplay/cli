@@ -93,6 +93,7 @@ authEndpoint: https://auth.metaplay.localhost/oauth2/auth
 tokenEndpoint: https://auth.metaplay.localhost/oauth2/token
 revokeEndpoint: https://auth.metaplay.localhost/oauth2/revoke
 userInfoEndpoint: https://portal.metaplay.localhost/api/external/userinfo
+noBrowserRedirectUri: https://auth-ui.metaplay.localhost/cli/code
 ```
 
 ```bash
@@ -113,13 +114,14 @@ The file has the following fields:
 | `userInfoEndpoint` | Yes | Endpoint returning the signed-in user's information, usually the portal's `/api/external/userinfo`. |
 | `scopes` | No | Space-separated OAuth2 scopes. Defaults to `openid profile email offline_access`. |
 | `audience` | No | OAuth2 audience, if the provider requires one. |
+| `noBrowserRedirectUri` | No | Page showing the authorization code for `metaplay auth login --no-browser` to paste back. Without it, `--no-browser` is refused. |
 
 The file is validated when the CLI loads it:
 
 - Unknown fields are rejected, so a misspelled field name is an error.
 - Endpoints must use `https`. Plain `http` is allowed only for loopback hosts: `localhost`, `*.localhost`, `127.0.0.1`, and `::1`.
 
-The OAuth2 client must allow the redirect URIs `http://localhost:5000/callback` through `http://localhost:5004/callback`. The browser login uses the highest free port in that range.
+The OAuth2 client must allow the redirect URIs `http://localhost:5000/callback` through `http://localhost:5004/callback`. The browser login uses the highest free port in that range. For `--no-browser`, it must also allow `noBrowserRedirectUri`.
 
 While the variable is set:
 

@@ -5,10 +5,16 @@
 package cmd
 
 import (
-	"github.com/metaplay/cli/pkg/auth"
-	"github.com/metaplay/cli/pkg/styles"
+	"io"
+	"os"
+
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/styles"
 )
 
 // Sign in a natural user to Metaplay Auth using the browser.
@@ -16,6 +22,8 @@ type authLoginOpts struct {
 	UsePositionalArgs
 
 	argAuthProvider string
+	flagNoBrowser   bool
+	flagCode        string
 }
 
 func init() {
@@ -26,7 +34,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "login [AUTH_PROVIDER]",
-		Short: "Login to your authentication provider using the browser",
+		Short: "Sign in with a browser, on this machine or another (--no-browser)",
 		Long: renderLong(&o, `
 			Login to your authentication provider using the browser.
 
@@ -34,12 +42,37 @@ func init() {
 			'metaplay-project.yaml', you can specify the name of the provider you want to use with the
 			argument AUTH_PROVIDER.
 
+			By default, the login opens a browser on this machine and receives the result on a local
+			port. When the browser is on another machine, such as when the CLI runs over SSH, in a
+			container or under a coding agent, use --no-browser instead. It prints a URL to open in any
+			browser, and the page shown after signing in gives a code to paste back. In a terminal,
+			the CLI waits for the code. Otherwise, finish the login with --code within 30 minutes.
+
+			Coding agents: run 'auth login --no-browser', show the user the URL, and ask them for the
+			code the page shows. Then run 'auth login --code' with it. Only the code from the most
+			recent URL works, and only once. Treat it like a password: never write it to a file.
+
 			{Arguments}
+		`),
+		Example: renderExample(`
+			# Sign in with a browser on this machine.
+			metaplay auth login
+
+			# Sign in with a browser on another machine, pasting the code when asked.
+			metaplay auth login --no-browser
+
+			# Finish a --no-browser login started without a terminal, such as by an agent.
+			metaplay auth login --code 'CODE'
 		`),
 		Run: runCommand(&o),
 	}
 
 	authCmd.AddCommand(cmd)
+
+	flags := cmd.Flags()
+	flags.BoolVar(&o.flagNoBrowser, "no-browser", false, "Sign in with a browser on another machine, by pasting the code it shows")
+	flags.StringVar(&o.flagCode, "code", "", "Finish a login started with --no-browser, with the code the sign-in page showed")
+	cmd.MarkFlagsMutuallyExclusive("no-browser", "code")
 }
 
 func (o *authLoginOpts) Prepare(cmd *cobra.Command, args []string) error {
@@ -72,8 +105,25 @@ func (o *authLoginOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msgf("Auth provider: %s", styles.RenderTechnical(authProvider.Name))
 	log.Info().Msg("")
 
+	// Finish a login started earlier without a browser. An empty --code, such as
+	// from an unset variable, is refused rather than starting a browser login.
+	if cmd.Flags().Changed("code") {
+		return auth.CompleteLoginWithCode(authProvider, o.flagCode)
+	}
+
+	// Start a login whose browser is elsewhere. Wait for the code only when someone
+	// can type it: an agent's shell has no terminal, or runs as CI, and finishes
+	// with --code.
+	if o.flagNoBrowser {
+		var codeInput io.Reader
+		if tui.IsInteractiveMode() && (isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())) {
+			codeInput = os.Stdin
+		}
+		return auth.LoginWithoutBrowser(authProvider, codeInput)
+	}
+
 	// Login using the active auth provider.
-	err = auth.LoginWithBrowser(cmd.Context(), authProvider)
+	err = auth.LoginWithBrowser(cmd.Context(), authProvider, tui.IsInteractiveMode())
 	if err != nil {
 		return err
 	}
