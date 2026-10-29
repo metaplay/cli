@@ -8,7 +8,7 @@ This skill is about *what to run when something is wrong with — or about to ch
 
 Every command in this skill targets an **environment** — a deployed cloud stack identified by a short ID (e.g. `nimbly`) or a full slug (e.g. `lovely-wombats-build-nimbly`). The environment names available to the project are listed in `metaplay-project.yaml`. Most commands ask interactively if you omit the argument; pass the env explicitly when scripting.
 
-Authentication: every command requires `metaplay auth login` first. A `401` means the session expired; `403` means the user lacks the relevant permission for that environment.
+Authentication: every command requires a signed-in session first. A `401` means the session expired; `403` means the user lacks the relevant permission for that environment. To sign in, use `metaplay auth login`, or `metaplay auth login --no-browser` when no browser can open on the machine running the CLI; `metaplay skills get metaplay-troubleshoot-sign-in` has the steps.
 
 ## Production safety — CRITICAL
 

@@ -34,7 +34,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "login [AUTH_PROVIDER]",
-		Short: "Login to your authentication provider using the browser",
+		Short: "Sign in with a browser, on this machine or another (--no-browser)",
 		Long: renderLong(&o, `
 			Login to your authentication provider using the browser.
 
@@ -47,6 +47,10 @@ func init() {
 			container or under a coding agent, use --no-browser instead. It prints a URL to open in any
 			browser, and the page shown after signing in gives a code to paste back. In a terminal,
 			the CLI waits for the code. Otherwise, finish the login with --code within 30 minutes.
+
+			Coding agents: run 'auth login --no-browser', show the user the URL, and ask them for the
+			code the page shows. Then run 'auth login --code' with it. Only the code from the most
+			recent URL works, and only once. Treat it like a password: never write it to a file.
 
 			{Arguments}
 		`),
@@ -119,7 +123,7 @@ func (o *authLoginOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Login using the active auth provider.
-	err = auth.LoginWithBrowser(cmd.Context(), authProvider)
+	err = auth.LoginWithBrowser(cmd.Context(), authProvider, tui.IsInteractiveMode())
 	if err != nil {
 		return err
 	}

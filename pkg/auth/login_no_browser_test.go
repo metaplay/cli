@@ -5,13 +5,17 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/zalando/go-keyring"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 func TestParsePastedCode(t *testing.T) {
@@ -317,4 +321,26 @@ func (r *stateEchoReader) Read(p []byte) (int, error) {
 	}
 	pending := config.PendingLogins[r.provider.GetSessionID()]
 	return copy(p, pending.State+"."+r.code+"\n"), nil
+}
+
+// Without a terminal, a browser that cannot be opened fails the login at once and
+// points at --no-browser, rather than waiting for a callback nobody can send.
+func TestLoginWithBrowserFailsFastWithoutTerminal(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("browser launchers are found on PATH only on Linux")
+	}
+	t.Setenv("PATH", t.TempDir())
+	provider := noBrowserProvider(t, "", "")
+
+	done := make(chan error, 1)
+	go func() { done <- LoginWithBrowser(context.Background(), provider, false) }()
+	select {
+	case err := <-done:
+		cliErr, ok := clierrors.AsCLIError(err)
+		if !ok || !strings.Contains(cliErr.Suggestion, "--no-browser") {
+			t.Errorf("LoginWithBrowser() error = %v, want a suggestion of --no-browser", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("LoginWithBrowser() waited for a callback instead of failing")
+	}
 }

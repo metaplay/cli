@@ -67,7 +67,10 @@ func findAvailableCallbackPort() (net.Listener, int, error) {
 		WithSuggestion("Close applications using these ports, or check your firewall settings")
 }
 
-func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) error {
+// LoginWithBrowser signs in a human user with a browser on this machine, which
+// returns the authorization code to a loopback port. interactive says whether
+// someone is at a terminal to open the URL by hand should the browser not open.
+func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig, interactive bool) error {
 	// Set up a local server on a random port.
 	listener, port, err := findAvailableCallbackPort()
 	if err != nil {
@@ -155,8 +158,17 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 
 	// Log the authorization URL for manual fallback
 	log.Info().Msgf("Opening a browser to log in. If a browser did not open up, you can copy-paste the following URL to authenticate: %s", styles.RenderMuted(authURL))
+	noBrowserCommand := authProvider.LoginCommand() + " --no-browser"
 	err = browser.OpenURL(authURL)
 	if err != nil {
+		// Without a terminal, such as under a coding agent, nobody is there to open
+		// the URL while this waits, and whoever runs the CLI sees the output only
+		// once it exits. Fail now rather than after the timeout, saying what works.
+		if !interactive && authProvider.NoBrowserRedirectURI != "" {
+			_ = server.Close()
+			return clierrors.Wrap(err, "Failed to open a browser to sign in").
+				WithSuggestion(fmt.Sprintf("Run '%s', give the user the URL it prints, and finish with the code they get back", noBrowserCommand))
+		}
 		log.Warn().Msgf("Unable to open browser: %v", err)
 		log.Info().Msg(styles.RenderAttention("Please open the URL above in your browser."))
 	}
@@ -164,7 +176,7 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	// The callback only reaches a browser on this machine, which is not where the
 	// URL ends up when the CLI runs over SSH, in a container or under an agent.
 	if authProvider.NoBrowserRedirectURI != "" {
-		log.Info().Msgf("If your browser is on another machine, stop this and run %s instead.", styles.RenderPrompt(authProvider.LoginCommand()+" --no-browser"))
+		log.Info().Msgf("If your browser is on another machine, stop this and run %s instead.", styles.RenderPrompt(noBrowserCommand))
 	}
 
 	// Wait for authentication to complete or timeout.
@@ -172,8 +184,12 @@ func LoginWithBrowser(ctx context.Context, authProvider *AuthProviderConfig) err
 	select {
 	case tokenSet = <-tokens:
 	case <-time.After(5 * time.Minute):
+		suggestion := "Log in again"
+		if authProvider.NoBrowserRedirectURI != "" {
+			suggestion = fmt.Sprintf("Log in again, or run '%s' if the browser is on another machine", noBrowserCommand)
+		}
 		return clierrors.New("Authentication timed out after 5 minutes").
-			WithSuggestion("Log in again")
+			WithSuggestion(suggestion)
 	}
 
 	// Shutdown the HTTP server gracefully
