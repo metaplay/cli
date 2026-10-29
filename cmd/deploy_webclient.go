@@ -176,7 +176,12 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Build the web client first")
 	}
 
-	config, err := webClient.Resolve(project.RelativeDir, project.GetSdkRootDir())
+	// The presets come from the SDK: sdkRootDir, or the project's Metaplay.Server package.
+	sdkDir, err := project.ResolveSdkDir()
+	if err != nil {
+		return err
+	}
+	config, err := webClient.Resolve(project.RelativeDir, sdkDir)
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to apply the web client's preset").
 			WithSuggestion("Check the web client's 'preset' or 'presetFile' in metaplay-project.yaml")

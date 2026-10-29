@@ -46,6 +46,9 @@ func (o *devCleanDashboardArtifactsOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if err := project.RequireSdkSources("dev clean-dashboard-artifacts"); err != nil {
+		return err
+	}
 	// Resolve project dashboard, project root and sdk root paths.
 	dashboardPath := project.GetDashboardDir()
 	projectRootPath, err := filepath.Abs(project.RelativeDir)

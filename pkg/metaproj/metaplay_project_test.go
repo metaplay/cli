@@ -792,6 +792,35 @@ func TestValidateProjectConfig_UnityProjectDir(t *testing.T) {
 	}
 }
 
+// A project without sdkRootDir references the SDK as NuGet packages, so it must load.
+func TestValidateProjectConfig_SdkPackages(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, dir := range []string{"Backend", "Shared"} {
+		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config := &ProjectConfig{
+		ProjectHumanID:        "test-project",
+		BuildRootDir:          ".",
+		BackendDir:            "Backend",
+		SharedCodeDir:         "Shared",
+		DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
+		ServerChartVersion:    "0.9.0",
+		BotClientChartVersion: "0.9.0",
+	}
+	if err := ValidateProjectConfig(projectDir, config); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	project, err := NewMetaplayProject(".", config)
+	if err != nil {
+		t.Fatalf("NewMetaplayProject returned an error: %v", err)
+	}
+	if !project.UsesSdkPackages() {
+		t.Errorf("UsesSdkPackages() = false for a project without sdkRootDir")
+	}
+}
+
 // webClients entries are checked when the project loads, so a mistake in one is
 // reported before a deploy starts. Their sourceDir is build output and need not
 // exist yet, and their preset is read only by the deploy.
