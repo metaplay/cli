@@ -556,8 +556,12 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 	// Resolve docker build root directory. All other paths need to be made relative to it.
 	buildRootDir := params.project.GetBuildRootDir()
 
-	// Check that sdkRoot is a valid directory
-	sdkRootPath := params.project.GetSdkRootDir()
+	// Check that sdkRoot is a valid directory. For a project that references the SDK as packages,
+	// this is the SDK files in its Metaplay.Server package.
+	sdkRootPath, err := params.project.ResolveSdkDir()
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(sdkRootPath); os.IsNotExist(err) {
 		return clierrors.Newf("Metaplay SDK directory not found: %s", sdkRootPath).
 			WithSuggestion("Check that 'sdkRootDir' in metaplay-project.yaml points to the correct location")
@@ -583,14 +587,28 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 			WithSuggestion("Check that 'sharedCodeDir' in metaplay-project.yaml points to the correct location")
 	}
 
-	// Rebase paths to be relative to docker build root.
-	rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
-	if err != nil {
-		return clierrors.Wrap(err, "Failed to resolve path to MetaplaySDK/ from build root")
-	}
-	rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
-	if err != nil {
-		return clierrors.Wrap(err, "Failed to resolve path to Dockerfile.server from build root")
+	// Rebase paths to be relative to docker build root. The SDK files in a package are outside the
+	// build root: Dockerfile.server is passed as an absolute path, and the files it copies as the
+	// build context 'sdk', which takes the place of its stage that copies them from SDK_ROOT.
+	var sdkArgs []string
+	if params.project.UsesSdkPackages() {
+		sdkArgs = []string{
+			"-f", filepath.ToSlash(dockerFilePath),
+			"--build-context", "sdk=" + filepath.ToSlash(sdkRootPath),
+		}
+	} else {
+		rebasedSdkRoot, err := rebasePath(sdkRootPath, buildRootDir)
+		if err != nil {
+			return clierrors.Wrap(err, "Failed to resolve path to MetaplaySDK/ from build root")
+		}
+		rebasedDockerFilePath, err := rebasePath(dockerFilePath, buildRootDir)
+		if err != nil {
+			return clierrors.Wrap(err, "Failed to resolve path to Dockerfile.server from build root")
+		}
+		sdkArgs = []string{
+			"-f", filepath.ToSlash(rebasedDockerFilePath),
+			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
+		}
 	}
 	rebasedProjectRoot, err := rebasePath(params.project.RelativeDir, buildRootDir)
 	if err != nil {
@@ -633,8 +651,9 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 		[]string{
 			"--pull",
 			"-t", params.imageName,
-			"-f", filepath.ToSlash(rebasedDockerFilePath),
-			"--build-arg", "SDK_ROOT=" + filepath.ToSlash(rebasedSdkRoot),
+		},
+		sdkArgs,
+		[]string{
 			"--build-arg", "PROJECT_ROOT=" + filepath.ToSlash(rebasedProjectRoot),
 			"--build-arg", "BACKEND_DIR=" + filepath.ToSlash(rebasedBackendDir),
 			"--build-arg", "SHARED_CODE_DIR=" + filepath.ToSlash(rebasedSharedCodeDir),

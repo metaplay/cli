@@ -60,6 +60,9 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if err := project.RequireSdkSources("test system"); err != nil {
+		return err
+	}
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Run Playwright.NET System Tests"))

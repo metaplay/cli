@@ -72,13 +72,23 @@ type MetaplayProject struct {
 	// SDK version metadata, loaded on the first SdkMetadata() call.
 	sdkMetadata    *MetaplayVersionMetadata
 	sdkMetadataErr error
+
+	// For a project that references the SDK as packages, the SDK files in its Metaplay.Server
+	// package, resolved on first use (see sdk_package.go).
+	sdkPackageDir    string
+	sdkPackageDirErr error
 }
 
 // SdkMetadata returns the parsed MetaplaySDK/version.yaml, loading it on first use.
 // The result, including a failure, is cached.
 func (project *MetaplayProject) SdkMetadata() (*MetaplayVersionMetadata, error) {
 	if project.sdkMetadata == nil && project.sdkMetadataErr == nil {
-		project.sdkMetadata, project.sdkMetadataErr = LoadSdkVersionMetadata(project.GetSdkRootDir())
+		sdkDir, err := project.ResolveSdkDir()
+		if err != nil {
+			project.sdkMetadataErr = err
+			return nil, err
+		}
+		project.sdkMetadata, project.sdkMetadataErr = LoadSdkVersionMetadata(sdkDir)
 		// Map well known errors to helpful errors
 		if errors.Is(project.sdkMetadataErr, ErrSdkNotFound) {
 			project.sdkMetadataErr = clierrors.Wrap(project.sdkMetadataErr, "Metaplay SDK not found").
@@ -99,8 +109,24 @@ func (project *MetaplayProject) GetBuildRootDir() string {
 	return filepath.Join(project.RelativeDir, project.Config.BuildRootDir)
 }
 
+// GetSdkRootDir returns the SDK directory: sdkRootDir, or for a project that references the SDK as
+// packages, the SDK files in its Metaplay.Server package, or "" if they cannot be resolved (see
+// ResolveSdkDir for the error).
 func (project *MetaplayProject) GetSdkRootDir() string {
-	return filepath.Join(project.RelativeDir, project.Config.SdkRootDir)
+	dir, err := project.ResolveSdkDir()
+	if err != nil {
+		log.Debug().Msgf("Failed to resolve the Metaplay SDK directory: %v", err)
+	}
+	return dir
+}
+
+// ResolveSdkDir returns the SDK directory like GetSdkRootDir, with the error when it cannot be
+// resolved. A package directory is absolute, sdkRootDir relative to the working directory.
+func (project *MetaplayProject) ResolveSdkDir() (string, error) {
+	if project.UsesSdkPackages() {
+		return project.resolveSdkPackageDir()
+	}
+	return filepath.Join(project.RelativeDir, project.Config.SdkRootDir), nil
 }
 
 func (project *MetaplayProject) GetBackendDir() string {
@@ -335,9 +361,11 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 	}
 	// Note the SDK directory may be missing if SDK is not yet installed but we have a
 	// metaplay-project.yaml, for example when cloning a sample project. We only check
-	// the path is well-formed.
-	if err := validateProjectPath("sdkRootDir", config.SdkRootDir); err != nil {
-		return err
+	// the path is well-formed. Without one, the project references the SDK as packages.
+	if config.SdkRootDir != "" {
+		if err := validateProjectPath("sdkRootDir", config.SdkRootDir); err != nil {
+			return err
+		}
 	}
 	if err := validateProjectDir(projectDir, "backendDir", config.BackendDir); err != nil {
 		return err
