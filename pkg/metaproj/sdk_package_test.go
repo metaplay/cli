@@ -130,11 +130,11 @@ func TestResolveSdkPackageDir_SourcesPresent(t *testing.T) {
 	if err := os.WriteFile("Directory.Build.props", []byte(props), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cloudDir := filepath.Join("MetaplaySDK", "Backend", "Cloud")
-	if err := os.MkdirAll(cloudDir, 0o755); err != nil {
+	backendDir := filepath.Join("MetaplaySDK", "Backend")
+	if err := os.MkdirAll(backendDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cloudDir, "Metaplay.Cloud.csproj"), []byte("<Project />"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(backendDir, "Metaplay.SourceReferences.targets"), []byte("<Project />"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	project, err := NewMetaplayProject(".", &ProjectConfig{})

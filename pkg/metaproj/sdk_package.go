@@ -129,9 +129,10 @@ func (project *MetaplayProject) resolveSdkPackageDir() (string, error) {
 
 func (project *MetaplayProject) findSdkPackageDir() (string, error) {
 	// A project's build references the SDK's projects instead of its packages when MetaplaySDK/ has
-	// the SDK's sources (MetaplaySDKReferences in the Blazor template's Directory.Build.props). The
-	// CLI and the server image would then use the packages while local builds use the sources.
-	sourcesMarker := filepath.Join(project.RelativeDir, "MetaplaySDK", "Backend", "Cloud", "Metaplay.Cloud.csproj")
+	// the SDK's sources: its Directory.Build.targets imports this file from them, which the packages
+	// do not carry. The CLI and the server image would then use the packages while local builds use
+	// the sources.
+	sourcesMarker := filepath.Join(project.RelativeDir, "MetaplaySDK", "Backend", "Metaplay.SourceReferences.targets")
 	if _, err := os.Stat(sourcesMarker); err == nil {
 		return "", clierrors.Newf("This project references the SDK as NuGet packages, but MetaplaySDK/ has the SDK's sources, which its build would use instead").
 			WithDetails("metaplay-project.yaml has no 'sdkRootDir', so the CLI and the server image build use the SDK's packages.").
