@@ -5,7 +5,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,11 +37,14 @@ func init() {
 		Long: renderLong(o, `
 			Download and extract a Metaplay SDK release into the current project.
 
-			The SDK is extracted to where sdkRootDir in metaplay-project.yaml points. Use --sdk-directory to
-			extract it elsewhere. An existing SDK is replaced only after confirmation, or with --overwrite.
+			The SDK is extracted to the sdkRootDir directory set in metaplay-project.yaml. An existing SDK is
+			replaced only after confirmation, or with --overwrite.
 
-			Use this for projects that come without the SDK, such as Metaplay samples and templates. To change
-			the SDK version of a project that already has one, use 'metaplay update sdk'.
+			Use this for projects that come without the SDK, such as the Metaplay samples and starter projects
+			listed at https://docs.metaplay.io/introduction/sample-projects-overview
+			Coding agents: read the documentation with 'metaplay llm-docs read <url>'.
+
+			To change the SDK version of a project that already has one, use 'metaplay update sdk'.
 
 			You must be logged in to the Metaplay portal (use 'metaplay auth login') and have agreed to the privacy policy
 			and terms & conditions in the portal (https://portal.metaplay.dev).
@@ -51,8 +53,8 @@ func init() {
 			# Download SDK v34.0 into the current project (creates ./MetaplaySDK/)
 			metaplay init sdk --sdk-version=34.0
 
-			# Download SDK v34.0 into a custom directory (creates ../Shared/MetaplaySDK/)
-			metaplay init sdk --sdk-version=34.0 --sdk-directory=../Shared/MetaplaySDK
+			# Download SDK v34.0 into a custom directory (creates ./Vendor/MetaplaySDK/)
+			metaplay init sdk --sdk-version=34.0 --sdk-directory=Vendor/MetaplaySDK
 		`),
 	}
 
@@ -70,24 +72,44 @@ func (o *initSdkOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *initSdkOpts) Run(cmd *cobra.Command) error {
-	// Resolve the directory into which the SDK will be extracted.
-	// Use --sdk-directory if given, otherwise sdkRootDir from metaplay-project.yaml.
-	sdkDirectory := o.flagSdkDirectory
-	if sdkDirectory == "" {
-		projectDir, err := findProjectDirectory()
-		if errors.Is(err, errProjectNotFound) {
-			return clierrors.New("--sdk-directory is required outside a Metaplay project").
-				WithSuggestion("Run the command in a directory with metaplay-project.yaml, or pass --sdk-directory.")
-		}
-		if err != nil {
+	// Note: Flag errors are not usage errors to avoid whole usage getting printed. This path is often used by agentic workflows and brief output is preferred.
+
+	// Load the project, if any.
+	project, err := tryResolveProject()
+	if err != nil {
+		if _, ok := clierrors.AsCLIError(err); ok {
 			return err
 		}
+		return clierrors.Wrap(err, "Failed to load metaplay-project.yaml")
+	}
 
-		projectConfig, err := metaproj.LoadProjectConfigFile(projectDir)
-		if err != nil {
-			return clierrors.Wrap(err, "Failed to load metaplay-project.yaml")
+	// Resolve the directory into which the SDK will be extracted. Inside a project, it is where sdkRootDir
+	// in metaplay-project.yaml points. Outside a project, it is given with --sdk-directory.
+	var sdkDirectory string
+	if project != nil {
+		sdkDirectory = project.GetSdkRootDir()
+
+		// --sdk-directory must match sdkRootDir, or the project would not find the SDK.
+		if o.flagSdkDirectory != "" {
+			flagSdkDirAbs, err := filepath.Abs(o.flagSdkDirectory)
+			if err != nil {
+				return clierrors.Wrapf(err, "Failed to resolve SDK directory '%s'", o.flagSdkDirectory)
+			}
+			projectSdkDirAbs, err := filepath.Abs(sdkDirectory)
+			if err != nil {
+				return clierrors.Wrapf(err, "Failed to resolve SDK directory '%s'", sdkDirectory)
+			}
+			if flagSdkDirAbs != projectSdkDirAbs {
+				return clierrors.Newf("--sdk-directory '%s' does not match sdkRootDir '%s' in metaplay-project.yaml", o.flagSdkDirectory, project.Config.SdkRootDir)
+			}
 		}
-		sdkDirectory = filepath.Join(projectDir, projectConfig.SdkRootDir)
+	} else {
+		if o.flagSdkDirectory == "" {
+			return clierrors.New("--sdk-directory is required outside a Metaplay project").
+				WithSuggestion("Run the command in a directory with metaplay-project.yaml, or pass --sdk-directory.").
+				WithDetails("To start a project from a Metaplay sample or starter project, see https://docs.metaplay.io/introduction/sample-projects-overview")
+		}
+		sdkDirectory = o.flagSdkDirectory
 	}
 
 	abs, err := filepath.Abs(sdkDirectory)
@@ -123,14 +145,14 @@ func (o *initSdkOpts) Run(cmd *cobra.Command) error {
 	// Without --sdk-version, offer the latest version in interactive mode.
 	var sdkVersionInfo *portalapi.SdkVersionInfo
 	if o.flagSdkVersion == "" {
-		if !tui.IsInteractiveMode() {
-			return clierrors.NewUsageError("--sdk-version is required").
-				WithSuggestion("Check available versions with 'metaplay get sdk-versions'")
-		}
-
 		sdkVersionInfo, err = portalClient.GetLatestSdkVersionInfo()
 		if err != nil {
 			return clierrors.Wrap(err, "Failed to get the latest SDK version")
+		}
+
+		if !tui.IsInteractiveMode() {
+			return clierrors.New("--sdk-version is required").
+				WithSuggestion(fmt.Sprintf("Pass --sdk-version=%s for the latest SDK, or check available versions with 'metaplay get sdk-versions'", sdkVersionInfo.Version))
 		}
 
 		confirmed, err := tui.DoConfirmQuestion(cmd.Context(), fmt.Sprintf("Use latest SDK (%s)?", sdkVersionInfo.Version))

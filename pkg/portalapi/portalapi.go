@@ -189,7 +189,7 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 	url := fmt.Sprintf("/api/v1/projects?human_id=%s", projectHumanID)
 	projectInfos, err := metahttp.Get[[]ProjectInfo](c.httpClient, url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
+		return nil, fmt.Errorf("failed to fetch project details: %w", err)
 	}
 
 	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)

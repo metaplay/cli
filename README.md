@@ -64,13 +64,15 @@ You can find the latest release on our [Github releases page](https://github.com
 
 ### Integrate Metaplay SDK to Your Game
 
-You can add Metaplay SDK to your game using the integration wizard in the CLI by running:
+You can add Metaplay SDK to your existing game using the integration wizard in the CLI by running:
 
 ```bash
 MyProject$ metaplay init project
 ```
 
-This will link your local project to the [Metaplay Portal](https://portal.metaplay.dev), donwload and extract the SDK, add the game-specific backend project, and add some samples on how to get started.
+This will link your local project to the [Metaplay Portal](https://portal.metaplay.dev), download and extract the SDK, and add the game-specific backend project.
+
+For a new game, see the [Sample Projects](https://docs.metaplay.io/introduction/sample-projects-overview) documentation for ready-to-run samples and starter projects to build on.
 
 ### Build and Deploy Server to Cloud
 

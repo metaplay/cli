@@ -61,8 +61,10 @@ func (o *authLogoutOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve project ID (if any).
-	projectID := "n/a"
-	if project != nil {
+	var projectID string
+	if project == nil {
+		projectID = "none (no metaplay-project.yaml found)"
+	} else {
 		projectID = project.Config.ProjectHumanID
 	}
 

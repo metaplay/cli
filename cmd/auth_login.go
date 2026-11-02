@@ -93,8 +93,10 @@ func (o *authLoginOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Project ID to show
-	projectID := "n/a"
-	if project != nil {
+	var projectID string
+	if project == nil {
+		projectID = "none (no metaplay-project.yaml found)"
+	} else {
 		projectID = project.Config.ProjectHumanID
 	}
 

@@ -66,7 +66,7 @@ func init() {
 			3. Add reference to the Metaplay Client SDK to your Unity project package.json.
 
 			Related commands:
-			- 'metaplay init sdk' only downloads the SDK, for Metaplay samples and templates.
+			- 'metaplay init sdk' only downloads the SDK, for Metaplay samples and starter projects.
 			- 'metaplay build image' builds a docker image to be deployed to the cloud.
 			- 'metaplay update project-environments' updates the environments list in metaplay-project.yaml from the cloud.
 			- 'metaplay init dashboard' initializes custom LiveOps Dashboard in the project.
@@ -132,7 +132,7 @@ func (o *initProjectOpts) Prepare(cmd *cobra.Command, args []string) error {
 		return clierrors.Newf("Project already initialized at %s", configFilePath).
 			WithDetails(
 				"To upgrade the SDK, use 'metaplay update sdk'",
-				"To download the SDK for a Metaplay sample or template, use 'metaplay init sdk'",
+				"To download the SDK for a Metaplay sample or starter project, use 'metaplay init sdk'",
 				"To re-initialize, first remove the existing metaplay-project.yaml file",
 			)
 	}
