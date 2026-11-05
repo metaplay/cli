@@ -106,7 +106,7 @@ func TestExchangeTokenForEnvironment_Success(t *testing.T) {
 
 		// Portal returns the raw JWT string (metahttp.Get[string] uses response.String()).
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(expectedToken))
+		_, _ = w.Write([]byte(expectedToken))
 	}))
 	defer server.Close()
 
@@ -123,7 +123,7 @@ func TestExchangeTokenForEnvironment_Success(t *testing.T) {
 func TestExchangeTokenForEnvironment_ServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte(`{"error": "access denied"}`))
+		_, _ = w.Write([]byte(`{"error": "access denied"}`))
 	}))
 	defer server.Close()
 
