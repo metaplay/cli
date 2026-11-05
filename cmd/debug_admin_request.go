@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -157,7 +158,11 @@ func (o *debugAdminRequestOpts) Run(cmd *cobra.Command) error {
 	// Admin hostname follows the infra-modules convention: <humanID>-admin.<stackDomain>.
 	// Avoids a privileged StackAPI /v0/deployments call just to learn the public hostname.
 	adminAPIBaseURL := fmt.Sprintf("https://%s-admin.%s", envConfig.HumanID, envConfig.StackDomain)
-	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL)
+	envAccessToken, err := envapi.EnvironmentAccessToken(tokenSet, envConfig.HumanID, envConfig.AuthProvider)
+	if err != nil {
+		return err
+	}
+	adminClient := metahttp.NewJSONClient(tokenSet, adminAPIBaseURL, envAccessToken)
 
 	// Prepare request body if needed
 	var requestBody any

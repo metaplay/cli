@@ -4,7 +4,14 @@
 
 package portalapi
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/metahttp"
+)
 
 func TestCanonicalizeSdkVersion(t *testing.T) {
 	tests := []struct {
@@ -65,5 +72,78 @@ func TestIsMajorVersionOnly(t *testing.T) {
 				t.Errorf("IsMajorVersionOnly(%q) = %v, expected %v", tc.input, result, tc.expected)
 			}
 		})
+	}
+}
+
+// newTestClient creates a portalapi.Client pointing at the given test server.
+func newTestClient(serverURL string) *Client {
+	tokenSet := &auth.TokenSet{
+		AccessToken: "test-access-token",
+		TokenType:   "Bearer",
+	}
+	return &Client{
+		httpClient: metahttp.NewJSONClient(tokenSet, serverURL, tokenSet.AccessToken),
+		baseURL:    serverURL,
+		tokenSet:   tokenSet,
+	}
+}
+
+func TestExchangeTokenForEnvironment_Success(t *testing.T) {
+	expectedToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.environment-scoped-token"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify the request path and query parameter.
+		if r.URL.Path != "/api/v1/tokens/get-environment-access-token" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("environment_human_id") != "lovely-wombats-build-nimbly" {
+			t.Errorf("unexpected environment_human_id: %s", r.URL.Query().Get("environment_human_id"))
+		}
+		// Verify authorization header is set.
+		if r.Header.Get("Authorization") == "" {
+			t.Error("expected Authorization header to be set")
+		}
+
+		// Portal returns the raw JWT string (metahttp.Get[string] uses response.String()).
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(expectedToken))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	token, err := client.ExchangeTokenForEnvironment("lovely-wombats-build-nimbly")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if token != expectedToken {
+		t.Errorf("expected token %q, got %q", expectedToken, token)
+	}
+}
+
+func TestExchangeTokenForEnvironment_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error": "access denied"}`))
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	_, err := client.ExchangeTokenForEnvironment("some-env")
+	if err == nil {
+		t.Fatal("expected error for server error response, got nil")
+	}
+}
+
+func TestExchangeTokenForEnvironment_EmptyToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Return an empty body — no token content.
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	_, err := client.ExchangeTokenForEnvironment("some-env")
+	if err == nil {
+		t.Fatal("expected error for empty token response, got nil")
 	}
 }
