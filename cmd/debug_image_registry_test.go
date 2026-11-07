@@ -42,7 +42,7 @@ func probedFromStack(t *testing.T, handler http.HandlerFunc) *envapi.ImageRegist
 	t.Cleanup(server.Close)
 
 	tokenSet := &auth.TokenSet{}
-	client := metahttp.NewJSONClient(tokenSet, server.URL)
+	client := metahttp.NewJSONClient(tokenSet, server.URL, "")
 	// The shared client retries a 5xx with a backoff, which only slows a test
 	// that is about what is printed.
 	client.Resty.SetRetryCount(0)

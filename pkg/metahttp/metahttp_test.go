@@ -20,7 +20,7 @@ import (
 
 // newTestClient returns a metahttp.Client pointed at the given test server.
 func newTestClient(baseURL string) *Client {
-	return NewJSONClient(&auth.TokenSet{AccessToken: "test-token"}, baseURL)
+	return NewJSONClient(&auth.TokenSet{AccessToken: "test-token"}, baseURL, "test-token")
 }
 
 func TestRequest_Success(t *testing.T) {
