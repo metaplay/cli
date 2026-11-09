@@ -5,9 +5,6 @@
   ],
   // Wait before updating so a hijacked or broken upstream release can be caught and yanked.
   minimumReleaseAge: '7 days',
-  constraints: {
-    go: '1.25',
-  },
   packageRules: [
     {
       matchManagers: [

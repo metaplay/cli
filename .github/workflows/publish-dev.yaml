@@ -32,6 +32,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27'
+          check-latest: true # use the newest 1.27.x, not an older one cached on the runner
 
       # Resolve tag for the release. Writes the output into env variables NEXT_DEV_TAG and LATEST_RELEASE_TAG (in GITHUB_ENV).
       - name: Resolve tag for release
