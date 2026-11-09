@@ -1,6 +1,6 @@
 module github.com/metaplay/cli
 
-// Minimum Go version only: CI and releases build with the newest 1.27.x (setup-go check-latest).
+// Minimum Go version only: CI builds with the newest patch of the line in .go-version.
 go 1.27.3
 
 require (
