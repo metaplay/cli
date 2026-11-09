@@ -108,7 +108,10 @@ func (o *imageListOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	// Resolve where the environment's images live, and a credential for them.
 	imageRepository, err := targetEnv.ResolveImageRepository()

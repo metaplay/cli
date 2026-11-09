@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/common"
 )
 
 const (
@@ -32,6 +33,7 @@ var proxyAuthProvider = auth.NewMetaplayAuthProvider()
 // kubeconfig when asked for one, and with an exec credential when asked for
 // that. It remembers what it was asked.
 type fakeStackAPI struct {
+	t                *testing.T
 	server           *httptest.Server
 	kubeconfig       string // the kubeconfig a request asking for no particular type gets
 	clusterAuthority string // the certificate authority an exec credential names
@@ -42,8 +44,14 @@ type fakeStackAPI struct {
 
 func newFakeStackAPI(t *testing.T) *fakeStackAPI {
 	t.Helper()
-	fake := &fakeStackAPI{}
+	fake := &fakeStackAPI{t: t}
 	fake.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// It is the Portal too, minting the environment's token, which is not
+		// a request to the stack and so is not remembered.
+		if r.URL.Path == "/api/v1/tokens/get-environment-access-token" {
+			_, _ = w.Write([]byte("the-environments-access-token"))
+			return
+		}
 		fake.mu.Lock()
 		fake.requests = append(fake.requests, r.Method+" "+r.URL.RequestURI())
 		kubeconfig, authority := fake.kubeconfig, fake.clusterAuthority
@@ -69,6 +77,9 @@ func newFakeStackAPI(t *testing.T) *fakeStackAPI {
 		}
 	}))
 	t.Cleanup(fake.server.Close)
+	previous := common.PortalBaseURL
+	common.PortalBaseURL = fake.server.URL
+	t.Cleanup(func() { common.PortalBaseURL = previous })
 	return fake
 }
 
@@ -89,7 +100,11 @@ func (f *fakeStackAPI) target() *TargetEnvironment {
 // targetAt is the environment as the CLI reaches it at stackAPIBaseURL, which
 // may spell the fake's address otherwise.
 func (f *fakeStackAPI) targetAt(stackAPIBaseURL string) *TargetEnvironment {
-	return NewTargetEnvironmentAtStackAPI(&auth.TokenSet{AccessToken: "the-callers-access-token"}, stackAPIBaseURL, kubeconfigEnvironment)
+	target, err := NewTargetEnvironmentAtStackAPI(&auth.TokenSet{AccessToken: "the-callers-access-token"}, stackAPIBaseURL, kubeconfigEnvironment, "")
+	if err != nil {
+		f.t.Fatalf("NewTargetEnvironmentAtStackAPI: %v", err)
+	}
+	return target
 }
 
 // servedKubeconfig is a kubeconfig as a stack writes one: one cluster, one user
