@@ -15,7 +15,6 @@ import (
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/envapi"
-	"github.com/metaplay/cli/pkg/metaproj"
 )
 
 type getKubernetesExecCredentialOpts struct {
@@ -80,15 +79,12 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	//       and thus the `kubectl` operations using this invocation must be run in the project directory where the metaplay-project.yaml is available.
 	//       Fix this later by passing the auth provider info or the project config file location as an argument?
 	var tokenSet *auth.TokenSet
-	var authProviderName string
 	if project != nil {
 		// If metaplay-project.yaml was found, resolve the environment from it.
-		var envConfig *metaproj.ProjectEnvironmentConfig
-		envConfig, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
+		_, tokenSet, err = resolveEnvironment(cmd.Context(), project, o.argEnvironmentHumanID)
 		if err != nil {
 			return err
 		}
-		authProviderName = envConfig.AuthProvider
 	} else {
 		// If no metaplay-project.yaml was found, assume the default auth provider is being used.
 		authProvider, err := auth.NewDefaultAuthProvider()
@@ -104,10 +100,7 @@ func (o *getKubernetesExecCredentialOpts) Run(cmd *cobra.Command) error {
 	// The kubeconfig hands us the StackAPI base URL directly, so use it as it
 	// arrived. Reducing it to a stack domain only to have the constructor
 	// rebuild the same URL made the two spellings able to disagree.
-	targetEnv, err := envapi.NewTargetEnvironmentAtStackAPI(tokenSet, o.argStackAPIBaseURL, o.argEnvironmentHumanID, authProviderName)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironmentAtStackAPI(tokenSet, o.argStackAPIBaseURL, o.argEnvironmentHumanID)
 
 	// Get the Kubernetes credentials in the execcredential format
 	credential, err := targetEnv.GetKubeExecCredential()
@@ -143,7 +136,7 @@ func (o *getKubernetesExecCredentialOpts) runForProxy(cmd *cobra.Command) error 
 			WithSuggestion(fmt.Sprintf("Run kubectl with %s set as it was when the kubeconfig was made, or get a new kubeconfig with 'metaplay get kubeconfig'", auth.AuthProviderFileEnvVar))
 	}
 
-	credential, err := envapi.NewProxyExecCredential(authProvider, o.argEnvironmentHumanID)
+	credential, err := envapi.NewProxyExecCredential(authProvider)
 	if err != nil {
 		return err
 	}

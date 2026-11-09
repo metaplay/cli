@@ -107,10 +107,17 @@ func findProjectDirectory() (string, error) {
 	}
 }
 
+// isDefaultAuthProviderName reports whether providerName names the default
+// provider: 'metaplay' and the empty name both do, meaning Metaplay Auth, or the
+// provider METAPLAYCLI_AUTH_PROVIDER_FILE replaces it with.
+func isDefaultAuthProviderName(providerName string) bool {
+	return providerName == "" || providerName == "metaplay"
+}
+
 // Get the AuthProvider: either return the project's custom provider (if defined),
 // or otherwise use the default Metaplay Auth.
 func getAuthProvider(project *metaproj.MetaplayProject, providerName string) (*auth.AuthProviderConfig, error) {
-	if auth.IsDefaultAuthProviderName(providerName) {
+	if isDefaultAuthProviderName(providerName) {
 		log.Debug().Msgf("Resolving the default auth provider")
 		return auth.NewDefaultAuthProvider()
 	} else {

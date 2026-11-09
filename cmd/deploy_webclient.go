@@ -196,13 +196,7 @@ func (o *deployWebClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderTitle("Deploy Web Client to Cloud"))
 	log.Info().Msg("")
 
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-
-	if err != nil {
-
-		return err
-
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to get the environment's details")

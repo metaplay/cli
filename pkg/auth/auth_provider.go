@@ -132,13 +132,6 @@ func (provider *AuthProviderConfig) IsBuiltinMetaplayAuth() bool {
 	return !provider.loadedFromFile && provider.Name == metaplayAuthProviderName
 }
 
-// IsDefaultAuthProviderName reports whether providerName names the default
-// provider: 'metaplay' and the empty name both do, meaning Metaplay Auth, or the
-// provider METAPLAYCLI_AUTH_PROVIDER_FILE replaces it with.
-func IsDefaultAuthProviderName(providerName string) bool {
-	return providerName == "" || providerName == "metaplay"
-}
-
 // NewDefaultAuthProvider resolves the auth provider used when a project does not
 // name one of its own: Metaplay Auth, or the provider described by the file named
 // in METAPLAYCLI_AUTH_PROVIDER_FILE when that is set, which is how a platform

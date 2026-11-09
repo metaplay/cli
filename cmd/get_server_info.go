@@ -116,10 +116,7 @@ func (o *getServerInfoOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Gather server deployment information.
 	info, err := o.gatherDeployedServerInfo(ctx, targetEnv, envConfig)

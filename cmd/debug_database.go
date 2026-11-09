@@ -160,10 +160,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
