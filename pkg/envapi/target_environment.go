@@ -20,8 +20,6 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
-	"github.com/metaplay/cli/pkg/metaproj"
-	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,11 +40,10 @@ import (
 
 // Wrapper object for accessing an environment within a target stack.
 type TargetEnvironment struct {
-	TokenSet               *auth.TokenSet   // Session tokens, for the Portal and the auth provider. Never sent to the stack.
-	StackApiBaseURL        string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
-	HumanID                string           // Environment human ID, eg, 'lovely-wombats-build-nimbly'. Same as Kubernetes namespace.
-	EnvironmentAccessToken string           // Access token for requests to the stack: one the Portal minted for this environment, or a custom auth provider's own.
-	StackApiClient         *metahttp.Client // HTTP client to access environment StackAPI.
+	TokenSet        *auth.TokenSet   // Tokens to use to access the environment.
+	StackApiBaseURL string           // Base URL of the StackAPI, eg, 'https://infra.<stack>/stackapi'
+	HumanID         string           // Environment human ID, eg, 'lovely-wombats-build-nimbly'. Same as Kubernetes namespace.
+	StackApiClient  *metahttp.Client // HTTP client to access environment StackAPI.
 
 	primaryKubeClient *KubeClient       // Lazily initialized KubeClient.
 	targetGameServer  *TargetGameServer // Lazily initialized TargetGameServer.
@@ -72,48 +69,21 @@ type DockerCredentials struct {
 	RegistryURL string
 }
 
-// NewTargetEnvironment creates a TargetEnvironment for accessing an environment
-// in a stack. An environment signing in with the default auth provider is sent an
-// access token the Portal mints for it alone, which takes a request to the
-// Portal; one with a custom auth provider is sent that provider's access token.
-func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID, authProviderName string) (*TargetEnvironment, error) {
-	return NewTargetEnvironmentAtStackAPI(tokenSet, fmt.Sprintf("https://infra.%s/stackapi", stackDomain), humanID, authProviderName)
+func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
+	return NewTargetEnvironmentAtStackAPI(tokenSet, fmt.Sprintf("https://infra.%s/stackapi", stackDomain), humanID)
 }
 
 // NewTargetEnvironmentAtStackAPI is NewTargetEnvironment for a caller that
 // already holds the StackAPI base URL and would otherwise have to take it apart
 // to recover a stack domain this type never stores.
-func NewTargetEnvironmentAtStackAPI(tokenSet *auth.TokenSet, stackApiBaseURL, humanID, authProviderName string) (*TargetEnvironment, error) {
-	envAccessToken, err := EnvironmentAccessToken(tokenSet, humanID, authProviderName)
-	if err != nil {
-		return nil, err
-	}
+func NewTargetEnvironmentAtStackAPI(tokenSet *auth.TokenSet, stackApiBaseURL, humanID string) *TargetEnvironment {
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
-		TokenSet:               tokenSet,
-		StackApiBaseURL:        stackApiBaseURL,
-		HumanID:                humanID,
-		EnvironmentAccessToken: envAccessToken,
-		StackApiClient:         metahttp.NewJSONClient(tokenSet, stackApiBaseURL, envAccessToken),
-	}, nil
-}
-
-// NewTargetEnvironmentFromConfig is NewTargetEnvironment for an environment
-// resolved from the project or the Portal.
-func NewTargetEnvironmentFromConfig(tokenSet *auth.TokenSet, envConfig *metaproj.ProjectEnvironmentConfig) (*TargetEnvironment, error) {
-	return NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID, envConfig.AuthProvider)
-}
-
-// EnvironmentAccessToken returns the access token requests to environment humanID
-// carry. With the default auth provider that is a token the Portal mints for the
-// environment in exchange for the session's, so no stack is ever sent a token
-// every other environment the user can reach would accept too. A custom auth
-// provider's token is the environment's own already, and is returned as it is.
-func EnvironmentAccessToken(tokenSet *auth.TokenSet, humanID, authProviderName string) (string, error) {
-	if !auth.IsDefaultAuthProviderName(authProviderName) {
-		return tokenSet.AccessToken, nil
+		TokenSet:        tokenSet,
+		StackApiBaseURL: stackApiBaseURL,
+		HumanID:         humanID,
+		StackApiClient:  metahttp.NewJSONClient(tokenSet, stackApiBaseURL),
 	}
-	return portalapi.NewClient(tokenSet).ExchangeTokenForEnvironment(humanID)
 }
 
 func (target *TargetEnvironment) GetKubernetesNamespace() string {
@@ -329,10 +299,9 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 const ProxyExecCredentialSkew = time.Minute
 
 // NewProxyExecCredential returns the exec credential for a kubeconfig pointing
-// at the Kubernetes API proxy: an access token for environment humanID, which the
-// Portal mints in exchange for the session's with authProvider, the session's
-// refreshed first if it expires within ProxyExecCredentialSkew.
-func NewProxyExecCredential(authProvider *auth.AuthProviderConfig, humanID string) (string, error) {
+// at the Kubernetes API proxy: the access token of the session with
+// authProvider, refreshed first if it expires within ProxyExecCredentialSkew.
+func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
 	// kubectl runs the plugin without a terminal, so a missing session cannot
 	// be logged in to here.
 	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, ProxyExecCredentialSkew)
@@ -343,13 +312,10 @@ func NewProxyExecCredential(authProvider *auth.AuthProviderConfig, humanID strin
 		return "", clierrors.New("Not logged in").
 			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
 	}
-	envAccessToken, err := portalapi.NewClient(tokenSet).ExchangeTokenForEnvironment(humanID)
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
 	if err != nil {
-		return "", err
-	}
-	expiresAt, err := auth.AccessTokenExpiresAt(&auth.TokenSet{AccessToken: envAccessToken})
-	if err != nil {
-		return "", clierrors.Wrap(err, "Failed to parse the environment access token's expiration")
+		return "", clierrors.Wrap(err, "Failed to parse access token expiration").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' to re-authenticate")
 	}
 
 	// A token already within the skew, handed on because it could not be
@@ -362,7 +328,7 @@ func NewProxyExecCredential(authProvider *auth.AuthProviderConfig, humanID strin
 	}
 	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
 		TypeMeta: metav1.TypeMeta{APIVersion: "client.authentication.k8s.io/v1beta1", Kind: "ExecCredential"},
-		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: envAccessToken, ExpirationTimestamp: &expiry},
+		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: tokenSet.AccessToken, ExpirationTimestamp: &expiry},
 	})
 	if err != nil {
 		return "", clierrors.Wrap(err, "Failed to encode the exec credential")

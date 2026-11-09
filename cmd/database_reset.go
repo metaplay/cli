@@ -115,10 +115,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Get kubeconfig to access the environment for Helm operations
 	kubeconfigPayload, err := targetEnv.GetKubeConfigWithEmbeddedCredentials()

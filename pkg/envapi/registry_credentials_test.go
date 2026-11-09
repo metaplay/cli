@@ -29,7 +29,7 @@ func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
 	t.Cleanup(server.Close)
 
 	tokenSet := &auth.TokenSet{}
-	client := metahttp.NewJSONClient(tokenSet, server.URL, "")
+	client := metahttp.NewJSONClient(tokenSet, server.URL)
 
 	// The shared client retries 5xx with a backoff, which is right against a
 	// real stack and ten seconds of pure waiting here: these tests only pin how

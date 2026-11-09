@@ -7,7 +7,6 @@ package portalapi
 import (
 	"fmt"
 	"math/rand/v2"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -54,7 +53,7 @@ func CanonicalizeSdkVersions(versions []SdkVersionInfo) {
 // NewClient creates a new Portal API client with the given auth token set.
 func NewClient(tokenSet *auth.TokenSet) *Client {
 	return &Client{
-		httpClient: metahttp.NewJSONClient(tokenSet, common.PortalBaseURL, tokenSet.AccessToken),
+		httpClient: metahttp.NewJSONClient(tokenSet, common.PortalBaseURL),
 		baseURL:    common.PortalBaseURL,
 		tokenSet:   tokenSet,
 	}
@@ -392,29 +391,6 @@ func parseMinorPatch(s string) (minor, patch int) {
 		patch, _ = strconv.Atoi(patchStr)
 	}
 	return minor, patch
-}
-
-// ExchangeTokenForEnvironment exchanges the session's access token for a
-// short-lived access token the Portal mints for one environment, naming it as the
-// token's client_id. That token is what a stack is sent, so the session's own,
-// which every environment the user can reach would accept, never leaves the CLI
-// for a stack.
-func (c *Client) ExchangeTokenForEnvironment(environmentHumanID string) (string, error) {
-	path := "/api/v1/tokens/get-environment-access-token?environment_human_id=" + url.QueryEscape(environmentHumanID)
-	log.Debug().Msgf("Exchanging the access token for environment '%s' via %s", environmentHumanID, c.baseURL)
-
-	accessToken, err := metahttp.Get[string](c.httpClient, path)
-	if err != nil {
-		return "", clierrors.Wrap(err, "Failed to get an access token for the environment").
-			WithDetails(fmt.Sprintf("Environment: %s", environmentHumanID)).
-			WithSuggestion("Check that you have access to this environment in the Portal")
-	}
-	if accessToken == "" {
-		return "", clierrors.New("The Portal answered with an empty access token for the environment").
-			WithDetails(fmt.Sprintf("Environment: %s", environmentHumanID)).
-			WithSuggestion("Try again, or contact support if the problem persists")
-	}
-	return accessToken, nil
 }
 
 // DownloadLatestSdk downloads the latest SDK to the specified target directory.

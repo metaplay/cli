@@ -100,10 +100,7 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Resolve target environment & game server.
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 	gameServer, err := targetEnv.GetGameServer(cmd.Context())
 	if err != nil {
 		return err

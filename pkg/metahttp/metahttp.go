@@ -77,13 +77,10 @@ func parseHTTPErrorMessage(body []byte) (string, bool) {
 }
 
 // NewJSONClient creates a new HTTP client with the given auth token set and base URL.
-// authToken is the bearer token its requests carry, which the caller chooses: the
-// session's access token for the Portal, and an environment's own access token for
-// a stack.
 // All failed requests are automatically retried a few times to mitigate network errors.
-func NewJSONClient(tokenSet *auth.TokenSet, baseURL string, authToken string) *Client {
+func NewJSONClient(tokenSet *auth.TokenSet, baseURL string) *Client {
 	restyClient := httputil.NewRetryClient().
-		SetAuthToken(authToken).
+		SetAuthToken(tokenSet.AccessToken).
 		SetBaseURL(baseURL).
 		SetHeader("accept", "application/json").
 		SetHeader("X-Application-Name", fmt.Sprintf("MetaplayCLI/%s", version.AppVersion))

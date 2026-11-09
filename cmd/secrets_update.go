@@ -155,10 +155,7 @@ func (o *secretsUpdateOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Get the existing secret to merge changes.
 	existingSecret, err := targetEnv.GetSecret(cmd.Context(), o.argSecretName)

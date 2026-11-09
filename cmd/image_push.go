@@ -92,10 +92,7 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Create TargetEnvironment.
-	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
-	if err != nil {
-		return err
-	}
+	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
 	// Resolve where the image goes and what authenticates the push; which
 	// registry that is depends on the stack.
