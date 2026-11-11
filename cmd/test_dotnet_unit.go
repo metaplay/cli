@@ -61,6 +61,9 @@ func (o *testDotnetUnitOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if err := project.RequireSdkSources("test dotnet-unit"); err != nil {
+		return err
+	}
 
 	log.Info().Msg("")
 	log.Info().Msg(styles.RenderTitle("Run .NET Unit Tests"))
