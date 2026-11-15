@@ -45,7 +45,7 @@ require (
 	helm.sh/helm/v3 v3.20.2
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
+	k8s.io/client-go v11.0.0+incompatible
 	k8s.io/kubectl v0.37.2
 	modernc.org/sqlite v1.61.1
 )
