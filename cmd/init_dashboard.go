@@ -109,6 +109,9 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	if err := project.RequireSdkSources("init dashboard"); err != nil {
+		return err
+	}
 
 	// Check if dashboard has already been initialized.
 	if project.UsesCustomDashboard() {
