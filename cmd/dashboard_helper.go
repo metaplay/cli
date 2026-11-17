@@ -47,7 +47,7 @@ func checkNodeVersion(ctx context.Context, recommendedVersion *version.Version) 
 	// Parse installed Node version
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse Node.js version from '%s': %s", installedVersionStr, err)
+		return fmt.Errorf("failed to parse Node.js version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if version older than recommended.
@@ -81,9 +81,8 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 
 	// Run the 'pnpm --version' command
 	cmd := exec.CommandContext(ctx, "pnpm", "--version")
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -93,10 +92,10 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 	}
 
 	// Parse pnpm version
-	installedVersionStr := strings.TrimSpace(out.String())
+	installedVersionStr := strings.TrimSpace(stdout.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse pnpm version from '%s': %v", installedVersionStr, err)
+		return fmt.Errorf("failed to parse pnpm version from '%s': %w", installedVersionStr, err)
 	}
 
 	// Fail if installed version is older than required.
@@ -128,13 +127,18 @@ func checkPnpmVersion(ctx context.Context, recommendedVersion *version.Version) 
 }
 
 func checkDashboardToolVersions(ctx context.Context, project *metaproj.MetaplayProject) error {
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for Node installation and minimum required version.
-	if err := checkNodeVersion(ctx, project.VersionMetadata.RecommendedNodeVersion); err != nil {
+	if err := checkNodeVersion(ctx, sdkMetadata.RecommendedNodeVersion); err != nil {
 		return err
 	}
 
 	// Check for pnpm installation and minimum required version.
-	if err := checkPnpmVersion(ctx, project.VersionMetadata.RecommendedPnpmVersion); err != nil {
+	if err := checkPnpmVersion(ctx, sdkMetadata.RecommendedPnpmVersion); err != nil {
 		return err
 	}
 

@@ -4,7 +4,6 @@
 
 package skills
 
-
 // RemoveRequest is the high-level input to RunRemove. It mirrors
 // InstallRequest's shape so callers that wire up both flows can reuse
 // scope/target resolution logic.
@@ -97,4 +96,3 @@ func resolveRemoveScope(req RemoveRequest) (Scope, error) {
 	}
 	return ScopeProject, nil
 }
-

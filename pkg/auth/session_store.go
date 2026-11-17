@@ -23,6 +23,8 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/rs/zerolog/log"
 	"github.com/zalando/go-keyring"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 // Service name and keyring key
@@ -53,16 +55,25 @@ type SessionState struct {
 	TokenSet *TokenSet // TokenSet for the user.
 }
 
+// ErrSessionProviderMismatch reports a stored session whose tokens were minted by a
+// different auth provider than the one now asking for it. Callers that only want the
+// session gone (logout) can recognise it and clear the session locally.
+var ErrSessionProviderMismatch = errors.New("session belongs to a different auth provider")
+
 // Persisted session state (with encrypted tokenSet).
 type PersistedSessionState struct {
-	UserType       UserType `json:"userType"`              // Type of the user (human or machine)
-	TokenSetLegacy string   `json:"tokenSet,omitempty"`    // Legacy CFB-encrypted tokenSet (deprecated)
-	TokenSetGCM    string   `json:"tokenSetGcm,omitempty"` // GCM-encrypted tokenSet
+	UserType       UserType `json:"userType"`                // Type of the user (human or machine)
+	TokenSetLegacy string   `json:"tokenSet,omitempty"`      // Legacy CFB-encrypted tokenSet (deprecated)
+	TokenSetGCM    string   `json:"tokenSetGcm,omitempty"`   // GCM-encrypted tokenSet
+	ProviderPrint  string   `json:"providerPrint,omitempty"` // AuthProviderConfig.Fingerprint() of the provider that minted these tokens
 }
 
 // Represents the config.json persisted on disk.
 type PersistedConfig struct {
 	Sessions map[string]PersistedSessionState `json:"sessions"` // Persisted sessions, use sessionID as key.
+
+	// Logins started with 'auth login --no-browser' and not yet finished, use sessionID as key.
+	PendingLogins map[string]PersistedPendingLogin `json:"pendingLogins,omitempty"`
 }
 
 func newPersistedConfig() *PersistedConfig {
@@ -302,7 +313,10 @@ func savePersistedConfig(config *PersistedConfig) error {
 		return fmt.Errorf("failed to serialize PersistedConfig: %w", err)
 	}
 
-	// Write sessionState to file.
+	// Write sessionState to file. In place, under the session lock, which keeps
+	// readers from seeing it half written. Renaming a new file over it would
+	// instead fail on Windows while anything has it open, and hand it to
+	// whoever wrote it, such as root under sudo.
 	err = os.WriteFile(filePath, configJSON, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write session state to file: %w", err)
@@ -312,6 +326,7 @@ func savePersistedConfig(config *PersistedConfig) error {
 }
 
 // Load the persisted config from disk, apply the update, and then persist the config back to disk.
+// The caller holds the session lock, or another process's update in between is lost.
 func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 	// Load config from disk.
 	configState, err := loadPersistedConfig()
@@ -329,8 +344,20 @@ func updatePersistedConfig(updateFunc func(*PersistedConfig) error) error {
 	return savePersistedConfig(configState)
 }
 
-// SaveSessionState saves the current session state (with GCM-encrypted tokenSet).
-func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) error {
+// SaveSessionState saves the current session state (with GCM-encrypted tokenSet),
+// stamped with the fingerprint of the provider that minted the tokens.
+func SaveSessionState(authProvider *AuthProviderConfig, userType UserType, tokenSet *TokenSet) error {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return saveSessionState(authProvider, userType, tokenSet)
+}
+
+// saveSessionState is SaveSessionState for a caller holding the session lock.
+func saveSessionState(authProvider *AuthProviderConfig, userType UserType, tokenSet *TokenSet) error {
 	// Serialize the tokenSet to JSON
 	tokenSetJSON, err := json.Marshal(tokenSet)
 	if err != nil {
@@ -351,13 +378,14 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 
 	// Construct session state (only using GCM field, legacy field is omitted).
 	sessionState := PersistedSessionState{
-		UserType:    userType,
-		TokenSetGCM: base64.StdEncoding.EncodeToString(encryptedTokenSet),
+		UserType:      userType,
+		TokenSetGCM:   base64.StdEncoding.EncodeToString(encryptedTokenSet),
+		ProviderPrint: authProvider.Fingerprint(),
 	}
 
 	// Update session state in persisted config.
 	return updatePersistedConfig(func(config *PersistedConfig) error {
-		config.Sessions[sessionID] = sessionState
+		config.Sessions[authProvider.GetSessionID()] = sessionState
 		return nil
 	})
 }
@@ -367,7 +395,18 @@ func SaveSessionState(sessionID string, userType UserType, tokenSet *TokenSet) e
 // If a legacy CFB-encrypted session is found, it is automatically migrated to GCM.
 // On Linux, sessions encrypted with the fallback key are re-encrypted with the
 // keyring-based key if a keyring becomes available.
-func LoadSessionState(sessionID string) (*SessionState, error) {
+func LoadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	return loadSessionState(authProvider)
+}
+
+// loadSessionState is LoadSessionState for a caller holding the session lock.
+func loadSessionState(authProvider *AuthProviderConfig) (*SessionState, error) {
 	// Load persisted config
 	persistedConfig, err := loadPersistedConfig()
 	if err != nil {
@@ -375,10 +414,21 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 	}
 
 	// Get session state.
+	sessionID := authProvider.GetSessionID()
 	sessionState, found := persistedConfig.Sessions[sessionID]
 	if !found {
 		// Session not found, return nil (but no error).
 		return nil, nil
+	}
+
+	// Refuse a stored session whose fingerprint names a different provider. Sessions are
+	// keyed by name, so two providers sharing one would otherwise present a platform's
+	// tokens to the other. Catches only what the fingerprint covers; see Fingerprint.
+	if !sessionBelongsToProvider(sessionState, authProvider) {
+		return nil, clierrors.Newf("Stored session '%s' belongs to a different auth provider", sessionID).
+			WithCause(ErrSessionProviderMismatch).
+			WithDetails("Its tokens were issued by another platform, so they are not valid here").
+			WithSuggestion(fmt.Sprintf("Run '%s' to sign in again, or rename one of the providers so they no longer share the name '%s'", authProvider.LoginCommand(), authProvider.Name))
 	}
 
 	// Get encryption key (read-only, do not create if missing).
@@ -448,7 +498,7 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 	// Migrate legacy session to GCM encryption
 	if needsMigration {
 		// Re-save with GCM encryption. Ignore errors as we can retry next time.
-		_ = SaveSessionState(sessionID, sessionState.UserType, &tokenSet)
+		_ = saveSessionState(authProvider, sessionState.UserType, &tokenSet)
 	}
 
 	return &SessionState{
@@ -457,11 +507,30 @@ func LoadSessionState(sessionID string) (*SessionState, error) {
 	}, nil
 }
 
+// sessionBelongsToProvider reports whether a stored session was minted by the given
+// provider. Sessions written before the fingerprint field existed carry none; they are
+// accepted so that upgrading the CLI does not sign everyone out, and get stamped on the
+// next save. Once a session carries a fingerprint, it must match exactly.
+func sessionBelongsToProvider(sessionState PersistedSessionState, authProvider *AuthProviderConfig) bool {
+	return sessionState.ProviderPrint == "" || sessionState.ProviderPrint == authProvider.Fingerprint()
+}
+
 // DeleteSessionState removes the current session state (i.e., signs out the user).
-func DeleteSessionState(sessionID string) error {
+func DeleteSessionState(authProvider *AuthProviderConfig) error {
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	return deleteSessionState(authProvider)
+}
+
+// deleteSessionState is DeleteSessionState for a caller holding the session lock.
+func deleteSessionState(authProvider *AuthProviderConfig) error {
 	// Remove the session from the persisted config.
 	return updatePersistedConfig(func(config *PersistedConfig) error {
-		delete(config.Sessions, sessionID)
+		delete(config.Sessions, authProvider.GetSessionID())
 		return nil
 	})
 }
@@ -510,9 +579,18 @@ func RevokeRefreshToken(authProvider *AuthProviderConfig, refreshToken string) {
 
 // RevokeAndDeleteSession revokes tokens server-side and removes local session state.
 // Server-side revocation is best-effort; local deletion always proceeds.
-func RevokeAndDeleteSession(authProvider *AuthProviderConfig, sessionID string) error {
+func RevokeAndDeleteSession(authProvider *AuthProviderConfig) error {
+	// Hold the session lock throughout, so that a refresh in another process
+	// cannot replace the refresh token between loading and revoking it, and
+	// leave the replacement live on the server.
+	unlock, err := lockSessionStore()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	// Load session to get tokens
-	sessionState, err := LoadSessionState(sessionID)
+	sessionState, err := loadSessionState(authProvider)
 	if err != nil {
 		log.Warn().Msgf("Failed to load session for revocation: %v", err)
 		// Proceed with local deletion anyway
@@ -524,5 +602,5 @@ func RevokeAndDeleteSession(authProvider *AuthProviderConfig, sessionID string) 
 	}
 
 	// Always delete local session state
-	return DeleteSessionState(sessionID)
+	return deleteSessionState(authProvider)
 }

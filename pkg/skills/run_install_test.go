@@ -19,8 +19,8 @@ type fakePrompter struct {
 	scopeErr       error
 	scopeCallCount int
 
-	chosenIDs       []string
-	targetsErr      error
+	chosenIDs        []string
+	targetsErr       error
 	targetsCallCount int
 
 	// Captured arguments for assertions.

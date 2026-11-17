@@ -59,8 +59,11 @@ func (o *getSdkVersionsOpts) Prepare(cmd *cobra.Command, args []string) error {
 }
 
 func (o *getSdkVersionsOpts) Run(cmd *cobra.Command) error {
-	// Ensure the user is logged in (Metaplay auth provider).
-	authProvider := auth.NewMetaplayAuthProvider()
+	// Ensure the user is logged in (default auth provider).
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		return err
+	}
 	tokenSet, err := tui.RequireLoggedIn(cmd.Context(), authProvider)
 	if err != nil {
 		return err

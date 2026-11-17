@@ -121,6 +121,10 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	if err := checkDashboardToolVersions(ctx, project); err != nil {
 		return err
 	}
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
 
 	// Resolve project dashboard dir (only Backend/Dashboard supported for now)
 	dashboardDirRelative := filepath.ToSlash(filepath.Join(project.Config.BackendDir, "Dashboard"))
@@ -145,7 +149,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// any R33 pre-release tag is included.
 	minSdkVersionPnpmAllowBuilds := version.Must(version.NewVersion("33.0.0-0"))
 	var allowBuildsPackages []string
-	if !project.VersionMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
+	if !sdkMetadata.SdkVersion.LessThan(minSdkVersionPnpmAllowBuilds) {
 		allowBuildsPackages = []string{
 			"@parcel/watcher",
 			"bootstrap-vue",
@@ -164,7 +168,7 @@ func (o *initDashboardOpts) Run(cmd *cobra.Command) error {
 	// Compute updated metaplay-project.yaml content
 	configPath, configContent, err := computeProjectConfigDashboardUpdate(project, dashboardDirRelative)
 	if err != nil {
-		return fmt.Errorf("failed to compute metaplay-project.yaml update: %w", err)
+		return err
 	}
 	plan.AddUpdate(configPath, configContent, 0644, "enable custom dashboard")
 
@@ -228,26 +232,30 @@ func computeProjectConfigDashboardUpdate(project *metaproj.MetaplayProject, dash
 	projectConfigFilePath := filepath.Join(project.RelativeDir, metaproj.ConfigFileName)
 	configFileBytes, err := os.ReadFile(projectConfigFilePath)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to read project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to read project config file: %w", err)
 	}
 
 	// Parse the YAML to AST
 	root, err := parser.ParseBytes(configFileBytes, parser.ParseComments)
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to parse project config file: %v", err)
+		return "", nil, fmt.Errorf("failed to parse project config file: %w", err)
 	}
 
 	// Update features.dashboard with new values.
-	_ = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
+	err = updateYamlNode(root, "$.features.dashboard", metaproj.DashboardFeatureConfig{
 		UseCustom: true,
 		RootDir:   dashboardDir,
 	})
+	if err != nil {
+		return "", nil, clierrors.Wrap(err, "Failed to enable the custom dashboard in metaplay-project.yaml").
+			WithSuggestion("Add a 'features.dashboard' section to metaplay-project.yaml and run this command again")
+	}
 
 	return projectConfigFilePath, []byte(root.String()), nil
 }
 
 // Replace a target node with 'value' (marshaled into YAML).
-// Note: If the 'path' doesn't exist, this function does nothing.
+// Returns an error if the 'path' doesn't exist.
 func updateYamlNode(root *ast.File, path string, value any) error {
 	// Path to node to update.
 	nodePath, err := yaml.PathString(path)

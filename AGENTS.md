@@ -194,5 +194,5 @@ func (o *myCommandOpts) Run(cmd *cobra.Command) error {
 - `github.com/rs/zerolog` - Structured logging
 - `github.com/charmbracelet/bubbletea` - Interactive TUI
 - `github.com/charmbracelet/lipgloss` - Terminal styling
-- `helm.sh/helm/v3` - Kubernetes Helm operations
+- `helm.sh/helm/v4` - Kubernetes Helm operations
 - `k8s.io/client-go` - Kubernetes client

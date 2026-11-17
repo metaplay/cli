@@ -22,11 +22,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "try",
-		Short: "[preview] Try the Metaplay skills in your AI agent without installing them",
+		Short: "Try the Metaplay skills in your AI agent without installing them",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Try the Metaplay skills in your AI agent without installing them.
 
 			To have your AI agent use the Metaplay skills on demand, include

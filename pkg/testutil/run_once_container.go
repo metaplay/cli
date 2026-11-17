@@ -206,9 +206,9 @@ func (r *RunOnceContainer) Run(ctx context.Context) (int, error) {
 		}
 	}
 
-	exitCode := int(state.ExitCode)
+	exitCode := state.ExitCode
 
-	r.exitCode = int(exitCode)
+	r.exitCode = exitCode
 	r.completed = true
 
 	log.Debug().Msgf("Container completed with exit code: %d", r.exitCode)

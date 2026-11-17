@@ -1,0 +1,390 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package envapi
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/rs/zerolog/log"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/metahttp"
+)
+
+// ErrRegistryCredentialsNotServed reports that this stack's API is older than
+// the registry credentials endpoint, so the caller should reach the
+// environment's images the way it did before.
+//
+// Every stack serves the endpoint from the version that introduced it on,
+// whichever registry its environments keep their images in, and a stack older
+// than that says so by not serving it at all: answering 200 with an empty body
+// would be indistinguishable from a stack that is simply broken. Stacks run by
+// their owners upgrade on their own schedule, so the path this selects stays
+// supported for as long as they run such a version.
+var ErrRegistryCredentialsNotServed = errors.New("this stack predates the image registry credentials endpoint")
+
+// RegistryCredentials is where an environment's images live, and what to
+// present to push or pull them.
+//
+// Host and repository stay separate because that is how the stack holds them,
+// and one shape then covers registries laid out differently.
+// QualifiedRepository is the only place the two are joined.
+type RegistryCredentials struct {
+	RegistryHost string `json:"registry_host"`
+	Repository   string `json:"repository"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+
+	// PullSecret names the Secret, in the environment's namespace, holding the
+	// credential its pods pull these images with. Empty where none is needed,
+	// as for ECR, whose nodes pull as themselves, and from a stack that
+	// predates the field. It is not checked like the fields above: a missing
+	// one leaves nothing to push to, and this one does not.
+	PullSecret string `json:"pull_secret"`
+}
+
+// QualifiedRepository is the Repository field prefixed with its host: what a
+// registry client needs, and what the stack does not carry ready-made.
+func (c *RegistryCredentials) QualifiedRepository() string {
+	return c.RegistryHost + "/" + c.Repository
+}
+
+// DockerCredentials is what a docker client presents for this registry.
+func (c *RegistryCredentials) DockerCredentials() *DockerCredentials {
+	return &DockerCredentials{
+		Username:    c.Username,
+		Password:    c.Password,
+		RegistryURL: c.RegistryHost,
+	}
+}
+
+// GetRegistryCredentials asks the stack for a credential to this environment's
+// image repository.
+//
+// The credential is short-lived and nothing stores it — not here, and not in
+// the docker credential store, which this CLI never writes to. It is handed to
+// the docker daemon inline and not kept.
+//
+// The stack decides which repository the credential reaches, so nothing here
+// sends one.
+func (target *TargetEnvironment) GetRegistryCredentials() (*RegistryCredentials, error) {
+	path := fmt.Sprintf("/v0/credentials/%s/registry", target.HumanID)
+	log.Debug().Msgf("Get image registry credentials from %s%s", target.StackApiClient.BaseURL, path)
+
+	// A 404 is expected here: it is how a stack older than the endpoint answers.
+	// Every command reaching such a stack's images takes this path and recovers
+	// from it, so it must not be logged as a failed request.
+	credentials, err := metahttp.PostExpecting[RegistryCredentials](target.StackApiClient, path, nil, "", http.StatusNotFound)
+	if err != nil {
+		if isHTTPNotFound(err) {
+			return nil, ErrRegistryCredentialsNotServed
+		}
+		return nil, clierrors.Wrap(err, "Failed to get the environment's image registry credentials").
+			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
+	}
+
+	// Checked here rather than where the reference is used: a missing field
+	// surfaces much further down as a docker error about a malformed reference
+	// or a rejected login, naming neither the stack nor this endpoint.
+	for _, missing := range []struct{ field, value string }{
+		{"registry host", credentials.RegistryHost},
+		{"repository", credentials.Repository},
+		{"username", credentials.Username},
+		{"password", credentials.Password},
+	} {
+		if missing.value == "" {
+			return nil, clierrors.Newf("The environment's registry credential names no %s", missing.field).
+				WithDetails("The stack answered successfully but left the field out, so there is nothing to push to.").
+				WithSuggestion("Report this to whoever operates the stack; nothing can be done from here")
+		}
+	}
+
+	// Caught here because this is the first point the two halves have to parse
+	// as a real registry name. A scheme on the host is how that fails in
+	// practice.
+	if _, err := name.NewRegistry(credentials.RegistryHost, name.StrictValidation); err != nil {
+		return nil, unusableRegistryCredential(err, "registry host", credentials.RegistryHost)
+	}
+	if _, err := name.NewRepository(credentials.QualifiedRepository(), name.StrictValidation); err != nil {
+		return nil, unusableRegistryCredential(err, "repository", credentials.QualifiedRepository())
+	}
+
+	return &credentials, nil
+}
+
+// unusableRegistryCredential reports a field the stack filled in with something
+// no registry client accepts, naming the field and what it held.
+func unusableRegistryCredential(cause error, field, value string) error {
+	return clierrors.Wrapf(cause, "The environment's registry credential names a %s that cannot be pushed to: '%s'", field, value).
+		WithDetails("The stack answered successfully, but what it answered is not a name a docker registry accepts.").
+		WithSuggestion("Report this to whoever operates the stack; nothing can be done from here")
+}
+
+// isHTTPNotFound reports whether err carries a 404 from the StackAPI.
+func isHTTPNotFound(err error) bool {
+	httpErr, ok := errors.AsType[*metahttp.HTTPError](err)
+	return ok && httpErr.StatusCode == http.StatusNotFound
+}
+
+// EnvironmentImageRepository is where an environment's images live and what
+// reaches them: one host-qualified repository, ready to tag against, and a
+// credential for it. Which way the stack answered is not recorded, because
+// nothing downstream may behave differently for it.
+//
+// Where the repository is in ECR and the CLI holds AWS credentials for it,
+// which is the older path, it also carries ECR's control plane. That changes
+// only how fast an image listing is, never what it lists.
+type EnvironmentImageRepository struct {
+	QualifiedRepository string
+	Credentials         *DockerCredentials
+
+	// PullSecret is the Secret pods installed into the environment pull these
+	// images with, for those whose credential nothing else provides, such as
+	// bot clients. Empty where the stack names none.
+	PullSecret string
+
+	ecr *ecrRepository
+}
+
+// Reference is the image reference for a tag in this repository.
+func (r *EnvironmentImageRepository) Reference(tag string) string {
+	return r.QualifiedRepository + ":" + tag
+}
+
+// credentialsFor is the credential to present when reading imageRef: this
+// repository's, where imageRef is on the same registry, and nil where it names
+// another, which is then read anonymously.
+//
+// Most references are built from this repository and always match. One is
+// not: a deployed release names its image repository itself, and whatever host
+// it names would otherwise be handed the environment's credential. The host is
+// taken from the repository rather than from the credential, which for ECR
+// carries its registry with a scheme a reference does not have.
+func (r *EnvironmentImageRepository) credentialsFor(imageRef string) *DockerCredentials {
+	repository, err := name.NewRepository(r.QualifiedRepository)
+	if err != nil {
+		// Only the older path's repository can get here, since a stack's answer
+		// is checked when it arrives. Read anonymously, the image fails as an
+		// authentication error, so say why the credential was held back.
+		log.Debug().Msgf("Not presenting the environment's credential: its repository '%s' does not parse: %v", r.QualifiedRepository, err)
+		return nil
+	}
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		// Nothing is read with it either way: the fetch parses the reference
+		// again, and reports why it does not parse.
+		return nil
+	}
+	if !strings.EqualFold(ref.Context().RegistryStr(), repository.RegistryStr()) {
+		// An image another registry keeps private fails the same way, so say
+		// here too why the credential was held back.
+		log.Debug().Msgf("Not presenting the environment's credential to %s: it was issued for %s", ref.Context().RegistryStr(), repository.RegistryStr())
+		return nil
+	}
+	return r.Credentials
+}
+
+// FetchImageMetadata reads the Metaplay labels of an image, presenting this
+// repository's credential only if the image is on its registry.
+func (r *EnvironmentImageRepository) FetchImageMetadata(imageRef string) (*MetaplayImageInfo, error) {
+	return FetchRemoteDockerImageMetadata(r.credentialsFor(imageRef), imageRef)
+}
+
+// ResolveImageRepository answers where this environment's images live:
+// whatever the stack issues a credential for, which it does for every registry
+// it keeps images in, and for a stack older than that, the cloud registry the
+// older path reaches.
+//
+// Nothing cloud-shaped is fetched before that fallback is taken. Asking first
+// and deciding after is what made reaching an environment's images depend on
+// a description only a cloud-provisioned environment has.
+//
+// The 404 that selects the fallback is also what an unknown environment gets,
+// from a check that runs before the endpoint is reached. The two are told
+// apart by what the second request finds — an environment on an older stack
+// has a description, one that does not exist has neither — rather than by
+// guessing at the first 404.
+func (target *TargetEnvironment) ResolveImageRepository() (*EnvironmentImageRepository, error) {
+	credentials, err := target.GetRegistryCredentials()
+	switch pushPathFor(err) {
+	case PushPathCredentialsEndpoint:
+		return newResolvedImageRepository(credentials.QualifiedRepository(), credentials.DockerCredentials(), credentials.PullSecret), nil
+	case PushPathOlder:
+		log.Debug().Msg("Stack predates the registry credentials endpoint; using the environment's cloud registry")
+	default:
+		return nil, err
+	}
+
+	older, err := target.reachOlderPath()
+	if err != nil {
+		return nil, target.olderPathFailure(err)
+	}
+	return older.repository, nil
+}
+
+// PushPath is which path a push or deploy takes to an environment's images.
+type PushPath string
+
+const (
+	// PushPathCredentialsEndpoint is a credential the stack issues, for
+	// whichever registry it keeps the environment's images in.
+	PushPathCredentialsEndpoint PushPath = "credentials-endpoint"
+	// PushPathOlder is the repository the environment's description names,
+	// in ECR, reached with AWS credentials the stack issues: how a stack older
+	// than the registry credentials endpoint has its images reached.
+	PushPathOlder PushPath = "older-path"
+	// PushPathNone is a push that fails before it reaches any registry.
+	PushPathNone PushPath = "none"
+)
+
+// pushPathFor is which path a push or deploy takes to an environment's images,
+// given what the registry credentials endpoint answered: the endpoint whenever
+// it serves, the older path only when it is not served at all, and neither on
+// any other failure, which is not a reason to fall back. ResolveImageRepository
+// and ProbeImageRegistry both decide by it, so a probe cannot report a path the
+// push it explains would not take.
+func pushPathFor(credentialsErr error) PushPath {
+	switch {
+	case credentialsErr == nil:
+		return PushPathCredentialsEndpoint
+	case errors.Is(credentialsErr, ErrRegistryCredentialsNotServed):
+		return PushPathOlder
+	default:
+		return PushPathNone
+	}
+}
+
+// errEnvironmentNotDescribed and errNoOlderRepository are the two ways the
+// older path finds nothing to reach, as opposed to failing to reach it.
+var (
+	errEnvironmentNotDescribed = errors.New("the stack has no description of this environment")
+	errNoOlderRepository       = errors.New("the environment names no repository of its own")
+)
+
+// olderPath is what the older path to an environment's images found.
+type olderPath struct {
+	// namedRepository is the repository the environment's description names,
+	// once the description has been read: what a failure to reach it was
+	// failing to reach.
+	namedRepository string
+
+	repository *EnvironmentImageRepository
+
+	// expiresAt is when ECR's authorization token expires, as ECR says.
+	expiresAt *time.Time
+}
+
+// reachOlderPath reaches an environment's images the way a stack older than
+// the registry credentials endpoint has them reached: the repository its
+// description names, in ECR, through AWS credentials the stack issues.
+//
+// Nothing cloud-shaped is fetched before the description is read, and finding
+// nothing there is told apart from failing to reach what it names.
+func (target *TargetEnvironment) reachOlderPath() (olderPath, error) {
+	// A 404 is handled here, as a description the stack does not have, so it
+	// is not logged as a failed request.
+	envDetails, err := target.getDetails(http.StatusNotFound)
+	if err != nil {
+		if isHTTPNotFound(err) {
+			return olderPath{}, errEnvironmentNotDescribed
+		}
+		return olderPath{}, clierrors.Wrap(err, "Failed to read the environment's details").
+			WithSuggestion("Check that you have access to this environment, and that its stack is reachable")
+	}
+	found := olderPath{namedRepository: envDetails.Deployment.EcrRepo}
+	if found.namedRepository == "" {
+		return found, errNoOlderRepository
+	}
+
+	credentialsFailed := func(err error) error {
+		return clierrors.Wrap(err, "Failed to get credentials for the environment's image repository").
+			WithSuggestion("Check that you have access to this environment")
+	}
+	client, err := target.newECRClient(envDetails)
+	if err != nil {
+		return found, credentialsFailed(err)
+	}
+	dockerCredentials, expiresAt, err := ecrDockerCredentials(client)
+	if err != nil {
+		return found, credentialsFailed(err)
+	}
+	// A stack this old names no Secret: its environments' images are all in
+	// ECR, which nodes pull from as themselves.
+	found.repository = newResolvedImageRepository(found.namedRepository, dockerCredentials, "")
+	found.repository.ecr = newECRRepository(client, found.namedRepository)
+	found.expiresAt = expiresAt
+	return found, nil
+}
+
+// olderPathFailure is what a push that fell back to the older path fails with,
+// given what reaching it failed with. Shared with ProbeImageRegistry, so what
+// the probe says a push would fail with is what one does.
+func (target *TargetEnvironment) olderPathFailure(err error) error {
+	switch {
+	case errors.Is(err, errEnvironmentNotDescribed):
+		// Neither request found anything: the environment is not on this
+		// stack at all. Reporting the deployments request would point the
+		// reader at a description that was never the problem.
+		return clierrors.Newf("Environment '%s' was not found on this stack", target.HumanID).
+			WithSuggestion("Check the environment name, and run 'metaplay update project-environments' to sync the list from the portal")
+	case errors.Is(err, errNoOlderRepository):
+		return clierrors.New("The environment has no image repository").
+			WithDetails("Its stack predates the registry credentials endpoint, and the environment names no repository of its own.").
+			WithSuggestion("Check that the environment finished provisioning, and that your CLI is up to date")
+	default:
+		return err
+	}
+}
+
+// newECRRepository is the ECR repository behind a qualified repository, as
+// ECR's control plane names it, or nil where the name does not parse, which
+// leaves listing it to the registry protocol.
+func newECRRepository(client ecrImageAPI, qualifiedRepository string) *ecrRepository {
+	repository, err := name.NewRepository(qualifiedRepository)
+	if err != nil {
+		return nil
+	}
+	return &ecrRepository{client: client, name: repository.RepositoryStr()}
+}
+
+// newResolvedImageRepository is the repository a resolution answered with,
+// logged once here rather than by every command that resolves one.
+func newResolvedImageRepository(qualifiedRepository string, credentials *DockerCredentials, pullSecret string) *EnvironmentImageRepository {
+	log.Debug().Msgf("Resolved the environment's image repository to %s, as username=%s, pulled with Secret %q", qualifiedRepository, credentials.Username, pullSecret)
+	return &EnvironmentImageRepository{
+		QualifiedRepository: qualifiedRepository,
+		Credentials:         credentials,
+		PullSecret:          pullSecret,
+	}
+}
+
+// RefreshImageRepository resolves this environment's images again, for a push
+// that happens long after an earlier resolution, and hands back a fresh
+// credential for the same repository.
+//
+// A stack's credential is short-lived where an ECR login was not, and a deploy
+// can wait at an image picker for longer than one lives, so it asks again right
+// before the push. A stack signs a credential for its own registry itself; for
+// ECR it asks ECR for one more authorization token. What the chart is told has
+// already been taken from the earlier answer, so a repository that changed in
+// between is refused rather than pushed to: the image would land somewhere the
+// deployment does not name.
+func (target *TargetEnvironment) RefreshImageRepository(earlier *EnvironmentImageRepository) (*EnvironmentImageRepository, error) {
+	refreshed, err := target.ResolveImageRepository()
+	if err != nil {
+		return nil, err
+	}
+	if refreshed.QualifiedRepository != earlier.QualifiedRepository {
+		return nil, clierrors.Newf("The environment's image repository changed from '%s' to '%s' since it was first resolved",
+			earlier.QualifiedRepository, refreshed.QualifiedRepository).
+			WithSuggestion("Run the command again")
+	}
+	return refreshed, nil
+}

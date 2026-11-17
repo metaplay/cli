@@ -11,7 +11,7 @@ Most feature work boils down to deciding where each piece of the feature lives w
 
 1. **Pin down the feature shape.** What state is involved, who owns it (single player, guild, server), what mutations are possible, and what's designer-tunable? The right SDK primitive (model member vs. action vs. config vs. server entity) follows directly from these answers — sketch them before touching files.
 2. **Read what exists.** Grep the project for similar features and the SDK markers they use (`[ModelAction(`, `[GameConfigEntry]`, `EntityActor`, `MetaplayClient`). Local patterns are the most reliable guide to project conventions.
-3. **Consult docs for unfamiliar primitives.** Use `metaplay-docs` for SDK API and concept questions rather than guessing — the SDK has constraints (determinism, serialization, fast-forward) that aren't obvious from type signatures alone.
+3. **Consult docs for unfamiliar primitives.** Use `metaplay-docs` for SDK API and concept questions rather than guessing — the SDK has constraints (determinism, serialization, fast-forward) that aren't obvious from type signatures alone. SDK doc comments link each type's guide as `<seealso href="https://docs.metaplay.io/<path>"/>`. You may read the guide with `metaplay llm-docs read <url>`.
 4. **Apply the design patterns below.** They cover the SDK contracts most likely to bite. After implementation, verify against `metaplay-develop-code-review` for the full rule checklist.
 
 ## Actions

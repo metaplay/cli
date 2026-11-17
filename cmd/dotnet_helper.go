@@ -95,7 +95,7 @@ func checkDotnetSdkVersion(ctx context.Context, requiredDotnetVersion *version.V
 	installedVersionStr := strings.TrimSpace(out.String())
 	installedVersion, err := version.NewVersion(installedVersionStr)
 	if err != nil {
-		return fmt.Errorf("failed to parse required .NET version string '%s': %v", installedVersionStr, err)
+		return fmt.Errorf("failed to parse required .NET version string '%s': %w", installedVersionStr, err)
 	}
 
 	// Print the info.

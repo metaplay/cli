@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
@@ -131,14 +132,8 @@ func (o *initProjectConfigOpts) Prepare(cmd *cobra.Command, args []string) error
 }
 
 func (o *initProjectConfigOpts) Run(cmd *cobra.Command) error {
-	// Try to resolve the project & auth provider.
-	project, err := tryResolveProject()
-	if err != nil {
-		return err
-	}
-
 	// Always use Metaplay Auth for project initialization.
-	authProvider, err := getAuthProvider(project, "metaplay")
+	authProvider, err := auth.NewDefaultAuthProvider()
 	if err != nil {
 		return err
 	}

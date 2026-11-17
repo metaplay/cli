@@ -44,7 +44,7 @@ func init() {
 	o := buildImageOpts{}
 
 	args := o.Arguments()
-	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:364cff09' or '364cff09'.")
+	args.AddStringArgumentOpt(&o.argImageName, "IMAGE", "Docker image name (optional) and tag, eg, 'mygame:20260601-153000-1a27c25' or '20260601-153000-1a27c25'.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to docker build.")
 
 	cmd := &cobra.Command{
@@ -65,26 +65,28 @@ func init() {
 		`),
 		Example: renderExample(`
 			# Build Docker image, produces image named '<projectID>:YYYYMMDD-HHMMSS-COMMIT_ID'.
-			# Only recommended when building images manually. In CI, you should always specify the tag explicitly.
 			metaplay build image
 
-			# Specify only the tag, produces image named '<projectID>:364cff09'.
-			metaplay build image 364cff09
+			# Specify only the tag, produces image named '<projectID>:20260601-153000-1a27c25'.
+			metaplay build image 20260601-153000-1a27c25
 
 			# Build a project from another directory.
 			metaplay -p ../MyProject build image
 
-			# Build docker image with commit ID and build number specified.
-			metaplay build image mygame:364cff09 --commit-id=1a27c25753 --build-number=123
+			# In CI, generate the tag in the same YYYYMMDD-HHMMSS-COMMIT_ID format and pass it
+			# explicitly, so that later steps can refer to it. Tags in this format are unique, and
+			# sort in the order the images were built.
+			export IMAGE_TAG="$(date -u +%Y%m%d-%H%M%S)-$COMMIT_ID"
+			metaplay build image mygame:$IMAGE_TAG --commit-id=$COMMIT_ID --build-number=$BUILD_NUMBER
 
 			# Build an image to be run on an arm64 machine.
-			metaplay build image mygame:364cff09 --architecture=arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=arm64
 
 			# Build a multi-arch image for both amd64 and arm64 (only supported with 'buildx').
-			metaplay build image mygame:364cff09 --architecture=amd64,arm64
+			metaplay build image mygame:20260601-153000-1a27c25 --architecture=amd64,arm64
 
 			# Pass extra arguments to the docker build.
-			metaplay build image mygame:364cff09 -- --build-arg FOO=BAR
+			metaplay build image mygame:20260601-153000-1a27c25 -- --build-arg FOO=BAR
 		`),
 	}
 
@@ -119,6 +121,10 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	// Find & load the project config file.
 	project, err := resolveProject()
+	if err != nil {
+		return err
+	}
+	sdkMetadata, err := project.SdkMetadata()
 	if err != nil {
 		return err
 	}
@@ -178,7 +184,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	if strings.HasSuffix(imageName, ":latest") {
 		return clierrors.New("Cannot build image with tag 'latest'").
-			WithSuggestion("Use a unique tag like 'mygame:20250131-133012'")
+			WithSuggestion("Use a unique tag like 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Check that docker is installed and running
@@ -252,7 +258,7 @@ func (o *buildImageOpts) Run(cmd *cobra.Command) error {
 
 	// Print build info.
 	log.Info().Msgf("Project ID:          %s", styles.RenderTechnical(project.Config.ProjectHumanID))
-	log.Info().Msgf("Metaplay SDK:        %s", styles.RenderTechnical(project.VersionMetadata.SdkVersion.String()))
+	log.Info().Msgf("Metaplay SDK:        %s", styles.RenderTechnical(sdkMetadata.SdkVersion.String()))
 	log.Info().Msgf("Docker image:        %s", styles.RenderTechnical(imageName))
 	log.Info().Msgf("Commit ID            %s %s", styles.RenderTechnical(commitID), commitIDBadge)
 	log.Info().Msgf("Build number:        %s %s", styles.RenderTechnical(buildNumber), buildNumberBadge)
@@ -325,9 +331,9 @@ func checkCommand(ctx context.Context, command string, args ...string) error {
 		}
 		trimmed := strings.TrimSpace(stderr.String())
 		if trimmed != "" {
-			return fmt.Errorf("%v: %s", err, truncateForLog(trimmed, 500))
+			return fmt.Errorf("%w: %s", err, truncateForLog(trimmed, 500))
 		}
-		return fmt.Errorf("command failed: %v", err)
+		return fmt.Errorf("command failed: %w", err)
 	}
 	return nil
 }
@@ -622,7 +628,7 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 	projectDotnetVersion := fmt.Sprintf("%d.%d", projectDotnetVersionSegments[0], projectDotnetVersionSegments[1])
 
 	// Resolve final docker build invocation
-	dockerArgs := append(
+	dockerArgs := slices.Concat(
 		buildEngineArgs,
 		[]string{
 			"--pull",
@@ -636,7 +642,7 @@ func buildDockerImage(ctx context.Context, params buildDockerImageParams) error 
 			"--build-arg", fmt.Sprintf("PROJECT_ID=%s", params.project.Config.ProjectHumanID),
 			"--build-arg", fmt.Sprintf("BUILD_NUMBER=%s", params.buildNumber),
 			"--build-arg", fmt.Sprintf("COMMIT_ID=%s", params.commitID),
-		}...,
+		},
 	)
 
 	// If target platform is specified, set it explicitly.

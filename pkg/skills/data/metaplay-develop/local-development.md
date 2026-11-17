@@ -5,7 +5,7 @@ description: Run a Metaplay game server, LiveOps Dashboard, and BotClient locall
 
 # Local development loop
 
-The daily inner loop for Metaplay project work: run the server, the LiveOps Dashboard, and a Unity client (or BotClient) on the developer's own machine, with fast feedback on code changes.
+The daily inner loop for Metaplay project work: run the server, the LiveOps Dashboard, and a game client (or BotClient) on the developer's own machine, with fast feedback on code changes.
 
 ## The three pieces
 

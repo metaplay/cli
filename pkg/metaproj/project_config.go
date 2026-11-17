@@ -7,6 +7,7 @@ package metaproj
 import (
 	"github.com/hashicorp/go-version"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/sitedeploy"
 )
 
 // Name of the Metaplay project config file.
@@ -41,15 +42,28 @@ type IntegrationTestContainerConfig struct {
 	Env  map[string]string `yaml:"env,omitempty"`
 }
 
+// WebClientConfig is a web client that 'metaplay deploy webclient' uploads to an
+// environment's CDN ($.webClients[] in metaplay-project.yaml).
+type WebClientConfig struct {
+	Name      string `yaml:"name"`
+	SourceDir string `yaml:"sourceDir"` // Relative path to the built site, eg, its 'dotnet publish' wwwroot
+
+	sitedeploy.Config `yaml:",inline"`
+}
+
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update ValidateProjectConfig().
 type ProjectConfig struct {
-	ProjectHumanID  string `yaml:"projectID"`       // The project's human ID (as in the portal)
-	BuildRootDir    string `yaml:"buildRootDir"`    // Relative path to the docker build root directory
-	SdkRootDir      string `yaml:"sdkRootDir"`      // Relative path to the MetaplaySDK directory
-	BackendDir      string `yaml:"backendDir"`      // Relative path to the project-specific backend directory
-	SharedCodeDir   string `yaml:"sharedCodeDir"`   // Relative path to the shared code directory
-	UnityProjectDir string `yaml:"unityProjectDir"` // Relative path to the Unity (client) project
+	ProjectHumanID string `yaml:"projectID"`     // The project's human ID (as in the portal)
+	BuildRootDir   string `yaml:"buildRootDir"`  // Relative path to the docker build root directory
+	SdkRootDir     string `yaml:"sdkRootDir"`    // Relative path to the MetaplaySDK directory
+	BackendDir     string `yaml:"backendDir"`    // Relative path to the project-specific backend directory
+	SharedCodeDir  string `yaml:"sharedCodeDir"` // Relative path to the shared code directory
+
+	// Relative path to the Unity (client) project (optional).
+	//
+	// Deprecated: Only needed during 'metaplay init project'. Do not add new uses; will be removed in the future.
+	UnityProjectDir string `yaml:"unityProjectDir"`
 
 	DotnetRuntimeVersion *version.Version `yaml:"dotnetRuntimeVersion"` // .NET runtime version that the project is using (major.minor); depends on the SDK version, eg, '10.0' (older SDKs use '8.0' or '9.0')
 
@@ -62,6 +76,8 @@ type ProjectConfig struct {
 	Features ProjectFeaturesConfig `yaml:"features"`
 
 	IntegrationTests *IntegrationTestsConfig `yaml:"integrationTests,omitempty"`
+
+	WebClients []WebClientConfig `yaml:"webClients,omitempty"`
 
 	Environments []ProjectEnvironmentConfig `yaml:"environments"`
 }

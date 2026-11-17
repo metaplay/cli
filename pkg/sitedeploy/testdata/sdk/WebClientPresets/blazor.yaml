@@ -1,0 +1,33 @@
+# A copy of the Metaplay SDK's preset for Blazor WebAssembly clients,
+# MetaplaySDK/WebClientPresets/blazor.yaml, for the tests.
+
+# The publish writes a Brotli and a gzip copy next to each compressible file. The CDN serves each
+# object as it is and cannot pick an encoding per request, so the Brotli copy is uploaded under the
+# original's name, in its place. Browsers accept Brotli over HTTPS. Files the publish does not
+# compress, such as images and fonts, are uploaded as they are.
+files:
+  - match: "**/*.br"
+    stripSuffix: .br
+    contentEncoding: br
+  - match: "**/*.gz"
+    exclude: true
+
+objects:
+  # The framework files' names carry a ten-character content hash, eg, Client.su7785ecxb.wasm, so each
+  # build uploads new names: they can be cached forever, and uploaded before anything names them. Files
+  # that keep their names across builds get the default Cache-Control: no-cache.
+  - matchRegex: '^_framework/[^/]+\.[a-z0-9]{10}\.[a-z]+$'
+    cacheControl: public, max-age=31536000, immutable
+    uploadOrder: -1
+
+  # dotnet.js names the other framework files, blazor.webassembly.js loads dotnet.js, and index.html loads
+  # blazor.webassembly.js: each goes up after the files it names.
+  - match: _framework/dotnet.js
+    uploadOrder: 1
+  - match: _framework/blazor.webassembly.js
+    uploadOrder: 2
+  - match: index.html
+    uploadOrder: 3
+
+# Metaplay.Client reads the game server's address from a file of this name at startup.
+endpointsFile: metaplay-endpoints.json

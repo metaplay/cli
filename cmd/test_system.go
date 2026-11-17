@@ -65,8 +65,13 @@ func (o *testSystemOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg(styles.RenderTitle("Run Playwright.NET System Tests"))
 	log.Info().Msg("")
 
+	sdkMetadata, err := project.SdkMetadata()
+	if err != nil {
+		return err
+	}
+
 	// Check for .NET SDK installation and required version (based on SDK version)
-	if err := checkDotnetSdkVersion(ctx, project.VersionMetadata.MinDotnetSdkVersion); err != nil {
+	if err := checkDotnetSdkVersion(ctx, sdkMetadata.MinDotnetSdkVersion); err != nil {
 		return err
 	}
 

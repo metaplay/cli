@@ -1,0 +1,248 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package sitedeploy
+
+import (
+	"bytes"
+	"context"
+	"crypto/md5"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+)
+
+// The manifest is kept next to the site's files, under this name.
+const manifestFileName = ".metaplay-site.json"
+
+const manifestFormat = 1
+
+// Manifest records the objects deploys of a site have uploaded, so that a
+// deploy can skip files it already uploaded identically. It is public, next
+// to the site, so that it also tells others, such as the developer portal,
+// that a site is deployed there and when.
+type Manifest struct {
+	Format     int                       `json:"format"`
+	Name       string                    `json:"name"` // The web client's name in metaplay-project.yaml.
+	DeployedAt time.Time                 `json:"deployedAt"`
+	Objects    map[string]ManifestObject `json:"objects"`
+}
+
+// ManifestObject is an object a deploy uploaded.
+type ManifestObject struct {
+	Size            int64     `json:"size"`
+	MD5             string    `json:"md5"`
+	ContentType     string    `json:"contentType"`
+	ContentEncoding string    `json:"contentEncoding,omitempty"`
+	CacheControl    string    `json:"cacheControl"`
+	DeployedAt      time.Time `json:"deployedAt"` // The last deploy whose site had the file.
+
+	// StoreTag is the store's tag for the bytes it holds, such as S3's ETag.
+	// It is only compared for equality, to check that the store still holds
+	// what the deploy uploaded.
+	StoreTag string `json:"storeTag"`
+}
+
+// ErrNotFound is what an ObjectStore returns for a key that has no object.
+var ErrNotFound = errors.New("object not found")
+
+// PutRequest is an object to upload.
+type PutRequest struct {
+	Key             string
+	Body            io.ReadSeeker
+	Size            int64
+	MD5             string
+	ContentType     string
+	ContentEncoding string
+	CacheControl    string
+}
+
+// ObjectStore is the bucket a site is deployed to.
+type ObjectStore interface {
+	Get(ctx context.Context, key string) ([]byte, error)
+
+	// Head gives the store's tag for the object at key, or ErrNotFound.
+	Head(ctx context.Context, key string) (string, error)
+
+	// Put uploads an object and gives the store's tag for it.
+	Put(ctx context.Context, req PutRequest) (string, error)
+}
+
+// ReadManifest reads the manifest of the site at prefix, or nil where nothing
+// has been deployed there.
+func ReadManifest(ctx context.Context, store ObjectStore, prefix string) (*Manifest, error) {
+	data, err := store.Get(ctx, ManifestKey(prefix))
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the site manifest: %w", err)
+	}
+	var manifest Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, fmt.Errorf("failed to parse the site manifest %s: %w", ManifestKey(prefix), err)
+	}
+	if manifest.Format != manifestFormat {
+		return nil, fmt.Errorf("the site manifest %s has format %d, expecting %d", ManifestKey(prefix), manifest.Format, manifestFormat)
+	}
+	return &manifest, nil
+}
+
+// VerifyUnchanged checks that the store still holds the objects the plan
+// skips as the previous deploy recorded them, and plans an upload for each
+// that it does not. An interrupted deploy leaves the manifest behind the
+// bucket, and so does a change made outside a deploy. It gives how many
+// objects it planned an upload for.
+func VerifyUnchanged(ctx context.Context, store ObjectStore, plan *Plan, previous *Manifest, concurrency int) (int, error) {
+	if previous == nil {
+		return 0, nil
+	}
+	var stale atomic.Int64
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.SetLimit(concurrency)
+	for i := range plan.Objects {
+		obj := &plan.Objects[i]
+		if !obj.Unchanged {
+			continue
+		}
+		recorded := previous.Objects[obj.Key].StoreTag
+		group.Go(func() error {
+			tag, err := store.Head(groupCtx, obj.Key)
+			if err != nil && !errors.Is(err, ErrNotFound) {
+				return fmt.Errorf("failed to check %s: %w", obj.Key, err)
+			}
+			if err != nil || recorded == "" || tag != recorded {
+				obj.Unchanged = false
+				stale.Add(1)
+			}
+			return nil
+		})
+	}
+	err := group.Wait()
+	return int(stale.Load()), err
+}
+
+// Deploy uploads the plan's changed objects in ascending upload order, each
+// order's uploads finished before the next starts, and then the manifest of the site
+// called name. onUploaded is called after each upload with how many of the plan's
+// uploads are done.
+func Deploy(ctx context.Context, store ObjectStore, name string, plan *Plan, previous *Manifest, now time.Time, concurrency int, onUploaded func(done, total int)) (*Manifest, error) {
+	total := plan.UploadCount()
+	var done atomic.Int64
+	tags := make([]string, len(plan.Objects))
+
+	for start := 0; start < len(plan.Objects); {
+		end := start
+		for end < len(plan.Objects) && plan.Objects[end].UploadOrder == plan.Objects[start].UploadOrder {
+			end++
+		}
+
+		group, groupCtx := errgroup.WithContext(ctx)
+		group.SetLimit(concurrency)
+		for i := start; i < end; i++ {
+			obj := plan.Objects[i]
+			if obj.Unchanged {
+				continue
+			}
+			group.Go(func() error {
+				tag, err := putFile(groupCtx, store, obj)
+				if err != nil {
+					return fmt.Errorf("failed to upload %s: %w", obj.Key, err)
+				}
+				tags[i] = tag
+				if onUploaded != nil {
+					onUploaded(int(done.Add(1)), total)
+				}
+				return nil
+			})
+		}
+		if err := group.Wait(); err != nil {
+			return nil, err
+		}
+		start = end
+	}
+
+	manifest := nextManifest(name, previous, plan, tags, now)
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	sum := md5.Sum(data)
+	_, err = store.Put(ctx, PutRequest{
+		Key:          plan.ManifestKey,
+		Body:         bytes.NewReader(data),
+		Size:         int64(len(data)),
+		MD5:          hex.EncodeToString(sum[:]),
+		ContentType:  contentTypes[".json"],
+		CacheControl: DefaultCacheControl,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload the site manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+func putFile(ctx context.Context, store ObjectStore, obj Object) (string, error) {
+	if obj.Data != nil {
+		return store.Put(ctx, PutRequest{
+			Key:             obj.Key,
+			Body:            bytes.NewReader(obj.Data),
+			Size:            obj.Size,
+			MD5:             obj.MD5,
+			ContentType:     obj.ContentType,
+			ContentEncoding: obj.ContentEncoding,
+			CacheControl:    obj.CacheControl,
+		})
+	}
+	file, err := os.Open(obj.LocalFile)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	return store.Put(ctx, PutRequest{
+		Key:             obj.Key,
+		Body:            file,
+		Size:            obj.Size,
+		MD5:             obj.MD5,
+		ContentType:     obj.ContentType,
+		ContentEncoding: obj.ContentEncoding,
+		CacheControl:    obj.CacheControl,
+	})
+}
+
+// nextManifest records the plan's objects on top of the previous manifest's:
+// a deploy deletes nothing, so the objects of earlier deploys are still in the
+// bucket and stay on record. tags are the store's tags of the plan's uploads,
+// by their index in the plan.
+func nextManifest(name string, previous *Manifest, plan *Plan, tags []string, now time.Time) *Manifest {
+	manifest := &Manifest{Format: manifestFormat, Name: name, DeployedAt: now, Objects: map[string]ManifestObject{}}
+	if previous != nil {
+		for key, obj := range previous.Objects {
+			manifest.Objects[key] = obj
+		}
+	}
+	for i, obj := range plan.Objects {
+		tag := tags[i]
+		if obj.Unchanged {
+			tag = previous.Objects[obj.Key].StoreTag
+		}
+		manifest.Objects[obj.Key] = ManifestObject{
+			Size:            obj.Size,
+			MD5:             obj.MD5,
+			ContentType:     obj.ContentType,
+			ContentEncoding: obj.ContentEncoding,
+			CacheControl:    obj.CacheControl,
+			DeployedAt:      now,
+			StoreTag:        tag,
+		}
+	}
+	return manifest
+}

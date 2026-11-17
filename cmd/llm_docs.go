@@ -41,7 +41,7 @@ const (
 
 var llmDocsCmd = &cobra.Command{
 	Use:   "llm-docs",
-	Short: "[preview] Query the Metaplay LLM-friendly documentation service (machine use only)",
+	Short: "Query the Metaplay LLM-friendly documentation service (machine use only)",
 }
 
 func init() {
@@ -53,7 +53,7 @@ func init() {
 // llm-docs gRPC service with the bearer token attached to the transport, and
 // returns the RequestMetadata to include in every RPC body. All metadata is
 // best-effort; missing values are simply omitted. Caller must Close the client.
-func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, error) {
+func newLLMDocsClient() (*llmDocsClient, *llmdocsclient.RequestMetadata, error) {
 	reqMeta := &llmdocsclient.RequestMetadata{}
 
 	// Project metadata from metaplay-project.yaml (if any).
@@ -64,19 +64,38 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		if id := project.Config.ProjectHumanID; id != "" {
 			reqMeta.ProjectId = &id
 		}
-		if project.VersionMetadata.SdkVersion != nil {
-			v := project.VersionMetadata.SdkVersion.String()
+		if sdkMetadata, err := project.SdkMetadata(); err != nil {
+			log.Debug().Msgf("llm-docs: skipping SDK version, SDK metadata failed to load: %v", err)
+		} else {
+			v := sdkMetadata.SdkVersion.String()
 			reqMeta.SdkVersion = &v
 		}
 	}
 
-	// Auth + user identity from the persisted Metaplay session (if any).
+	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
+	isOverrideTarget := target != ""
+	if target == "" {
+		target = defaultLLMDocsTarget
+	}
+
+	// Auth + user identity from the persisted session (if any).
 	// We deliberately use LoadSessionState (not LoadAndRefreshTokenSet) here:
 	// a failed refresh would delete the session, and a best-effort metadata
 	// read must never have that side effect.
+	//
+	// A session from a provider other than the built-in one belongs to a different
+	// platform, and the default target is operated by Metaplay: presenting that
+	// session there would hand a foreign platform's credential (and the identity
+	// derived from it) to a service that is not its audience. Such a session is
+	// used only when the caller has pointed at a different llm-docs service of
+	// their own with METAPLAYCLI_LLM_DOCS_ADDR.
 	var accessToken string
-	authProvider := auth.NewMetaplayAuthProvider()
-	if sessionState, err := auth.LoadSessionState(authProvider.GetSessionID()); err != nil {
+	authProvider, err := auth.NewDefaultAuthProvider()
+	if err != nil {
+		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to resolve auth provider: %v", err)
+	} else if !authProvider.IsBuiltinMetaplayAuth() && !isOverrideTarget {
+		stderrLogger.Info().Msgf(styles.RenderMuted("llm-docs: auth token withheld (session belongs to auth provider '%s', and %s is a Metaplay service)"), authProvider.Name, target)
+	} else if sessionState, err := auth.LoadSessionState(authProvider); err != nil {
 		log.Debug().Msgf("llm-docs: skipping auth metadata, failed to load session: %v", err)
 	} else if sessionState != nil {
 		accessToken = sessionState.TokenSet.AccessToken
@@ -89,11 +108,6 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		}
 	}
 
-	target := strings.TrimSpace(os.Getenv("METAPLAYCLI_LLM_DOCS_ADDR"))
-	isOverrideTarget := target != ""
-	if target == "" {
-		target = defaultLLMDocsTarget
-	}
 	insecureForced := isTruthy(os.Getenv("METAPLAYCLI_LLM_DOCS_INSECURE"))
 	useInsecure := insecureForced || isLoopbackTarget(target)
 
@@ -133,7 +147,12 @@ func newLLMDocsClient() (*llmdocsclient.Client, *llmdocsclient.RequestMetadata, 
 		return nil, nil, clierrors.Wrapf(err, "Failed to prepare llm-docs client for %s", target).
 			WithSuggestion("Set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target; loopback targets use plaintext automatically")
 	}
-	return client, reqMeta, nil
+	return &llmDocsClient{Client: client, target: target}, reqMeta, nil
+}
+
+type llmDocsClient struct {
+	*llmdocsclient.Client
+	target string
 }
 
 func isLoopbackTarget(target string) bool {
@@ -168,7 +187,7 @@ func (c bearerCredentials) RequireTransportSecurity() bool {
 	return c.requireTLS
 }
 
-func wrapLLMDocsError(err error, action string) error {
+func (c *llmDocsClient) wrapError(err error, action string) error {
 	if err == nil {
 		return nil
 	}
@@ -195,12 +214,33 @@ func wrapLLMDocsError(err error, action string) error {
 			WithDetails(st.Message()).
 			WithSuggestion("Check the path; use 'metaplay llm-docs read index.md' to see the catalog")
 	case codes.FailedPrecondition:
-		return clierrors.Newf("llm-docs could not %s", action).
+		cliErr := clierrors.Newf("llm-docs could not %s", action).
 			WithDetails(st.Message())
+		// The server reports "path is a directory: <path>" when 'read' is
+		// given a directory.
+		if dir, isDir := strings.CutPrefix(st.Message(), "path is a directory"); isDir {
+			dir = strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(dir, ":")), "/")
+			if dir == "" {
+				dir = "<path>"
+			}
+			// Only a few directories have an index.md, so listing comes first.
+			cliErr = cliErr.WithSuggestion(fmt.Sprintf("This path is a directory; list it with 'metaplay llm-docs glob \"*\" --path \"%s\"' (some directories also have an index.md)", dir))
+		}
+		return cliErr
+	case codes.OutOfRange:
+		return clierrors.Newf("Requested range is out of bounds while trying to %s", action).
+			WithDetails(st.Message()).
+			WithSuggestion("Use a smaller --offset; the details above give the file's line count")
+	case codes.Canceled:
+		return clierrors.Wrapf(err, "llm-docs request was cancelled while trying to %s", action)
 	case codes.DeadlineExceeded:
 		return clierrors.Wrapf(err, "llm-docs request timed out while trying to %s", action).
 			WithSuggestion("Retry the command; if this persists, the service may be overloaded")
 	case codes.Unavailable:
+		if isNetworkAccessDenied(c.target) {
+			return clierrors.Wrapf(err, "Cannot connect to %s", c.target).
+				WithSuggestion("A restricted sandbox may be blocking network access")
+		}
 		return clierrors.Wrapf(err, "llm-docs service is unavailable while trying to %s", action).
 			WithSuggestion("Check your network connection, or set METAPLAYCLI_LLM_DOCS_ADDR to override the gRPC target")
 	default:

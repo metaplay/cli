@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,6 +51,18 @@ var ignoredFilePrefixes = []string{
 	"._", // macOS resource fork files
 }
 
+// isSdkPathInDirs returns true if archivePath is one of the dirs or below one. Both are
+// paths within the SDK archive, e.g. "MetaplaySDK/Foo/bar.txt" is in "MetaplaySDK/Foo".
+func isSdkPathInDirs(archivePath string, dirs []string) bool {
+	for _, dir := range dirs {
+		dir = strings.TrimSuffix(dir, "/")
+		if archivePath == dir || strings.HasPrefix(archivePath, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // shouldIgnoreFile returns true if the file should be ignored during comparison.
 func shouldIgnoreFile(filename string) bool {
 	// Check exact matches
@@ -84,18 +97,18 @@ func buildGitignoreMatcherForDir(rootDir string) *gitignoreMatcher {
 	matcher := &gitignoreMatcher{}
 
 	// Walk the directory tree to find all .gitignore files. The callback handles
-	// per-entry errors itself (returning nil to continue), so Walk never returns a
-	// non-nil error here; gitignore matching is best-effort, so discard it.
-	_ = filepath.Walk(rootDir, func(path string, info os.FileInfo, err error) error {
+	// per-entry errors itself (returning nil to continue), so WalkDir never returns
+	// a non-nil error here; gitignore matching is best-effort, so discard it.
+	_ = filepath.WalkDir(rootDir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // Continue on errors
 		}
 
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
 
-		if info.Name() == ".gitignore" {
+		if entry.Name() == ".gitignore" {
 			// Read the file content and use NewGitIgnoreFromReader
 			// This avoids issues with NewGitIgnore's base path handling
 			content, err := os.ReadFile(path)
@@ -463,7 +476,8 @@ type zipFileEntry struct {
 
 // DetectSdkModificationsWithPatch compares the local SDK directory against the original
 // SDK zip file and returns both the list of modifications and a git-compatible patch.
-func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*SdkModificationResult, error) {
+// Directories listed in excludedDirs are ignored on both sides.
+func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string, excludedDirs []string) (*SdkModificationResult, error) {
 	// Build gitignore matcher by scanning the SDK directory for all .gitignore files
 	gitMatcher := buildGitignoreMatcherForDir(sdkRootDir)
 
@@ -498,6 +512,11 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 			continue
 		}
 
+		// Skip excluded directories
+		if isSdkPathInDirs(file.Name, excludedDirs) {
+			continue
+		}
+
 		// Skip files ignored by .gitignore (path relative to SDK root)
 		if gitMatcher.isIgnored(relPath, false) {
 			continue
@@ -520,13 +539,13 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	var patchBuf bytes.Buffer
 
 	// Walk the local SDK directory - detect and generate diff in one pass
-	err = filepath.Walk(sdkRootDir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(sdkRootDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
 		// Skip directories
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
 
@@ -541,6 +560,12 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 
 		// Skip ignored files (OS-specific)
 		if shouldIgnoreFile(filepath.Base(relPath)) {
+			return nil
+		}
+
+		// Skip excluded directories. The excludedDirs are canonical MetaplaySDK/-rooted
+		// paths.
+		if isSdkPathInDirs("MetaplaySDK/"+relPath, excludedDirs) {
 			return nil
 		}
 
@@ -635,15 +660,16 @@ func DetectSdkModificationsWithPatch(sdkRootDir string, sdkZipPath string) (*Sdk
 	}, nil
 }
 
-// countBinaryFiles returns the number of binary files in the modifications list.
-func countBinaryFiles(modifications []ModifiedFile) int {
-	count := 0
+// binaryModifiedFiles returns the binary files in the modifications list.
+// These cannot be included in the patch and must be restored manually.
+func binaryModifiedFiles(modifications []ModifiedFile) []ModifiedFile {
+	var binaries []ModifiedFile
 	for _, m := range modifications {
 		if m.IsBinary {
-			count++
+			binaries = append(binaries, m)
 		}
 	}
-	return count
+	return binaries
 }
 
 // printModifiedFilesList prints the list of modified files to the log.

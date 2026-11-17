@@ -7,13 +7,17 @@ package envapi
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/metahttp"
 	"github.com/rs/zerolog/log"
@@ -21,12 +25,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	clientauthenticationv1beta1 "k8s.io/client-go/pkg/apis/clientauthentication/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -54,13 +61,22 @@ type AWSCredentials struct {
 
 // Container for access information to an environment's docker registry.
 type DockerCredentials struct {
-	Username    string
-	Password    string
+	Username string
+	Password string
+	// The registry, in one of two shapes: ECR's proxy endpoint, scheme and all
+	// ('https://<id>.dkr.ecr...'), or the bare host a stack that issues its own
+	// credentials reports. Not a name a registry client will parse.
 	RegistryURL string
 }
 
 func NewTargetEnvironment(tokenSet *auth.TokenSet, stackDomain, humanID string) *TargetEnvironment {
-	stackApiBaseURL := fmt.Sprintf("https://infra.%s/stackapi", stackDomain)
+	return NewTargetEnvironmentAtStackAPI(tokenSet, fmt.Sprintf("https://infra.%s/stackapi", stackDomain), humanID)
+}
+
+// NewTargetEnvironmentAtStackAPI is NewTargetEnvironment for a caller that
+// already holds the StackAPI base URL and would otherwise have to take it apart
+// to recover a stack domain this type never stores.
+func NewTargetEnvironmentAtStackAPI(tokenSet *auth.TokenSet, stackApiBaseURL, humanID string) *TargetEnvironment {
 	log.Debug().Msgf("Create TargetEnvironment with stackApiBaseURL=%s", stackApiBaseURL)
 	return &TargetEnvironment{
 		TokenSet:        tokenSet,
@@ -250,9 +266,15 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 
 // Request details about an environment from the StackAPI.
 func (target *TargetEnvironment) GetDetails() (*DeploymentSecret, error) {
+	return target.getDetails()
+}
+
+// getDetails is GetDetails, naming the non-2xx statuses the caller handles
+// itself, which are then not logged as failed requests.
+func (target *TargetEnvironment) getDetails(expectedStatuses ...int) (*DeploymentSecret, error) {
 	path := fmt.Sprintf("/v0/deployments/%s", target.HumanID)
 	log.Debug().Msgf("Get environment details from %s%s", target.StackApiClient.BaseURL, path)
-	details, err := metahttp.Get[DeploymentSecret](target.StackApiClient, path)
+	details, err := metahttp.RequestExpecting[DeploymentSecret](target.StackApiClient, http.MethodGet, path, nil, "", expectedStatuses...)
 	return &details, err
 }
 
@@ -271,23 +293,90 @@ func (target *TargetEnvironment) GetKubeExecCredential() (*string, error) {
 	return &credentials, err
 }
 
-/**
-* Get a `kubeconfig` payload which invokes `metaplay-auth get-kubernetes-execcredential` to get the actual
-* access credentials each time the kubeconfig is used.
-* @param userID Any identity for the user, stored in the kubeconfig but not used otherwise.
-* @returns The kubeconfig YAML.
- */
-func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) (string, error) {
-	path := fmt.Sprintf("/v0/credentials/%s/k8s?type=execcredential", target.HumanID)
-	log.Debug().Msgf("Getting Kubernetes KubeConfig with execcredential from %s%s...", target.StackApiClient.BaseURL, path)
+// ProxyExecCredentialSkew is how much earlier than its access token an exec
+// credential for the Kubernetes API proxy reports expiring, so that kubectl
+// never presents an expired token. The CLI refreshes on the same boundary.
+const ProxyExecCredentialSkew = time.Minute
 
-	credentials, err := metahttp.Post[KubeExecCredential](target.StackApiClient, path, nil, "")
+// NewProxyExecCredential returns the exec credential for a kubeconfig pointing
+// at the Kubernetes API proxy: the access token of the session with
+// authProvider, refreshed first if it expires within ProxyExecCredentialSkew.
+func NewProxyExecCredential(authProvider *auth.AuthProviderConfig) (string, error) {
+	// kubectl runs the plugin without a terminal, so a missing session cannot
+	// be logged in to here.
+	tokenSet, err := auth.LoadAndRefreshTokenSetValidFor(authProvider, ProxyExecCredentialSkew)
+	if err != nil {
+		return "", err
+	}
+	if tokenSet == nil {
+		return "", clierrors.New("Not logged in").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' and try again")
+	}
+	expiresAt, err := auth.AccessTokenExpiresAt(tokenSet)
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to parse access token expiration").
+			WithSuggestion("Run '" + authProvider.LoginCommand() + "' to re-authenticate")
+	}
+
+	// A token already within the skew, handed on because it could not be
+	// refreshed or because tokens live no longer than the skew, is reported
+	// with its own expiry. One already past would have kubectl run the plugin
+	// again for every request.
+	expiry := metav1.NewTime(expiresAt.Add(-ProxyExecCredentialSkew))
+	if !expiry.After(time.Now()) {
+		expiry = metav1.NewTime(expiresAt)
+	}
+	payload, err := json.Marshal(clientauthenticationv1beta1.ExecCredential{
+		TypeMeta: metav1.TypeMeta{APIVersion: "client.authentication.k8s.io/v1beta1", Kind: "ExecCredential"},
+		Status:   &clientauthenticationv1beta1.ExecCredentialStatus{Token: tokenSet.AccessToken, ExpirationTimestamp: &expiry},
+	})
+	if err != nil {
+		return "", clierrors.Wrap(err, "Failed to encode the exec credential")
+	}
+	return string(payload), nil
+}
+
+// ErrKubernetesAPIProxyRefused is wrapped by the errors GetKubeConfigWithExecCredential
+// returns when the stack serves the Kubernetes API proxy but a dynamic kubeconfig
+// cannot safely point at it. A static kubeconfig carries the stack's own
+// credential and is unaffected.
+var ErrKubernetesAPIProxyRefused = errors.New("a dynamic kubeconfig cannot use the stack's Kubernetes API proxy")
+
+// GetKubeConfigWithExecCredential returns a kubeconfig that runs the CLI for a
+// credential each time kubectl needs one. userID names its user, and is not
+// used otherwise. A stack serving the Kubernetes API proxy names a server under
+// StackAPI in its kubeconfig, and the CLI then answers kubectl with its own
+// access token. Otherwise the CLI asks StackAPI for a credential.
+//
+// The proxy plugin answers with the default auth provider's token.
+// proxyAuthProvider is that provider, if the environment signs in with it, and
+// nil otherwise, in which case a stack serving the proxy is refused rather than
+// have another provider's token handed to it. The kubeconfig pins the plugin to
+// proxyAuthProvider's fingerprint, since which provider is the default depends
+// on METAPLAYCLI_AUTH_PROVIDER_FILE where kubectl runs.
+func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string, proxyAuthProvider *auth.AuthProviderConfig) (string, error) {
+	log.Debug().Msgf("Getting the environment's kubeconfig from %s to find its Kubernetes API", target.StackApiBaseURL)
+	served, err := target.GetKubeConfigWithEmbeddedCredentials()
+	if err != nil {
+		return "", err
+	}
+	server, certificateAuthority, err := kubeconfigCluster(served)
 	if err != nil {
 		return "", err
 	}
 
-	if string(credentials.Spec.Cluster.CertificateAuthorityData) == "" && credentials.Spec.Cluster.Server == "" {
-		return "", fmt.Errorf("received kubeExecCredential with missing spec.cluster")
+	isProxy, err := target.isKubernetesAPIProxy(server)
+	if err != nil {
+		return "", err
+	}
+	pluginArgs := []string{"get", "kubernetes-execcredential", target.HumanID}
+	if isProxy {
+		if proxyAuthProvider == nil {
+			return "", fmt.Errorf("%w: the environment uses an auth provider other than the default, whose token the proxy plugin answers with", ErrKubernetesAPIProxyRefused)
+		}
+		pluginArgs = append(pluginArgs, "--proxy", "--auth-provider-fingerprint", proxyAuthProvider.Fingerprint())
+	} else {
+		pluginArgs = append(pluginArgs, target.StackApiBaseURL)
 	}
 
 	kubeConfig, err := yaml.Marshal(KubeConfig{
@@ -295,16 +384,16 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 		Clusters: []KubeConfigCluster{
 			{
 				Cluster: KubeConfigClusterData{
-					CertificateAuthorityData: base64.StdEncoding.EncodeToString(credentials.Spec.Cluster.CertificateAuthorityData[:]),
-					Server:                   credentials.Spec.Cluster.Server,
+					CertificateAuthorityData: base64.StdEncoding.EncodeToString(certificateAuthority),
+					Server:                   server,
 				},
-				Name: credentials.Spec.Cluster.Server,
+				Name: server,
 			},
 		},
 		Contexts: []KubeConfigContext{
 			{
 				Context: KubeConfigContextData{
-					Cluster:   credentials.Spec.Cluster.Server,
+					Cluster:   server,
 					Namespace: target.HumanID,
 					User:      userID,
 				},
@@ -319,13 +408,8 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 				Name: userID,
 				User: KubeConfigUserData{
 					Exec: KubeConfigUserDataExec{
-						Command: "metaplay",
-						Args: []string{
-							"get",
-							"kubernetes-execcredential",
-							target.HumanID,
-							target.StackApiBaseURL,
-						},
+						Command:         "metaplay",
+						Args:            pluginArgs,
 						ApiVersion:      "client.authentication.k8s.io/v1beta1",
 						InteractiveMode: "Never",
 					},
@@ -336,8 +420,75 @@ func (target *TargetEnvironment) GetKubeConfigWithExecCredential(userID string) 
 	if err != nil {
 		return "", err
 	}
-	dump := string(kubeConfig[:])
-	return dump, nil
+	return string(kubeConfig), nil
+}
+
+// isKubernetesAPIProxy reports whether server is the Kubernetes API proxy,
+// which a stack names under StackAPI's own URL. A server under StackAPI's path
+// on another host is refused rather than taken for a cluster: the CLI sends
+// its access token only to the StackAPI it already talks to.
+func (target *TargetEnvironment) isKubernetesAPIProxy(server string) (bool, error) {
+	// The proxy is always named by a full URL. Anything else, such as a bare
+	// '10.0.0.1:6443' that kubectl accepts and url.Parse does not, is a
+	// cluster's, as the CLI always took it, and its plugin never hands the
+	// server the user's token.
+	serverURL, err := url.Parse(server)
+	if err != nil || serverURL.Host == "" {
+		return false, nil
+	}
+	stackAPIURL, err := url.Parse(target.StackApiBaseURL)
+	if err != nil {
+		return false, fmt.Errorf("invalid StackAPI base URL %q: %w", target.StackApiBaseURL, err)
+	}
+	// A base URL spelled with a trailing slash would otherwise demand a double
+	// slash, and take the proxy for a cluster.
+	if !strings.HasPrefix(serverURL.Path, strings.TrimSuffix(stackAPIURL.Path, "/")+"/") {
+		return false, nil
+	}
+	if serverURL.Scheme != stackAPIURL.Scheme || !sameHostAndPort(serverURL, stackAPIURL) {
+		return false, fmt.Errorf("%w: the environment's kubeconfig names StackAPI at %s://%s, but the CLI reached it at %s://%s",
+			ErrKubernetesAPIProxyRefused, serverURL.Scheme, serverURL.Host, stackAPIURL.Scheme, stackAPIURL.Host)
+	}
+	return true, nil
+}
+
+// sameHostAndPort reports whether two URLs of one scheme name the same host,
+// case-insensitively, and the same port, reading an omitted one as the
+// scheme's default.
+func sameHostAndPort(a, b *url.URL) bool {
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && portOrDefault(a) == portOrDefault(b)
+}
+
+func portOrDefault(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch u.Scheme {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	}
+	return ""
+}
+
+// kubeconfigCluster returns the server and certificate authority a kubeconfig's
+// current context names. An absent certificate authority is not an error: a
+// server with a publicly trusted certificate needs none.
+func kubeconfigCluster(payload string) (string, []byte, error) {
+	config, err := clientcmd.Load([]byte(payload))
+	if err != nil {
+		return "", nil, fmt.Errorf("the environment's kubeconfig does not parse: %w", err)
+	}
+	kubeContext, ok := config.Contexts[config.CurrentContext]
+	if !ok {
+		return "", nil, fmt.Errorf("the environment's kubeconfig has no current context %q", config.CurrentContext)
+	}
+	cluster, ok := config.Clusters[kubeContext.Cluster]
+	if !ok || cluster.Server == "" {
+		return "", nil, fmt.Errorf("the environment's kubeconfig names no server for its context %q", config.CurrentContext)
+	}
+	return cluster.Server, cluster.CertificateAuthorityData, nil
 }
 
 // Get AWS credentials against the target environment.
@@ -360,16 +511,16 @@ func (target *TargetEnvironment) GetAWSCredentials() (*AWSCredentials, error) {
 	return &awsCredentials, err
 }
 
-// newECRClient creates an authenticated ECR client for the environment.
-func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+// newAWSConfig creates an AWS config authenticated against the environment.
+func (target *TargetEnvironment) newAWSConfig(envDetails *DeploymentSecret) (aws.Config, error) {
 	log.Debug().Msg("Get AWS credentials")
 	awsCredentials, err := target.GetAWSCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get AWS credentials: %v", err)
+		return aws.Config{}, fmt.Errorf("failed to get AWS credentials: %w", err)
 	}
 
 	log.Debug().Msg("Create AWS config")
-	cfg, err := config.LoadDefaultConfig(context.TODO(),
+	return config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(envDetails.Deployment.AwsRegion),
 		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
 			return aws.Credentials{
@@ -379,6 +530,11 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 			}, nil
 		})),
 	)
+}
+
+// newECRClient creates an authenticated ECR client for the environment.
+func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ecr.Client, error) {
+	cfg, err := target.newAWSConfig(envDetails)
 	if err != nil {
 		return nil, err
 	}
@@ -387,24 +543,97 @@ func (target *TargetEnvironment) newECRClient(envDetails *DeploymentSecret) (*ec
 	return ecr.NewFromConfig(cfg), nil
 }
 
-// Get Docker credentials for the environment's docker registry.
-func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecret) (*DockerCredentials, error) {
-	client, err := target.newECRClient(envDetails)
+// ErrNoStorageCredentials reports that the environment's stack issues no
+// credentials for the environment's buckets.
+var ErrNoStorageCredentials = errors.New("the environment's stack issues no credentials for its storage")
+
+// storageAccess is how to reach an environment's buckets over the S3 API, on
+// AWS S3 or on an S3-compatible service.
+type storageAccess struct {
+	// Endpoint is the URL of an S3-compatible service, or empty for AWS S3.
+	Endpoint string
+	// Region signs the requests.
+	Region string
+	// UsePathStyle addresses a bucket in the URL's path rather than its host
+	// name, as many S3-compatible services need.
+	UsePathStyle bool
+	Credentials  aws.CredentialsProvider
+}
+
+// NewS3Client creates an S3 client authenticated against the environment, for
+// its buckets. Returns ErrNoStorageCredentials for an environment whose stack
+// issues none.
+func (target *TargetEnvironment) NewS3Client(envDetails *DeploymentSecret) (*s3.Client, error) {
+	access, err := target.getStorageAccess(envDetails)
+	if err != nil {
+		return nil, err
+	}
+	return newS3Client(access)
+}
+
+// getStorageAccess asks the stack for access to the environment's buckets.
+// Stacks issue it only for buckets on AWS S3 for now, as the credentials of
+// the environment's gameserver-admin role, and answer 404 elsewhere.
+func (target *TargetEnvironment) getStorageAccess(envDetails *DeploymentSecret) (*storageAccess, error) {
+	if envDetails.Deployment.AwsRegion == "" {
+		return nil, ErrNoStorageCredentials
+	}
+	credentials, err := target.GetAWSCredentials()
+	if isHTTPNotFound(err) {
+		return nil, ErrNoStorageCredentials
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get storage credentials: %w", err)
+	}
+	return &storageAccess{
+		Region: envDetails.Deployment.AwsRegion,
+		Credentials: aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			return aws.Credentials{
+				AccessKeyID:     credentials.AccessKeyID,
+				SecretAccessKey: credentials.SecretAccessKey,
+				SessionToken:    credentials.SessionToken,
+			}, nil
+		}),
+	}, nil
+}
+
+// newS3Client creates an S3 client from the access to an environment's buckets.
+func newS3Client(access *storageAccess) (*s3.Client, error) {
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(access.Region),
+		config.WithCredentialsProvider(access.Credentials),
+	)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Debug().Msg("Create S3 client")
+	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if access.Endpoint != "" {
+			o.BaseEndpoint = aws.String(access.Endpoint)
+			o.UsePathStyle = access.UsePathStyle
+			// S3-compatible services do not all take the checksums AWS S3 does,
+			// so send and check them only where an operation requires them.
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+		}
+	}), nil
+}
+
+// ecrDockerCredentials gets a docker login for ECR from its control plane, and
+// when the token it is made of expires, where ECR says.
+func ecrDockerCredentials(client *ecr.Client) (*DockerCredentials, *time.Time, error) {
 	// Fetch the ECR docker authentication token
 	log.Debug().Msg("Fetch ECR login credentials from AWS")
 	response, err := client.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(response.AuthorizationData) == 0 ||
 		response.AuthorizationData[0].AuthorizationToken == nil ||
 		response.AuthorizationData[0].ProxyEndpoint == nil {
-		return nil, errors.New("received an empty authorization token response for ECR repository")
+		return nil, nil, errors.New("received an empty authorization token response for ECR repository")
 	}
 
 	// Parse username and password from the response (separated by a ':')
@@ -413,13 +642,13 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecr
 	authorization64 := *response.AuthorizationData[0].AuthorizationToken
 	decoded, err := base64.StdEncoding.DecodeString(authorization64)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	authorization := string(decoded)
 	username, password, ok := strings.Cut(authorization, ":")
 	if !ok {
-		return nil, errors.New("failed to parse authorization token")
+		return nil, nil, errors.New("failed to parse authorization token")
 	}
 
 	log.Debug().Msgf("ECR: username=%s, proxyEndpoint=%s", username, registryURL)
@@ -428,83 +657,5 @@ func (target *TargetEnvironment) GetDockerCredentials(envDetails *DeploymentSecr
 		Username:    username,
 		Password:    password,
 		RegistryURL: registryURL,
-	}, nil
-}
-
-// ECRImage represents a single image in the ECR repository.
-type ECRImage struct {
-	Tags      []string  `json:"tags"`
-	PushedAt  time.Time `json:"pushedAt"`
-	SizeBytes int64     `json:"sizeBytes"`
-	Digest    string    `json:"digest"`
-}
-
-// ListECRImages lists Docker images in the environment's ECR repository.
-// When maxResults > 0, stops fetching pages once at least that many tagged images
-// have been collected (the caller should trim if an exact limit is needed). When 0, fetches all.
-func (target *TargetEnvironment) ListECRImages(envDetails *DeploymentSecret, maxResults int) ([]ECRImage, error) {
-	client, err := target.newECRClient(envDetails)
-	if err != nil {
-		return nil, err
-	}
-
-	// Extract repository name from full URI (strip registry prefix).
-	// EcrRepo looks like "123456789.dkr.ecr.us-west-2.amazonaws.com/myrepo"
-	repoName := envDetails.Deployment.EcrRepo
-	if idx := strings.Index(repoName, "/"); idx != -1 {
-		repoName = repoName[idx+1:]
-	}
-
-	var images []ECRImage
-	var nextToken *string
-	for {
-		input := &ecr.DescribeImagesInput{
-			RepositoryName: &repoName,
-			NextToken:      nextToken,
-		}
-
-		output, err := client.DescribeImages(context.TODO(), input)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list images from ECR: %w", err)
-		}
-
-		for _, detail := range output.ImageDetails {
-			// Skip untagged images (old layers)
-			if len(detail.ImageTags) == 0 {
-				continue
-			}
-
-			var pushedAt time.Time
-			if detail.ImagePushedAt != nil {
-				pushedAt = *detail.ImagePushedAt
-			}
-			var sizeBytes int64
-			if detail.ImageSizeInBytes != nil {
-				sizeBytes = *detail.ImageSizeInBytes
-			}
-			digest := ""
-			if detail.ImageDigest != nil {
-				digest = *detail.ImageDigest
-			}
-
-			images = append(images, ECRImage{
-				Tags:      detail.ImageTags,
-				PushedAt:  pushedAt,
-				SizeBytes: sizeBytes,
-				Digest:    digest,
-			})
-		}
-
-		nextToken = output.NextToken
-		if nextToken == nil {
-			break
-		}
-
-		// Stop fetching if we have enough images
-		if maxResults > 0 && len(images) >= maxResults {
-			break
-		}
-	}
-
-	return images, nil
+	}, response.AuthorizationData[0].ExpiresAt, nil
 }

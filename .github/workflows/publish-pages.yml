@@ -2,18 +2,19 @@ name: Publish Pages
 
 on:
   push:
+    # Only main may publish: customer CI pipelines run install.sh with deploy credentials.
     branches:
       - main
-      - dev/pages-ci # dev branch for easier iteration
-    # Run on changes to install.sh and publish-pages.yml. Keeps the install.sh public URL up-to-date.
+      # To iterate on this workflow, uncomment the dev branch below on that branch only, and
+      # temporarily allow it in the 'github-pages' environment's branch policy. Never merge this
+      # enabled into main or leave the branch allowed in the policy: any push to the branch would
+      # replace the public install scripts.
+      # - dev/pages-ci
+    # Run on changes to the install scripts and this workflow. Keeps the public URLs up-to-date.
     paths:
       - install.sh
       - install.ps1
       - .github/workflows/publish-pages.yml
-    # Trigger on version tags for official releases like '1.2.3' (but not for dev releases like '1.2.3-xyz').
-    # Keeps the command reference up-to-date with latest official release.
-    tags:
-      - '[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: read     # to checkout your code
@@ -23,10 +24,14 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # Naming the environment applies its protection rules (deploys from main only).
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Copy the install.sh to be available publicly at https://metaplay.github.io/cli/install.sh.
       # GitHub Pages isn't throttled like the https://raw.githubusercontent.com/metaplay/cli/main/install.sh.
@@ -47,7 +52,7 @@ jobs:
 
       - id: deployment
         name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
       - name: Show published URL
         run: echo "🎉 Site published at ${{ steps.deployment.outputs.page_url }}"

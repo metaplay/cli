@@ -10,6 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/jwalton/go-supportscolor"
+	"github.com/mattn/go-isatty"
 )
 
 var (
@@ -35,14 +36,63 @@ var (
 	StyleComment   lipgloss.Style
 
 	ListStyle = lipgloss.NewStyle()
+
+	colorEnabled bool
 )
 
+// DetectColorSupport returns whether stdout is a terminal that should show colors.
+func DetectColorSupport() bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	fd := os.Stdout.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
+}
+
+type colorLevel int
+
+const (
+	colorLevel16 colorLevel = iota
+	colorLevel256
+	colorLevel16m
+)
+
+// detectColorLevel returns the palette depth for stdout.
+func detectColorLevel() colorLevel {
+	support := supportscolor.SupportsColor(os.Stdout.Fd())
+	switch {
+	case support.Has16m:
+		return colorLevel16m
+	case support.Has256:
+		return colorLevel256
+	case support.SupportsColor:
+		return colorLevel16
+	}
+
+	// supportscolor reports no color for a pipe. Pick a palette anyway, so that
+	// --color yes still produces colors when piped.
+	if colorTerm := os.Getenv("COLORTERM"); colorTerm == "truecolor" || colorTerm == "24bit" {
+		return colorLevel16m
+	}
+	return colorLevel256
+}
+
+// SetColorEnabled controls whether the Render*() helpers emit escape sequences.
+func SetColorEnabled(enabled bool) {
+	colorEnabled = enabled
+}
+
+// ColorEnabled returns whether the Render*() helpers emit escape sequences.
+func ColorEnabled() bool {
+	return colorEnabled
+}
+
 func init() {
-	// Check terminal color support
-	colorSupport := supportscolor.SupportsColor(os.Stdout.Fd())
+	colorEnabled = DetectColorSupport()
 
 	// Use appropriate colors based on terminal capabilities
-	if colorSupport.Has16m {
+	switch detectColorLevel() {
+	case colorLevel16m:
 		// Terminal supports true color (24-bit)
 		ColorNeutral = lipgloss.Color("#737373")
 		ColorBright = lipgloss.Color("#e0e0e0") // Light gray
@@ -52,7 +102,7 @@ func init() {
 		ColorBlue = lipgloss.Color("#2d90dc")
 		ColorRed = lipgloss.Color("#ef4444")
 		ColorYellow = lipgloss.Color("#ffff55")
-	} else if colorSupport.Has256 {
+	case colorLevel256:
 		// Terminal supports 256 colors (8-bit)
 		ColorNeutral = lipgloss.Color("240")     // Gray
 		ColorBright = lipgloss.Color("252")      // Light gray
@@ -62,27 +112,17 @@ func init() {
 		ColorBlue = lipgloss.Color("33")         // Blue
 		ColorRed = lipgloss.Color("196")         // Red
 		ColorYellow = lipgloss.Color("226")      // Yellow
-	} else if colorSupport.SupportsColor {
-		// Terminal only supports basic 16 colors
-		ColorNeutral = lipgloss.Color("darkgray")
-		ColorBright = lipgloss.Color("white")  // Keep as white for basic terminals
-		ColorOrange = lipgloss.Color("yellow") // Basic terminals don't have orange
-		ColorGreen = lipgloss.Color("green")
-		ColorCommentGreen = lipgloss.Color("green") // Same as green for basic terminals
-		ColorBlue = lipgloss.Color("blue")
-		ColorRed = lipgloss.Color("red")
-		ColorYellow = lipgloss.Color("yellow")
-	} else {
-		// Fallback for terminals with no color support
-		// Using basic ANSI named colors which will be ignored in terminals without color
-		ColorNeutral = lipgloss.Color("white")
-		ColorBright = lipgloss.Color("white")
-		ColorOrange = lipgloss.Color("white")
-		ColorGreen = lipgloss.Color("white")
-		ColorCommentGreen = lipgloss.Color("white")
-		ColorBlue = lipgloss.Color("white")
-		ColorRed = lipgloss.Color("white")
-		ColorYellow = lipgloss.Color("white")
+	default:
+		// Terminal only supports basic 16 colors. lipgloss v2 parses color names like
+		// "yellow" as no color, so use ANSI numbers.
+		ColorNeutral = lipgloss.Color("8")      // Dark gray
+		ColorBright = lipgloss.Color("15")      // Keep as white for basic terminals
+		ColorOrange = lipgloss.Color("3")       // Basic terminals don't have orange
+		ColorGreen = lipgloss.Color("2")        // Green
+		ColorCommentGreen = lipgloss.Color("2") // Same as green for basic terminals
+		ColorBlue = lipgloss.Color("4")         // Blue
+		ColorRed = lipgloss.Color("1")          // Red
+		ColorYellow = lipgloss.Color("3")       // Yellow
 	}
 
 	// Initialize styles with the appropriate colors

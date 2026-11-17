@@ -34,6 +34,9 @@ import (
 // The values from requiredValues are used as-is with the highest priority. Any attempt to override
 // a value defined in requiredValues with a different value results in an error. Overriding with
 // the same value is allowed.
+//
+// If checkChart is not nil, it is called with the loaded chart before anything is installed or
+// upgraded, and an error from it is returned as is.
 func HelmUpgradeOrInstall(
 	output *tui.TaskOutput,
 	actionConfig *action.Configuration,
@@ -46,6 +49,7 @@ func HelmUpgradeOrInstall(
 	requiredValues map[string]any,
 	timeout time.Duration,
 	validateValuesSchema bool,
+	checkChart func(*v2chart.Chart) error,
 ) (*v1.Release, error) {
 	// Validate that defaultValues and requiredValues have correct types
 	if err := validateHelmValuesTypes(defaultValues, "defaultValues"); err != nil {
@@ -122,6 +126,14 @@ func HelmUpgradeOrInstall(
 		loadedChartVersion = v2Chart.Metadata.Version
 	}
 	output.AppendLinef("Chart loaded: %s (version %s)", chartName, loadedChartVersion)
+
+	// Whatever the caller needs of this chart that its name and version range
+	// do not say, checked before anything is installed. Optional.
+	if checkChart != nil {
+		if err := checkChart(v2Chart); err != nil {
+			return nil, err
+		}
+	}
 
 	// Construct base values
 	baseValues := map[string]any{}

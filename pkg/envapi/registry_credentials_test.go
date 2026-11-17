@@ -1,0 +1,561 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package envapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/metahttp"
+)
+
+// Where a stack's image repository is, and how the CLI finds out: it asks, and
+// a 404 means a stack older than the endpoint, whose images are in a cloud
+// registry the older path reaches. That makes "not served" and "failed"
+// load-bearing to tell apart — treating a failure as "not served" takes the
+// fallback and reports whatever that fails with instead.
+
+func testEnvironment(t *testing.T, handler http.Handler) *TargetEnvironment {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	tokenSet := &auth.TokenSet{}
+	client := metahttp.NewJSONClient(tokenSet, server.URL)
+
+	// The shared client retries 5xx with a backoff, which is right against a
+	// real stack and ten seconds of pure waiting here: these tests only pin how
+	// a status maps to an error.
+	client.Resty.SetRetryCount(0)
+
+	return &TargetEnvironment{
+		TokenSet:        tokenSet,
+		StackApiBaseURL: server.URL,
+		HumanID:         "lovely-wombats-build-nimbly",
+		StackApiClient:  client,
+	}
+}
+
+func serveRegistryCredentials(t *testing.T, credentials RegistryCredentials) (*TargetEnvironment, *string) {
+	t.Helper()
+	var requestedPath string
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(credentials)
+	}))
+	return env, &requestedPath
+}
+
+func TestGetRegistryCredentials_ReportsWhereImagesGoAndHowToAuthenticate(t *testing.T) {
+	env, path := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+	})
+
+	credentials, err := env.GetRegistryCredentials()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if *path != "/v0/credentials/lovely-wombats-build-nimbly/registry" {
+		t.Errorf("asked %s, want the environment's own credentials path", *path)
+	}
+	if credentials.RegistryHost != "registry.example-stack.example.com" {
+		t.Errorf("registry host = %q", credentials.RegistryHost)
+	}
+	if credentials.Repository != "lovely-wombats-build-nimbly/gameserver" {
+		t.Errorf("repository = %q", credentials.Repository)
+	}
+	if credentials.Username != "developer" || credentials.Password != "signed-assertion" {
+		t.Errorf("credential = %q/%q", credentials.Username, credentials.Password)
+	}
+}
+
+// The stack carries host and repository separately; every registry client
+// needs them joined. Getting this wrong points every command at a repository
+// that does not exist.
+func TestGetRegistryCredentials_QualifiedRepositoryJoinsTheTwoHalves(t *testing.T) {
+	env, _ := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+	})
+
+	credentials, err := env.GetRegistryCredentials()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver"
+	if got := credentials.QualifiedRepository(); got != want {
+		t.Errorf("reference = %q, want %q", got, want)
+	}
+}
+
+// A stack older than this endpoint keeps its images somewhere the older path
+// reaches. That is not an error, and must not read as one.
+func TestGetRegistryCredentials_NotServedIsNotAFailure(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+
+	_, err := env.GetRegistryCredentials()
+
+	if !errors.Is(err, ErrRegistryCredentialsNotServed) {
+		t.Fatalf("error = %v, want it to report that the stack does not serve this", err)
+	}
+}
+
+// Everything else is a failure and must stay one: a stack whose registry
+// endpoint is broken would otherwise be reported as whatever the fallback
+// happens to fail with.
+func TestGetRegistryCredentials_OtherFailuresAreNotMistakenForNotServed(t *testing.T) {
+	for _, status := range []int{
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+	} {
+		env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", status)
+		}))
+
+		_, err := env.GetRegistryCredentials()
+
+		if err == nil {
+			t.Errorf("status %d: expected an error", status)
+			continue
+		}
+		if errors.Is(err, ErrRegistryCredentialsNotServed) {
+			t.Errorf("status %d: reported as 'not served', which would silently take the fallback", status)
+		}
+	}
+}
+
+// A stack answering 200 with nothing useful cannot be used. Saying so here
+// names the endpoint; letting it through produces a docker error about an empty
+// reference much further down.
+func TestGetRegistryCredentials_AnIncompleteAnswerIsRefused(t *testing.T) {
+	incomplete := map[string]struct {
+		credentials RegistryCredentials
+		names       string
+	}{
+		"no registry host": {RegistryCredentials{Repository: "env/gameserver", Username: "u", Password: "p"}, "registry host"},
+		"no repository":    {RegistryCredentials{RegistryHost: "registry.example.com", Username: "u", Password: "p"}, "repository"},
+		"no username":      {RegistryCredentials{RegistryHost: "registry.example.com", Repository: "env/gameserver", Password: "p"}, "username"},
+		"no password":      {RegistryCredentials{RegistryHost: "registry.example.com", Repository: "env/gameserver", Username: "u"}, "password"},
+		// Several missing at once. The message must name the same field every
+		// run — an error that varies is one nobody can search for.
+		"nothing at all": {RegistryCredentials{}, "registry host"},
+	}
+	for name, tc := range incomplete {
+		t.Run(name, func(t *testing.T) {
+			env, _ := serveRegistryCredentials(t, tc.credentials)
+
+			_, err := env.GetRegistryCredentials()
+			if err == nil {
+				t.Fatal("expected an error naming what the stack left out")
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("error = %q, want it to name the missing %q", err, tc.names)
+			}
+		})
+	}
+}
+
+// Fields that are all present but do not join into a name any registry client
+// parses are refused the same way an incomplete answer is. A scheme on the host
+// is how that happens, and it stays invisible until docker rejects the
+// reference several steps later.
+func TestGetRegistryCredentials_AnUnparseableRepositoryIsRefused(t *testing.T) {
+	env, _ := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "https://registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+	})
+
+	_, err := env.GetRegistryCredentials()
+	if err == nil {
+		t.Fatal("expected an error naming the field it could not use")
+	}
+	if !strings.Contains(err.Error(), "https://registry.example-stack.example.com") {
+		t.Errorf("error = %q, want it to name the host it could not parse", err)
+	}
+	if !strings.Contains(err.Error(), "registry host") {
+		t.Errorf("error = %q, want it to name which field was unusable", err)
+	}
+}
+
+// Where the stack issues a credential, that is the whole answer: nothing else
+// is consulted, and in particular nothing cloud-shaped is fetched. That second
+// half is the point — asking for the environment's cloud description first is
+// what made this fail before it reached any registry, since only a
+// cloud-provisioned environment has one.
+func TestResolveImageRepository_UsesWhatTheStackIssued(t *testing.T) {
+	var asked []string
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(RegistryCredentials{
+			RegistryHost: "registry.example-stack.example.com",
+			Repository:   "lovely-wombats-build-nimbly/gameserver",
+			Username:     "developer",
+			Password:     "signed-assertion",
+		})
+	}))
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver"
+	if repository.QualifiedRepository != want {
+		t.Errorf("qualified repository = %q, want %q", repository.QualifiedRepository, want)
+	}
+	if repository.Credentials.Username != "developer" {
+		t.Errorf("username = %q", repository.Credentials.Username)
+	}
+	if repository.Credentials.RegistryURL != "registry.example-stack.example.com" {
+		t.Errorf("registry = %q, want the host the credential names", repository.Credentials.RegistryURL)
+	}
+	for _, path := range asked {
+		if strings.Contains(path, "/deployments/") {
+			t.Errorf("fetched %s, which only a cloud-provisioned environment has", path)
+		}
+	}
+}
+
+// Pods other than the game server's, such as bot clients, need the Secret the
+// environment's pods pull with, and nothing but the stack can say which one it
+// is. What the stack names is carried through unchanged.
+func TestResolveImageRepository_CarriesThePullSecretTheStackNames(t *testing.T) {
+	env, _ := serveRegistryCredentials(t, RegistryCredentials{
+		RegistryHost: "registry.example-stack.example.com",
+		Repository:   "lovely-wombats-build-nimbly/gameserver",
+		Username:     "developer",
+		Password:     "signed-assertion",
+		PullSecret:   "lovely-wombats-build-nimbly-registry-pull",
+	})
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.PullSecret != "lovely-wombats-build-nimbly-registry-pull" {
+		t.Errorf("pull secret = %q, want the one the stack named", repository.PullSecret)
+	}
+}
+
+// Where nodes pull as themselves, as from ECR, the stack names no Secret, and
+// a stack older than the field sends none. Neither is an incomplete answer:
+// the image is still there to push to.
+func TestResolveImageRepository_NoPullSecretIsAnAnswer(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Written by hand, as a stack that predates the field answers.
+		_, _ = w.Write([]byte(`{"registry_host":"registry.example-stack.example.com","repository":"lovely-wombats-build-nimbly/gameserver","username":"developer","password":"signed-assertion"}`))
+	}))
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.PullSecret != "" {
+		t.Errorf("pull secret = %q, want none", repository.PullSecret)
+	}
+}
+
+// A stack serving an environment whose images are in ECR answers the same
+// endpoint, with ECR's own login. Nothing here treats it differently: the
+// reference it resolves to is exactly the repository the environment's
+// description names, which is what the older path pushed to, and nothing
+// cloud-shaped is asked for along the way.
+func TestResolveImageRepository_AnECRAnswerIsTheRepositoryTheOlderPathPushedTo(t *testing.T) {
+	const described = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly-gameserver"
+
+	var asked []string
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(RegistryCredentials{
+			RegistryHost: "123456789012.dkr.ecr.eu-west-1.amazonaws.com",
+			Repository:   "lovely-wombats-build-nimbly-gameserver",
+			Username:     "AWS",
+			Password:     "ecr-authorization-token",
+		})
+	}))
+
+	repository, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repository.QualifiedRepository != described {
+		t.Errorf("qualified repository = %q, want the one the environment's description names, %q",
+			repository.QualifiedRepository, described)
+	}
+	if repository.Credentials.Username != "AWS" || repository.Credentials.Password != "ecr-authorization-token" {
+		t.Errorf("credentials = %s / %s, want ECR's login as the stack answered it",
+			repository.Credentials.Username, repository.Credentials.Password)
+	}
+	for _, path := range asked {
+		if strings.HasSuffix(path, "/aws") || strings.Contains(path, "/deployments/") {
+			t.Errorf("requested %s, which only the older path needs", path)
+		}
+	}
+}
+
+// A stack that issues no credential, and an environment that names no
+// repository either, has nowhere for its images at all. Saying that names both
+// halves of why; reaching for cloud credentials anyway would report something
+// that names neither.
+func TestResolveImageRepository_NoCredentialAndNoRepositoryIsRefusedClearly(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/registry") {
+			http.NotFound(w, r)
+			return
+		}
+		// An environment naming no repository, which is what a stack that has
+		// not provisioned one looks like.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeploymentSecret{})
+	}))
+
+	_, err := env.ResolveImageRepository()
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "image repository") {
+		t.Errorf("error = %q, want it to name the missing repository", err)
+	}
+}
+
+// A 404 has two meanings and they must not be confused. An environment that is
+// not on this stack gets one before the registry endpoint is even reached, so
+// it looks exactly like a stack that has no such endpoint; following the
+// fallback would report a missing description that was never the problem.
+func TestResolveImageRepository_AnUnknownEnvironmentSaysSo(t *testing.T) {
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Both requests answer 404, which is what an unknown environment gets
+		// whether or not the stack serves its own registry.
+		http.NotFound(w, r)
+	}))
+
+	_, err := env.ResolveImageRepository()
+
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "lovely-wombats-build-nimbly") {
+		t.Errorf("error = %q, want it to name the environment", err)
+	}
+	if strings.Contains(err.Error(), "/deployments/") {
+		t.Errorf("error = %q, want it to name the environment rather than the request that failed", err)
+	}
+}
+
+// The fallback's other leg: a stack that issues no credential but whose
+// environment does name a repository proceeds to the older path rather than
+// refusing. Only the branch is asserted — where it leads needs a cloud
+// registry no test should reach — but getting the branch wrong refuses every
+// older stack outright.
+func TestResolveImageRepository_AnEnvironmentWithARepositoryTakesTheOlderPath(t *testing.T) {
+	var asked []string
+	env := testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		if strings.Contains(r.URL.Path, "/registry") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		details := DeploymentSecret{}
+		details.Deployment.EcrRepo = "123456789.dkr.ecr.eu-west-1.amazonaws.com/an-environment"
+		_ = json.NewEncoder(w).Encode(details)
+	}))
+
+	_, err := env.ResolveImageRepository()
+
+	// The older path gets as far as asking the stack for cloud credentials,
+	// which is where a test without a cloud account stops. Asserting that the
+	// request was made is what pins the branch: a refusal or a silent success
+	// would both leave it unasked.
+	if !slices.ContainsFunc(asked, func(path string) bool { return strings.HasSuffix(path, "/aws") }) {
+		t.Errorf("requested %v, want the older path's cloud credentials request", asked)
+	}
+
+	// What must NOT happen is the refusal that belongs to an environment naming
+	// no repository at all.
+	if err != nil && strings.Contains(err.Error(), "no image repository") {
+		t.Errorf("error = %q, want it to have taken the older path rather than refusing", err)
+	}
+}
+
+// What a command pulls or reads metadata from: a tag in the repository the
+// stack answered with, built from that answer and from nothing else.
+func TestReference_NamesATagInTheResolvedRepository(t *testing.T) {
+	for qualified, want := range map[string]string{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver": "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42",
+		"123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly":  "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42",
+	} {
+		t.Run(qualified, func(t *testing.T) {
+			repository := &EnvironmentImageRepository{QualifiedRepository: qualified}
+			if got := repository.Reference("v42"); got != want {
+				t.Errorf("Reference(v42) = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+// A credential is presented to the registry it was issued for and to no other.
+// Most references a command reads are built from the stack's answer, but one
+// is not: a deployed release names its image repository itself, and whatever
+// host it names would otherwise be handed the environment's credential. A
+// reference on another registry is read without one.
+func TestCredentialsFor_PresentsTheCredentialOnlyToItsOwnRegistry(t *testing.T) {
+	credentials := &DockerCredentials{
+		Username:    "developer",
+		Password:    "signed-assertion",
+		RegistryURL: "registry.example-stack.example.com",
+	}
+	repository := &EnvironmentImageRepository{
+		QualifiedRepository: "registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver",
+		Credentials:         credentials,
+	}
+
+	for ref, presented := range map[string]bool{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42": true,
+		// The same registry: the credential is the registry's, and what it
+		// reaches there is the stack's to narrow.
+		"registry.example-stack.example.com/another-environment/gameserver:v42":                          true,
+		"REGISTRY.example-stack.example.com/lovely-wombats-build-nimbly/gameserver:v42":                  true,
+		"registry.example-stack.example.com.attacker.example/lovely-wombats-build-nimbly/gameserver:v42": false,
+		"registry.example-stack.example.com:5000/lovely-wombats-build-nimbly/gameserver:v42":             false,
+		"attacker.example/registry.example-stack.example.com/gameserver:v42":                             false,
+		"localhost:5000/some/image:v1": false,
+		"alpine:3":                     false,
+		"not a reference":              false,
+	} {
+		t.Run(ref, func(t *testing.T) {
+			got := repository.credentialsFor(ref)
+			if presented && got != credentials {
+				t.Errorf("credentialsFor(%q) = %v, want the environment's credential", ref, got)
+			}
+			if !presented && got != nil {
+				t.Errorf("credentialsFor(%q) presented the environment's credential to another registry", ref)
+			}
+		})
+	}
+}
+
+// An environment on a stack older than the credentials endpoint reaches ECR
+// the older way, and the repository the fallback names is where its credential
+// goes. ECR's credential carries its registry with a scheme, which is not how
+// a reference spells it, so the repository decides rather than the credential.
+func TestCredentialsFor_TheFallbacksCredentialGoesToItsRepositorysRegistry(t *testing.T) {
+	credentials := &DockerCredentials{
+		Username:    "AWS",
+		Password:    "ecr-authorization-token",
+		RegistryURL: "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com",
+	}
+	repository := &EnvironmentImageRepository{
+		QualifiedRepository: "123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly",
+		Credentials:         credentials,
+	}
+
+	if got := repository.credentialsFor("123456789012.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42"); got != credentials {
+		t.Errorf("the environment's own ECR image was not given its credential: %v", got)
+	}
+	if got := repository.credentialsFor("210987654321.dkr.ecr.eu-west-1.amazonaws.com/lovely-wombats-build-nimbly:v42"); got != nil {
+		t.Error("another account's registry was given the environment's credential")
+	}
+}
+
+// serveRegistryCredentialsInTurn answers each credentials request with the
+// next of answers, and fails the test on a request it has no answer for.
+func serveRegistryCredentialsInTurn(t *testing.T, answers ...RegistryCredentials) *TargetEnvironment {
+	t.Helper()
+	asked := 0
+	return testEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if asked >= len(answers) {
+			t.Errorf("credentials asked for %d times, want %d", asked+1, len(answers))
+			http.Error(w, "no answer left", http.StatusInternalServerError)
+			return
+		}
+		answer := answers[asked]
+		asked++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(answer)
+	}))
+}
+
+// A deploy can sit at an image picker for longer than a stack's credential
+// lives, so it resolves again right before it pushes. What it gets back is a
+// fresh credential for the same repository.
+func TestRefreshImageRepository_HandsBackAFreshCredentialForTheSameRepository(t *testing.T) {
+	env := serveRegistryCredentialsInTurn(t,
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
+	)
+
+	earlier, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	refreshed, err := env.RefreshImageRepository(earlier)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if refreshed.Credentials.Password != "second" {
+		t.Errorf("password = %q, want the fresh credential", refreshed.Credentials.Password)
+	}
+	if refreshed.QualifiedRepository != earlier.QualifiedRepository {
+		t.Errorf("repository = %q, want %q", refreshed.QualifiedRepository, earlier.QualifiedRepository)
+	}
+}
+
+// The chart is told the repository resolved first, and the push goes to the
+// one resolved second. If the stack names another in between, pushing would
+// deploy a reference the image never went to, so the deploy is refused
+// instead, naming both.
+func TestRefreshImageRepository_RefusesARepositoryThatChangedInBetween(t *testing.T) {
+	env := serveRegistryCredentialsInTurn(t,
+		RegistryCredentials{RegistryHost: "registry.example-stack.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "first"},
+		RegistryCredentials{RegistryHost: "registry.elsewhere.example.com", Repository: "lovely-wombats-build-nimbly/gameserver", Username: "developer", Password: "second"},
+	)
+
+	earlier, err := env.ResolveImageRepository()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	_, err = env.RefreshImageRepository(earlier)
+
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, named := range []string{
+		"registry.example-stack.example.com/lovely-wombats-build-nimbly/gameserver",
+		"registry.elsewhere.example.com/lovely-wombats-build-nimbly/gameserver",
+	} {
+		if !strings.Contains(err.Error(), named) {
+			t.Errorf("error = %q, want it to name %s", err, named)
+		}
+	}
+}

@@ -231,6 +231,9 @@ func chooseFromListWithSubtitle(title string, subtitle string, items []list.Item
 	list.SetShowHelp(false)
 
 	// Create and run model
+	if err := requireInteractiveMode("selection dialog"); err != nil {
+		return -1, err
+	}
 	model := newCompactListModel(title, list)
 	model.subtitle = subtitle
 	program := tea.NewProgram(model)
@@ -367,6 +370,9 @@ func ChooseMultipleFromListDialogWithDefaults[TItem any](
 	l.SetShowHelp(false)
 
 	// Create and run model.
+	if err := requireInteractiveMode("multi-select dialog"); err != nil {
+		return nil, err
+	}
 	model := newMultiSelectModel(title, footer, l, checked)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()
@@ -496,16 +502,16 @@ func ChooseFromListDialogMultiline[TItem any](
 	rowsPerItem := 1 + maxDescLines
 	delegate := compactMultilineDelegate{rowsPerItem: rowsPerItem}
 	// Bubble list height: rowsPerItem*N + spacing*(N-1) + slack.
-	listHeight := rowsPerItem*len(items) + delegate.Spacing()*(len(items)-1) + 2
-	if listHeight > 30 {
-		listHeight = 30
-	}
+	listHeight := min(rowsPerItem*len(items)+delegate.Spacing()*(len(items)-1)+2, 30)
 	l := list.New(listItems, delegate, 0, listHeight)
 	l.SetShowTitle(false)
 	l.SetFilteringEnabled(false)
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 
+	if err := requireInteractiveMode("selection dialog"); err != nil {
+		return nil, err
+	}
 	model := newCompactListMultilineModel(title, l)
 	program := tea.NewProgram(model)
 	finalModel, err := program.Run()

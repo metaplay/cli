@@ -5,14 +5,17 @@
 package cmd
 
 import (
-	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -121,15 +124,17 @@ func TestUserIdentityFromTokens(t *testing.T) {
 }
 
 func TestWrapLLMDocsError(t *testing.T) {
+	client := &llmDocsClient{}
+
 	t.Run("nil stays nil", func(t *testing.T) {
-		if got := wrapLLMDocsError(nil, "read file"); got != nil {
+		if got := client.wrapError(nil, "read file"); got != nil {
 			t.Errorf("expected nil, got %v", got)
 		}
 	})
 
 	t.Run("non-status error wraps generically", func(t *testing.T) {
 		cause := errors.New("boom")
-		got := wrapLLMDocsError(cause, "read file")
+		got := client.wrapError(cause, "read file")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -137,6 +142,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 		if !strings.Contains(cliErr.Message, "read file") {
 			t.Errorf("message missing action: %q", cliErr.Message)
 		}
+		//nolint:errorlint // Wants this exact error, not merely one in its chain.
 		if cliErr.Cause != cause {
 			t.Errorf("cause not preserved, got %v", cliErr.Cause)
 		}
@@ -147,7 +153,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("InvalidArgument", func(t *testing.T) {
 		grpcErr := status.Error(codes.InvalidArgument, "bad pattern")
-		got := wrapLLMDocsError(grpcErr, "run ripgrep")
+		got := client.wrapError(grpcErr, "run ripgrep")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -163,7 +169,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("Unauthenticated suggests auth login", func(t *testing.T) {
 		grpcErr := status.Error(codes.Unauthenticated, "token expired")
-		got := wrapLLMDocsError(grpcErr, "read file")
+		got := client.wrapError(grpcErr, "read file")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -178,7 +184,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("PermissionDenied suggests contacting admin", func(t *testing.T) {
 		grpcErr := status.Error(codes.PermissionDenied, "not in allowlist")
-		got := wrapLLMDocsError(grpcErr, "search documentation")
+		got := client.wrapError(grpcErr, "search documentation")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -197,7 +203,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("DeadlineExceeded suggests retry", func(t *testing.T) {
 		grpcErr := status.Error(codes.DeadlineExceeded, "context deadline exceeded")
-		got := wrapLLMDocsError(grpcErr, "find files")
+		got := client.wrapError(grpcErr, "find files")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -215,7 +221,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("NotFound carries suggestion and details", func(t *testing.T) {
 		grpcErr := status.Error(codes.NotFound, "no such file")
-		got := wrapLLMDocsError(grpcErr, "read file")
+		got := client.wrapError(grpcErr, "read file")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -230,7 +236,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("FailedPrecondition carries details", func(t *testing.T) {
 		grpcErr := status.Error(codes.FailedPrecondition, "index not ready")
-		got := wrapLLMDocsError(grpcErr, "search documentation")
+		got := client.wrapError(grpcErr, "search documentation")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -243,9 +249,102 @@ func TestWrapLLMDocsError(t *testing.T) {
 		}
 	})
 
+	t.Run("FailedPrecondition on a directory suggests listing it", func(t *testing.T) {
+		grpcErr := status.Error(codes.FailedPrecondition, "path is a directory: docs/cloud-deployments/")
+		got := client.wrapError(grpcErr, "read file")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		wantCmd := `'metaplay llm-docs glob "*" --path "docs/cloud-deployments"'`
+		if !strings.Contains(cliErr.Suggestion, wantCmd) {
+			t.Errorf("suggestion missing %s: %q", wantCmd, cliErr.Suggestion)
+		}
+		// Most directories have no index.md, so it must not be the primary advice.
+		if strings.Contains(cliErr.Suggestion, "read '") {
+			t.Errorf("suggestion should not tell the caller to read an index.md: %q", cliErr.Suggestion)
+		}
+		if len(cliErr.Details) != 1 || cliErr.Details[0] != "path is a directory: docs/cloud-deployments/" {
+			t.Errorf("expected gRPC message in details, got %v", cliErr.Details)
+		}
+	})
+
+	t.Run("FailedPrecondition on a directory quotes a path with spaces", func(t *testing.T) {
+		grpcErr := status.Error(codes.FailedPrecondition, "path is a directory: samples/My Game")
+		got := client.wrapError(grpcErr, "read file")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		if !strings.Contains(cliErr.Suggestion, `--path "samples/My Game"`) {
+			t.Errorf("suggestion does not quote the path: %q", cliErr.Suggestion)
+		}
+	})
+
+	t.Run("FailedPrecondition on a directory without a path stays generic", func(t *testing.T) {
+		grpcErr := status.Error(codes.FailedPrecondition, "path is a directory")
+		got := client.wrapError(grpcErr, "read file")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		if !strings.Contains(cliErr.Suggestion, `--path "<path>"`) {
+			t.Errorf("suggestion missing generic placeholder: %q", cliErr.Suggestion)
+		}
+	})
+
+	t.Run("FailedPrecondition not about a directory has no suggestion", func(t *testing.T) {
+		grpcErr := status.Error(codes.FailedPrecondition, "index not ready")
+		got := client.wrapError(grpcErr, "search documentation")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		if cliErr.Suggestion != "" {
+			t.Errorf("expected no suggestion, got %q", cliErr.Suggestion)
+		}
+	})
+
+	t.Run("OutOfRange explains the offset", func(t *testing.T) {
+		msg := "offset is beyond end of file: offset 500 is beyond end of file (54 lines total)"
+		grpcErr := status.Error(codes.OutOfRange, msg)
+		got := client.wrapError(grpcErr, "read file")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		if !strings.Contains(cliErr.Message, "out of bounds") || !strings.Contains(cliErr.Message, "read file") {
+			t.Errorf("unexpected message: %q", cliErr.Message)
+		}
+		if !strings.Contains(cliErr.Suggestion, "--offset") {
+			t.Errorf("suggestion missing --offset: %q", cliErr.Suggestion)
+		}
+		if len(cliErr.Details) != 1 || cliErr.Details[0] != msg {
+			t.Errorf("expected gRPC message in details, got %v", cliErr.Details)
+		}
+		if cliErr.Code != clierrors.ExitRuntime {
+			t.Errorf("expected ExitRuntime, got %d", cliErr.Code)
+		}
+	})
+
+	t.Run("Canceled wraps cause", func(t *testing.T) {
+		grpcErr := status.Error(codes.Canceled, "ripgrep cancelled")
+		got := client.wrapError(grpcErr, "run ripgrep")
+		cliErr, ok := clierrors.AsCLIError(got)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", got)
+		}
+		if !strings.Contains(cliErr.Message, "cancelled") || !strings.Contains(cliErr.Message, "run ripgrep") {
+			t.Errorf("unexpected message: %q", cliErr.Message)
+		}
+		if cliErr.Cause == nil {
+			t.Error("expected cause to be preserved")
+		}
+	})
+
 	t.Run("Unavailable wraps cause and suggests override", func(t *testing.T) {
 		grpcErr := status.Error(codes.Unavailable, "connection refused")
-		got := wrapLLMDocsError(grpcErr, "read deployment info")
+		got := client.wrapError(grpcErr, "read deployment info")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -260,7 +359,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 
 	t.Run("default gRPC code falls through to generic wrap", func(t *testing.T) {
 		grpcErr := status.Error(codes.Internal, "server exploded")
-		got := wrapLLMDocsError(grpcErr, "find files")
+		got := client.wrapError(grpcErr, "find files")
 		cliErr, ok := clierrors.AsCLIError(got)
 		if !ok {
 			t.Fatalf("expected *CLIError, got %T", got)
@@ -277,7 +376,7 @@ func TestWrapLLMDocsError(t *testing.T) {
 func TestBearerCredentials(t *testing.T) {
 	t.Run("empty token returns no metadata", func(t *testing.T) {
 		c := bearerCredentials{}
-		md, err := c.GetRequestMetadata(context.Background())
+		md, err := c.GetRequestMetadata(t.Context())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -288,7 +387,7 @@ func TestBearerCredentials(t *testing.T) {
 
 	t.Run("non-empty token sets bearer header", func(t *testing.T) {
 		c := bearerCredentials{token: "abc123"}
-		md, err := c.GetRequestMetadata(context.Background())
+		md, err := c.GetRequestMetadata(t.Context())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -305,4 +404,115 @@ func TestBearerCredentials(t *testing.T) {
 			t.Error("expected false when requireTLS=false")
 		}
 	})
+}
+
+// newLLMDocsTestCmd returns a command carrying the flags that register
+// defines, parsed from argv. Callers pass the real command's registerFlags,
+// so these tests fail if a flag's name or type changes.
+func newLLMDocsTestCmd(t *testing.T, register func(*pflag.FlagSet), argv []string) *cobra.Command {
+	t.Helper()
+	cmd := &cobra.Command{Use: "test"}
+	register(cmd.Flags())
+	if err := cmd.ParseFlags(argv); err != nil {
+		t.Fatalf("failed to parse flags %v: %v", argv, err)
+	}
+	return cmd
+}
+
+// checkLLMDocsPrepareErr asserts err is nil when wantErr is empty, and
+// otherwise a usage error mentioning wantErr.
+func checkLLMDocsPrepareErr(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	if wantErr == "" {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !clierrors.IsUsageError(err) {
+		t.Errorf("expected usage error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), wantErr) {
+		t.Errorf("error %q does not mention %q", err.Error(), wantErr)
+	}
+}
+
+func TestLLMDocsReadOptsPrepare(t *testing.T) {
+	tests := []struct {
+		name    string
+		argv    []string
+		wantErr string
+	}{
+		{"no flags", nil, ""},
+		{"offset 1", []string{"--offset", "1"}, ""},
+		{"offset max int32", []string{"--offset", "2147483647"}, ""},
+		{"offset 0", []string{"--offset", "0"}, "--offset"},
+		{"offset negative", []string{"--offset", "-1"}, "--offset"},
+		{"offset above int32", []string{"--offset", "2147483648"}, "--offset"},
+		{"limit 1", []string{"--limit", "1"}, ""},
+		{"limit max int32", []string{"--limit", "2147483647"}, ""},
+		{"limit 0", []string{"--limit", "0"}, "--limit"},
+		{"limit wraps to 1 as int32", []string{"--limit", "4294967297"}, "--limit"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &llmDocsReadOpts{}
+			cmd := newLLMDocsTestCmd(t, o.registerFlags, tc.argv)
+			checkLLMDocsPrepareErr(t, o.Prepare(cmd, nil), tc.wantErr)
+		})
+	}
+}
+
+func TestLLMDocsRipgrepOptsPrepare(t *testing.T) {
+	maxStr := strconv.Itoa(llmDocsMaxContextLines)
+	overStr := strconv.Itoa(llmDocsMaxContextLines + 1)
+	tests := []struct {
+		name    string
+		argv    []string
+		wantErr string
+	}{
+		{"defaults", nil, ""},
+		{"context at max", []string{"--context", maxStr}, ""},
+		{"short before and after", []string{"-B", "3", "-A", "5"}, ""},
+		{"short context negative", []string{"-C", "-1"}, "--context"},
+		{"context above max", []string{"--context", overStr}, "--context"},
+		{"context wraps as int32", []string{"-C", "4294967297"}, "--context"},
+		{"before negative", []string{"--before-context", "-2"}, "--before-context"},
+		{"after above max", []string{"-A", overStr}, "--after-context"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &llmDocsRipgrepOpts{}
+			cmd := newLLMDocsTestCmd(t, o.registerFlags, tc.argv)
+			checkLLMDocsPrepareErr(t, o.Prepare(cmd, nil), tc.wantErr)
+		})
+	}
+}
+
+func TestLLMDocsRipgrepGlobFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		argv []string
+		want []string
+	}{
+		{"none", nil, nil},
+		{
+			"brace alternatives are not split at commas",
+			[]string{"--glob", "*.{cs,md}", "--glob", "!**/Tests/**"},
+			[]string{"*.{cs,md}", "!**/Tests/**"},
+		},
+		{"equals form keeps commas", []string{"--glob=a,b"}, []string{"a,b"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &llmDocsRipgrepOpts{}
+			newLLMDocsTestCmd(t, o.registerFlags, tc.argv)
+			if !slices.Equal(o.flagGlobs, tc.want) {
+				t.Errorf("globs = %q, want %q", o.flagGlobs, tc.want)
+			}
+		})
+	}
 }

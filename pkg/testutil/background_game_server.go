@@ -150,7 +150,7 @@ func NewGameServer(opts GameServerOptions) *BackgroundGameServer {
 	}
 
 	defaultCmd = append(defaultCmd, "--Player:ForceFullDebugConfigForBots=false")
-	opts.Cmd = append(defaultCmd, opts.ExtraArgs...)
+	opts.Cmd = slices.Concat(defaultCmd, opts.ExtraArgs)
 
 	return &BackgroundGameServer{opts: opts}
 }
@@ -447,7 +447,7 @@ func removeDockerContainerByName(ctx context.Context, name string) error {
 	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", name)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker rm -f %s failed: %v, output: %s", name, err, string(output))
+		return fmt.Errorf("docker rm -f %s failed: %w, output: %s", name, err, string(output))
 	}
 	return nil
 }

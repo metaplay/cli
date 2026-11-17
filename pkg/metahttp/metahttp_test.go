@@ -5,10 +5,15 @@
 package metahttp
 
 import (
+	"bytes"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/metaplay/cli/pkg/auth"
 )
@@ -51,8 +56,8 @@ func TestRequest_HTTPError_400ParsedMessage(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusBadRequest {
@@ -78,8 +83,8 @@ func TestRequest_HTTPError_404(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/missing")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusNotFound {
@@ -99,8 +104,8 @@ func TestRequest_HTTPError_409(t *testing.T) {
 
 	type response struct{}
 	_, err := PostJSON[response](newTestClient(server.URL), "/snapshots", map[string]any{"shardIndex": 0})
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusConflict {
@@ -123,8 +128,8 @@ func TestRequest_HTTPError_500_NonJSONBody(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/boom")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusInternalServerError {
@@ -144,8 +149,8 @@ func TestRequest_HTTPError_EmptyBody(t *testing.T) {
 
 	type response struct{}
 	_, err := Get[response](newTestClient(server.URL), "/nothing")
-	var httpErr *HTTPError
-	if !errors.As(err, &httpErr) {
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
 	}
 	if httpErr.StatusCode != http.StatusBadGateway {
@@ -207,5 +212,57 @@ func TestParseHTTPErrorMessage(t *testing.T) {
 				t.Errorf("structured: got %v, want %v", gotStructured, tc.wantStructured)
 			}
 		})
+	}
+}
+
+// An expected status is still an error the caller has to handle, but not one
+// the user is shown a failed-request line for: the caller is about to recover
+// from it.
+func TestRequestExpecting_ExpectedStatusIsReturnedButNotLoggedAsAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// An opaque body, which is what an unrouted path answers with and what
+		// would otherwise be logged at Error level.
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	var logged bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	_, err := PostExpecting[map[string]any](newTestClient(server.URL), "/v0/whatever", nil, "", http.StatusNotFound)
+
+	httpErr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
+		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
+	}
+	if httpErr.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", httpErr.StatusCode, http.StatusNotFound)
+	}
+	if strings.Contains(logged.String(), `"level":"error"`) {
+		t.Errorf("logged %s, want the expected status not reported as a failure", logged.String())
+	}
+}
+
+// Every other status keeps the Error-level line: it is the user's only
+// diagnostic when the body is opaque.
+func TestRequestExpecting_AnUnexpectedStatusIsStillLoggedAsAFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	var logged bytes.Buffer
+	previousLogger := log.Logger
+	log.Logger = zerolog.New(&logged)
+	t.Cleanup(func() { log.Logger = previousLogger })
+
+	_, err := PostExpecting[map[string]any](newTestClient(server.URL), "/v0/whatever", nil, "", http.StatusNotFound)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(logged.String(), `"level":"error"`) {
+		t.Errorf("logged %s, want the unexpected status reported as a failure", logged.String())
 	}
 }

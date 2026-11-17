@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -29,8 +30,9 @@ func init() {
 	args.AddStringArgumentOpt(&o.argAuthProvider, "AUTH_PROVIDER", "Name of the auth provider to use. Defaults to 'metaplay'.")
 
 	cmd := &cobra.Command{
-		Use:   "whoami [AUTH_PROVIDER]",
-		Short: "Show information about the signed in user",
+		Use:     "whoami [AUTH_PROVIDER]",
+		Aliases: []string{"status"},
+		Short:   "Show information about the signed in user",
 		Long: renderLong(&o, `
 			Show information about the signed in user.
 
@@ -85,7 +87,7 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Load session state.
-	sessionState, err := auth.LoadSessionState(authProvider.GetSessionID())
+	sessionState, err := auth.LoadSessionState(authProvider)
 	if err != nil {
 		return err
 	}
@@ -107,7 +109,7 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Msgf("Fetch user info...")
 	userInfo, err := auth.FetchUserInfo(authProvider, tokenSet)
 	if err != nil {
-		log.Panic().Msgf("Failed to fetch user info: %v", err)
+		return auth.ExplainUserInfoError(err, authProvider, sessionState.UserType)
 	}
 
 	// Output based on format
@@ -115,13 +117,15 @@ func (o *authWhoamiOpts) Run(cmd *cobra.Command) error {
 		// Pretty-print as JSON
 		userInfoJSON, err := json.MarshalIndent(userInfo, "", "  ")
 		if err != nil {
-			log.Panic().Msgf("Failed to marshal user info to JSON: %v", err)
+			return clierrors.Wrap(err, "Failed to marshal user info to JSON")
 		}
 		log.Info().Msg(string(userInfoJSON))
 	} else {
 		// Project ID to show
-		projectID := "n/a"
-		if project != nil {
+		var projectID string
+		if project == nil {
+			projectID = "none (no metaplay-project.yaml found)"
+		} else {
 			projectID = project.Config.ProjectHumanID
 		}
 

@@ -83,6 +83,14 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 		t.Errorf("metaplay-devops sub-skill count = %d, want %d (%v)", len(devops.SubSkills), len(wantDevopsSubSkills), devops.SubSkills)
 	}
 
+	troubleshoot := FindByID(loaded, "metaplay-troubleshoot")
+	if troubleshoot == nil {
+		t.Fatal("metaplay-troubleshoot not found")
+	}
+	if _, ok := troubleshoot.SubSkills["sign-in"]; !ok {
+		t.Errorf("metaplay-troubleshoot missing sub-skill \"sign-in\"")
+	}
+
 	docs := FindByID(loaded, "metaplay-docs")
 	if docs == nil {
 		t.Fatal("metaplay-docs not found")

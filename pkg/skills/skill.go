@@ -5,11 +5,12 @@
 package skills
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -59,7 +60,7 @@ func (s *Skill) SubSkillNames() []string {
 	for k := range s.SubSkills {
 		names = append(names, k)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 	return names
 }
 
@@ -85,7 +86,7 @@ func LoadAll(rootFS fs.FS) ([]*Skill, error) {
 		}
 		skills = append(skills, skill)
 	}
-	sort.Slice(skills, func(i, j int) bool { return skills[i].ID < skills[j].ID })
+	slices.SortFunc(skills, func(a, b *Skill) int { return strings.Compare(a.ID, b.ID) })
 	return skills, nil
 }
 
@@ -111,7 +112,7 @@ func loadSkill(rootFS fs.FS, id string) (*Skill, error) {
 		Frontmatter: fm,
 		Body:        body,
 		RawSKILL:    raw,
-		SubSkills:    map[string]*SubSkill{},
+		SubSkills:   map[string]*SubSkill{},
 	}
 
 	entries, err := fs.ReadDir(rootFS, id)
@@ -196,10 +197,9 @@ func Resolve(skills []*Skill, address string) ([]byte, error) {
 		}
 		return skill.RawSKILL, nil
 	}
-	candidates := make([]*Skill, len(skills))
-	copy(candidates, skills)
-	sort.Slice(candidates, func(i, j int) bool {
-		return len(candidates[i].ID) > len(candidates[j].ID)
+	candidates := slices.Clone(skills)
+	slices.SortFunc(candidates, func(a, b *Skill) int {
+		return cmp.Compare(len(b.ID), len(a.ID))
 	})
 	for _, skill := range candidates {
 		prefix := skill.ID + "-"

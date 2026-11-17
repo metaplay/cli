@@ -256,7 +256,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		// Execute the command in the debug container
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
 		if err != nil {
-			return fmt.Errorf("failed to collect CPU profile: %v", err)
+			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
 
 		return nil
@@ -283,7 +283,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		}
 
 		if copyErr != nil {
-			return fmt.Errorf("failed to copy CPU profile: %v", copyErr)
+			return fmt.Errorf("failed to copy CPU profile: %w", copyErr)
 		}
 		return nil
 	})

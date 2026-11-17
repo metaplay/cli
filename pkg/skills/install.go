@@ -6,12 +6,14 @@ package skills
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strings"
 )
 
 // Scope selects which AgentDir directory to install into.
@@ -152,11 +154,11 @@ func Install(opts InstallOptions) ([]InstallAction, error) {
 		}
 	}
 
-	sort.Slice(actions, func(i, j int) bool {
-		if actions[i].TargetID != actions[j].TargetID {
-			return actions[i].TargetID < actions[j].TargetID
-		}
-		return actions[i].SkillID < actions[j].SkillID
+	slices.SortFunc(actions, func(a, b InstallAction) int {
+		return cmp.Or(
+			strings.Compare(a.TargetID, b.TargetID),
+			strings.Compare(a.SkillID, b.SkillID),
+		)
 	})
 	return actions, nil
 }

@@ -292,7 +292,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 		// Create gzip reader for decompression
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("failed to create gzip reader: %v", err)
+			return nil, nil, 0, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		tarReader = tar.NewReader(gzReader)
 		closer = func() error { return gzReader.Close() }
@@ -310,7 +310,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 		}
 		if err != nil {
 			_ = closer()
-			return nil, nil, 0, fmt.Errorf("failed to read tar header: %v", err)
+			return nil, nil, 0, fmt.Errorf("failed to read tar header: %w", err)
 		}
 		if hdr.Name != filepath.Base(fileName) {
 			continue
@@ -351,7 +351,7 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 		destFile, err = os.Create(destPath)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to create destination file: %v", err)
+		return 0, fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func() { _ = destFile.Close() }()
 
@@ -447,7 +447,7 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 	// Create the destination directory if it doesn't exist
 	destDir := filepath.Dir(destPath)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
-		return fmt.Errorf("failed to create destination directory: %v", err)
+		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
 	// Use forward slash for remote Linux path (not filepath.Join which uses OS-specific separators)

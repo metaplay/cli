@@ -1,6 +1,6 @@
 ---
 name: metaplay-develop-init-project
-description: Integrate the Metaplay SDK into an existing Unity project — `metaplay init project` (downloads SDK + scaffolds Backend/, sample scene, metaplay-project.yaml). Use when the user wants to set up Metaplay for the first time in a project or integrate the SDK into a Unity game.
+description: Integrate the Metaplay SDK into an existing Unity project — `metaplay init project` (downloads SDK + scaffolds Backend/, sample scene, metaplay-project.yaml). Use when the user wants to add Metaplay to a Unity game. Also covers Metaplay samples and starter projects (not only Unity), which use `metaplay init sdk`.
 ---
 
 # Initialize a Metaplay project
@@ -46,6 +46,10 @@ Prerequisites:
 - The user has accepted SDK T&Cs in the portal (or pass `--auto-agree`).
 - A Unity project exists in the working directory. If detection fails, pass `--unity-project=<path>` explicitly.
 
+## Samples and starter projects
+
+A Metaplay sample or starter project already has `metaplay-project.yaml` and the game code, and lacks only the `MetaplaySDK/` directory. Run `metaplay init sdk` in its directory; `init project` refuses with "Project already initialized". The samples and starter projects are not only Unity; the list is at https://docs.metaplay.io/introduction/sample-projects-overview (readable with `metaplay llm-docs read <url>`).
+
 ## After `init project`
 
 Typical next steps:
@@ -57,7 +61,7 @@ Typical next steps:
 
 ## Common mistakes
 
-- **Running `init project` over an existing Metaplay project**: don't — it tries to re-extract the SDK and may overwrite scaffolding.
+- **Running `init project` on a Metaplay sample or starter project**: use `metaplay init sdk`, see "Samples and starter projects" above.
 - **`init project` on a fresh empty directory**: requires an existing Unity project. Create the Unity project first, then run `init project` from its root (or pass `--unity-project=<path>`).
 - **Not authenticated**: `init project` fails without `metaplay auth login`. The error message tells you.
 - **SDK T&Cs not accepted**: the portal will redirect; pass `--auto-agree` once the user has read them.

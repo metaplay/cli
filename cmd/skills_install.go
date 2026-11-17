@@ -27,11 +27,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "install [flags]",
-		Short: "[preview] Install Metaplay skill wrappers into your project (or user home)",
+		Short: "Install Metaplay skill wrappers into your project (or user home)",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Install thin wrapper SKILL.md files for the embedded skills.
 
 			Project scope writes under the current directory. We do NOT
@@ -191,17 +189,6 @@ func flagScopeToScope(flag string) *skillspkg.Scope {
 		return &s
 	}
 	return nil
-}
-
-// containsStr is shared with skills_prompter.go (defined here for now to
-// avoid an extra file). Linear scan; targets are tiny.
-func containsStr(slice []string, s string) bool {
-	for _, v := range slice {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }
 
 func reportInstallActions(actions []skillspkg.InstallAction) {

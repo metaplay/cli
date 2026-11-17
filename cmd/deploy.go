@@ -11,7 +11,7 @@ import (
 // deployCmd includes commands for deploying server and bots to the cloud.
 var deployCmd = &cobra.Command{
 	Use:   "deploy",
-	Short: "Deploy server or bots into the cloud",
+	Short: "Deploy server, bots or web clients into the cloud",
 }
 
 func init() {

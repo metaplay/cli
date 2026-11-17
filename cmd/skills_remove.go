@@ -32,11 +32,9 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "remove [SKILL] [flags]",
-		Short: "[preview] Remove Metaplay skill wrappers from the project (or user home)",
+		Short: "Remove Metaplay skill wrappers from the project (or user home)",
 		Run:   runCommand(&o),
 		Long: renderLong(&o, `
-			PREVIEW: This command is in preview and subject to change!
-
 			Delete wrappers previously written by 'metaplay skills install'.
 
 			{Arguments}

@@ -189,7 +189,7 @@ func (c *Client) FetchProjectInfo(projectHumanID string) (*ProjectInfo, error) {
 	url := fmt.Sprintf("/api/v1/projects?human_id=%s", projectHumanID)
 	projectInfos, err := metahttp.Get[[]ProjectInfo](c.httpClient, url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch environment details: %w", err)
+		return nil, fmt.Errorf("failed to fetch project details: %w", err)
 	}
 
 	log.Debug().Msgf("Project info response from portal: %+v", projectInfos)
@@ -304,10 +304,7 @@ func (c *Client) FindSdkVersionByVersionOrName(versionOrName string) (*SdkVersio
 	// If input looks like a major version only (digits with no dots), find the latest for that major.
 	// Check this before name matching, so "34" finds latest 34.x instead of matching a name.
 	if IsMajorVersionOnly(versionOrName) {
-		result, err := findLatestForMajorVersion(versions, versionOrName)
-		if err != nil {
-			return nil, err
-		}
+		result := findLatestForMajorVersion(versions, versionOrName)
 		if result != nil {
 			log.Debug().Msgf("Resolved major version %s to %s", versionOrName, result.Version)
 			return result, nil
@@ -359,7 +356,7 @@ func IsMajorVersionOnly(version string) bool {
 }
 
 // findLatestForMajorVersion finds the latest SDK version matching the given major version.
-func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (*SdkVersionInfo, error) {
+func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) *SdkVersionInfo {
 	prefix := majorVersion + "."
 	var best *SdkVersionInfo
 	var bestMinor, bestPatch = -1, -1
@@ -383,7 +380,7 @@ func findLatestForMajorVersion(versions []SdkVersionInfo, majorVersion string) (
 		}
 	}
 
-	return best, nil
+	return best
 }
 
 // parseMinorPatch parses "3" or "3.1" into minor and patch numbers.

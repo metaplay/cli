@@ -5,12 +5,14 @@
 package skills
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
+	"strings"
 )
 
 // RemoveStatus categorises the outcome of removing a single wrapper.
@@ -71,8 +73,8 @@ func Remove(opts RemoveOptions) ([]RemoveAction, error) {
 	// targets that share a path scan it once and the report attributes the
 	// removal to the first target, with the rest marked as shared.
 	type group struct {
-		baseDir  string
-		targets  []string
+		baseDir string
+		targets []string
 	}
 	var groups []group
 	groupIdx := map[string]int{}
@@ -124,11 +126,11 @@ func Remove(opts RemoveOptions) ([]RemoveAction, error) {
 		}
 	}
 
-	sort.Slice(actions, func(i, j int) bool {
-		if actions[i].TargetID != actions[j].TargetID {
-			return actions[i].TargetID < actions[j].TargetID
-		}
-		return actions[i].SkillID < actions[j].SkillID
+	slices.SortFunc(actions, func(a, b RemoveAction) int {
+		return cmp.Or(
+			strings.Compare(a.TargetID, b.TargetID),
+			strings.Compare(a.SkillID, b.SkillID),
+		)
 	})
 	return actions, nil
 }
@@ -154,9 +156,7 @@ func optsScopeDir(scope Scope, t AgentDir) string {
 // that have since been removed from the embedded set.
 func candidateSkillDirs(baseDir string, filter []string) ([]string, error) {
 	if len(filter) > 0 {
-		out := append([]string(nil), filter...)
-		sort.Strings(out)
-		return out, nil
+		return slices.Sorted(slices.Values(filter)), nil
 	}
 	if _, err := os.Stat(baseDir); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -171,7 +171,7 @@ func candidateSkillDirs(baseDir string, filter []string) ([]string, error) {
 			ids = append(ids, e.Name())
 		}
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return ids, nil
 }
 

@@ -20,6 +20,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
+	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
@@ -59,19 +60,12 @@ var rootCmd = &cobra.Command{
 		hasTerminal := isatty.IsTerminal(os.Stdout.Fd()) || isatty.IsCygwinTerminal(os.Stdout.Fd())
 
 		// Determine whether to use colors.
-		colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
-		var useColors bool
-		if isTruthy(colorMode) {
-			useColors = true
-		} else if isFalsy(colorMode) {
-			useColors = false
-		} else {
-			if colorMode != "auto" {
-				fmt.Fprintf(os.Stderr, "ERROR: Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.\n", flagColorMode)
-				os.Exit(2)
-			}
-			useColors = hasTerminal
+		useColors, err := resolveUseColors()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(2)
 		}
+		styles.SetColorEnabled(useColors)
 
 		// Resolve whether using verbose mode
 		isVerbose := isTruthy(os.Getenv("METAPLAYCLI_VERBOSE")) || flagVerbose
@@ -112,9 +106,35 @@ var rootCmd = &cobra.Command{
 		// Show CLI version & whether in interactive mode
 		stderrLogger.Info().Msgf(styles.RenderMuted("Metaplay CLI %s, %s"), version.AppVersion, modeStr)
 
-		// Log about non-default portal being used.
-		if common.PortalBaseURL != common.DefaultPortalBaseURL {
+		// Log about non-default portal being used. Trailing slashes are trimmed before
+		// comparing, because reading 'https://portal.metaplay.dev/' as an override
+		// would silence the warning below for the one case that needs it.
+		isDefaultPortal := strings.TrimRight(common.PortalBaseURL, "/") == strings.TrimRight(common.DefaultPortalBaseURL, "/")
+		if !isDefaultPortal {
 			stderrLogger.Info().Msgf(styles.RenderMuted("Portal base URL: %s"), common.PortalBaseURL)
+		}
+
+		// Log about which auth provider the session will come from. Only one direction
+		// warns. A provider file with the default portal has no valid use: the portal
+		// rejects another platform's tokens, so the command is about to send one to a
+		// service that is not its audience.
+		//
+		// The reverse is a supported setup — a local portal in front of Metaplay Auth,
+		// which pkg/common/config.go documents — so it is muted like the portal line
+		// above. Warning on it taught developers to ignore the direction that is real.
+		//
+		// It says *default* provider because that is all the variables determine. An
+		// environment naming its own authProvider uses that instead, and nothing here
+		// can know.
+		if authProviderFile := os.Getenv(auth.AuthProviderFileEnvVar); authProviderFile != "" {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Auth provider file: %s"), authProviderFile)
+			if isDefaultPortal {
+				stderrLogger.Warn().Msgf("%s Auth provider file is set, but the portal is still %s; set %s to the matching platform's portal",
+					styles.RenderWarning("⚠️"), common.DefaultPortalBaseURL, common.PortalBaseURLEnvVar)
+			}
+		} else if !isDefaultPortal {
+			stderrLogger.Info().Msgf(styles.RenderMuted("Default auth provider: Metaplay Auth (set %s to sign in to another platform)"),
+				auth.AuthProviderFileEnvVar)
 		}
 
 		// Check for new CLI version available.
@@ -129,6 +149,11 @@ var rootCmd = &cobra.Command{
 // It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func ExecuteContext(ctx context.Context) {
+	if err := checkUnknownSubcommand(rootCmd, os.Args[1:]); err != nil {
+		displayCobraError(err)
+		os.Exit(2)
+	}
+
 	err := rootCmd.ExecuteContext(ctx)
 	if err != nil {
 		// Handle Cobra errors (unknown flags, missing arguments, etc.)
@@ -136,6 +161,33 @@ func ExecuteContext(ctx context.Context) {
 		displayCobraError(err)
 		os.Exit(2)
 	}
+}
+
+// checkUnknownSubcommand returns an error if args invoke an unknown subcommand of a command
+// group, eg, 'metaplay auth foo'.
+func checkUnknownSubcommand(root *cobra.Command, args []string) error {
+	cmd, rest, err := root.Find(args)
+	if err != nil || cmd == root || cmd.Runnable() || !cmd.HasSubCommands() {
+		return nil
+	}
+
+	// Parse the flags to separate them from positional args. Cobra parses them again on execute.
+	if err := cmd.ParseFlags(rest); err != nil {
+		return nil // Let Cobra report flag errors
+	}
+	posArgs := cmd.Flags().Args()
+	if len(posArgs) == 0 {
+		return nil
+	}
+
+	msg := fmt.Sprintf("unknown command %q for %q", posArgs[0], cmd.CommandPath())
+	if cmd.SuggestionsMinimumDistance <= 0 {
+		cmd.SuggestionsMinimumDistance = 2 // Same default as Cobra uses for the root command
+	}
+	if suggestions := cmd.SuggestionsFor(posArgs[0]); len(suggestions) > 0 {
+		msg += "\n\nDid you mean this?\n\t" + strings.Join(suggestions, "\n\t")
+	}
+	return errors.New(msg)
 }
 
 // displayCobraError formats Cobra's built-in errors (flag parsing, unknown commands, etc.)
@@ -257,8 +309,7 @@ func (w *coloredLineConsoleWriter) Write(p []byte) (n int, err error) {
 }
 
 // Initialize zerolog:
-// In verbose mode, the output includes timestamps and log levels. Colors are
-// always enabled.
+// In verbose mode, the output includes timestamps and log levels.
 // In non-verbose mode, the output is plain-text only, so its compatible with
 // piping to `jq` and other tools. Colors are auto-detected based on the TTY used.
 func initLogger(useColors, isVerbose bool) {
@@ -268,12 +319,14 @@ func initLogger(useColors, isVerbose bool) {
 		zerolog.TimeFieldFormat = "2006-01-02 15:04:05.000"
 		stdoutWriter := zerolog.ConsoleWriter{
 			Out:        os.Stdout,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		log.Logger = zerolog.New(stdoutWriter).With().Timestamp().Logger()
 
 		stderrWriter := zerolog.ConsoleWriter{
 			Out:        os.Stderr,
+			NoColor:    !useColors,
 			TimeFormat: "2006-01-02 15:04:05.000",
 		}
 		stderrLogger = zerolog.New(stderrWriter).With().Timestamp().Logger()
@@ -547,6 +600,19 @@ func renderExample(str string) string {
 
 	// Return final result
 	return str
+}
+
+// Return whether output should be colored, or an error for an invalid color mode.
+func resolveUseColors() (bool, error) {
+	colorMode := coalesceString(os.Getenv("METAPLAYCLI_COLOR"), flagColorMode)
+	if isTruthy(colorMode) {
+		return true, nil
+	} else if isFalsy(colorMode) {
+		return false, nil
+	} else if colorMode == "auto" {
+		return styles.DetectColorSupport(), nil
+	}
+	return false, clierrors.NewUsageErrorf("Invalid color mode (--color or METAPLAYCLI_COLOR): %s. Allowed values are yes/no/auto.", colorMode)
 }
 
 // Return true if the value is truthy ('yes', 'y', 'true', '1').

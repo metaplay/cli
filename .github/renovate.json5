@@ -2,28 +2,25 @@
   extends: [
     'config:recommended',
     ':dependencyDashboard',
+    // Indirect go.mod deps get security fixes only, no routine updates.
+    'security:gomodIndirectSecurityUpdates',
   ],
-  constraints: {
-    go: '1.25',
-  },
+  // Wait before updating so a hijacked or broken upstream release can be caught and yanked.
+  minimumReleaseAge: '7 days',
+  // GitHub's advisories miss many Go vulnerabilities (unreviewed, or filed under a
+  // package path instead of the module path), so also check osv.dev, which mirrors
+  // the Go vulnerability database. Experimental in Renovate.
+  osvVulnerabilityAlerts: true,
   packageRules: [
+    // Do not set `enabled: true` here: rules in this file run after the preset's,
+    // so it would re-enable routine updates for indirect deps.
     {
       matchManagers: [
         'gomod',
       ],
-      enabled: true,
       postUpdateOptions: [
         'gomodTidy',
       ],
-    },
-    {
-      matchManagers: [
-        'gomod',
-      ],
-      matchDepTypes: [
-        'indirect',
-      ],
-      enabled: false,
     },
     // Helm must be pinned to v3.19.4 for now because v3.19.5 had breaking
     // behavior causing Grafana dashboards to be lost. There's a workaround
@@ -58,12 +55,31 @@
       automerge: true,
       automergeType: 'branch',
     },
+    // VHS only records the README GIF (images/cli-build/record.sh), so no CI covers it.
+    {
+      matchManagers: [
+        'dockerfile',
+      ],
+      matchPackageNames: [
+        'ghcr.io/charmbracelet/vhs',
+      ],
+      matchUpdateTypes: [
+        'minor',
+        'patch',
+      ],
+      automerge: true,
+      automergeType: 'branch',
+    },
   ],
   labels: [
     'dependencies',
   ],
   vulnerabilityAlerts: {
+    // Must stay explicit: security PRs force-apply this object, and `enabled: true`
+    // is what overrides `enabled: false` rules (indirect deps, the Helm pin).
     enabled: true,
+    // Security PRs skip minimumReleaseAge, so review them by hand instead of automerging.
+    automerge: false,
     labels: [
       'security',
     ],
