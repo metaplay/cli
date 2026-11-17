@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/kube"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -16,6 +17,9 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+// The field manager name that Kubernetes records for changes made through Helm.
+const helmFieldManager = "metaplay-cli"
 
 // Initialize a new Helm "ActionConfig" which contains the kubeconfig used to make
 // the Helm operations.
@@ -30,6 +34,13 @@ func NewActionConfig(kubeconfigPayload string, namespace string) (*action.Config
 	restGetter := &clientConfigRESTClientGetter{
 		config: clientConfig,
 	}
+
+	// Name the field manager that Kubernetes records for Helm's changes. Helm
+	// defaults to the binary name, which differs between platforms ('metaplay',
+	// 'metaplay.exe') and with 'go run'. Under server-side apply, a field removed
+	// from the chart is only deleted if the same manager applied it before, so
+	// the name must be the same everywhere.
+	kube.ManagedFieldsManager = helmFieldManager
 
 	// Initialize Helm action configuration. The logger must be set before Init,
 	// which copies it into the Kubernetes client and the storage driver.
