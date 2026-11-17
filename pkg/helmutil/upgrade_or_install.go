@@ -7,15 +7,15 @@ package helmutil
 import (
 	"fmt"
 	"maps"
-	"os"
 	"reflect"
+	"strconv"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v4/pkg/action"
-	"helm.sh/helm/v4/pkg/chart/loader"
+	"helm.sh/helm/v4/pkg/chart/common"
 	v2chart "helm.sh/helm/v4/pkg/chart/v2"
 	v2loader "helm.sh/helm/v4/pkg/chart/v2/loader"
 	"helm.sh/helm/v4/pkg/cli"
@@ -63,6 +63,10 @@ func HelmUpgradeOrInstall(
 	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
 	output.SetHeaderLines([]string{headerLine})
 
+	// Pipe Helm's action log to the task output. The Kubernetes client keeps the
+	// debug log handler it got in NewActionConfig.
+	actionConfig.SetLogger(newLineHandler(output.AppendLine, false))
+
 	var installCmd *action.Install
 	var upgradeCmd *action.Upgrade
 	var chartPathOptions *action.ChartPathOptions
@@ -78,7 +82,6 @@ func HelmUpgradeOrInstall(
 		installCmd.Namespace = namespace
 		installCmd.Timeout = timeout
 		installCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
-		installCmd.WaitForJobs = true                           // Also wait for jobs to complete
 		installCmd.Devel = true                                 // If version is development, accept it
 		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &installCmd.ChartPathOptions
@@ -89,14 +92,27 @@ func HelmUpgradeOrInstall(
 		upgradeCmd.Namespace = namespace
 		upgradeCmd.Timeout = timeout
 		upgradeCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
-		upgradeCmd.WaitForJobs = true                           // Also wait for jobs to complete
 		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
 		upgradeCmd.Devel = true                                 // If version is development, accept it
-		upgradeCmd.ForceReplace = true                          // Force recreate resources (delete old, create new) instead of rolling update
 		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
 		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
 		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
+
+		// Upgrade with the apply method the release was last deployed with. Helm v4
+		// installs with server-side apply, and releases deployed with Helm v3 use
+		// client-side apply. This is what Helm's default "auto" does, made explicit
+		// so that ForceConflicts can follow it: Helm rejects ForceConflicts under
+		// client-side apply. Under server-side apply, a field someone changed with
+		// kubectl fails the upgrade with a conflict unless ForceConflicts is set.
+		// With it, the chart's value wins, as it does under client-side apply.
+		//
+		// Do not set ForceReplace: Helm rejects it under server-side apply, and
+		// under client-side apply it replaces whole objects, dropping labels and
+		// finalizers added by others (such as the operator).
+		serverSideApply := existingRelease.ApplyMethod == string(v1.ApplyMethodServerSideApply)
+		upgradeCmd.ServerSideApply = strconv.FormatBool(serverSideApply)
+		upgradeCmd.ForceConflicts = serverSideApply
 	}
 
 	// Load (download) Helm chart
@@ -109,28 +125,19 @@ func HelmUpgradeOrInstall(
 	}
 
 	output.AppendLinef("Loading chart from: %s", chartPath)
-	loadedChart, err := loader.Load(chartPath)
+	// Metaplay charts are apiVersion v1 or v2, which the v2 loader handles. It
+	// fails if Chart.yaml is missing, so Metadata is always set.
+	loadedChart, err := v2loader.Load(chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Helm chart: %w", err)
 	}
 
-	// Get chart metadata - loader.Load returns a v2.Chart
-	v2Chart, ok := loadedChart.(*v2chart.Chart)
-	if !ok {
-		return nil, fmt.Errorf("unexpected chart type: %T", loadedChart)
-	}
-	chartName := ""
-	loadedChartVersion := ""
-	if v2Chart.Metadata != nil {
-		chartName = v2Chart.Metadata.Name
-		loadedChartVersion = v2Chart.Metadata.Version
-	}
-	output.AppendLinef("Chart loaded: %s (version %s)", chartName, loadedChartVersion)
+	output.AppendLinef("Chart loaded: %s (version %s)", loadedChart.Name(), loadedChart.Metadata.Version)
 
 	// Whatever the caller needs of this chart that its name and version range
 	// do not say, checked before anything is installed. Optional.
 	if checkChart != nil {
-		if err := checkChart(v2Chart); err != nil {
+		if err := checkChart(loadedChart); err != nil {
 			return nil, err
 		}
 	}
@@ -145,19 +152,13 @@ func HelmUpgradeOrInstall(
 	filesValueMap := map[string]any{}
 	for _, valuesFile := range valuesFiles {
 		output.AppendLinef("Loading values from: %s", valuesFile)
-		file, err := os.Open(valuesFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open values file: %w", err)
-		}
-		defer func() { _ = file.Close() }()
-
-		values, err := v2loader.LoadValues(file)
+		values, err := common.ReadValuesFile(valuesFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read values file: %w", err)
 		}
 
 		// Merge with previous values, files processed later override earlier ones
-		filesValueMap = mergeValuesMaps(filesValueMap, values)
+		filesValueMap = mergeValuesMaps(filesValueMap, values.AsMap())
 	}
 
 	// Resolve final configurable values map: use defaultValues as base to allow files to override any defaults.
@@ -193,24 +194,14 @@ func HelmUpgradeOrInstall(
 		if err != nil {
 			return nil, fmt.Errorf("failed to install the Helm chart: %w", err)
 		}
-		// Convert Releaser interface to concrete v1.Release
-		release, ok := releaser.(*v1.Release)
-		if !ok {
-			return nil, fmt.Errorf("unexpected release type: %T", releaser)
-		}
-		return release, nil
+		return toV1Release(releaser)
 	} else {
 		output.AppendLine("Upgrading existing release...")
 		releaser, err := upgradeCmd.Run(releaseName, loadedChart, finalValueMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upgrade an existing Helm release: %w", err)
 		}
-		// Convert Releaser interface to concrete v1.Release
-		release, ok := releaser.(*v1.Release)
-		if !ok {
-			return nil, fmt.Errorf("unexpected release type: %T", releaser)
-		}
-		return release, nil
+		return toV1Release(releaser)
 	}
 }
 

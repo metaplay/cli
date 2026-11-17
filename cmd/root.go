@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
 	"github.com/metaplay/cli/pkg/common"
+	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -72,6 +74,11 @@ var rootCmd = &cobra.Command{
 
 		// Initialize zerolog
 		initLogger(useColors, isVerbose)
+
+		// Helm logs some warnings through the global slog logger, whose default
+		// handler writes straight to stderr, garbling the interactive output.
+		// Send them to the debug log instead.
+		slog.SetDefault(slog.New(helmutil.NewDebugLogHandler()))
 
 		// Check for common CI environment variables
 		isCI := envutil.IsCI()

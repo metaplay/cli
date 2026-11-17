@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/release"
 	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
@@ -28,14 +29,13 @@ func HelmListReleases(actionConfig *action.Configuration, chartName string) ([]*
 		return nil, fmt.Errorf("failed to list Helm releases: %w", err)
 	}
 
-	// Convert Releaser interfaces to concrete v1.Release types
-	var releases []*v1.Release
+	releases := make([]*v1.Release, 0, len(releasers))
 	for _, releaser := range releasers {
-		if rel, ok := releaser.(*v1.Release); ok {
-			releases = append(releases, rel)
-		} else {
-			log.Warn().Msgf("Unexpected release type: %T", releaser)
+		rel, err := toV1Release(releaser)
+		if err != nil {
+			return nil, err
 		}
+		releases = append(releases, rel)
 	}
 
 	log.Debug().Msgf("Found %d Helm releases: %s", len(releases), strings.Join(GetReleaseNames(releases), ", "))
@@ -57,8 +57,22 @@ func HelmListReleases(actionConfig *action.Configuration, chartName string) ([]*
 
 func GetReleaseNames(releases []*v1.Release) []string {
 	names := make([]string, len(releases))
-	for ndx, release := range releases {
-		names[ndx] = release.Name
+	for ndx, rel := range releases {
+		names[ndx] = rel.Name
 	}
 	return names
+}
+
+// toV1Release converts a release returned by a Helm action to the concrete type.
+// Helm v4 returns the Releaser interface to leave room for future release
+// formats. Releases of apiVersion v1 and v2 charts are all v1.Release.
+func toV1Release(releaser release.Releaser) (*v1.Release, error) {
+	switch rel := releaser.(type) {
+	case *v1.Release:
+		return rel, nil
+	case v1.Release:
+		return &rel, nil
+	default:
+		return nil, fmt.Errorf("unexpected Helm release type: %T", releaser)
+	}
 }

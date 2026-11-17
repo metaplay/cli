@@ -31,8 +31,9 @@ func NewActionConfig(kubeconfigPayload string, namespace string) (*action.Config
 		config: clientConfig,
 	}
 
-	// Initialize Helm action configuration
-	actionConfig := new(action.Configuration)
+	// Initialize Helm action configuration. The logger must be set before Init,
+	// which copies it into the Kubernetes client and the storage driver.
+	actionConfig := action.NewConfiguration(action.ConfigurationSetLogger(NewDebugLogHandler()))
 	if err := actionConfig.Init(restGetter, namespace, "secret"); err != nil {
 		return nil, fmt.Errorf("failed to initialize Helm configuration: %w", err)
 	}
