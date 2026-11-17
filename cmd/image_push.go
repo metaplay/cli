@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -213,13 +212,12 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		Password:      dockerCredentials.Password,
 		ServerAddress: dockerCredentials.RegistryURL,
 	}
-	authConfigBytes, err := json.Marshal(authConfig)
+	// The daemon decodes X-Registry-Auth as base64url. With standard base64, it silently
+	// drops credentials whose encoding contains '+' or '/' and sends the request anonymously.
+	authStr, err := registry.EncodeAuthConfig(authConfig)
 	if err != nil {
-		return false, fmt.Errorf("failed to marshal auth config: %w", err)
+		return false, fmt.Errorf("failed to encode auth config: %w", err)
 	}
-
-	// Encode with base64
-	authStr := base64.StdEncoding.EncodeToString(authConfigBytes)
 
 	pushResponseReader, err := cli.ImagePush(ctx, dstImageName, image.PushOptions{
 		RegistryAuth: authStr,
