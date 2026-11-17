@@ -22,18 +22,6 @@
         'gomodTidy',
       ],
     },
-    // Helm must be pinned to v3.19.4 for now because v3.19.5 had breaking
-    // behavior causing Grafana dashboards to be lost. There's a workaround
-    // in chart v0.9.1.
-    {
-      matchManagers: [
-        'gomod',
-      ],
-      matchPackageNames: [
-        'helm.sh/helm/v3',
-      ],
-      enabled: false,
-    },
     {
       matchManagers: [
         'github-actions',
@@ -76,7 +64,7 @@
   ],
   vulnerabilityAlerts: {
     // Must stay explicit: security PRs force-apply this object, and `enabled: true`
-    // is what overrides `enabled: false` rules (indirect deps, the Helm pin).
+    // is what overrides `enabled: false` rules (such as the one for indirect deps).
     enabled: true,
     // Security PRs skip minimumReleaseAge, so review them by hand instead of automerging.
     automerge: false,
