@@ -173,8 +173,7 @@ func HelmUpgradeOrInstall(
 	}
 }
 
-// Deploys apply the chart the way Helm v3 did: with client-side apply and
-// Helm v3's readiness wait.
+// Deploys apply the chart the way Helm v3 did, with client-side apply.
 //
 // Helm v4 defaults to server-side apply for new installs and keeps each
 // release's recorded apply method on upgrade. Releases deployed with Helm v3
@@ -184,10 +183,9 @@ func HelmUpgradeOrInstall(
 // apply it replaces whole objects, dropping labels and finalizers added by
 // others (such as the operator).
 //
-// Helm v4's default wait (kstatus) requires every replica to be updated and
-// fails while any pod is terminating. The legacy wait accepts a Deployment
-// once replicas minus maxUnavailable pods are ready, as Helm v3 did.
-const helmWaitStrategy = kube.LegacyStrategy
+// Waits use Helm v4's default (kstatus), which waits for every replica to be
+// updated and available, and for custom resources to be reconciled.
+const helmWaitStrategy = kube.StatusWatcherStrategy
 
 // newInstallAction creates the Helm install action for a new release.
 func newInstallAction(actionConfig *action.Configuration, namespace, releaseName, chartVersion string, timeout time.Duration, validateValuesSchema bool) *action.Install {

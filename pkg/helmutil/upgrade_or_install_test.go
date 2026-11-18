@@ -13,10 +13,10 @@ import (
 	"helm.sh/helm/v4/pkg/kube"
 )
 
-// Install and upgrade must apply the chart as Helm v3 did. Helm rejects
+// Install and upgrade must use client-side apply, as Helm v3 did. Helm rejects
 // ForceConflicts under client-side apply, and ForceReplace drops labels and
 // finalizers that others added to the objects.
-func TestHelmActionsUseHelmV3Behavior(t *testing.T) {
+func TestHelmActionSettings(t *testing.T) {
 	cfg := &action.Configuration{}
 
 	install := newInstallAction(cfg, "ns", "rel", "1.2.3", time.Minute, true)
@@ -26,8 +26,8 @@ func TestHelmActionsUseHelmV3Behavior(t *testing.T) {
 	if install.ForceConflicts {
 		t.Error("install: ForceConflicts = true, want false")
 	}
-	if install.WaitStrategy != kube.LegacyStrategy {
-		t.Errorf("install: WaitStrategy = %q, want %q", install.WaitStrategy, kube.LegacyStrategy)
+	if install.WaitStrategy != kube.StatusWatcherStrategy {
+		t.Errorf("install: WaitStrategy = %q, want %q", install.WaitStrategy, kube.StatusWatcherStrategy)
 	}
 
 	upgrade := newUpgradeAction(cfg, "ns", "1.2.3", time.Minute, true)
@@ -40,8 +40,8 @@ func TestHelmActionsUseHelmV3Behavior(t *testing.T) {
 	if upgrade.ForceReplace {
 		t.Error("upgrade: ForceReplace = true, want false")
 	}
-	if upgrade.WaitStrategy != kube.LegacyStrategy {
-		t.Errorf("upgrade: WaitStrategy = %q, want %q", upgrade.WaitStrategy, kube.LegacyStrategy)
+	if upgrade.WaitStrategy != kube.StatusWatcherStrategy {
+		t.Errorf("upgrade: WaitStrategy = %q, want %q", upgrade.WaitStrategy, kube.StatusWatcherStrategy)
 	}
 }
 
