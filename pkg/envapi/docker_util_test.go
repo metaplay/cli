@@ -273,7 +273,14 @@ func useFakeDockerDaemon(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
+	useDockerHost(t, "tcp://"+strings.TrimPrefix(server.URL, "http://"))
+}
+
+// useDockerHost points Docker clients created from the environment at host, with no other Docker
+// settings from the developer's environment.
+func useDockerHost(t *testing.T, host string) {
+	t.Helper()
+	t.Setenv("DOCKER_HOST", host)
 	t.Setenv("DOCKER_API_VERSION", "")
 	t.Setenv("DOCKER_TLS_VERIFY", "")
 	t.Setenv("DOCKER_CERT_PATH", "")
@@ -300,10 +307,7 @@ func TestNewDockerClientPermissionDenied(t *testing.T) {
 	if err := os.Chmod(socketPath, 0); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DOCKER_HOST", "unix://"+socketPath)
-	t.Setenv("DOCKER_API_VERSION", "")
-	t.Setenv("DOCKER_TLS_VERIFY", "")
-	t.Setenv("DOCKER_CERT_PATH", "")
+	useDockerHost(t, "unix://"+socketPath)
 
 	_, err = NewDockerClient(context.Background(), func(string) {})
 	if cliErr, ok := errors.AsType[*clierrors.CLIError](err); !ok || cliErr.Message != "No permission to access Docker" {

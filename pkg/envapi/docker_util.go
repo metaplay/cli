@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -125,7 +126,7 @@ func WaitForDocker(ctx context.Context, onWaiting func(message string), check fu
 		case err := <-checkDone:
 			// A check that fails because of the deadline reports it as its own error. Check that the
 			// deadline has passed: a network dial timeout also counts as DeadlineExceeded.
-			if err != nil && ctx.Err() == nil && checkCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() == nil && checkCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
 				return dockerTimeoutError()
 			}
 			return err
@@ -166,24 +167,36 @@ func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*clie
 		return dockerClient, nil
 	}
 
-	// connectDocker explains its own failures (bad configuration, unsupported version, timeout).
-	if _, ok := errors.AsType[*clierrors.CLIError](err); ok || ctx.Err() != nil {
-		return nil, err // Already explained, or cancelled (runCommand reports cancellation)
+	if ctx.Err() != nil {
+		return nil, err // Cancelled (runCommand reports cancellation)
+	}
+	return nil, ExplainDockerUnavailable(err)
+}
+
+// ExplainDockerUnavailable is the error for a failure to reach Docker, from the API client or from
+// the docker CLI. An error that is already explained, such as a timeout from WaitForDocker or an
+// unsupported API version, is returned as is.
+func ExplainDockerUnavailable(err error) error {
+	if _, ok := errors.AsType[*clierrors.CLIError](err); ok {
+		return err
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return clierrors.Wrap(err, "Docker is not installed").
+			WithSuggestion("Install Docker Desktop, or Docker Engine on Linux, and make sure 'docker' is in your PATH")
 	}
 	if IsDockerPermissionDenied(err) {
-		return nil, DockerPermissionDenied(err)
+		return DockerPermissionDenied(err)
 	}
-	dockerSuggestion := "Start Docker Desktop"
+	suggestion := "Start Docker Desktop"
 	switch runtime.GOOS {
 	case "darwin":
-		dockerSuggestion = "Start Docker Desktop, or run 'open -a Docker'"
+		suggestion = "Start Docker Desktop, or run 'open -a Docker'"
 	case "linux":
-		dockerSuggestion = "Start Docker with 'sudo systemctl start docker'"
+		suggestion = "Start Docker with 'sudo systemctl start docker'"
 	case "windows":
-		dockerSuggestion = "Start Docker Desktop from the Start menu"
+		suggestion = "Start Docker Desktop from the Start menu"
 	}
-	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
-		WithSuggestion(dockerSuggestion)
+	return clierrors.Wrap(err, "Cannot connect to Docker").WithSuggestion(suggestion)
 }
 
 // IsDockerPermissionDenied reports whether err, from the API client or from the docker CLI, means
@@ -445,48 +458,46 @@ func ReadLocalDockerImagesByProjectID(ctx context.Context, projectID string) ([]
 	// Parse the image information for all local images matching this project.
 	var matchingImages []MetaplayImageInfo
 	for _, img := range images.Items {
-		var imageInspect *client.ImageInspectResult // Inspected on the first usable tag, shared by all tags
+		// Only simple local tags (e.g., 'myimage:latest'), not fully qualified names (e.g.,
+		// 'docker.io/library/ubuntu:latest' or 'customregistry/myimage:tag').
+		type usableTag struct {
+			repoTag string
+			ref     name.Reference
+		}
+		var tags []usableTag
 		for _, repoTag := range img.RepoTags {
-			if repoTag == "" {
+			if repoTag == "" || strings.Contains(repoTag, "/") {
 				continue
 			}
-
-			// Skip tags that look like fully qualified names (e.g., 'docker.io/library/ubuntu:latest' or 'customregistry/myimage:tag').
-			// We only want to handle simple/local tags (e.g., 'myimage:latest').
-			if strings.Contains(repoTag, "/") {
-				continue
+			if ref, err := name.ParseReference(repoTag); err == nil {
+				tags = append(tags, usableTag{repoTag, ref})
 			}
+		}
+		if len(tags) == 0 {
+			continue
+		}
 
-			// Parse the image reference.
-			imageRef, err := name.ParseReference(repoTag)
+		// Inspect the image once for all its tags.
+		imageInspect, err := dockerClient.ImageInspect(ctx, img.ID)
+		if cerrdefs.IsNotFound(err) {
+			log.Debug().Msgf("Image %s was removed while listing, skipping", img.ID)
+			continue
+		} else if err != nil {
+			// Without Docker, fail instead of returning a partial list, which would look like missing
+			// images. Otherwise only this image is broken: skip it, so it doesn't block choosing any
+			// other image.
+			if ctx.Err() != nil || client.IsErrConnectionFailed(err) {
+				return nil, clierrors.Wrap(err, "Lost the connection to Docker while listing local images").
+					WithSuggestion("Make sure Docker is running, then try again")
+			}
+			log.Warn().Err(err).Msgf("Failed to inspect local image %s, skipping it. If it is broken, remove it with 'docker rmi %s'.", img.ID, img.ID)
+			continue
+		}
+
+		for _, tag := range tags {
+			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, tag.repoTag, tag.ref, imageInspect.InspectResponse)
 			if err != nil {
-				continue
-			}
-
-			// Get the image configuration using Docker SDK
-			if imageInspect == nil {
-				result, err := dockerClient.ImageInspect(ctx, img.ID)
-				if cerrdefs.IsNotFound(err) {
-					log.Debug().Msgf("Image %s was removed while listing, skipping", img.ID)
-					break // Removed since ImageList: none of its tags exist either
-				} else if err != nil {
-					// Without Docker, fail instead of returning a partial list, which would look like
-					// missing images. Otherwise only this image is broken: skip it, so it doesn't
-					// block choosing any other image.
-					if ctx.Err() != nil || client.IsErrConnectionFailed(err) {
-						return nil, clierrors.Wrap(err, "Lost the connection to Docker while listing local images").
-							WithSuggestion("Make sure Docker is running, then try again")
-					}
-					log.Warn().Err(err).Msgf("Failed to inspect local image %s, skipping it. If it is broken, remove it with 'docker rmi %s'.", img.ID, img.ID)
-					break
-				}
-				imageInspect = &result
-			}
-
-			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect.InspectResponse)
-			if err != nil {
-				// Log the error from newMetaplayImageInfoFromInspect, which might indicate parsing/validation failures.
-				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed: %v", img.ID, repoTag, err)
+				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed", img.ID, tag.repoTag)
 				continue
 			}
 			matchingImages = append(matchingImages, *imageInfo)

@@ -412,18 +412,7 @@ func checkDockerAvailable(ctx context.Context) error {
 	if err == nil || ctx.Err() != nil {
 		return err // Available, or cancelled (runCommand reports cancellation)
 	}
-	if errors.Is(err, envapi.ErrDockerTimeout) {
-		return err // Already explained
-	}
-	if errors.Is(err, exec.ErrNotFound) {
-		return clierrors.Wrap(err, "Docker is not installed").
-			WithSuggestion("Install Docker Desktop, or Docker Engine on Linux, and make sure 'docker' is in your PATH")
-	}
-	if envapi.IsDockerPermissionDenied(err) {
-		return envapi.DockerPermissionDenied(err)
-	}
-	return clierrors.Wrap(err, "Docker is not responding").
-		WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
+	return envapi.ExplainDockerUnavailable(err)
 }
 
 // Check that the specified docker build engine is available.
