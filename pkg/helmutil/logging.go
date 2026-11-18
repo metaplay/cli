@@ -15,9 +15,10 @@ import (
 // the CLI's debug log, so they show up with --verbose. Helm v3 logged through
 // zerolog's Printf, which is also debug level.
 //
-// Helm v4 logs through slog: through the logger in action.Configuration, and in
-// some places through the global slog logger. Set this handler for both. Without
-// it, the former is discarded and the latter is printed straight to stderr.
+// Helm v4 logs through slog. action.Configuration takes its logger from the
+// global slog logger, and some code logs to the global logger directly, so
+// setting this handler as the slog default covers both. Without it, Helm's
+// logs are printed straight to stderr.
 func NewDebugLogHandler() slog.Handler {
 	return newLineHandler(func(line string) { log.Debug().Msg(line) }, true)
 }

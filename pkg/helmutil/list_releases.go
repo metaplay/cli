@@ -41,18 +41,18 @@ func HelmListReleases(actionConfig *action.Configuration, chartName string) ([]*
 	log.Debug().Msgf("Found %d Helm releases: %s", len(releases), strings.Join(GetReleaseNames(releases), ", "))
 
 	// Filter releases by chart name
-	var matchingReleases []*v1.Release
+	var filteredReleases []*v1.Release
 	for _, rel := range releases {
 		if rel.Chart != nil && rel.Chart.Metadata != nil {
 			if rel.Chart.Metadata.Name == chartName {
-				matchingReleases = append(matchingReleases, rel)
+				filteredReleases = append(filteredReleases, rel)
 			}
 		} else {
 			log.Warn().Msgf("Found chart with missing metadata: %s", rel.Name)
 		}
 	}
 
-	return matchingReleases, nil
+	return filteredReleases, nil
 }
 
 func GetReleaseNames(releases []*v1.Release) []string {

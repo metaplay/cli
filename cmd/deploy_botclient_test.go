@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	chart "helm.sh/helm/v4/pkg/chart/v2"
+	v2chart "helm.sh/helm/v4/pkg/chart/v2"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -60,9 +60,9 @@ func errorText(err error) string {
 
 // loadtestChart is a loaded metaplay-loadtest chart at version, declaring
 // imageValues as its botclients.image values.
-func loadtestChart(version string, imageValues map[string]any) *chart.Chart {
-	return &chart.Chart{
-		Metadata: &chart.Metadata{Name: metaplayLoadTestChartName, Version: version},
+func loadtestChart(version string, imageValues map[string]any) *v2chart.Chart {
+	return &v2chart.Chart{
+		Metadata: &v2chart.Metadata{Name: metaplayLoadTestChartName, Version: version},
 		Values:   map[string]any{"botclients": map[string]any{"image": imageValues}},
 	}
 }
@@ -83,7 +83,7 @@ func TestCheckBotClientChart(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		chart          *chart.Chart
+		chart          *v2chart.Chart
 		pullSecret     string
 		localChartPath string
 		mentions       []string // what the refusal names; none when the chart is not refused

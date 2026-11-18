@@ -18,8 +18,14 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// The field manager name that Kubernetes records for changes made through Helm.
-const helmFieldManager = "metaplay-cli"
+// Name the field manager that Kubernetes records for Helm's changes. Helm
+// defaults to the binary name, which differs between platforms ('metaplay',
+// 'metaplay.exe') and with 'go run'. Under server-side apply, a field removed
+// from the chart is only deleted if the same manager applied it before, so
+// the name must be the same everywhere. Helm reads it from a package global.
+func init() {
+	kube.ManagedFieldsManager = "metaplay-cli"
+}
 
 // Initialize a new Helm "ActionConfig" which contains the kubeconfig used to make
 // the Helm operations.
@@ -35,16 +41,9 @@ func NewActionConfig(kubeconfigPayload string, namespace string) (*action.Config
 		config: clientConfig,
 	}
 
-	// Name the field manager that Kubernetes records for Helm's changes. Helm
-	// defaults to the binary name, which differs between platforms ('metaplay',
-	// 'metaplay.exe') and with 'go run'. Under server-side apply, a field removed
-	// from the chart is only deleted if the same manager applied it before, so
-	// the name must be the same everywhere.
-	kube.ManagedFieldsManager = helmFieldManager
-
-	// Initialize Helm action configuration. The logger must be set before Init,
-	// which copies it into the Kubernetes client and the storage driver.
-	actionConfig := action.NewConfiguration(action.ConfigurationSetLogger(NewDebugLogHandler()))
+	// Initialize Helm action configuration. It logs through the global slog
+	// logger, which cmd/root.go points at the debug log.
+	actionConfig := action.NewConfiguration()
 	if err := actionConfig.Init(restGetter, namespace, "secret"); err != nil {
 		return nil, fmt.Errorf("failed to initialize Helm configuration: %w", err)
 	}

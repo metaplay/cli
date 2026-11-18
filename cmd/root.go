@@ -75,9 +75,10 @@ var rootCmd = &cobra.Command{
 		// Initialize zerolog
 		initLogger(useColors, isVerbose)
 
-		// Helm logs some warnings through the global slog logger, whose default
-		// handler writes straight to stderr, garbling the interactive output.
-		// Send them to the debug log instead.
+		// Helm logs through the global slog logger, whose default handler writes
+		// straight to stderr, garbling the interactive output. Send its logs to
+		// the debug log instead. This must run before any Helm action
+		// configuration is created, as each one copies the default handler.
 		slog.SetDefault(slog.New(helmutil.NewDebugLogHandler()))
 
 		// Check for common CI environment variables
