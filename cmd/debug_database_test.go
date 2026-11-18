@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -15,18 +16,18 @@ import (
 func testShards(n int) []kubeutil.DatabaseShardConfig {
 	shards := make([]kubeutil.DatabaseShardConfig, n)
 	for i := range shards {
-		shards[i] = kubeutil.DatabaseShardConfig{ShardIndex: i, DatabaseName: "db" + string(rune('0'+i))}
+		shards[i] = kubeutil.DatabaseShardConfig{ShardIndex: i, DatabaseName: fmt.Sprintf("db%d", i)}
 	}
 	return shards
 }
 
-func chooseShardAt(i int) func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
+func chooseShardAt(i int) shardChooser {
 	return func(shards []kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 		return &shards[i], nil
 	}
 }
 
-func failIfChooserCalled(t *testing.T) func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
+func failIfChooserCalled(t *testing.T) shardChooser {
 	return func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 		t.Fatal("shard dialog should not be shown")
 		return nil, nil
@@ -37,7 +38,7 @@ func failIfChooserCalled(t *testing.T) func([]kubeutil.DatabaseShardConfig) (*ku
 func TestSelectDatabaseShard_DialogChoiceIsUsed(t *testing.T) {
 	shards := testShards(3)
 	for want := range shards {
-		got, err := selectDatabaseShard(shards, false, 0, chooseShardAt(want))
+		got, err := selectDatabaseShard(shards, -1, chooseShardAt(want))
 		if err != nil {
 			t.Fatalf("pick %d: unexpected error: %v", want, err)
 		}
@@ -47,47 +48,42 @@ func TestSelectDatabaseShard_DialogChoiceIsUsed(t *testing.T) {
 	}
 }
 
-func TestSelectDatabaseShard_ExplicitIndex(t *testing.T) {
-	shards := testShards(3)
-	got, err := selectDatabaseShard(shards, true, 2, failIfChooserCalled(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+// Cases where the dialog must not be shown.
+func TestSelectDatabaseShard_NoDialog(t *testing.T) {
+	testCases := []struct {
+		name         string
+		numShards    int
+		index        int
+		wantIndex    int
+		wantUsageErr bool
+	}{
+		{name: "explicit index", numShards: 3, index: 2, wantIndex: 2},
+		{name: "single shard, no index", numShards: 1, index: -1, wantIndex: 0},
+		{name: "index out of range", numShards: 2, index: 2, wantUsageErr: true},
 	}
-	if got.ShardIndex != 2 {
-		t.Errorf("got shard %d, want 2", got.ShardIndex)
-	}
-}
 
-func TestSelectDatabaseShard_SingleShardSkipsDialog(t *testing.T) {
-	got, err := selectDatabaseShard(testShards(1), false, 0, failIfChooserCalled(t))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.ShardIndex != 0 {
-		t.Errorf("got shard %d, want 0", got.ShardIndex)
-	}
-}
-
-func TestSelectDatabaseShard_IndexOutOfRange(t *testing.T) {
-	_, err := selectDatabaseShard(testShards(2), true, 2, failIfChooserCalled(t))
-	if err == nil {
-		t.Fatal("expected an error for index 2 with 2 shards")
-	}
-	if !clierrors.IsUsageError(err) {
-		t.Errorf("expected a usage error, got: %v", err)
-	}
-}
-
-func TestSelectDatabaseShard_NoShards(t *testing.T) {
-	_, err := selectDatabaseShard(nil, false, 0, failIfChooserCalled(t))
-	if err == nil {
-		t.Fatal("expected an error when no shards are configured")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := selectDatabaseShard(testShards(tc.numShards), tc.index, failIfChooserCalled(t))
+			if tc.wantUsageErr {
+				if !clierrors.IsUsageError(err) {
+					t.Errorf("expected a usage error, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.ShardIndex != tc.wantIndex {
+				t.Errorf("got shard %d, want %d", got.ShardIndex, tc.wantIndex)
+			}
+		})
 	}
 }
 
 func TestSelectDatabaseShard_DialogError(t *testing.T) {
 	dialogErr := errors.New("canceled")
-	_, err := selectDatabaseShard(testShards(2), false, 0, func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
+	_, err := selectDatabaseShard(testShards(2), -1, func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error) {
 		return nil, dialogErr
 	})
 	if !errors.Is(err, dialogErr) {
