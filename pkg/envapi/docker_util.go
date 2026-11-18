@@ -89,30 +89,23 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 	}, nil
 }
 
-// dockerResponseTimeout bounds how long WaitForDocker waits for Docker to answer. A paused or
-// still-starting Docker Desktop accepts connections on its socket before its engine answers, and
-// without a bound a daemon that never answers hangs the command. Docker Desktop can take tens of
-// seconds to start its engine, and CI runners can be slow to start the daemon, so it is generous.
-//
-// WaitForDocker reports through onWaiting after dockerSlowAfter, and then every
-// dockerStillWaitingEvery, so a slow start doesn't look like a hang in a terminal or a CI log.
-//
-// They are variables so that tests can shorten them.
+// WaitForDocker's timings, variables so that tests can shorten them. A paused or still-starting
+// Docker Desktop accepts connections before its engine answers, so the wait needs a bound. Docker
+// Desktop can take tens of seconds to start, and CI runners can be slow to start the daemon, so
+// the bound is generous, and progress is reported so a slow start doesn't look like a hang.
 var (
 	dockerResponseTimeout   = 60 * time.Second
 	dockerSlowAfter         = 3 * time.Second
 	dockerStillWaitingEvery = 10 * time.Second
 )
 
-// ErrDockerTimeout is in the chain of the error WaitForDocker returns when Docker did not respond
-// in time. That error is a *clierrors.CLIError that already explains the problem.
+// ErrDockerTimeout is in the chain of WaitForDocker's error when Docker did not respond in time.
 var ErrDockerTimeout = errors.New("timed out waiting for Docker")
 
-// WaitForDocker runs check, which talks to Docker, with a deadline of dockerResponseTimeout. While
-// check runs, it reports progress messages through onWaiting, and it makes no further calls to
-// onWaiting after it returns. It returns as soon as the deadline passes or ctx is cancelled, even if
-// check does not stop. On the deadline it returns an error with ErrDockerTimeout in its chain. On
-// cancellation it returns ctx's error. Otherwise it returns check's error as is.
+// WaitForDocker runs check, which talks to Docker, with a deadline of dockerResponseTimeout, and
+// reports progress through onWaiting while it waits. It returns as soon as the deadline passes or
+// ctx is cancelled, even if check does not stop: then with an explained error wrapping
+// ErrDockerTimeout, or ctx's error. Otherwise it returns check's error as is.
 //
 // Inside a task runner task, pass the task output's AppendLine as onWaiting: logging directly would
 // garble the display. Outside one, pass LogWaiting.
@@ -175,17 +168,39 @@ func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*clie
 	if _, ok := errors.AsType[*clierrors.CLIError](err); ok || ctx.Err() != nil {
 		return nil, err // Already explained, or cancelled (runCommand reports cancellation)
 	}
+	if IsDockerPermissionDenied(err) {
+		return nil, DockerPermissionDenied(err)
+	}
 	dockerSuggestion := "Start Docker Desktop"
 	switch runtime.GOOS {
 	case "darwin":
 		dockerSuggestion = "Start Docker Desktop, or run 'open -a Docker'"
 	case "linux":
-		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
+		dockerSuggestion = "Start Docker with 'sudo systemctl start docker'"
 	case "windows":
 		dockerSuggestion = "Start Docker Desktop from the Start menu"
 	}
 	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
 		WithSuggestion(dockerSuggestion)
+}
+
+// IsDockerPermissionDenied reports whether err, from the API client or from the docker CLI, means
+// the daemon's socket refused this user. Both say "permission denied while trying to connect to the
+// docker API" (older docker CLIs: "... to the Docker daemon socket"), and the API client keeps
+// only that message. The phrase is matched, not just "permission denied": the docker CLI also
+// writes unrelated warnings to stderr, such as an unreadable config file or an invalid plugin.
+func IsDockerPermissionDenied(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "permission denied while trying to connect")
+}
+
+// DockerPermissionDenied is the error for a Docker daemon whose socket refused this user. The
+// daemon may well be running.
+func DockerPermissionDenied(err error) error {
+	suggestion := "Make sure your user has access to the Docker socket"
+	if runtime.GOOS == "linux" {
+		suggestion = "Add your user to the 'docker' group with 'sudo usermod -aG docker $USER', then log out and back in"
+	}
+	return clierrors.Wrap(err, "No permission to access Docker").WithSuggestion(suggestion)
 }
 
 // connectDocker creates a client with opts, then pings the daemon to verify it answers and to

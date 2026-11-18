@@ -8,8 +8,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -93,12 +97,7 @@ func TestNewDockerClientUnsupportedVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(tt.handler)
-			defer server.Close()
-			t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
-			t.Setenv("DOCKER_API_VERSION", "")
-			t.Setenv("DOCKER_TLS_VERIFY", "")
-			t.Setenv("DOCKER_CERT_PATH", "")
+			useFakeDockerDaemon(t, tt.handler)
 
 			dockerClient, err := NewDockerClient(context.Background(), func(string) {})
 			if err == nil {
@@ -248,7 +247,7 @@ func TestReadLocalDockerImagesByProjectIDInspectErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			useFakeDockerDaemon(t, func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("API-Version", "1.47")
 				w.Header().Set("Content-Type", "application/json")
 				switch {
@@ -260,12 +259,7 @@ func TestReadLocalDockerImagesByProjectIDInspectErrors(t *testing.T) {
 					w.WriteHeader(tt.inspectStatus)
 					_, _ = w.Write([]byte(`{"message":"inspect failed"}`))
 				}
-			}))
-			defer server.Close()
-			t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
-			t.Setenv("DOCKER_API_VERSION", "")
-			t.Setenv("DOCKER_TLS_VERIFY", "")
-			t.Setenv("DOCKER_CERT_PATH", "")
+			})
 
 			images, err := ReadLocalDockerImagesByProjectID(context.Background(), "game")
 			if tt.wantErr {
@@ -276,6 +270,82 @@ func TestReadLocalDockerImagesByProjectIDInspectErrors(t *testing.T) {
 			}
 			if err != nil || len(images) != 0 {
 				t.Errorf("got %d images, error %v; want none and no error", len(images), err)
+			}
+		})
+	}
+}
+
+// useFakeDockerDaemon points Docker clients created from the environment at handler for the test.
+func useFakeDockerDaemon(t *testing.T, handler http.HandlerFunc) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	t.Setenv("DOCKER_HOST", "tcp://"+strings.TrimPrefix(server.URL, "http://"))
+	t.Setenv("DOCKER_API_VERSION", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+}
+
+// TestNewDockerClientPermissionDenied checks that a socket that refuses this user is reported as a
+// permission problem, not as Docker not running.
+func TestNewDockerClientPermissionDenied(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs Unix socket permissions that apply to this user")
+	}
+	socketPath := filepath.Join(t.TempDir(), "docker.sock")
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := os.Chmod(socketPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_HOST", "unix://"+socketPath)
+	t.Setenv("DOCKER_API_VERSION", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	_, err = NewDockerClient(context.Background(), func(string) {})
+	if cliErr, ok := errors.AsType[*clierrors.CLIError](err); !ok || cliErr.Message != "No permission to access Docker" {
+		t.Errorf("error = %v, want 'No permission to access Docker'", err)
+	}
+}
+
+// TestIsDockerPermissionDenied checks that only a socket permission error is diagnosed as one, and
+// not other "permission denied" text the docker CLI writes to stderr.
+func TestIsDockerPermissionDenied(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   bool
+	}{
+		{
+			name:   "older docker CLI",
+			stderr: "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get \"http://%2Fvar%2Frun%2Fdocker.sock/v1.24/info\": dial unix /var/run/docker.sock: connect: permission denied",
+			want:   true,
+		},
+		{
+			name:   "newer docker CLI",
+			stderr: "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock",
+			want:   true,
+		},
+		{
+			name:   "unreadable config file, daemon stopped",
+			stderr: "WARNING: Error loading config file: /home/user/.docker/config.json: open /home/user/.docker/config.json: permission denied\nfailed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory",
+			want:   false,
+		},
+		{
+			name:   "invalid plugin, daemon stopped",
+			stderr: "WARNING: Plugin \"/usr/libexec/docker/cli-plugins/docker-scan\" is not valid: failed to fetch metadata: fork/exec /usr/libexec/docker/cli-plugins/docker-scan: permission denied\nCannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+			want:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := errors.New("exit status 1: " + tt.stderr) // As checkCommand formats it
+			if got := IsDockerPermissionDenied(err); got != tt.want {
+				t.Errorf("IsDockerPermissionDenied = %v, want %v", got, tt.want)
 			}
 		})
 	}
