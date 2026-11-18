@@ -7,19 +7,16 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/moby/moby/api/pkg/authconfig"
-	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
-	"github.com/moby/moby/client/pkg/jsonmessage"
-	"github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -153,7 +150,6 @@ func extractDockerImageTag(imageName string) (string, error) {
 func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName string, dstRepository *envapi.EnvironmentImageRepository) (bool, error) {
 	dockerCredentials := dstRepository.Credentials
 
-	// Create a Docker client
 	cli, err := envapi.NewDockerClient(ctx, output.AppendLine)
 	if err != nil {
 		return false, err
@@ -184,7 +180,9 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		// the config digest under the legacy image store and the manifest digest under the
 		// containerd image store, so accept a match against either remote digest.
 		localImage, err := cli.ImageInspect(ctx, srcImageName)
-		if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, envapi.LocalImageNotFound(err, srcImageName)
+		} else if err != nil {
 			return false, clierrors.Wrapf(err, "Failed to inspect local image '%s'", srcImageName)
 		}
 
@@ -204,7 +202,10 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
 		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: srcImageName, Target: dstImageName}); err != nil {
-			return false, fmt.Errorf("failed to tag image: %w", err)
+			if cerrdefs.IsNotFound(err) {
+				return false, envapi.LocalImageNotFound(err, srcImageName)
+			}
+			return false, clierrors.Wrapf(err, "Failed to tag image '%s' as '%s'", srcImageName, dstImageName)
 		}
 	}
 
@@ -226,88 +227,10 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return false, fmt.Errorf("failed to push docker image: %w", err)
+		return false, dockerTransferFailed(err, "push", dstImageName)
 	}
-
-	// Follow push progress. JSONMessages closes the stream when it ends or ctx is cancelled.
-	progressIDs := []string{}                     // Track order of progress IDs
-	progresses := map[string]jsonstream.Message{} // Track progress by ID
-
-	for progress, err := range pushResponse.JSONMessages(ctx) {
-		if err != nil {
-			return false, fmt.Errorf("failed to decode push response: %w", err)
-		}
-
-		// Track progress by ID to show the latest status for each layer
-		if progress.ID != "" {
-			// Add ID to the order tracking slice if it's not already there
-			if _, exists := progresses[progress.ID]; !exists {
-				progressIDs = append(progressIDs, progress.ID)
-			}
-			progresses[progress.ID] = progress
-		}
-
-		// If progress has an error, return it
-		if progress.Error != nil {
-			return false, fmt.Errorf("error pushing image: %s", progress.Error.Message)
-		}
-
-		// Update the output with current progress information (only in interactive mode).
-		if tui.IsInteractiveMode() {
-			updateDockerProgressOutput(output, progressIDs, progresses)
-		}
+	if err := followDockerProgress(output, pushResponse.JSONMessages(ctx)); err != nil {
+		return false, dockerTransferFailed(err, "push", dstImageName)
 	}
-
 	return true, nil
-}
-
-// updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.
-// Shared by both image push and image pull commands.
-func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonstream.Message) {
-	lines := []string{}
-	width := dockerProgressWidth()
-
-	for _, id := range progressIDs {
-		progress, exists := progresses[id]
-		if !exists || (progress.Progress == nil && progress.Status == "") {
-			continue
-		}
-
-		// Shorten common verbose statuses
-		status := progress.Status
-		switch {
-		case strings.HasPrefix(status, "Pulling fs layer"):
-			status = "Pulling layer"
-		case strings.HasPrefix(status, "Waiting"):
-			status = "Waiting"
-		case strings.HasPrefix(status, "Downloading"):
-			status = "Downloading"
-		case strings.HasPrefix(status, "Verifying Checksum"):
-			status = "Verifying"
-		case strings.HasPrefix(status, "Download complete"):
-			status = "Downloaded"
-		case strings.HasPrefix(status, "Extracting"):
-			status = "Extracting"
-		case strings.HasPrefix(status, "Pull complete"):
-			status = "Complete"
-		}
-
-		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
-		if progress.Progress != nil {
-			progressLine += fmt.Sprintf(" %s", jsonmessage.RenderTUIProgress(*progress.Progress, width))
-		}
-		lines = append(lines, strings.TrimSpace(progressLine))
-	}
-
-	output.SetFooterLines(lines)
-}
-
-// dockerProgressWidth is the width of stdin's terminal, or 200 when stdin is not a
-// terminal. RenderTUIProgress draws the progress bar above 110 columns and the time
-// left above 50.
-func dockerProgressWidth() uint16 {
-	if ws, err := term.GetWinsize(os.Stdin.Fd()); err == nil {
-		return ws.Width
-	}
-	return 200
 }
