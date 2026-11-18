@@ -44,7 +44,7 @@ func PrintNotice(line string) {
 		heldNotices = append(heldNotices, line)
 		return
 	}
-	fmt.Fprintln(noticeOutput, line)
+	_, _ = fmt.Fprintln(noticeOutput, line)
 }
 
 func beginDisplay() {
@@ -59,7 +59,7 @@ func endDisplay() {
 	defer noticeMu.Unlock()
 	displayOnScreen = false
 	for _, line := range heldNotices {
-		fmt.Fprintln(noticeOutput, line)
+		_, _ = fmt.Fprintln(noticeOutput, line)
 	}
 	heldNotices = nil
 }
