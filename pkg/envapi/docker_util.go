@@ -154,13 +154,13 @@ func dockerTimeoutError() error {
 //
 // onWaiting receives progress messages while the daemon is slow to answer; see WaitForDocker.
 func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*client.Client, error) {
-	dockerClient, err := connectDocker(ctx, onWaiting, client.FromEnv)
+	dockerClient, err := createDockerClientAndPing(ctx, onWaiting, client.FromEnv)
 	// A socket that refused permission exists, so there is nothing to fall back from.
 	if client.IsErrConnectionFailed(err) && !IsDockerPermissionDenied(err) && runtime.GOOS == "darwin" && os.Getenv(client.EnvOverrideHost) == "" {
 		if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
 			host := "unix://" + filepath.Join(homeDir, ".docker", "run", "docker.sock")
 			log.Debug().Msgf("Docker connection with default settings failed, trying Docker Desktop socket %s", host)
-			dockerClient, err = connectDocker(ctx, onWaiting, client.FromEnv, client.WithHost(host))
+			dockerClient, err = createDockerClientAndPing(ctx, onWaiting, client.FromEnv, client.WithHost(host))
 		}
 	}
 	if err == nil {
@@ -218,9 +218,9 @@ func DockerPermissionDenied(err error) error {
 	return clierrors.Wrap(err, "No permission to access Docker").WithSuggestion(suggestion)
 }
 
-// connectDocker creates a client with opts, then pings the daemon to verify it answers and to
+// createDockerClientAndPing creates a client with opts, then pings the daemon to verify it answers and to
 // negotiate the API version.
-func connectDocker(ctx context.Context, onWaiting func(message string), opts ...client.Opt) (*client.Client, error) {
+func createDockerClientAndPing(ctx context.Context, onWaiting func(message string), opts ...client.Opt) (*client.Client, error) {
 	dockerClient, err := client.New(opts...)
 	if err != nil {
 		return nil, clierrors.Wrap(err, "Invalid Docker client configuration").
