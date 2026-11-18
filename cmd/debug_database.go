@@ -172,6 +172,13 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Pick the shard before creating the debug pod, so a bad index or a cancelled dialog leaves no pod behind.
+	targetShard, err := selectDatabaseShard(shards, o.argShardIndex != "", o.parsedShardIndex, o.chooseDatabaseShardDialog)
+	if err != nil {
+		return err
+	}
+	shardIndex := targetShard.ShardIndex
+
 	// Create a debug container to run MySQL client
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
@@ -186,27 +193,6 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 	// Make sure the debug container is cleaned up even if we return early
 	defer cleanup()
-
-	// Interactive shard selection if no index provided and multiple shards exist
-	shardIndex := o.parsedShardIndex
-	if o.argShardIndex == "" && len(shards) > 1 {
-		selected, err := o.chooseDatabaseShardDialog(shards)
-		if err != nil {
-			return err
-		}
-		// Find selected index
-		for i, s := range shards {
-			if &s == selected {
-				shardIndex = i
-				break
-			}
-		}
-	}
-	if shardIndex < 0 || shardIndex >= len(shards) {
-		return clierrors.Newf("Invalid database shard index %d", shardIndex).
-			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
-	}
-	targetShard := shards[shardIndex]
 
 	// Show info
 	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
@@ -323,6 +309,28 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		stderrLogger.Info().Msgf("✅ Wrote output to %s", styles.RenderTechnical(o.flagOutput))
 	}
 	return err
+}
+
+// selectDatabaseShard returns the shard to connect to: the given index if indexGiven, otherwise
+// the user's choice from chooseShard when there are several shards, otherwise shard 0.
+func selectDatabaseShard(shards []kubeutil.DatabaseShardConfig, indexGiven bool, index int, chooseShard func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error)) (kubeutil.DatabaseShardConfig, error) {
+	if len(shards) == 0 {
+		return kubeutil.DatabaseShardConfig{}, clierrors.New("The environment has no database shards configured")
+	}
+
+	if !indexGiven && len(shards) > 1 {
+		selected, err := chooseShard(shards)
+		if err != nil {
+			return kubeutil.DatabaseShardConfig{}, err
+		}
+		return *selected, nil
+	}
+
+	if index < 0 || index >= len(shards) {
+		return kubeutil.DatabaseShardConfig{}, clierrors.NewUsageErrorf("Invalid database shard index %d", index).
+			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
+	}
+	return shards[index], nil
 }
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.
