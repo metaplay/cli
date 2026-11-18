@@ -123,8 +123,9 @@ func WaitForDocker(ctx context.Context, onWaiting func(message string), check fu
 	for {
 		select {
 		case err := <-checkDone:
-			// A check that fails because of the deadline reports it as its own error.
-			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			// A check that fails because of the deadline reports it as its own error. Check that the
+			// deadline has passed: a network dial timeout also counts as DeadlineExceeded.
+			if err != nil && ctx.Err() == nil && checkCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
 				return dockerTimeoutError()
 			}
 			return err
@@ -153,7 +154,8 @@ func dockerTimeoutError() error {
 // onWaiting receives progress messages while the daemon is slow to answer; see WaitForDocker.
 func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*client.Client, error) {
 	dockerClient, err := connectDocker(ctx, onWaiting, client.FromEnv)
-	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" && os.Getenv(client.EnvOverrideHost) == "" {
+	// A socket that refused permission exists, so there is nothing to fall back from.
+	if client.IsErrConnectionFailed(err) && !IsDockerPermissionDenied(err) && runtime.GOOS == "darwin" && os.Getenv(client.EnvOverrideHost) == "" {
 		if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
 			host := "unix://" + filepath.Join(homeDir, ".docker", "run", "docker.sock")
 			log.Debug().Msgf("Docker connection with default settings failed, trying Docker Desktop socket %s", host)
@@ -468,8 +470,15 @@ func ReadLocalDockerImagesByProjectID(ctx context.Context, projectID string) ([]
 					log.Debug().Msgf("Image %s was removed while listing, skipping", img.ID)
 					break // Removed since ImageList: none of its tags exist either
 				} else if err != nil {
-					// Fail instead of returning a partial list, which would look like missing images.
-					return nil, clierrors.Wrapf(err, "Failed to inspect local image %s", img.ID)
+					// Without Docker, fail instead of returning a partial list, which would look like
+					// missing images. Otherwise only this image is broken: skip it, so it doesn't
+					// block choosing any other image.
+					if ctx.Err() != nil || client.IsErrConnectionFailed(err) {
+						return nil, clierrors.Wrap(err, "Lost the connection to Docker while listing local images").
+							WithSuggestion("Make sure Docker is running, then try again")
+					}
+					log.Warn().Err(err).Msgf("Failed to inspect local image %s, skipping it. If it is broken, remove it with 'docker rmi %s'.", img.ID, img.ID)
+					break
 				}
 				imageInspect = &result
 			}

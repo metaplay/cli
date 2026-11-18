@@ -234,16 +234,15 @@ func TestWaitForDockerProgress(t *testing.T) {
 	}
 }
 
-// TestReadLocalDockerImagesByProjectIDInspectErrors checks that an image removed while listing is
-// skipped, and that any other inspect failure fails the listing instead of returning a partial list.
+// TestReadLocalDockerImagesByProjectIDInspectErrors checks that an image the daemon cannot inspect,
+// because it was removed while listing or is broken, is skipped without failing the listing.
 func TestReadLocalDockerImagesByProjectIDInspectErrors(t *testing.T) {
 	tests := []struct {
 		name          string
 		inspectStatus int
-		wantErr       bool
 	}{
 		{name: "image removed", inspectStatus: http.StatusNotFound},
-		{name: "daemon error", inspectStatus: http.StatusInternalServerError, wantErr: true},
+		{name: "broken image", inspectStatus: http.StatusInternalServerError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -262,12 +261,6 @@ func TestReadLocalDockerImagesByProjectIDInspectErrors(t *testing.T) {
 			})
 
 			images, err := ReadLocalDockerImagesByProjectID(context.Background(), "game")
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("got %d images and no error, want an error", len(images))
-				}
-				return
-			}
 			if err != nil || len(images) != 0 {
 				t.Errorf("got %d images, error %v; want none and no error", len(images), err)
 			}
@@ -292,7 +285,13 @@ func TestNewDockerClientPermissionDenied(t *testing.T) {
 	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 		t.Skip("needs Unix socket permissions that apply to this user")
 	}
-	socketPath := filepath.Join(t.TempDir(), "docker.sock")
+	// Not under t.TempDir(): on macOS that path exceeds the 104-byte limit for a socket path.
+	dir, err := os.MkdirTemp("/tmp", "d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socketPath := filepath.Join(dir, "docker.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

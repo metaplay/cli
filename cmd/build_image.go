@@ -343,8 +343,12 @@ func commandOutput(ctx context.Context, command string, args ...string) ([]byte,
 			return nil, ctxErr
 		}
 		trimmed := strings.TrimSpace(stderr.String())
+		// Keep the end of stderr, where the error is: warnings (such as invalid plugins) come first.
+		if len(trimmed) > 1000 {
+			trimmed = "(truncated)..." + trimmed[len(trimmed)-1000:]
+		}
 		if trimmed != "" {
-			return nil, fmt.Errorf("%w: %s", err, truncateForLog(trimmed, 500))
+			return nil, fmt.Errorf("%w: %s", err, trimmed)
 		}
 		return nil, fmt.Errorf("command failed: %w", err)
 	}
@@ -491,9 +495,6 @@ func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, false, ctxErr
-		}
-		if errors.Is(err, envapi.ErrDockerTimeout) {
-			return nil, false, err // Already explained
 		}
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
 	}

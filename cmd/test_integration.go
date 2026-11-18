@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -636,13 +635,5 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 
 // dockerSupportsBuildx returns true if docker buildx is available.
 func dockerSupportsBuildx(ctx context.Context) bool {
-	if ctx.Err() != nil {
-		return false
-	}
-	// Try `docker buildx version`
-	cmd := exec.CommandContext(ctx, "docker", "buildx", "version")
-	if err := cmd.Run(); err != nil {
-		return false
-	}
-	return true
+	return checkCommand(ctx, "docker", "buildx", "version") == nil
 }
