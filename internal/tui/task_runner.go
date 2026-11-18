@@ -5,9 +5,11 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -144,12 +146,12 @@ type Task struct {
 
 // TaskRunner manages and executes a sequence of tasks with visual progress
 type TaskRunner struct {
-	tasks      []*Task       // Tasks that the operation consists of, run sequentially
-	quitting   bool          // Is the operation quitting?
-	done       chan struct{} // Signals when all tasks are complete
-	frameIndex int           // Current frame index for spinner animation
-	lastTick   time.Time     // Last time the spinner was updated
-	program    *tea.Program  // Reference to the tea program for quitting
+	tasks       []*Task       // Tasks that the operation consists of, run sequentially
+	interrupted *atomic.Bool  // Ctrl-C was pressed: start no further tasks
+	done        chan struct{} // Signals when all tasks are complete
+	frameIndex  int           // Current frame index for spinner animation
+	lastTick    time.Time     // Last time the spinner was updated
+	program     *tea.Program  // Reference to the tea program for quitting
 }
 
 // tickMsg is sent when the spinner should advance one frame
@@ -161,9 +163,10 @@ type doneMsg struct{ err error }
 // NewTaskRunner creates a new TaskRunner
 func NewTaskRunner() *TaskRunner {
 	return &TaskRunner{
-		tasks:    make([]*Task, 0),
-		done:     make(chan struct{}),
-		lastTick: time.Now(),
+		tasks:       make([]*Task, 0),
+		interrupted: &atomic.Bool{},
+		done:        make(chan struct{}),
+		lastTick:    time.Now(),
 	}
 }
 
@@ -231,10 +234,19 @@ func (m *TaskRunner) runInteractive() error {
 		return fmt.Errorf("error running tasks: %w", err)
 	}
 
+	// Ctrl-C quit the display. Interrupt the command now that the terminal is restored, so the
+	// running task, which uses the command's context, stops.
+	if m.interrupted.Load() {
+		interrupt()
+	}
+
 	// Wait for all tasks to complete
 	<-m.done
 
-	return m.checkErrors()
+	if err := m.checkErrors(); err != nil || !m.interrupted.Load() {
+		return err
+	}
+	return context.Canceled // A task finished despite Ctrl-C: the remaining ones did not run
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
@@ -295,6 +307,10 @@ func (m *TaskRunner) checkErrors() error {
 func (m *TaskRunner) executeTasks() {
 	var firstError error
 	for _, task := range m.tasks {
+		if m.interrupted.Load() {
+			break
+		}
+
 		// Update task status to running and start timing
 		task.mu.Lock()
 		task.status = StatusRunning
@@ -348,7 +364,7 @@ func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			m.quitting = true
+			m.interrupted.Store(true)
 			return m, tea.Quit
 		}
 	case tickMsg:
