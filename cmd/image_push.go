@@ -8,7 +8,6 @@ import (
 	"context"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -167,11 +166,9 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 
 	// Check that the local image exists before anything else: when the source name is already the
 	// destination name, the push itself would be the first to find it missing, with a less clear error.
-	localImage, err := cli.ImageInspect(ctx, srcImageName)
-	if cerrdefs.IsNotFound(err) {
-		return false, envapi.LocalImageNotFound(err, srcImageName)
-	} else if err != nil {
-		return false, clierrors.Wrapf(err, "Failed to inspect local image '%s'", srcImageName)
+	localImage, err := envapi.InspectLocalImage(ctx, cli, srcImageName)
+	if err != nil {
+		return false, err
 	}
 
 	// Check whether the tag already exists in the remote repository. Image tags must be unique
@@ -199,13 +196,11 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 			WithSuggestion("Rebuild with a unique tag and push that. A '<timestamp>-<commit>' tag (e.g. '20260601-153000-1a27c25') is recommended; 'metaplay build image' without a tag generates one automatically.")
 	}
 
-	// If names don't match, tag the source image as the destination.
+	// If names don't match, tag the source image as the destination. Tag by ID, so the image pushed
+	// is the one inspected above.
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
-		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: srcImageName, Target: dstImageName}); err != nil {
-			if cerrdefs.IsNotFound(err) {
-				return false, envapi.LocalImageNotFound(err, srcImageName)
-			}
+		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: localImage.ID, Target: dstImageName}); err != nil {
 			return false, clierrors.Wrapf(err, "Failed to tag image '%s' as '%s'", srcImageName, dstImageName)
 		}
 	}

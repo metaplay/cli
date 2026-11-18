@@ -43,17 +43,17 @@ func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.
 		}
 
 		if tui.IsInteractiveMode() {
-			updateDockerProgressOutput(output, progressIDs, progresses, dockerProgressWidth())
+			updateDockerProgressOutput(output, progressIDs, progresses)
 		}
 	}
 	return nil
 }
 
-// updateDockerProgressOutput shows the latest status of each layer in the task output's footer,
-// with progress bars sized for a terminal width columns wide. The width is read on every update,
-// so the bars follow a terminal resize.
-func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonstream.Message, width uint16) {
+// updateDockerProgressOutput shows the latest status of each layer in the task output's footer.
+// The terminal width is read on every update, so the progress bars follow a resize.
+func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonstream.Message) {
 	lines := []string{}
+	width := dockerProgressWidth()
 
 	for _, id := range progressIDs {
 		progress := progresses[id]
@@ -117,14 +117,8 @@ func dockerTransferFailed(err error, action, imageName string) error {
 	return transferErr
 }
 
-// streamError is an error the daemon reported inside the progress stream with a status code. It
-// gets the error type of that code, as errors returned before the stream starts do, and as the
-// client's own Stream.Wait does.
-//
-// Most stream errors have no code: the daemon formats them with streamformatter.FormatError, which
-// sets only the message. That includes every push failure, because the daemon writes a push's first
-// progress message before it contacts the registry. Registry authentication failures are therefore
-// also recognized by their message, in dockerTransferFailed.
+// streamError is a daemon error from inside the progress stream with a status code, typed by that
+// code as errors returned before the stream are, and as the client's own Stream.Wait does.
 type streamError struct {
 	err    *jsonstream.Error
 	errdef error
@@ -162,7 +156,9 @@ var registryAuthFragments = []string{
 }
 
 // isRegistryAuthMessage reports whether message is a registry's authentication or authorization
-// failure. A 401 or 403 counts only from containerd's resolver, which talks to the registry
+// failure. The message is all there is for most stream errors: the daemon formats them with
+// streamformatter.FormatError, which sets no status code. That includes every push failure,
+// because the daemon writes a push's first progress message before it contacts the registry. A 401 or 403 counts only from containerd's resolver, which talks to the registry
 // ("unexpected status from HEAD request to ...: 403 Forbidden"). A 403 from the blob storage a
 // registry redirects layer downloads to (an expired presigned URL) is not a credentials problem.
 func isRegistryAuthMessage(message string) bool {

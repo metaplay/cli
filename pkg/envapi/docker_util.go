@@ -247,10 +247,17 @@ func createDockerClientAndPing(ctx context.Context, onWaiting func(message strin
 // LogWaiting reports a WaitForDocker progress message outside a task runner task.
 func LogWaiting(message string) { log.Info().Msg(message) }
 
-// LocalImageNotFound is the error for a local image that does not exist.
-func LocalImageNotFound(err error, imageName string) error {
-	return clierrors.Wrapf(err, "Local image '%s' not found", imageName).
-		WithSuggestion("Check the image name, or build the image first with 'metaplay build image'")
+// InspectLocalImage inspects a local image with dockerClient. A missing image is reported as
+// "Local image '<name>' not found", with the suggestion to build it.
+func InspectLocalImage(ctx context.Context, dockerClient *client.Client, imageName string) (client.ImageInspectResult, error) {
+	result, err := dockerClient.ImageInspect(ctx, imageName)
+	if cerrdefs.IsNotFound(err) {
+		return result, clierrors.Wrapf(err, "Local image '%s' not found", imageName).
+			WithSuggestion("Check the image name, or build the image first with 'metaplay build image'")
+	} else if err != nil {
+		return result, clierrors.Wrapf(err, "Failed to inspect local image '%s'", imageName)
+	}
+	return result, nil
 }
 
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
@@ -269,11 +276,9 @@ func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*
 	}
 
 	// Inspect the image using the Docker SDK
-	imageInspect, err := dockerClient.ImageInspect(ctx, imageRefString)
-	if cerrdefs.IsNotFound(err) {
-		return nil, LocalImageNotFound(err, imageRefString)
-	} else if err != nil {
-		return nil, clierrors.Wrapf(err, "Failed to inspect local image '%s'", imageRefString)
+	imageInspect, err := InspectLocalImage(ctx, dockerClient, imageRefString)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use the helper function to convert inspect data to MetaplayImageInfo
