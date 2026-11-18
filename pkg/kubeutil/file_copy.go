@@ -500,6 +500,14 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 			return nil
 		}
 
+		// After the command is cancelled no attempt can succeed, so stop. client-go flattens the
+		// cancellation into its error text, so wrap the context's error for errors.Is.
+		// The partial file is removed: only this process could resume it.
+		if ctx.Err() != nil {
+			_ = os.Remove(destPath)
+			return fmt.Errorf("file copy stopped: %w", ctx.Err())
+		}
+
 		// Check if progress was made - if so, reset failure counter
 		if state.bytesTransferred > progressBefore {
 			log.Debug().Msgf("Progress made: %d -> %d bytes, resetting failure counter", progressBefore, state.bytesTransferred)

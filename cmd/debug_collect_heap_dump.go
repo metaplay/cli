@@ -266,8 +266,8 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
 		)
 		if err != nil {
-			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s, which now always report healthy", podName).
-				WithSuggestion("Restart the pod, or run in it: curl localhost:8585/setOverride/healthz?mode=Passthrough")
+			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s, which report healthy until the override expires 30 minutes after it was set", podName).
+				WithSuggestion("To re-enable them sooner, run in the pod: curl localhost:8585/setOverride/healthz?mode=Passthrough")
 		}
 		return nil
 	})

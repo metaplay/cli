@@ -252,6 +252,11 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	})
 
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// client-go flattens the cancellation into its error text: wrap it again, so callers
+			// can tell a cancelled command from a failed one with errors.Is.
+			err = fmt.Errorf("%w: %w", ctxErr, err)
+		}
 		return stdOut.String(), stdErr.String(), fmt.Errorf("error streaming command: %w, stdout: %s, stderr: %s", err, stdOut.String(), stdErr.String())
 	}
 
