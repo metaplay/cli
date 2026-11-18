@@ -219,14 +219,17 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		return false, clierrors.Wrap(err, "Failed to encode auth config")
 	}
 
+	checkPush := func() envapi.RegistryAccess {
+		return envapi.CheckRegistryAccess(ctx, dockerCredentials, dstImageName, true)
+	}
 	pushResponse, err := cli.ImagePush(ctx, dstImageName, client.ImagePushOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return false, dockerTransferFailed(err, "push", dstImageName)
+		return false, dockerTransferFailed(ctx, err, "push", dstImageName, checkPush)
 	}
 	if err := followDockerProgress(output, pushResponse.JSONMessages(ctx)); err != nil {
-		return false, dockerTransferFailed(err, "push", dstImageName)
+		return false, dockerTransferFailed(ctx, err, "push", dstImageName, checkPush)
 	}
 	return true, nil
 }

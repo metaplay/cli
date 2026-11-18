@@ -5,16 +5,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"iter"
 	"os"
 	"strings"
 
-	cerrdefs "github.com/containerd/errdefs"
-	"github.com/containerd/errdefs/pkg/errhttp"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/client"
 	"github.com/moby/moby/client/pkg/jsonmessage"
 	"golang.org/x/term"
 )
@@ -32,7 +33,7 @@ func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.
 			return err
 		}
 		if progress.Error != nil {
-			return newStreamError(progress.Error)
+			return progress.Error
 		}
 
 		if progress.ID != "" {
@@ -82,7 +83,9 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 
 		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
 		if progress.Progress != nil {
-			progressLine += fmt.Sprintf(" %s", jsonmessage.RenderTUIProgress(*progress.Progress, width))
+			// The progress gets what the line's prefix and the task output's indent leave.
+			used := min(int(width), taskOutputIndent+len(progressLine)+1)
+			progressLine += " " + jsonmessage.RenderTUIProgress(*progress.Progress, uint16(int(width)-used))
 		}
 		lines = append(lines, strings.TrimSpace(progressLine))
 	}
@@ -90,84 +93,40 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 	output.SetFooterLines(lines)
 }
 
-// dockerProgressWidth is the width of the terminal the TUI draws on (stdout), or 200 when
-// that is unknown, as moby's own progress display does. RenderTUIProgress draws the
-// progress bar above 110 columns and the time left above 50.
+// dockerProgressWidth is the width of the terminal the TUI draws on (stdout), or 80 columns when
+// that is unknown, so that lines fit a default-size terminal. RenderTUIProgress draws the progress
+// bar when given more than 110 columns, and the time left when given more than 50.
 func dockerProgressWidth() uint16 {
 	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
 		return uint16(min(width, 0xffff))
 	}
-	return 200
+	return 80
 }
+
+// taskOutputIndent is how far the task runner indents footer lines.
+const taskOutputIndent = 4
 
 // dockerTransferFailed is the error for a failed image pull or push, where action is "pull" or
-// "push". The daemon's message says what went wrong (missing tag or repository, denied access, no
-// match for this platform, registry errors, disk full), so it is shown as the cause. The daemon
-// reports a missing image, and a registry that hides private repositories, as not found.
-func dockerTransferFailed(err error, action, imageName string) error {
+// "push". The daemon's message says what went wrong, so it is shown as the cause. For a suggestion,
+// the registry is asked about access with checkAccess, because the daemon's error often has no
+// status code (it never has for a push) and its wording depends on the registry and image store.
+func dockerTransferFailed(ctx context.Context, err error, action, imageName string, checkAccess func() envapi.RegistryAccess) error {
 	transferErr := clierrors.Wrapf(err, "Failed to %s image '%s'", action, imageName)
 	switch {
-	case cerrdefs.IsNotFound(err) && strings.Contains(err.Error(), "no matching manifest"):
+	case ctx.Err() != nil:
+		return transferErr // Cancelled (runCommand reports cancellation)
+	case client.IsErrConnectionFailed(err):
+		return transferErr.WithSuggestion("Make sure Docker is running, then try again")
+	case strings.Contains(err.Error(), "no matching manifest"):
 		return transferErr // Image not built for this platform: the message says so, and the tag is right
-	case cerrdefs.IsNotFound(err):
-		return transferErr.WithSuggestion("Check the tag, the environment and its registry credentials")
-	case cerrdefs.IsUnauthorized(err), cerrdefs.IsPermissionDenied(err), isRegistryAuthMessage(err.Error()):
-		return transferErr.WithSuggestion("Check the environment's registry credentials")
+	}
+	switch checkAccess() {
+	case envapi.RegistryAccessDenied:
+		return transferErr.WithSuggestion(envapi.RegistryCredentialsSuggestion)
+	case envapi.RegistryRepositoryNotFound:
+		return transferErr.WithSuggestion("The environment's image repository was not found. Check the environment, and that its registry credentials can access the repository")
+	case envapi.RegistryImageNotFound:
+		return transferErr.WithSuggestion("Check the tag. 'metaplay image list ENVIRONMENT' shows the environment's images")
 	}
 	return transferErr
-}
-
-// streamError is a daemon error from inside the progress stream with a status code, typed by that
-// code as errors returned before the stream are, and as the client's own Stream.Wait does.
-type streamError struct {
-	err    *jsonstream.Error
-	errdef error
-}
-
-func newStreamError(err *jsonstream.Error) error {
-	if err.Code == 0 {
-		return err // No status code to derive a type from
-	}
-	return &streamError{err: err, errdef: errhttp.ToNative(err.Code)}
-}
-
-func (e *streamError) Error() string   { return e.err.Error() }
-func (e *streamError) Unwrap() []error { return []error{e.err, e.errdef} }
-
-// registryAuthFragments are registry authentication and authorization failures, as they appear in
-// the daemon's messages. They come from the registry API's error codes ("denied: ...",
-// "unauthorized: ..."), often after a request or context prefix; from registries' own wording
-// (Docker Hub, ECR, Google Artifact Registry), which the containerd image store passes on after
-// "error from registry: "; from the legacy image store ("no basic auth credentials"); and from
-// containerd's resolver ("push access denied, ...", "failed to authorize: ...").
-var registryAuthFragments = []string{
-	"denied:",
-	"unauthorized:",
-	"access denied",
-	"access to the resource is denied",
-	"denied on resource",
-	"not authorized to perform",
-	"authorization token has expired",
-	"incorrect username or password",
-	"no basic auth credentials",
-	"authentication required",
-	"failed to authorize",
-	"authorization failed",
-}
-
-// isRegistryAuthMessage reports whether message is a registry's authentication or authorization
-// failure. The message is all there is for most stream errors: the daemon formats them with
-// streamformatter.FormatError, which sets no status code. That includes every push failure,
-// because the daemon writes a push's first progress message before it contacts the registry. A 401 or 403 counts only from containerd's resolver, which talks to the registry
-// ("unexpected status from HEAD request to ...: 403 Forbidden"). A 403 from the blob storage a
-// registry redirects layer downloads to (an expired presigned URL) is not a credentials problem.
-func isRegistryAuthMessage(message string) bool {
-	message = strings.ToLower(message)
-	for _, fragment := range registryAuthFragments {
-		if strings.Contains(message, fragment) {
-			return true
-		}
-	}
-	return strings.Contains(message, "unexpected status from") &&
-		(strings.Contains(message, "401 unauthorized") || strings.Contains(message, "403 forbidden"))
 }

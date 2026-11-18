@@ -272,7 +272,8 @@ func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*
 	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
 	parsedRef, err := name.ParseReference(imageRefString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse local docker image reference '%s': %w", imageRefString, err)
+		return nil, clierrors.Wrapf(err, "Invalid image name '%s'", imageRefString).
+			WithSuggestion("Use a lowercase NAME:TAG, e.g., 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Inspect the image using the Docker SDK
@@ -283,7 +284,13 @@ func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*
 
 	// Use the helper function to convert inspect data to MetaplayImageInfo
 	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
-	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect.InspectResponse)
+	imageInfo, err := newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect.InspectResponse)
+	if err != nil {
+		// Typically missing Metaplay labels: the image was not built by 'metaplay build image'.
+		return nil, clierrors.Wrapf(err, "Local image '%s' is not a Metaplay server image", imageRefString).
+			WithSuggestion("Build the image with 'metaplay build image'")
+	}
+	return imageInfo, nil
 }
 
 // RemoteDockerImageDigests holds the two content digests that can identify a remote image. Which
@@ -324,7 +331,11 @@ func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (d
 		if isRemoteImageNotFound(err) {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("failed to query remote docker image '%s': %w", imageRef, err)
+		if registryAccessFromError(err, false) == RegistryAccessDenied {
+			return nil, false, clierrors.Wrapf(err, "No access to image '%s' in the environment's registry", imageRef).
+				WithSuggestion(RegistryCredentialsSuggestion)
+		}
+		return nil, false, clierrors.Wrapf(err, "Failed to query image '%s' in the environment's registry", imageRef)
 	}
 
 	// Resolve the image and read its config digest. The descriptor digest is the manifest digest.

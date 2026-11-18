@@ -139,14 +139,17 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 	}
 
 	output.AppendLinef("Pulling image %s", remoteImageName)
+	checkPull := func() envapi.RegistryAccess {
+		return envapi.CheckRegistryAccess(ctx, dockerCredentials, remoteImageName, false)
+	}
 	pullResponse, err := cli.ImagePull(ctx, remoteImageName, client.ImagePullOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		return dockerTransferFailed(err, "pull", remoteImageName)
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
 	if err := followDockerProgress(output, pullResponse.JSONMessages(ctx)); err != nil {
-		return dockerTransferFailed(err, "pull", remoteImageName)
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
 	return nil
 }
