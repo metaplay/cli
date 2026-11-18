@@ -21,8 +21,8 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/release"
+	v2chart "helm.sh/helm/v4/pkg/chart/v2"
+	rcommon "helm.sh/helm/v4/pkg/release/common"
 )
 
 const metaplayLoadTestChartName = "metaplay-loadtest"
@@ -306,7 +306,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	if existingRelease != nil {
 		releaseName := existingRelease.Name
 		releaseStatus := existingRelease.Info.Status
-		if releaseStatus == release.StatusUninstalling {
+		if releaseStatus == rcommon.StatusUninstalling {
 			return clierrors.Newf("Helm release %s is in state 'uninstalling'", releaseName).
 				WithSuggestion("Try again later, or manually uninstall the botclient with 'metaplay remove botclient'")
 		} else if releaseStatus.IsPending() {
@@ -389,8 +389,8 @@ func botClientImageValues(repository *envapi.EnvironmentImageRepository, tag str
 // so no version number here has to be kept in step with the chart's releases.
 // A chart from localChartPath ignores the project's chart version and
 // --helm-chart-version alike, so the suggestion names the path instead.
-func checkBotClientChart(pullSecret string, localChartPath string) func(*chart.Chart) error {
-	return func(loadedChart *chart.Chart) error {
+func checkBotClientChart(pullSecret string, localChartPath string) func(*v2chart.Chart) error {
+	return func(loadedChart *v2chart.Chart) error {
 		if pullSecret == "" {
 			return nil
 		}

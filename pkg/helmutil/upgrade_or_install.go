@@ -8,18 +8,18 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/chartutil"
-	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/chart/common"
+	v2chart "helm.sh/helm/v4/pkg/chart/v2"
+	v2loader "helm.sh/helm/v4/pkg/chart/v2/loader"
+	"helm.sh/helm/v4/pkg/cli"
+	"helm.sh/helm/v4/pkg/kube"
+	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
 // HelmUpgradeOrInstall performs the equivalent of `helm upgrade --install --wait --values <path> ...`
@@ -39,7 +39,7 @@ import (
 func HelmUpgradeOrInstall(
 	output *tui.TaskOutput,
 	actionConfig *action.Configuration,
-	existingRelease *release.Release,
+	existingRelease *v1.Release,
 	namespace, releaseName, chartURL string,
 	chartVersion string,
 	valuesFiles []string,
@@ -48,8 +48,8 @@ func HelmUpgradeOrInstall(
 	requiredValues map[string]any,
 	timeout time.Duration,
 	validateValuesSchema bool,
-	checkChart func(*chart.Chart) error,
-) (*release.Release, error) {
+	checkChart func(*v2chart.Chart) error,
+) (*v1.Release, error) {
 	// Validate that defaultValues and requiredValues have correct types
 	if err := validateHelmValuesTypes(defaultValues, "defaultValues"); err != nil {
 		return nil, fmt.Errorf("invalid defaultValues: %w", err)
@@ -62,13 +62,9 @@ func HelmUpgradeOrInstall(
 	headerLine := fmt.Sprintf("Deploying chart %s as release %s", chartURL, releaseName)
 	output.SetHeaderLines([]string{headerLine})
 
-	// Pipe Helm output to task output
-	actionConfig.Log = func(format string, args ...any) {
-		// Render line and trim any trailing line endings
-		line := fmt.Sprintf(format, args...)
-		line = strings.TrimRight(line, "\r\n")
-		output.AppendLine(line)
-	}
+	// Pipe Helm's action log to the task output. The Kubernetes client keeps the
+	// debug log handler it got in NewActionConfig.
+	actionConfig.SetLogger(newTaskOutputLogHandler(output.AppendLine))
 
 	var installCmd *action.Install
 	var upgradeCmd *action.Upgrade
@@ -77,14 +73,24 @@ func HelmUpgradeOrInstall(
 	// Determine if install or upgrade based on existence of release:
 	// - Use install if no previous Helm release exists
 	// - Use upgrade if a previous Helm release exists
+	//
+	// Both apply the chart the way Helm v3 did, with client-side apply. Helm v4
+	// defaults to server-side apply for new installs and keeps each release's
+	// recorded apply method on upgrade. Releases deployed with Helm v3 use
+	// client-side apply, so the default would leave environments split between
+	// the two methods, which accept different manifests and handle field
+	// ownership differently. Do not set ForceReplace either: under client-side
+	// apply it replaces whole objects, dropping labels and finalizers added by
+	// others (such as the operator).
 	if existingRelease == nil {
 		output.AppendLine("No existing release found, install new release")
 		installCmd = action.NewInstall(actionConfig)
 		installCmd.Version = chartVersion
 		installCmd.ReleaseName = releaseName
 		installCmd.Namespace = namespace
-		installCmd.Wait = true
 		installCmd.Timeout = timeout
+		installCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+		installCmd.ServerSideApply = false                      // Client-side apply, as with Helm v3
 		installCmd.Devel = true                                 // If version is development, accept it
 		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &installCmd.ChartPathOptions
@@ -93,11 +99,12 @@ func HelmUpgradeOrInstall(
 		upgradeCmd = action.NewUpgrade(actionConfig)
 		upgradeCmd.Version = chartVersion
 		upgradeCmd.Namespace = namespace
-		upgradeCmd.Wait = true
 		upgradeCmd.Timeout = timeout
+		upgradeCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+		upgradeCmd.ServerSideApply = "false"                    // Client-side apply, as with Helm v3
 		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
 		upgradeCmd.Devel = true                                 // If version is development, accept it
-		upgradeCmd.Atomic = false                               // Don't rollback on failures to not hide errors
+		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
 		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
 		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
@@ -113,7 +120,9 @@ func HelmUpgradeOrInstall(
 	}
 
 	output.AppendLinef("Loading chart from: %s", chartPath)
-	loadedChart, err := loader.Load(chartPath)
+	// Metaplay charts are apiVersion v1 or v2, which the v2 loader handles. It
+	// fails if Chart.yaml is missing, so Metadata is always set.
+	loadedChart, err := v2loader.Load(chartPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load Helm chart: %w", err)
 	}
@@ -138,7 +147,7 @@ func HelmUpgradeOrInstall(
 	filesValueMap := map[string]any{}
 	for _, valuesFile := range valuesFiles {
 		output.AppendLinef("Loading values from: %s", valuesFile)
-		values, err := chartutil.ReadValuesFile(valuesFile)
+		values, err := common.ReadValuesFile(valuesFile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read values file: %w", err)
 		}
@@ -176,20 +185,24 @@ func HelmUpgradeOrInstall(
 	output.AppendLine("Starting Helm deployment...")
 	if installCmd != nil {
 		output.AppendLine("Installing new release...")
-		release, err := installCmd.Run(loadedChart, finalValueMap)
+		releaser, err := installCmd.Run(loadedChart, finalValueMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to install the Helm chart: %w", err)
 		}
-		return release, nil
+		return toV1Release(releaser)
 	} else {
 		output.AppendLine("Upgrading existing release...")
-		release, err := upgradeCmd.Run(releaseName, loadedChart, finalValueMap)
+		releaser, err := upgradeCmd.Run(releaseName, loadedChart, finalValueMap)
 		if err != nil {
 			return nil, fmt.Errorf("failed to upgrade an existing Helm release: %w", err)
 		}
-		return release, nil
+		return toV1Release(releaser)
 	}
 }
+
+// The wait strategy for install, upgrade and uninstall: Helm v4's default
+// (kstatus), which waits for every replica to be updated and available.
+const helmWaitStrategy = kube.StatusWatcherStrategy
 
 // Combine two Helm values maps into one. On conflicts, the fields in 'override' win
 // over 'base'. Maps are recursively merged. Sequences are replaced.
