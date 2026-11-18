@@ -242,8 +242,12 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 		// Not cancelled with the command: cancelling the exec stream would not stop the collector in
 		// the pod, which keeps the server frozen and writes the dump file until it finishes. Only
-		// then can the health checks be re-enabled and the file removed.
-		_, _, err := kubeutil.ExecInDebugContainer(context.WithoutCancel(ctx), kubeCli, podName, debugContainerName, collectCmd)
+		// then can the health checks be re-enabled and the file removed. After an interrupt, wait
+		// at most 10 minutes plus 3 times the estimated duration.
+		estimated := time.Duration(processInfo.MemoryGB * 10 * float64(time.Second))
+		collectCtx, cancel := kubeutil.ContinueAfterCancel(ctx, 10*time.Minute+3*estimated)
+		defer cancel()
+		_, _, err := kubeutil.ExecInDebugContainer(collectCtx, kubeCli, podName, debugContainerName, collectCmd)
 		dumpDuration = time.Since(startTime)
 		if err != nil {
 			return fmt.Errorf("failed to collect heap dump: %w", err)
@@ -277,18 +281,37 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	}
 
 	// Copy heap dump to local machine
+	downloaded := false
 	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
 		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
 		if err != nil {
 			return fmt.Errorf("failed to copy heap dump: %w", err)
 		}
+		downloaded = true
 		return nil
 	})
 
 	// Remove the remote file, also when the download failed
 	runner.AddCleanupTask("Remove heap dump from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
-		return kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, remoteDumpDir+"/"+filepath.Base(o.flagOutputPath))
+		remotePath := remoteDumpDir + "/" + filepath.Base(o.flagOutputPath)
+		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "heap dump", o.flagOutputPath, downloaded, remotePath)
 	})
+}
+
+// removeFromPod removes a collected file from the pod, explaining a failure: the file uses the
+// pod's disk space until it is removed, and the error says whether the local copy is complete.
+func removeFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, what, localPath string, downloaded bool, remotePaths ...string) error {
+	err := kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, remotePaths...)
+	if err == nil {
+		return nil
+	}
+	message := fmt.Sprintf("Failed to remove the %s from pod %s", what, podName)
+	if downloaded {
+		message = fmt.Sprintf("The %s was saved to %s, but removing it from pod %s failed", what, localPath, podName)
+	}
+	return clierrors.Wrap(err, message).
+		WithDetails(remotePaths...).
+		WithSuggestion("The file uses the pod's disk space until it is removed or the pod restarts. Remove it, or restart the pod")
 }
 
 // formatDuration converts a duration in seconds to a human-readable string

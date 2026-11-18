@@ -527,7 +527,7 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 }
 
 // waitForDomainResolution waits for a domain to resolve within a 15-minute timeout.
-func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout time.Duration) error {
+func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostname string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
 
 	output.SetHeaderLines([]string{
@@ -537,7 +537,7 @@ func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout ti
 	attemptNdx := 0
 	for {
 		// Do a DNS lookup.
-		_, err := net.LookupHost(hostname)
+		_, err := net.DefaultResolver.LookupHost(ctx, hostname)
 		if err == nil {
 			output.AppendLinef("Successfully resolved domain %s", hostname)
 			return nil
@@ -557,7 +557,11 @@ func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout ti
 		attemptNdx += 1
 
 		// Delay before trying again -- these can take a while so avoid spamming the log
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -750,7 +754,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for the primary domain name to resolve to an IP address.
 	taskRunner.AddTask("Wait for game server domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(output, serverPrimaryAddress, 15*time.Minute)
+		return waitForDomainResolution(ctx, output, serverPrimaryAddress, 15*time.Minute)
 	})
 
 	// Wait for server to respond to client traffic.
@@ -762,7 +766,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for the admin domain name to resolve to an IP address.
 	taskRunner.AddTask("Wait for LiveOps Dashboard domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(output, envDetails.Deployment.AdminHostname, 15*time.Minute)
+		return waitForDomainResolution(ctx, output, envDetails.Deployment.AdminHostname, 15*time.Minute)
 	})
 
 	// Wait for admin API to successfully respond to an HTTP request.

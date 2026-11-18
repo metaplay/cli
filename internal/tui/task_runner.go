@@ -45,6 +45,13 @@ type TaskOutput struct {
 	logLines    []string   // Append-only log lines of output (only 5 are shown)
 	footerLines []string   // Footer lines (all are shown, updates are logged)
 	mu          sync.Mutex // Protects the lines slice
+
+	progress *plainProgress // The runner's progress reporting, which logs lines once the display has closed
+}
+
+// logsLines reports whether appended lines are logged, which they are when there is no display.
+func (to *TaskOutput) logsLines() bool {
+	return !isInteractiveMode || (to.progress != nil && to.progress.isLogging())
 }
 
 // TaskRunFunc is the function signature for task execution functions
@@ -56,8 +63,7 @@ func (to *TaskOutput) AppendLine(line string) {
 	to.logLines = append(to.logLines, line)
 	to.mu.Unlock()
 
-	// If not in interactive mode, log line.
-	if !isInteractiveMode {
+	if to.logsLines() {
 		log.Info().Msgf("  %s", line)
 	}
 }
@@ -69,8 +75,7 @@ func (to *TaskOutput) AppendLinef(format string, a ...any) {
 	to.logLines = append(to.logLines, line)
 	to.mu.Unlock()
 
-	// If not in interactive mode, log line.
-	if !isInteractiveMode {
+	if to.logsLines() {
 		log.Info().Msgf("  %s", line)
 	}
 }
@@ -158,10 +163,15 @@ type TaskRunner struct {
 // plainProgress reports the tasks' progress as log lines: in non-interactive mode, and after the
 // user interrupted the command, which closes the display while the tasks still run.
 type plainProgress struct {
-	mu             sync.Mutex
-	logging        bool  // Report progress as log lines
-	reportFailures bool  // Log failures, which the command reports only as "Canceled." after an interrupt
-	current        *Task // The task being run, or nil
+	mu      sync.Mutex
+	logging bool  // Report progress as log lines
+	current *Task // The task being run, or nil
+}
+
+func (p *plainProgress) isLogging() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.logging
 }
 
 // cleanupTimeout bounds each cleanup task.
@@ -190,6 +200,7 @@ func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
 		title:   title,
 		runFunc: runFunc,
 		status:  StatusPending,
+		output:  TaskOutput{progress: m.progress},
 	}
 
 	// Add to runner
@@ -197,9 +208,10 @@ func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
 }
 
 // AddCleanupTask adds a task that undoes an earlier task's changes, such as a setting changed in a
-// pod. Unlike other tasks, it runs also when an earlier task failed or the command was interrupted.
-// Its context is not cancelled with the command's, and is bounded by cleanupTimeout. runFunc must
-// be safe to run when the change it undoes was never made.
+// pod. Unlike other tasks, it runs also when an earlier task failed or the command was interrupted,
+// as long as some task before it started. Its own failure does not stop the tasks after it. Its
+// context is not cancelled with the command's, and is bounded by cleanupTimeout. runFunc must be
+// safe to run when the change it undoes was not made.
 func (m *TaskRunner) AddCleanupTask(title string, runFunc func(ctx context.Context, output *TaskOutput) error) {
 	m.tasks = append(m.tasks, &Task{
 		title: title,
@@ -210,6 +222,7 @@ func (m *TaskRunner) AddCleanupTask(title string, runFunc func(ctx context.Conte
 		},
 		cleanup: true,
 		status:  StatusPending,
+		output:  TaskOutput{progress: m.progress},
 	})
 }
 
@@ -270,27 +283,26 @@ func (m *TaskRunner) runInteractive(options ...tea.ProgramOption) error {
 	}
 
 	// The display closes before the tasks finish when the user interrupts the command (Ctrl-C,
-	// SIGINT or SIGTERM). Cancel the command, as SIGINT does without the display, and wait for the
+	// SIGINT or SIGTERM). Stop the command, as SIGINT does without the display, and wait for the
 	// tasks, reporting their progress as log lines.
 	select {
 	case <-m.done:
 	default:
 		if !displayFailed {
-			interrupt()
+			Interrupt()
 		}
-		m.progress.closeDisplay(!displayFailed)
+		m.progress.closeDisplay()
 		<-m.done
 	}
 
-	return m.checkErrors()
+	return m.result()
 }
 
 // closeDisplay switches progress reporting to log lines, starting with the task still running.
-func (p *plainProgress) closeDisplay(interrupted bool) {
+func (p *plainProgress) closeDisplay() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.logging = true
-	p.reportFailures = interrupted
 	if p.current != nil {
 		log.Info().Msgf("Waiting for '%s' to finish...", p.current.title)
 	}
@@ -306,20 +318,13 @@ func (p *plainProgress) taskStarted(task *Task) {
 	}
 }
 
-// taskEnded logs the task's result once the display has closed. A failure caused by the
-// cancellation is not logged: the command reports the cancellation itself.
-func (p *plainProgress) taskEnded(task *Task, err error, elapsed time.Duration) {
+// taskEnded logs a task's success once the display has closed. Failures are shown by result.
+func (p *plainProgress) taskEnded(err error, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.current = nil
-	if !p.logging {
-		return
-	}
-	switch {
-	case err == nil:
+	if p.logging && err == nil {
 		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
-	case p.reportFailures && !errors.Is(err, context.Canceled):
-		log.Error().Msgf(" %s '%s' failed: %v", styles.RenderError("✗"), task.title, err)
 	}
 }
 
@@ -327,38 +332,88 @@ func (p *plainProgress) taskEnded(task *Task, err error, elapsed time.Duration) 
 func (m *TaskRunner) runNonInteractive() error {
 	m.progress.logging = true
 	m.executeTasks()
-	if err := m.checkErrors(); err != nil {
-		return err
+	err := m.result()
+	if err == nil {
+		log.Info().Msg("")
 	}
-	log.Info().Msg("")
-	return nil
+	return err
 }
 
-// checkErrors checks if any tasks failed and returns the first error
-func (m *TaskRunner) checkErrors() error {
-	var errors []error
+// result returns the error for the command, once the tasks have finished, and shows the failures
+// that error does not cover. The error is the first ordinary task's failure. Without one, it is
+// context.Canceled if an interrupt skipped tasks, or else the first cleanup task's failure.
+//
+// The command shows its error itself, except after an interrupt: then it shows only "Canceled.",
+// so result shows the failures here. It leaves out ordinary tasks' failures that wrap
+// context.Canceled, which the interrupt caused. Cleanup tasks don't use the command's context, so
+// their failures are always shown.
+func (m *TaskRunner) result() error {
+	wasInterrupted := interrupted.Load()
+	var failed []*Task
+	var skipped []string
 	for _, task := range m.tasks {
 		task.mu.Lock()
 		if task.error != nil {
-			errors = append(errors, task.error)
+			failed = append(failed, task)
+		} else if task.status == StatusPending && !task.cleanup {
+			skipped = append(skipped, task.title)
 		}
 		task.mu.Unlock()
 	}
 
-	if len(errors) > 0 {
-		return errors[0]
+	// The interrupt kept tasks from running, so the command did not do all its work
+	canceled := wasInterrupted && len(skipped) > 0
+
+	// The task whose failure is the error, if any
+	var returnedTask *Task
+	for _, task := range failed {
+		if !task.cleanup {
+			returnedTask = task
+			break
+		}
+	}
+	if returnedTask == nil && len(failed) > 0 && !canceled {
+		returnedTask = failed[0]
 	}
 
+	for _, task := range failed {
+		switch {
+		case !wasInterrupted && task == returnedTask:
+			// The command shows it
+		case wasInterrupted && !task.cleanup && errors.Is(task.error, context.Canceled):
+			// Caused by the interrupt
+		default:
+			errorDisplay(fmt.Errorf("%s: %w", task.title, task.error))
+		}
+	}
+	if canceled {
+		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(skipped, ", "))
+	}
+
+	if returnedTask != nil {
+		return returnedTask.error
+	}
+	if canceled {
+		return context.Canceled
+	}
 	return nil
 }
 
-// executeTasks runs the tasks sequentially. After a task fails, only cleanup tasks run.
+// executeTasks runs the tasks sequentially. After an ordinary task fails or the command is
+// interrupted, only cleanup tasks run.
 func (m *TaskRunner) executeTasks() {
 	var firstError error
+	stopped := false
+	anyStarted := false
 	for _, task := range m.tasks {
-		if firstError != nil && !task.cleanup {
+		if task.cleanup {
+			if !anyStarted {
+				continue // Nothing to undo
+			}
+		} else if stopped || interrupted.Load() {
 			continue
 		}
+		anyStarted = true
 		m.progress.taskStarted(task)
 
 		// Update task status to running and start timing
@@ -369,24 +424,29 @@ func (m *TaskRunner) executeTasks() {
 
 		// Execute the task
 		log.Debug().Msgf("Task start: %s", task.title)
-		if err := task.runFunc(&task.output); err != nil {
-			task.mu.Lock()
-			task.elapsed = time.Since(task.startTime)
+		err := task.runFunc(&task.output)
+
+		task.mu.Lock()
+		task.elapsed = time.Since(task.startTime)
+		elapsed := task.elapsed
+		if err != nil {
 			task.status = StatusFailed
 			task.error = err
-			elapsed := task.elapsed
-			task.mu.Unlock()
-			m.progress.taskEnded(task, err, elapsed)
+		} else {
+			task.status = StatusCompleted
+		}
+		task.mu.Unlock()
+		m.progress.taskEnded(err, elapsed)
+
+		if err != nil {
+			log.Debug().Msgf("Task failed: %s: %v", task.title, err)
 			if firstError == nil {
 				firstError = err
 			}
+			if !task.cleanup {
+				stopped = true
+			}
 		} else {
-			task.mu.Lock()
-			task.status = StatusCompleted
-			elapsed := time.Since(task.startTime)
-			task.elapsed = elapsed
-			task.mu.Unlock()
-			m.progress.taskEnded(task, nil, elapsed)
 			log.Debug().Msgf("Task completed: %s %s", task.title, humanizeElapsed(elapsed))
 		}
 	}
@@ -416,6 +476,9 @@ func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
+			// Mark the command interrupted at once, so no further task starts while the display
+			// closes. runInteractive cancels the command once the terminal is restored.
+			interrupted.Store(true)
 			return m, tea.Quit
 		}
 	case tickMsg:

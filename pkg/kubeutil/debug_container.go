@@ -261,10 +261,30 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 // RemoveFilesInDebugContainer removes files in the debug container with a single 'rm -f'. Files
 // that do not exist are not an error.
 func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, paths ...string) error {
-	log.Debug().Msgf("Remove files from debug container: %s", strings.Join(paths, " "))
-	_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, "rm -f "+strings.Join(paths, " "))
-	if err != nil {
-		return fmt.Errorf("failed to remove %s from the pod: %w", strings.Join(paths, " and "), err)
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
 	}
-	return nil
+	command := "rm -f -- " + strings.Join(quoted, " ")
+	log.Debug().Msgf("Remove files from debug container: %s", command)
+	_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, command)
+	return err
+}
+
+// shellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
+// one built from a user's --output, means only itself.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ContinueAfterCancel returns a context that is not cancelled with ctx, so that work in a pod which
+// cancelling would not stop can finish after the command is interrupted. It is cancelled grace
+// after ctx is, so an interrupted command does not wait for it forever.
+func ContinueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	continued, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stopWaiting := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
+	return continued, func() {
+		stopWaiting()
+		cancel()
+	}
 }

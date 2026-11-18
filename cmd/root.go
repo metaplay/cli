@@ -146,9 +146,12 @@ var rootCmd = &cobra.Command{
 }
 
 // ExecuteContext adds all child commands to the root command and sets flags appropriately.
-// It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
+// It accepts a context for cancellation support: main cancels it on Ctrl+C, SIGINT and SIGTERM.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func ExecuteContext(ctx context.Context) {
+	// The task runner shows failures that a command's returned error does not cover the same way.
+	tui.SetErrorDisplay(displayError)
+
 	if err := checkUnknownSubcommand(rootCmd, os.Args[1:]); err != nil {
 		displayCobraError(err)
 		os.Exit(2)
@@ -438,7 +441,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 // interrupt looks identical to "pnpm not installed").
 //
 // We check three signals in order of specificity:
-//  1. the root context was canceled via SIGINT/SIGTERM (matches signal.NotifyContext);
+//  1. the root context was canceled: main cancels it on Ctrl+C, SIGINT and SIGTERM;
 //  2. the error chain itself carries context.Canceled (e.g. an interactive prompt);
 //  3. a SignaledError from execChildInteractive (defensive — covers the case
 //     where a forwarded signal killed the child but didn't reach our context).

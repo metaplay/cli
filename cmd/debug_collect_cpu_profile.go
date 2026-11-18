@@ -255,8 +255,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 		// Execute the command in the debug container. Not cancelled with the command: cancelling the
 		// exec stream would not stop dotnet-trace in the pod, which would write the profile files
-		// after they were removed. It stops after the requested duration.
-		_, _, err := kubeutil.ExecInDebugContainer(context.WithoutCancel(ctx), kubeCli, podName, debugContainerName, collectCmd)
+		// after they were removed. It stops after the requested duration, so after an interrupt,
+		// wait at most that long plus 5 minutes for the conversion.
+		collectCtx, cancel := kubeutil.ContinueAfterCancel(ctx, time.Duration(o.flagDuration)*time.Second+5*time.Minute)
+		defer cancel()
+		_, _, err := kubeutil.ExecInDebugContainer(collectCtx, kubeCli, podName, debugContainerName, collectCmd)
 		if err != nil {
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
@@ -265,11 +268,13 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	})
 
 	// Copy CPU profile to local machine
+	downloaded := false
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
 		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
 		if err != nil {
 			return fmt.Errorf("failed to copy CPU profile: %w", err)
 		}
+		downloaded = true
 		return nil
 	})
 
@@ -279,7 +284,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		if remoteDownloadName != remoteNettraceName {
 			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
 		}
-		return kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, filesToRemove...)
+		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "CPU profile", o.flagOutputPath, downloaded, filesToRemove...)
 	})
 
 	return nil
