@@ -228,7 +228,8 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	if err != nil {
 		return false, dockerTransferFailed(ctx, err, "push", dstImageName, checkPush)
 	}
-	if err := followDockerProgress(output, pushResponse.JSONMessages(ctx)); err != nil {
+	// Layer progress says nothing about access for a push: the daemon prepares layers first.
+	if _, err := followDockerProgress(output, pushResponse.JSONMessages(ctx)); err != nil {
 		return false, dockerTransferFailed(ctx, err, "push", dstImageName, checkPush)
 	}
 	return true, nil

@@ -51,10 +51,8 @@ func CheckRegistryAccess(ctx context.Context, creds *DockerCredentials, imageRef
 
 	authenticator := registryAuthenticator(creds)
 	if push {
-		// CheckPushPermission takes no context, so bound it through the transport.
-		httpTransport := remote.DefaultTransport.(*http.Transport).Clone()
-		httpTransport.ResponseHeaderTimeout = registryAccessTimeout
-		err = remote.CheckPushPermission(ref, staticKeychain{authenticator}, httpTransport)
+		// CheckPushPermission takes no context, so its requests get ctx through the transport.
+		err = remote.CheckPushPermission(ref, staticKeychain{authenticator}, contextTransport{ctx, remote.DefaultTransport})
 	} else {
 		// GET rather than HEAD: only a response body says whether the repository or the tag is missing.
 		_, err = remote.Get(ref, remote.WithAuth(authenticator), remote.WithContext(ctx), remote.WithRetryBackoff(remote.Backoff{Steps: 1}))
@@ -67,8 +65,8 @@ func CheckRegistryAccess(ctx context.Context, creds *DockerCredentials, imageRef
 // registryAccessFromError classifies an error from go-containerregistry by the registry's answer.
 // Any other error, such as a network failure, says nothing about access.
 func registryAccessFromError(err error, push bool) RegistryAccess {
-	var transportErr *transport.Error
-	if !errors.As(err, &transportErr) {
+	transportErr, ok := errors.AsType[*transport.Error](err)
+	if !ok {
 		return RegistryAccessUnknown
 	}
 	switch transportErr.StatusCode {
@@ -92,6 +90,16 @@ func registryAccessFromError(err error, push bool) RegistryAccess {
 		return RegistryImageNotFound
 	}
 	return RegistryAccessUnknown
+}
+
+// contextTransport sends every request with ctx, which bounds and cancels them all.
+type contextTransport struct {
+	ctx  context.Context
+	base http.RoundTripper
+}
+
+func (t contextTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(req.WithContext(t.ctx))
 }
 
 // staticKeychain resolves every registry to one authenticator, for CheckPushPermission.

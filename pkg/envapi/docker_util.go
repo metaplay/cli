@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,7 +20,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
@@ -52,26 +50,30 @@ type MetaplayImageInfo struct {
 	Architecture string    // Architecture the image is built for (e.g., "amd64") - can be added if needed elsewhere
 }
 
+// errMissingLabel is in the chain of newMetaplayImageInfo's error for an image without a required
+// Metaplay label, that is, one not built by 'metaplay build image'.
+var errMissingLabel = errors.New("missing required label")
+
 func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string, createdTime time.Time, os string, architecture string) (*MetaplayImageInfo, error) {
 	// Extract required labels for a valid Metaplay server image.
 	projectID, ok := labels[labelProjectID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelProjectID, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelProjectID, imageID, repoTag)
 	}
 
 	sdkVersion, ok := labels[labelSdkVersion]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelSdkVersion, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelSdkVersion, imageID, repoTag)
 	}
 
 	commitID, ok := labels[labelCommitID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelCommitID, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelCommitID, imageID, repoTag)
 	}
 
 	buildNumber, ok := labels[labelBuildNumber]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelBuildNumber, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelBuildNumber, imageID, repoTag)
 	}
 
 	// Create and return the MetaplayImageInfo
@@ -285,10 +287,11 @@ func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*
 	// Use the helper function to convert inspect data to MetaplayImageInfo
 	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
 	imageInfo, err := newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect.InspectResponse)
-	if err != nil {
-		// Typically missing Metaplay labels: the image was not built by 'metaplay build image'.
+	if errors.Is(err, errMissingLabel) {
 		return nil, clierrors.Wrapf(err, "Local image '%s' is not a Metaplay server image", imageRefString).
 			WithSuggestion("Build the image with 'metaplay build image'")
+	} else if err != nil {
+		return nil, clierrors.Wrapf(err, "Failed to read local image '%s'", imageRefString)
 	}
 	return imageInfo, nil
 }
@@ -357,17 +360,8 @@ func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (d
 // isRemoteImageNotFound reports whether err from a remote registry query indicates that no image
 // exists at the requested reference (as opposed to a transport/auth/other failure).
 func isRemoteImageNotFound(err error) bool {
-	if transportErr, ok := errors.AsType[*transport.Error](err); ok {
-		for _, code := range transportErr.Errors {
-			if code.Code == transport.ManifestUnknownErrorCode || code.Code == transport.NameUnknownErrorCode {
-				return true
-			}
-		}
-		if transportErr.StatusCode == http.StatusNotFound {
-			return true
-		}
-	}
-	return false
+	access := registryAccessFromError(err, false)
+	return access == RegistryImageNotFound || access == RegistryRepositoryNotFound
 }
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.

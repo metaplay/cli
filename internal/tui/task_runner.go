@@ -87,6 +87,9 @@ func (to *TaskOutput) SetHeaderLines(lines []string) {
 	}
 }
 
+// TaskOutputIndent is how many columns the task runner indents a task's output lines by.
+const TaskOutputIndent = 4
+
 // Update the footer lines to the provided ones. Also logged in non-interactive mode.
 func (to *TaskOutput) SetFooterLines(lines []string) {
 	to.mu.Lock()
@@ -408,9 +411,9 @@ func (m TaskRunner) View() tea.View {
 		}
 		lines = append(lines, taskLine)
 
-		// Add output lines if there are any, indented by 4 spaces
+		// Add output lines if there are any, indented
 		for _, outputLine := range outputLines {
-			lines = append(lines, fmt.Sprintf("    %s", styles.RenderMuted(outputLine)))
+			lines = append(lines, strings.Repeat(" ", TaskOutputIndent)+styles.RenderMuted(outputLine))
 		}
 	}
 

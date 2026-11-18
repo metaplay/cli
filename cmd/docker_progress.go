@@ -22,18 +22,18 @@ import (
 
 // followDockerProgress consumes the progress messages of an image pull or push until the stream
 // ends, showing each layer's latest status in the task output's footer in interactive mode. It
-// returns the first stream or daemon error. A stream from the client's JSONMessages ends when the
-// response ends or its context is cancelled.
-func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.Message, error]) error {
+// returns the first stream or daemon error, and whether any layer progress came before it. A
+// stream from the client's JSONMessages ends when the response ends or its context is cancelled.
+func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.Message, error]) (layersStarted bool, err error) {
 	progressIDs := []string{}                     // Layer IDs in the order they first appeared
 	progresses := map[string]jsonstream.Message{} // Latest message for each layer ID
 
 	for progress, err := range messages {
 		if err != nil {
-			return err
+			return len(progressIDs) > 0, err
 		}
 		if progress.Error != nil {
-			return progress.Error
+			return len(progressIDs) > 0, progress.Error
 		}
 
 		if progress.ID != "" {
@@ -47,7 +47,7 @@ func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.
 			updateDockerProgressOutput(output, progressIDs, progresses)
 		}
 	}
-	return nil
+	return len(progressIDs) > 0, nil
 }
 
 // updateDockerProgressOutput shows the latest status of each layer in the task output's footer.
@@ -84,8 +84,8 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
 		if progress.Progress != nil {
 			// The progress gets what the line's prefix and the task output's indent leave.
-			used := min(int(width), taskOutputIndent+len(progressLine)+1)
-			progressLine += " " + jsonmessage.RenderTUIProgress(*progress.Progress, uint16(int(width)-used))
+			used := min(width, tui.TaskOutputIndent+len(progressLine)+1)
+			progressLine += " " + jsonmessage.RenderTUIProgress(*progress.Progress, uint16(min(width-used, 0xffff)))
 		}
 		lines = append(lines, strings.TrimSpace(progressLine))
 	}
@@ -96,20 +96,18 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 // dockerProgressWidth is the width of the terminal the TUI draws on (stdout), or 80 columns when
 // that is unknown, so that lines fit a default-size terminal. RenderTUIProgress draws the progress
 // bar when given more than 110 columns, and the time left when given more than 50.
-func dockerProgressWidth() uint16 {
+func dockerProgressWidth() int {
 	if width, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && width > 0 {
-		return uint16(min(width, 0xffff))
+		return width
 	}
 	return 80
 }
-
-// taskOutputIndent is how far the task runner indents footer lines.
-const taskOutputIndent = 4
 
 // dockerTransferFailed is the error for a failed image pull or push, where action is "pull" or
 // "push". The daemon's message says what went wrong, so it is shown as the cause. For a suggestion,
 // the registry is asked about access with checkAccess, because the daemon's error often has no
 // status code (it never has for a push) and its wording depends on the registry and image store.
+// checkAccess is nil when the failure can't be about access.
 func dockerTransferFailed(ctx context.Context, err error, action, imageName string, checkAccess func() envapi.RegistryAccess) error {
 	transferErr := clierrors.Wrapf(err, "Failed to %s image '%s'", action, imageName)
 	switch {
@@ -117,8 +115,8 @@ func dockerTransferFailed(ctx context.Context, err error, action, imageName stri
 		return transferErr // Cancelled (runCommand reports cancellation)
 	case client.IsErrConnectionFailed(err):
 		return transferErr.WithSuggestion("Make sure Docker is running, then try again")
-	case strings.Contains(err.Error(), "no matching manifest"):
-		return transferErr // Image not built for this platform: the message says so, and the tag is right
+	case checkAccess == nil:
+		return transferErr
 	}
 	switch checkAccess() {
 	case envapi.RegistryAccessDenied:

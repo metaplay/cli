@@ -148,7 +148,11 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 	if err != nil {
 		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
-	if err := followDockerProgress(output, pullResponse.JSONMessages(ctx)); err != nil {
+	if layersStarted, err := followDockerProgress(output, pullResponse.JSONMessages(ctx)); err != nil {
+		if layersStarted {
+			// The daemon pulls layers only after the registry let it read the manifest.
+			checkPull = nil
+		}
 		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
 	return nil
