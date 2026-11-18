@@ -19,7 +19,6 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
-	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -131,10 +130,9 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if this is a production environment and require additional confirmation. A dry run imports
-	// nothing, so it doesn't require --confirm-production.
-	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction && !o.flagDryRun {
-		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when importing to production environments", envConfig.Name)
+	// A dry run imports nothing, so it doesn't require --confirm-production.
+	if err := requireProductionConfirmation(envConfig, o.flagConfirmProduction || o.flagDryRun); err != nil {
+		return err
 	}
 
 	// Open and validate the archive up front (local-only) so a bad input file fails fast, before any

@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v4/pkg/action"
+	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
 const (
@@ -19,7 +19,7 @@ const (
 
 // Find an existing Helm relase with the given chart name.
 // If multiple releases are found, it is considered an error.
-func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*release.Release, error) {
+func GetExistingRelease(actionConfig *action.Configuration, chartName string) (*v1.Release, error) {
 	// Find all releases of the chart deployed in the environment.
 	releases, err := HelmListReleases(actionConfig, chartName)
 	if err != nil {

@@ -34,7 +34,7 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int      // parsed and validated in Prepare
+	parsedShardIndex int      // parsed in Prepare, only meaningful when argShardIndex is set
 	extraArgs        []string // Extra arguments to pass to mariadb
 	flagReadWrite    bool     // If true, connect to read-write replica; otherwise, read-only
 	flagQuery        string   // If set, run this SQL query and exit, otherwise run in interactive mode
@@ -47,7 +47,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, the first shard (index 0) will be used.")
+	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Database shard index to connect to. If not specified, you choose from a list (or shard 0 is used if it is the only one). Required in non-interactive mode.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to mariadb CLI.")
 
 	cmd := &cobra.Command{
@@ -75,7 +75,7 @@ func init() {
 			- 'metaplay debug shell' starts a debug shell in a running game server pod.
 		`),
 		Example: renderExample(`
-			# Connect to a database shard in the 'nimbly' environment using the first shard
+			# Connect to a database shard in the 'nimbly' environment, choosing the shard from a list
 			metaplay debug database nimbly
 
 			# Connect to the second shard in the 'nimbly' environment (0-based indexing is used)
@@ -119,7 +119,7 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse shard index argument if provided
-	o.parsedShardIndex = 0 // default
+	o.parsedShardIndex = 0
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
@@ -172,6 +172,16 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// Pick the shard before creating the debug pod, so a bad index or a cancelled dialog leaves no pod behind.
+	shardIndex := -1 // not given
+	if o.argShardIndex != "" {
+		shardIndex = o.parsedShardIndex
+	}
+	targetShard, err := selectDatabaseShard(shards, shardIndex, o.chooseDatabaseShardDialog)
+	if err != nil {
+		return err
+	}
+
 	// Create a debug container to run MySQL client
 	podName, cleanup, err := kubeutil.CreateDebugPod(
 		cmd.Context(),
@@ -187,32 +197,11 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	// Make sure the debug container is cleaned up even if we return early
 	defer cleanup()
 
-	// Interactive shard selection if no index provided and multiple shards exist
-	shardIndex := o.parsedShardIndex
-	if o.argShardIndex == "" && len(shards) > 1 {
-		selected, err := o.chooseDatabaseShardDialog(shards)
-		if err != nil {
-			return err
-		}
-		// Find selected index
-		for i, s := range shards {
-			if &s == selected {
-				shardIndex = i
-				break
-			}
-		}
-	}
-	if shardIndex < 0 || shardIndex >= len(shards) {
-		return clierrors.Newf("Invalid database shard index %d", shardIndex).
-			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
-	}
-	targetShard := shards[shardIndex]
-
 	// Show info
 	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
 	stderrLogger.Info().Msg("")
 	stderrLogger.Info().Msg("Target database:")
-	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", shardIndex)), len(shards))
+	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(strconv.Itoa(targetShard.ShardIndex)), len(shards))
 	stderrLogger.Info().Msgf("  Replica:     %s", styles.RenderTechnical(replicaType))
 	stderrLogger.Info().Msg("")
 
@@ -323,6 +312,30 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		stderrLogger.Info().Msgf("✅ Wrote output to %s", styles.RenderTechnical(o.flagOutput))
 	}
 	return err
+}
+
+// shardChooser asks the user to pick one of the shards.
+type shardChooser func([]kubeutil.DatabaseShardConfig) (*kubeutil.DatabaseShardConfig, error)
+
+// selectDatabaseShard returns the shard at index. A negative index means none was given: the user
+// picks with chooseShard when there are several shards, otherwise shard 0 is used.
+func selectDatabaseShard(shards []kubeutil.DatabaseShardConfig, index int, chooseShard shardChooser) (kubeutil.DatabaseShardConfig, error) {
+	if index < 0 {
+		if len(shards) > 1 {
+			selected, err := chooseShard(shards)
+			if err != nil {
+				return kubeutil.DatabaseShardConfig{}, err
+			}
+			return *selected, nil
+		}
+		index = 0
+	}
+
+	if index >= len(shards) {
+		return kubeutil.DatabaseShardConfig{}, clierrors.NewUsageErrorf("Invalid database shard index %d", index).
+			WithSuggestion(fmt.Sprintf("Shard index must be between 0 and %d (inclusive)", len(shards)-1))
+	}
+	return shards[index], nil
 }
 
 // chooseDatabaseShardDialog shows a dialog to select a database shard interactively.

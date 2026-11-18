@@ -181,8 +181,17 @@ func loadProject(projectDir string) (*metaproj.MetaplayProject, error) {
 		return nil, err
 	}
 	log.Debug().Msgf("Project config loaded: %#v", projectConfig)
+	printProjectLoadWarnings(projectConfig)
 
 	return metaproj.NewMetaplayProject(projectDir, projectConfig)
+}
+
+// printProjectLoadWarnings prints warnings found while loading metaplay-project.yaml. They go
+// to stderr so they don't end up in output that scripts parse.
+func printProjectLoadWarnings(projectConfig *metaproj.ProjectConfig) {
+	for _, warning := range projectConfig.LoadWarnings {
+		stderrLogger.Warn().Msg(warning)
+	}
 }
 
 // Try to find the metaplay-project.yaml based on the --project flag, and load

@@ -22,7 +22,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
-	"helm.sh/helm/v3/pkg/release"
+	rcommon "helm.sh/helm/v4/pkg/release/common"
 )
 
 const metaplayGameServerChartName = "metaplay-gameserver"
@@ -332,16 +332,25 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		untypedShardsConfig[i] = v
 	}
 
+	envFamily, err := envConfig.GetEnvironmentFamily()
+	if err != nil {
+		return err
+	}
+	runtimeOptionsFile, err := envConfig.GetEnvironmentSpecificRuntimeOptionsFile()
+	if err != nil {
+		return err
+	}
+
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
 	helmDefaultValues := map[string]any{
 		"environment":       envConfig.Name,
-		"environmentFamily": envConfig.GetEnvironmentFamily(),
+		"environmentFamily": envFamily,
 		"config": map[string]any{
 			"files": []any{
 				"./Config/Options.base.yaml",
-				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
+				runtimeOptionsFile,
 			},
 		},
 		"tenant": map[string]any{
@@ -422,7 +431,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  %-19s %s", "Revision:", styles.RenderTechnical(fmt.Sprintf("%d", existingRelease.Version)))
 		lastDeployedAt := "Unknown"
 		if !existingRelease.Info.LastDeployed.IsZero() {
-			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed.Time)
+			lastDeployedAt = humanize.Time(existingRelease.Info.LastDeployed)
 		}
 		log.Info().Msgf("  %-19s %s", "Last Deployed:", styles.RenderTechnical(lastDeployedAt))
 	}
@@ -432,7 +441,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	uninstallExistingRelease := false
 	if existingRelease != nil {
 		releaseStatus := existingRelease.Info.Status
-		if releaseStatus == release.StatusUninstalling {
+		if releaseStatus == rcommon.StatusUninstalling {
 			return clierrors.New("Cannot deploy: existing Helm release is in state 'uninstalling'").
 				WithSuggestion("Wait for the uninstall to complete, or manually remove with 'metaplay remove server'")
 		} else if releaseStatus.IsPending() {
@@ -483,6 +492,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If migrating from old operator to new operator, uninstall the old release first.
 	if uninstallExisting {
 		taskRunner.AddTask("Uninstall existing game server", func(output *tui.TaskOutput) error {
+			// Already uninstalled by the task above if the release was stuck in a pending state.
+			if existingRelease == nil {
+				return nil
+			}
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
 			return err
