@@ -5,6 +5,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -141,13 +142,6 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
-	// Check that docker is installed and running
-	log.Debug().Msgf("Check if docker is available")
-	err = checkDockerAvailable(cmd.Context())
-	if err != nil {
-		return err
-	}
-
 	// Resolve Helm chart version constraints. A local chart was validated in
 	// Prepare and is used as-is.
 	var chartVersionConstraints version.Constraints = nil
@@ -182,14 +176,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// and then let the user choose from the images.
 	switch o.argImageNameTag {
 	case "":
-		selectedImage, err := selectDockerImageInteractively("Select Image to Deploy", project.Config.ProjectHumanID)
+		selectedImage, err := selectDockerImageInteractively(cmd.Context(), "Select Image to Deploy", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageNameTag = selectedImage.RepoTag
 	case "latest-local":
 		// Resolve the local docker images matching project human ID.
-		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
+		localImages, err := envapi.ReadLocalDockerImagesByProjectID(cmd.Context(), project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
@@ -210,7 +204,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	var imageInfo *envapi.MetaplayImageInfo
 	if useLocalImage {
 		// Resolve metadata from local image.
-		imageInfo, err = envapi.ReadLocalDockerImageMetadata(o.argImageNameTag)
+		imageInfo, err = envapi.ReadLocalDockerImageMetadata(cmd.Context(), o.argImageNameTag)
 		if err != nil {
 			return err
 		}
@@ -580,9 +574,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-func selectDockerImageInteractively(title string, projectHumanID string) (*envapi.MetaplayImageInfo, error) {
+func selectDockerImageInteractively(ctx context.Context, title string, projectHumanID string) (*envapi.MetaplayImageInfo, error) {
 	// Resolve the local docker images matching project human ID.
-	localImages, err := envapi.ReadLocalDockerImagesByProjectID(projectHumanID)
+	localImages, err := envapi.ReadLocalDockerImagesByProjectID(ctx, projectHumanID)
 	if err != nil {
 		return nil, err
 	}

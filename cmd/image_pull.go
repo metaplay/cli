@@ -6,18 +6,15 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io"
 	"strings"
 
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/pkg/jsonmessage"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
+	"github.com/moby/moby/api/pkg/authconfig"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -122,8 +119,7 @@ func (o *imagePullOpts) Run(cmd *cobra.Command) error {
 // pullDockerImage pulls a docker image from a remote repository to the local machine.
 // Output progress into the task output.
 func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageName string, dockerCredentials *envapi.DockerCredentials) error {
-	// Create a Docker client
-	cli, err := envapi.NewDockerClient()
+	cli, err := envapi.NewDockerClient(ctx, output.AppendLine)
 	if err != nil {
 		return err
 	}
@@ -137,67 +133,27 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 	}
 	// The daemon decodes X-Registry-Auth as base64url. With standard base64, it silently
 	// drops credentials whose encoding contains '+' or '/' and sends the request anonymously.
-	authStr, err := registry.EncodeAuthConfig(authConfig)
+	authStr, err := authconfig.Encode(authConfig)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to encode auth config")
 	}
 
-	// Pull the image
 	output.AppendLinef("Pulling image %s", remoteImageName)
-	pullResponseReader, err := cli.ImagePull(ctx, remoteImageName, image.PullOptions{
+	checkPull := func() envapi.RegistryAccess {
+		return envapi.CheckRegistryAccess(ctx, dockerCredentials, remoteImageName, false)
+	}
+	pullResponse, err := cli.ImagePull(ctx, remoteImageName, client.ImagePullOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		// Check for common errors like image not found
-		if strings.Contains(err.Error(), "manifest for") && strings.Contains(err.Error(), "not found") {
-			return clierrors.Newf("Image '%s' not found in the repository", remoteImageName).
-				WithSuggestion("Check the tag and environment are correct")
-		}
-		return clierrors.Wrap(err, "Failed to pull docker image").
-			WithSuggestion("Make sure Docker Desktop is running")
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
-	defer func() { _ = pullResponseReader.Close() }()
-
-	// Follow pull progress
-	decoder := json.NewDecoder(pullResponseReader)
-	progressIDs := []string{}                          // Track order of progress IDs
-	progresses := map[string]jsonmessage.JSONMessage{} // Track progress by ID
-
-	for {
-		var progress jsonmessage.JSONMessage
-		if err := decoder.Decode(&progress); err != nil {
-			if errors.Is(err, io.EOF) {
-				break // End of stream
-			}
-			if errors.Is(err, context.Canceled) {
-				return clierrors.New("Image pull cancelled")
-			}
-			return clierrors.Wrap(err, "Failed to decode pull response")
+	if layersStarted, err := followDockerProgress(output, pullResponse.JSONMessages(ctx)); err != nil {
+		if layersStarted {
+			// The daemon pulls layers only after the registry let it read the manifest.
+			checkPull = nil
 		}
-
-		// Track progress by ID to show the latest status for each layer
-		if progress.ID != "" {
-			if _, exists := progresses[progress.ID]; !exists {
-				progressIDs = append(progressIDs, progress.ID)
-			}
-			progresses[progress.ID] = progress
-		}
-
-		// If progress has an error, return it
-		if progress.Error != nil {
-			return clierrors.Newf("Error pulling image: %s", progress.Error.Message)
-		}
-
-		// Update the output with current progress information (only in interactive mode).
-		if tui.IsInteractiveMode() {
-			updateDockerProgressOutput(output, progressIDs, progresses)
-		}
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
-
-	// Final update to ensure the last status is shown
-	if tui.IsInteractiveMode() {
-		updateDockerProgressOutput(output, progressIDs, progresses)
-	}
-
 	return nil
 }

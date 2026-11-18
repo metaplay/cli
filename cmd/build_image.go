@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,8 +17,8 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -318,24 +319,42 @@ func resolveBuildEngine(engine string) (string, error) {
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
 }
 
-func checkCommand(ctx context.Context, command string, args ...string) error {
+// runCommandAndDiscardOutput runs a command for its exit status only. On failure, the error
+// includes the command's stderr, or is ctx's error if ctx ended.
+func runCommandAndDiscardOutput(ctx context.Context, command string, args ...string) error {
+	_, err := runCommandAndCaptureStdout(ctx, command, args...)
+	return err
+}
+
+// runCommandAndCaptureStdout runs a command and returns its stdout. On failure, the error includes
+// the command's stderr, or is ctx's error if ctx ended.
+func runCommandAndCaptureStdout(ctx context.Context, command string, args ...string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	// Bound the wait for stderr to close after the process exits or ctx kills it: a child process
+	// (such as a docker CLI plugin) can hold the pipe open, and Output would then never return.
+	cmd.WaitDelay = 5 * time.Second
+	output, err := cmd.Output()
+	// Output returns ErrWaitDelay only when the process itself exited successfully, so treat it as success.
+	if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+			return nil, ctxErr
 		}
 		trimmed := strings.TrimSpace(stderr.String())
-		if trimmed != "" {
-			return fmt.Errorf("%w: %s", err, truncateForLog(trimmed, 500))
+		// Keep the end of stderr, where the error is: warnings (such as invalid plugins) come first.
+		if len(trimmed) > 1000 {
+			trimmed = "(truncated)..." + trimmed[len(trimmed)-1000:]
 		}
-		return fmt.Errorf("command failed: %w", err)
+		if trimmed != "" {
+			return nil, fmt.Errorf("%w: %s", err, trimmed)
+		}
+		return nil, fmt.Errorf("command failed: %w", err)
 	}
-	return nil
+	return output, nil
 }
 
 // executeCommand runs a command with the given arguments in the specified working directory.
@@ -384,64 +403,18 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 	return relativePath, nil
 }
 
-// Check if docker is available and running. Uses a short timeout as 'docker' invocation
-// can sometimes hang indefinitely. In CI environments, uses a longer timeout to account
-// for slower daemon startup.
+// checkDockerAvailable checks that the docker CLI is installed and that the daemon it talks to is
+// running. Commands that run the docker CLI use it: the CLI also follows 'docker context', which
+// the API client (envapi.NewDockerClient) does not. Waiting is bounded and reported as for the API
+// client, by envapi.WaitForDocker.
 func checkDockerAvailable(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
+		return runCommandAndDiscardOutput(ctx, "docker", "info")
+	})
+	if err == nil || ctx.Err() != nil {
+		return err // Available, or cancelled (runCommand reports cancellation)
 	}
-
-	// Use a longer timeout in CI where Docker daemon startup can be slower.
-	// GitHub Actions in particular is known to have long Docker init latencies.
-	timeout := 10 * time.Second
-	if envutil.IsCI() {
-		timeout = 60 * time.Second
-	}
-
-	// Run 'docker info' in background so we can handle timeouts (docker is known to hang
-	// indefinitely in some cases).
-	done := make(chan error)
-	go func() {
-		done <- checkCommand(ctx, "docker", "info")
-	}()
-
-	// Wait for docker to respond, printing a waiting message after 1sec.
-	select {
-	case err := <-done:
-		if err != nil {
-			return clierrors.Wrap(err, "Docker is not responding").
-				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(time.Second):
-		log.Info().Msgf("Waiting for docker daemon to respond...")
-	}
-
-	// In CI, keep logging every 10sec so the build doesn't look stuck.
-	// For non-CI, just wait for the remaining timeout silently.
-	tick := time.NewTicker(10 * time.Second)
-	defer tick.Stop()
-	deadline := time.After(timeout - time.Second)
-	for {
-		select {
-		case err := <-done:
-			if err != nil {
-				return clierrors.Wrap(err, "Docker is not responding").
-					WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
-			}
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-tick.C:
-			log.Info().Msgf("Still waiting for docker daemon to respond...")
-		case <-deadline:
-			return clierrors.New("Docker daemon timed out").
-				WithSuggestion("Docker may be starting up or unresponsive. Try restarting Docker Desktop.")
-		}
-	}
+	return envapi.ExplainDockerUnavailable(err)
 }
 
 // Check that the specified docker build engine is available.
@@ -450,7 +423,7 @@ func checkBuildEngineAvailable(ctx context.Context, buildEngine string) error {
 
 	switch buildEngine {
 	case "buildx":
-		err := checkCommand(ctx, "docker", "buildx", "version")
+		err := runCommandAndDiscardOutput(ctx, "docker", "buildx", "version")
 		if err != nil {
 			return clierrors.Wrap(err, "Docker buildx is not available").
 				WithSuggestion("Install Docker buildx or use --engine=buildkit instead")
@@ -504,15 +477,16 @@ func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
 	// Use the explicit Go template syntax instead of the `json` shorthand —
 	// the shorthand was added in Docker CLI 22.06 and older clients render
 	// it as the literal string "json".
-	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{json .}}")
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	var output []byte
+	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
+		var err error
+		output, err = runCommandAndCaptureStdout(ctx, "docker", "version", "--format", "{{json .}}")
+		return err
+	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, false, ctxErr
 		}
-		log.Debug().Err(err).Str("stderr", stderr.String()).Msgf("'docker version --format json' failed")
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)
 	}
 
@@ -521,7 +495,6 @@ func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
 		log.Debug().
 			Err(err).
 			Str("stdout", truncateForLog(string(output), 500)).
-			Str("stderr", truncateForLog(stderr.String(), 500)).
 			Msgf("Could not parse Docker version JSON output")
 		return nil, false, nil // Don't fail the build if we can't parse the version
 	}

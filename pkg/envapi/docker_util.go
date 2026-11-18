@@ -8,22 +8,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/rs/zerolog/log"
 )
 
@@ -50,26 +50,30 @@ type MetaplayImageInfo struct {
 	Architecture string    // Architecture the image is built for (e.g., "amd64") - can be added if needed elsewhere
 }
 
+// errMissingLabel is in the chain of newMetaplayImageInfo's error for an image without a required
+// Metaplay label, that is, one not built by 'metaplay build image'.
+var errMissingLabel = errors.New("missing required label")
+
 func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string, createdTime time.Time, os string, architecture string) (*MetaplayImageInfo, error) {
 	// Extract required labels for a valid Metaplay server image.
 	projectID, ok := labels[labelProjectID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelProjectID, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelProjectID, imageID, repoTag)
 	}
 
 	sdkVersion, ok := labels[labelSdkVersion]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelSdkVersion, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelSdkVersion, imageID, repoTag)
 	}
 
 	commitID, ok := labels[labelCommitID]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelCommitID, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelCommitID, imageID, repoTag)
 	}
 
 	buildNumber, ok := labels[labelBuildNumber]
 	if !ok {
-		return nil, fmt.Errorf("missing required label '%s' in image %s (tag %s)", labelBuildNumber, imageID, repoTag)
+		return nil, fmt.Errorf("%w '%s' in image %s (tag %s)", errMissingLabel, labelBuildNumber, imageID, repoTag)
 	}
 
 	// Create and return the MetaplayImageInfo
@@ -88,69 +92,179 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 	}, nil
 }
 
-// newDockerClient creates a new Docker client with a verified connection.
-// It first tries the default connection mechanism (via environment variables or default socket).
-// If that fails on macOS, it attempts to connect to the Docker Desktop socket as a fallback.
-func NewDockerClient() (*client.Client, error) {
-	// Try creating a client from environment variables (respects DOCKER_HOST).
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client from environment: %w", err)
-	}
+// WaitForDocker's timings, variables so that tests can shorten them. A paused or still-starting
+// Docker Desktop accepts connections before its engine answers, so the wait needs a bound. Docker
+// Desktop can take tens of seconds to start, and CI runners can be slow to start the daemon, so
+// the bound is generous, and progress is reported so a slow start doesn't look like a hang.
+var (
+	dockerResponseTimeout   = 60 * time.Second
+	dockerSlowAfter         = 3 * time.Second
+	dockerStillWaitingEvery = 10 * time.Second
+)
 
-	// Ping the daemon to verify connectivity and to retrieve the version.
-	pingResponse, err := dockerClient.Ping(context.Background())
+// ErrDockerTimeout is in the chain of WaitForDocker's error when Docker did not respond in time.
+var ErrDockerTimeout = errors.New("timed out waiting for Docker")
+
+// WaitForDocker runs check, which talks to Docker, with a deadline of dockerResponseTimeout, and
+// reports progress through onWaiting while it waits. It returns as soon as the deadline passes or
+// ctx is cancelled, even if check does not stop: then with an explained error wrapping
+// ErrDockerTimeout, or ctx's error. Otherwise it returns check's error as is.
+//
+// Inside a task runner task, pass the task output's AppendLine as onWaiting: logging directly would
+// garble the display. Outside one, pass LogWaiting.
+func WaitForDocker(ctx context.Context, onWaiting func(message string), check func(ctx context.Context) error) error {
+	checkCtx, cancel := context.WithTimeout(ctx, dockerResponseTimeout)
+	defer cancel()
+
+	// Run check on its own goroutine, and report from this one: onWaiting then can't run after return.
+	checkDone := make(chan error, 1)
+	go func() { checkDone <- check(checkCtx) }()
+
+	next := time.NewTimer(dockerSlowAfter)
+	defer next.Stop()
+	message := "Waiting for Docker to respond..."
+	for {
+		select {
+		case err := <-checkDone:
+			// A check that fails because of the deadline reports it as its own error. Check that the
+			// deadline has passed: a network dial timeout also counts as DeadlineExceeded.
+			if ctx.Err() == nil && checkCtx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+				return dockerTimeoutError()
+			}
+			return err
+		case <-checkCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return err // Cancelled (runCommand reports cancellation)
+			}
+			return dockerTimeoutError()
+		case <-next.C:
+			onWaiting(message)
+			message = "Still waiting for Docker to respond..."
+			next.Reset(dockerStillWaitingEvery)
+		}
+	}
+}
+
+func dockerTimeoutError() error {
+	return clierrors.Wrapf(ErrDockerTimeout, "Docker did not respond within %d seconds", int(dockerResponseTimeout.Seconds())).
+		WithSuggestion("Make sure Docker is running and not paused, then try again")
+}
+
+// NewDockerClient creates a Docker client with a verified connection to the daemon at DOCKER_HOST,
+// or at the default socket. On macOS, when DOCKER_HOST is unset and the default socket is not
+// reachable, it tries the Docker Desktop socket in the user's home directory.
+//
+// onWaiting receives progress messages while the daemon is slow to answer; see WaitForDocker.
+func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*client.Client, error) {
+	dockerClient, err := createDockerClientAndPing(ctx, onWaiting, client.FromEnv)
+	// A socket that refused permission exists, so there is nothing to fall back from.
+	if client.IsErrConnectionFailed(err) && !IsDockerPermissionDenied(err) && runtime.GOOS == "darwin" && os.Getenv(client.EnvOverrideHost) == "" {
+		if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+			host := "unix://" + filepath.Join(homeDir, ".docker", "run", "docker.sock")
+			log.Debug().Msgf("Docker connection with default settings failed, trying Docker Desktop socket %s", host)
+			dockerClient, err = createDockerClientAndPing(ctx, onWaiting, client.FromEnv, client.WithHost(host))
+		}
+	}
 	if err == nil {
-		dockerClient.NegotiateAPIVersionPing(pingResponse)
-		return dockerClient, nil // Success
+		return dockerClient, nil
 	}
 
-	// If connection failed, decide if we should try a fallback.
-	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" {
-		log.Debug().Msg("Docker connection with default settings failed, trying Docker Desktop socket path as a fallback...")
-		_ = dockerClient.Close() // Close the failed client.
-
-		homeDir, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return nil, fmt.Errorf("cannot find home directory to build fallback Docker socket path: %w", homeErr)
-		}
-		socketPath := filepath.Join(homeDir, ".docker", "run", "docker.sock")
-		host := "unix://" + socketPath
-
-		// Try again with the fallback host.
-		dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithHost(host))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create Docker client with fallback host '%s': %w", host, err)
-		}
-
-		// Ping again to verify the fallback connection.
-		pingResponse, err = dockerClient.Ping(context.Background())
-		if err != nil {
-			_ = dockerClient.Close()
-			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
-				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
-		}
-
-		dockerClient.NegotiateAPIVersionPing(pingResponse)
-		return dockerClient, nil // Success with fallback
+	if ctx.Err() != nil {
+		return nil, err // Cancelled (runCommand reports cancellation)
 	}
+	return nil, ExplainDockerUnavailable(err)
+}
 
-	// For non-connection errors, or non-macOS systems, return the original error.
-	dockerSuggestion := "Start Docker Desktop"
+// ExplainDockerUnavailable is the error for a failure to reach Docker, from the API client or from
+// the docker CLI. An error that is already explained, such as a timeout from WaitForDocker or an
+// unsupported API version, is returned as is.
+func ExplainDockerUnavailable(err error) error {
+	if _, ok := errors.AsType[*clierrors.CLIError](err); ok {
+		return err
+	}
+	if errors.Is(err, exec.ErrNotFound) {
+		return clierrors.Wrap(err, "Docker is not installed").
+			WithSuggestion("Install Docker Desktop, or Docker Engine on Linux, and make sure 'docker' is in your PATH")
+	}
+	if IsDockerPermissionDenied(err) {
+		return DockerPermissionDenied(err)
+	}
+	suggestion := "Start Docker Desktop"
 	switch runtime.GOOS {
+	case "darwin":
+		suggestion = "Start Docker Desktop, or run 'open -a Docker'"
 	case "linux":
-		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
+		suggestion = "Start Docker with 'sudo systemctl start docker'"
 	case "windows":
-		dockerSuggestion = "Start Docker Desktop from the Start menu"
+		suggestion = "Start Docker Desktop from the Start menu"
 	}
-	return nil, clierrors.Wrap(err, "Cannot connect to Docker").
-		WithSuggestion(dockerSuggestion)
+	return clierrors.Wrap(err, "Cannot connect to Docker").WithSuggestion(suggestion)
+}
+
+// IsDockerPermissionDenied reports whether err, from the API client or from the docker CLI, means
+// the daemon's socket refused this user. Both say "permission denied while trying to connect to the
+// docker API" (older docker CLIs: "... to the Docker daemon socket"), and the API client keeps
+// only that message. The phrase is matched, not just "permission denied": the docker CLI also
+// writes unrelated warnings to stderr, such as an unreadable config file or an invalid plugin.
+func IsDockerPermissionDenied(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "permission denied while trying to connect")
+}
+
+// DockerPermissionDenied is the error for a Docker daemon whose socket refused this user. The
+// daemon may well be running.
+func DockerPermissionDenied(err error) error {
+	suggestion := "Make sure your user has access to the Docker socket"
+	if runtime.GOOS == "linux" {
+		suggestion = "Add your user to the 'docker' group with 'sudo usermod -aG docker $USER', then log out and back in"
+	}
+	return clierrors.Wrap(err, "No permission to access Docker").WithSuggestion(suggestion)
+}
+
+// createDockerClientAndPing creates a client with opts, then pings the daemon to verify it answers and to
+// negotiate the API version.
+func createDockerClientAndPing(ctx context.Context, onWaiting func(message string), opts ...client.Opt) (*client.Client, error) {
+	dockerClient, err := client.New(opts...)
+	if err != nil {
+		return nil, clierrors.Wrap(err, "Invalid Docker client configuration").
+			WithSuggestion("Check the DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY environment variables")
+	}
+
+	err = WaitForDocker(ctx, onWaiting, func(ctx context.Context) error {
+		ping, err := dockerClient.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
+		// Ping returns the daemon's API version along with the negotiation error. Check the version
+		// itself: the client reports other failures, such as any HTTP 400, as the same error type.
+		if err != nil && ping.APIVersion != "" && versions.LessThan(ping.APIVersion, client.MinAPIVersion) {
+			return clierrors.Wrapf(err, "Docker API version %s is not supported", ping.APIVersion).
+				WithSuggestion(fmt.Sprintf("Upgrade Docker to a version that supports API %s or newer", client.MinAPIVersion))
+		}
+		return err
+	})
+	if err != nil {
+		_ = dockerClient.Close()
+		return nil, err
+	}
+	return dockerClient, nil
+}
+
+// LogWaiting reports a WaitForDocker progress message outside a task runner task.
+func LogWaiting(message string) { log.Info().Msg(message) }
+
+// InspectLocalImage inspects a local image with dockerClient. A missing image is reported as
+// "Local image '<name>' not found", with the suggestion to build it.
+func InspectLocalImage(ctx context.Context, dockerClient *client.Client, imageName string) (client.ImageInspectResult, error) {
+	result, err := dockerClient.ImageInspect(ctx, imageName)
+	if cerrdefs.IsNotFound(err) {
+		return result, clierrors.Wrapf(err, "Local image '%s' not found", imageName).
+			WithSuggestion("Check the image name, or build the image first with 'metaplay build image'")
+	} else if err != nil {
+		return result, clierrors.Wrapf(err, "Failed to inspect local image '%s'", imageName)
+	}
+	return result, nil
 }
 
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
-func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, error) {
-	// Create a new Docker client
-	dockerClient, err := NewDockerClient()
+func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*MetaplayImageInfo, error) {
+	dockerClient, err := NewDockerClient(ctx, LogWaiting)
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
@@ -160,18 +274,26 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	// This is needed for imageRef.Identifier() when calling newMetaplayImageInfoFromInspect.
 	parsedRef, err := name.ParseReference(imageRefString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse local docker image reference '%s': %w", imageRefString, err)
+		return nil, clierrors.Wrapf(err, "Invalid image name '%s'", imageRefString).
+			WithSuggestion("Use a lowercase NAME:TAG, e.g., 'mygame:20260601-153000-1a27c25'")
 	}
 
 	// Inspect the image using the Docker SDK
-	imageInspect, err := dockerClient.ImageInspect(context.Background(), imageRefString)
+	imageInspect, err := InspectLocalImage(ctx, dockerClient, imageRefString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect local docker image '%s': %w", imageRefString, err)
+		return nil, err
 	}
 
 	// Use the helper function to convert inspect data to MetaplayImageInfo
 	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
-	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect)
+	imageInfo, err := newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect.InspectResponse)
+	if errors.Is(err, errMissingLabel) {
+		return nil, clierrors.Wrapf(err, "Local image '%s' is not a Metaplay server image", imageRefString).
+			WithSuggestion("Build the image with 'metaplay build image'")
+	} else if err != nil {
+		return nil, clierrors.Wrapf(err, "Failed to read local image '%s'", imageRefString)
+	}
+	return imageInfo, nil
 }
 
 // RemoteDockerImageDigests holds the two content digests that can identify a remote image. Which
@@ -212,7 +334,11 @@ func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (d
 		if isRemoteImageNotFound(err) {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("failed to query remote docker image '%s': %w", imageRef, err)
+		if registryAccessFromError(err, false) == RegistryAccessDenied {
+			return nil, false, clierrors.Wrapf(err, "No access to image '%s' in the environment's registry", imageRef).
+				WithSuggestion(RegistryCredentialsSuggestion)
+		}
+		return nil, false, clierrors.Wrapf(err, "Failed to query image '%s' in the environment's registry", imageRef)
 	}
 
 	// Resolve the image and read its config digest. The descriptor digest is the manifest digest.
@@ -234,17 +360,8 @@ func FetchRemoteDockerImageDigests(creds *DockerCredentials, imageRef string) (d
 // isRemoteImageNotFound reports whether err from a remote registry query indicates that no image
 // exists at the requested reference (as opposed to a transport/auth/other failure).
 func isRemoteImageNotFound(err error) bool {
-	if transportErr, ok := errors.AsType[*transport.Error](err); ok {
-		for _, code := range transportErr.Errors {
-			if code.Code == transport.ManifestUnknownErrorCode || code.Code == transport.NameUnknownErrorCode {
-				return true
-			}
-		}
-		if transportErr.StatusCode == http.StatusNotFound {
-			return true
-		}
-	}
-	return false
+	access := registryAccessFromError(err, false)
+	return access == RegistryImageNotFound || access == RegistryRepositoryNotFound
 }
 
 // FetchRemoteDockerImageMetadata retrieves the labels of an image in a remote Docker registry.
@@ -339,24 +456,18 @@ func newMetaplayImageInfoFromInspect(imageID string, repoTag string, imageRef na
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
 // that have the 'io.metaplay.project_id' label matching the provided projectID.
 // The images are returned in a timestamp order, latest first (highest timestamp first).
-func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
+func ReadLocalDockerImagesByProjectID(ctx context.Context, projectID string) ([]MetaplayImageInfo, error) {
 	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
 
-	// Create a new Docker client using the helper function.
-	dockerClient, err := NewDockerClient()
+	dockerClient, err := NewDockerClient(ctx, LogWaiting)
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
 	defer func() { _ = dockerClient.Close() }()
 
-	// Create filter for the project ID label
-	filterArgs := filters.NewArgs()
-	filterArgs.Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID))
-
-	// List all images from the local Docker daemon with the filter
-	images, err := dockerClient.ImageList(context.Background(), image.ListOptions{
-		All:     false,
-		Filters: filterArgs,
+	// List all images from the local Docker daemon with the project ID label.
+	images, err := dockerClient.ImageList(ctx, client.ImageListOptions{
+		Filters: make(client.Filters).Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list local docker images: %w", err)
@@ -364,37 +475,47 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 
 	// Parse the image information for all local images matching this project.
 	var matchingImages []MetaplayImageInfo
-	for _, img := range images {
-		// For each image ID, create a reference and fetch metadata
-		// log.Info().Msgf("Repo tags: %#v", img.RepoTags)
+	for _, img := range images.Items {
+		// Only simple local tags (e.g., 'myimage:latest'), not fully qualified names (e.g.,
+		// 'docker.io/library/ubuntu:latest' or 'customregistry/myimage:tag').
+		type usableTag struct {
+			repoTag string
+			ref     name.Reference
+		}
+		var tags []usableTag
 		for _, repoTag := range img.RepoTags {
-			if repoTag == "" {
+			if repoTag == "" || strings.Contains(repoTag, "/") {
 				continue
 			}
-
-			// Skip tags that look like fully qualified names (e.g., 'docker.io/library/ubuntu:latest' or 'customregistry/myimage:tag').
-			// We only want to handle simple/local tags (e.g., 'myimage:latest').
-			if strings.Contains(repoTag, "/") {
-				continue
+			if ref, err := name.ParseReference(repoTag); err == nil {
+				tags = append(tags, usableTag{repoTag, ref})
 			}
+		}
+		if len(tags) == 0 {
+			continue
+		}
 
-			// Parse the image reference.
-			imageRef, err := name.ParseReference(repoTag)
+		// Inspect the image once for all its tags.
+		imageInspect, err := dockerClient.ImageInspect(ctx, img.ID)
+		if cerrdefs.IsNotFound(err) {
+			log.Debug().Msgf("Image %s was removed while listing, skipping", img.ID)
+			continue
+		} else if err != nil {
+			// Without Docker, fail instead of returning a partial list, which would look like missing
+			// images. Otherwise only this image is broken: skip it, so it doesn't block choosing any
+			// other image.
+			if ctx.Err() != nil || client.IsErrConnectionFailed(err) {
+				return nil, clierrors.Wrap(err, "Lost the connection to Docker while listing local images").
+					WithSuggestion("Make sure Docker is running, then try again")
+			}
+			log.Warn().Err(err).Msgf("Failed to inspect local image %s, skipping it. If it is broken, remove it with 'docker rmi %s'.", img.ID, img.ID)
+			continue
+		}
+
+		for _, tag := range tags {
+			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, tag.repoTag, tag.ref, imageInspect.InspectResponse)
 			if err != nil {
-				continue
-			}
-
-			// Get the image configuration using Docker SDK
-			imageInspect, err := dockerClient.ImageInspect(context.Background(), img.ID)
-			if err != nil {
-				log.Warn().Err(err).Msgf("Failed to inspect image %s (for repoTag %s), skipping", img.ID, repoTag)
-				continue
-			}
-
-			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect)
-			if err != nil {
-				// Log the error from newMetaplayImageInfoFromInspect, which might indicate parsing/validation failures.
-				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed: %v", img.ID, repoTag, err)
+				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed", img.ID, tag.repoTag)
 				continue
 			}
 			matchingImages = append(matchingImages, *imageInfo)
