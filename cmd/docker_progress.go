@@ -62,26 +62,8 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 			continue
 		}
 
-		// Shorten common verbose statuses
-		status := progress.Status
-		switch {
-		case strings.HasPrefix(status, "Pulling fs layer"):
-			status = "Pulling layer"
-		case strings.HasPrefix(status, "Waiting"):
-			status = "Waiting"
-		case strings.HasPrefix(status, "Downloading"):
-			status = "Downloading"
-		case strings.HasPrefix(status, "Verifying Checksum"):
-			status = "Verifying"
-		case strings.HasPrefix(status, "Download complete"):
-			status = "Downloaded"
-		case strings.HasPrefix(status, "Extracting"):
-			status = "Extracting"
-		case strings.HasPrefix(status, "Pull complete"):
-			status = "Complete"
-		}
-
-		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
+		// Docker's own status wording, so it matches what 'docker pull' and 'docker push' show.
+		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], progress.Status)
 		if progress.Progress != nil {
 			// The progress gets what the line's prefix and the task output's indent leave.
 			used := min(width, tui.TaskOutputIndent+len(progressLine)+1)
