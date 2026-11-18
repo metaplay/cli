@@ -26,7 +26,6 @@ import (
 func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.Message, error]) error {
 	progressIDs := []string{}                     // Layer IDs in the order they first appeared
 	progresses := map[string]jsonstream.Message{} // Latest message for each layer ID
-	width := dockerProgressWidth()
 
 	for progress, err := range messages {
 		if err != nil {
@@ -44,14 +43,15 @@ func followDockerProgress(output *tui.TaskOutput, messages iter.Seq2[jsonstream.
 		}
 
 		if tui.IsInteractiveMode() {
-			updateDockerProgressOutput(output, progressIDs, progresses, width)
+			updateDockerProgressOutput(output, progressIDs, progresses, dockerProgressWidth())
 		}
 	}
 	return nil
 }
 
 // updateDockerProgressOutput shows the latest status of each layer in the task output's footer,
-// with progress bars sized for a terminal width columns wide.
+// with progress bars sized for a terminal width columns wide. The width is read on every update,
+// so the bars follow a terminal resize.
 func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonstream.Message, width uint16) {
 	lines := []string{}
 
@@ -111,60 +111,67 @@ func dockerTransferFailed(err error, action, imageName string) error {
 		return transferErr // Image not built for this platform: the message says so, and the tag is right
 	case cerrdefs.IsNotFound(err):
 		return transferErr.WithSuggestion("Check the tag, the environment and its registry credentials")
-	case cerrdefs.IsUnauthorized(err), cerrdefs.IsPermissionDenied(err):
+	case cerrdefs.IsUnauthorized(err), cerrdefs.IsPermissionDenied(err), isRegistryAuthMessage(err.Error()):
 		return transferErr.WithSuggestion("Check the environment's registry credentials")
 	}
 	return transferErr
 }
 
-// streamError is an error the daemon reported inside the progress stream. Errors returned before
-// the stream starts carry an error type matching their HTTP status, which cerrdefs checks for.
-// streamError gives stream errors a type too, so pull and push failures can choose a suggestion.
+// streamError is an error the daemon reported inside the progress stream with a status code. It
+// gets the error type of that code, as errors returned before the stream starts do, and as the
+// client's own Stream.Wait does.
 //
-// The daemon writes a push's first progress message before it contacts the registry, so every push
-// failure arrives inside the stream. It formats those errors with streamformatter.FormatError,
-// which sets only the message, never the status code. A registry's authentication failures are
-// therefore recognized by their message.
+// Most stream errors have no code: the daemon formats them with streamformatter.FormatError, which
+// sets only the message. That includes every push failure, because the daemon writes a push's first
+// progress message before it contacts the registry. Registry authentication failures are therefore
+// also recognized by their message, in dockerTransferFailed.
 type streamError struct {
 	err    *jsonstream.Error
 	errdef error
 }
 
 func newStreamError(err *jsonstream.Error) error {
-	switch {
-	case err.Code != 0:
-		return &streamError{err: err, errdef: errhttp.ToNative(err.Code)}
-	case isRegistryAuthMessage(err.Message):
-		return &streamError{err: err, errdef: cerrdefs.ErrUnauthenticated}
+	if err.Code == 0 {
+		return err // No status code to derive a type from
 	}
-	return err // Nothing to derive a type from
+	return &streamError{err: err, errdef: errhttp.ToNative(err.Code)}
 }
 
 func (e *streamError) Error() string   { return e.err.Error() }
 func (e *streamError) Unwrap() []error { return []error{e.err, e.errdef} }
 
+// registryAuthFragments are registry authentication and authorization failures, as they appear in
+// the daemon's messages. They come from the registry API's error codes ("denied: ...",
+// "unauthorized: ..."), often after a request or context prefix; from registries' own wording
+// (Docker Hub, ECR, Google Artifact Registry), which the containerd image store passes on after
+// "error from registry: "; from the legacy image store ("no basic auth credentials"); and from
+// containerd's resolver ("push access denied, ...", "failed to authorize: ...").
+var registryAuthFragments = []string{
+	"denied:",
+	"unauthorized:",
+	"access denied",
+	"access to the resource is denied",
+	"denied on resource",
+	"not authorized to perform",
+	"authorization token has expired",
+	"incorrect username or password",
+	"no basic auth credentials",
+	"authentication required",
+	"failed to authorize",
+	"authorization failed",
+}
+
 // isRegistryAuthMessage reports whether message is a registry's authentication or authorization
-// failure. The forms come from the registry API's error codes ("denied: ...", "unauthorized: ..."),
-// the daemon's legacy image store ("no basic auth credentials") and containerd's resolver, which
-// the containerd image store uses ("push access denied, ...", "failed to authorize: ...", and
-// unexpected HTTP statuses).
+// failure. A 401 or 403 counts only from containerd's resolver, which talks to the registry
+// ("unexpected status from HEAD request to ...: 403 Forbidden"). A 403 from the blob storage a
+// registry redirects layer downloads to (an expired presigned URL) is not a credentials problem.
 func isRegistryAuthMessage(message string) bool {
 	message = strings.ToLower(message)
-	if strings.HasPrefix(message, "denied:") || strings.HasPrefix(message, "unauthorized:") {
-		return true
-	}
-	for _, fragment := range []string{
-		"access denied",
-		"no basic auth credentials",
-		"authentication required",
-		"failed to authorize",
-		"authorization failed",
-		"401 unauthorized",
-		"403 forbidden",
-	} {
+	for _, fragment := range registryAuthFragments {
 		if strings.Contains(message, fragment) {
 			return true
 		}
 	}
-	return false
+	return strings.Contains(message, "unexpected status from") &&
+		(strings.Contains(message, "401 unauthorized") || strings.Contains(message, "403 forbidden"))
 }

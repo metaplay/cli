@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -166,6 +165,15 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	srcImageName := imageName
 	dstImageName := dstRepository.Reference(imageTag)
 
+	// Check that the local image exists before anything else: when the source name is already the
+	// destination name, the push itself would be the first to find it missing, with a less clear error.
+	localImage, err := cli.ImageInspect(ctx, srcImageName)
+	if cerrdefs.IsNotFound(err) {
+		return false, envapi.LocalImageNotFound(err, srcImageName)
+	} else if err != nil {
+		return false, clierrors.Wrapf(err, "Failed to inspect local image '%s'", srcImageName)
+	}
+
 	// Check whether the tag already exists in the remote repository. Image tags must be unique
 	// per build: re-using a tag (e.g. 'latest', a bare commit SHA, or any tag that has already
 	// been pushed) means a deployed environment can't reliably resolve which artifact it's
@@ -175,17 +183,10 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		return false, err
 	}
 	if exists {
-		// Resolve the local image's ID so we can tell apart "same image, re-pushed" (a harmless
-		// no-op we can skip) from "different image, same tag" (a hard error). The local image ID is
-		// the config digest under the legacy image store and the manifest digest under the
-		// containerd image store, so accept a match against either remote digest.
-		localImage, err := cli.ImageInspect(ctx, srcImageName)
-		if cerrdefs.IsNotFound(err) {
-			return false, envapi.LocalImageNotFound(err, srcImageName)
-		} else if err != nil {
-			return false, clierrors.Wrapf(err, "Failed to inspect local image '%s'", srcImageName)
-		}
-
+		// Compare the local image's ID to tell apart "same image, re-pushed" (a harmless no-op we
+		// can skip) from "different image, same tag" (a hard error). The local image ID is the
+		// config digest under the legacy image store and the manifest digest under the containerd
+		// image store, so accept a match against either remote digest.
 		if localImage.ID == remoteDigests.ConfigDigest || localImage.ID == remoteDigests.ManifestDigest {
 			// Identical image already in the repository: nothing to do.
 			output.AppendLinef("Image %s is already present in the repository (identical digest), skipping push", dstImageName)
@@ -220,7 +221,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	// drops credentials whose encoding contains '+' or '/' and sends the request anonymously.
 	authStr, err := authconfig.Encode(authConfig)
 	if err != nil {
-		return false, fmt.Errorf("failed to encode auth config: %w", err)
+		return false, clierrors.Wrap(err, "Failed to encode auth config")
 	}
 
 	pushResponse, err := cli.ImagePush(ctx, dstImageName, client.ImagePushOptions{

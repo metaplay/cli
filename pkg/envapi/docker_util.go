@@ -273,7 +273,7 @@ func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*
 	if cerrdefs.IsNotFound(err) {
 		return nil, LocalImageNotFound(err, imageRefString)
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to inspect local docker image '%s': %w", imageRefString, err)
+		return nil, clierrors.Wrapf(err, "Failed to inspect local image '%s'", imageRefString)
 	}
 
 	// Use the helper function to convert inspect data to MetaplayImageInfo
