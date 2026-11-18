@@ -39,6 +39,12 @@ const (
 	EnvironmentTypeProduction  EnvironmentType = "production"
 )
 
+// IsKnownNonProduction reports whether the type is development or staging. Safety checks
+// use it so that an unknown type is treated as production.
+func (t EnvironmentType) IsKnownNonProduction() bool {
+	return t == EnvironmentTypeDevelopment || t == EnvironmentTypeStaging
+}
+
 // Type of hosting for an environment (Metaplay-hosted vs self-hosted)
 type HostingType string
 

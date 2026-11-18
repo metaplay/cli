@@ -139,6 +139,12 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
+	// The Helm values below need a known environment type.
+	if !metaproj.IsKnownEnvironmentType(envConfig.Type) {
+		return clierrors.Newf("Environment '%s' has unknown type '%s'", envConfig.Name, envConfig.Type).
+			WithSuggestion("Set 'type' to development, staging or production in metaplay-project.yaml")
+	}
+
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 

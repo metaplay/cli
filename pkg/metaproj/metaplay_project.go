@@ -319,6 +319,11 @@ func ApplyProjectConfigDefaults(config *ProjectConfig) error {
 			}
 			config.Environments[ndx].HostingType = hostingType
 		}
+
+		// Accept any casing so that 'Production' is not skipped by the production safety checks.
+		if envConfig.Type != "" {
+			config.Environments[ndx].Type = normalizeEnvironmentType(envConfig.Name, envConfig.Type)
+		}
 	}
 
 	return nil
@@ -503,11 +508,6 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		}
 		if envConfig.Type == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
-		}
-		// Exact values only: the production gates in the database commands compare against them.
-		if _, ok := environmentTypeToFamilyMapping[envConfig.Type]; !ok {
-			return fmt.Errorf("environment '%s' has invalid 'type' '%s': must be one of '%s', '%s' or '%s' (lowercase)", envName, envConfig.Type,
-				portalapi.EnvironmentTypeDevelopment, portalapi.EnvironmentTypeStaging, portalapi.EnvironmentTypeProduction)
 		}
 		if envConfig.ServerValuesFile != "" {
 			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))

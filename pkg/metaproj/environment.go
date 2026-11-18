@@ -5,6 +5,8 @@
 package metaproj
 
 import (
+	"strings"
+
 	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/rs/zerolog/log"
 )
@@ -38,12 +40,30 @@ type ProjectEnvironmentConfig struct {
 	Name                string                    `yaml:"name"`                          // Name of the environment.
 	HostingType         portalapi.HostingType     `yaml:"hostingType"`                   // Type of hosting for the environment (Metaplay-hosted vs self-hosted)
 	HumanID             string                    `yaml:"humanId"`                       // Stable human ID of the environment. Also the Kubernetes namespace.
-	Type                portalapi.EnvironmentType `yaml:"type"`                          // Type of the environment (eg, development, Staging, production).
+	Type                portalapi.EnvironmentType `yaml:"type"`                          // Type of the environment (development, staging or production).
 	StackDomain         string                    `yaml:"stackDomain"`                   // Stack base domain (eg, 'p1.metaplay.io').
 	ServerValuesFile    string                    `yaml:"serverValuesFile,omitempty"`    // Relative path (from metaplay-project.yaml) to the game server deployment Helm values file.
 	BotClientValuesFile string                    `yaml:"botclientValuesFile,omitempty"` // Relative path (from metaplay-project.yaml) to the bot client deployment Helm values file.
 	AuthProvider        string                    `yaml:"authProvider,omitempty"`        // Name of the auth provider to use for this environment. Defaults to 'metaplay'.
 	Aliases             []string                  `yaml:"aliases,omitempty"`             // Short aliases for the environment, e.g., 'dev', 'prod'.
+}
+
+// IsKnownEnvironmentType reports whether envType is one of the types the CLI knows how to deploy.
+func IsKnownEnvironmentType(envType portalapi.EnvironmentType) bool {
+	_, found := environmentTypeToFamilyMapping[envType]
+	return found
+}
+
+// normalizeEnvironmentType lowercases a hand-typed type such as 'Production', and warns about
+// values that differ from the canonical lowercase ones.
+func normalizeEnvironmentType(envName string, envType portalapi.EnvironmentType) portalapi.EnvironmentType {
+	normalized := portalapi.EnvironmentType(strings.ToLower(strings.TrimSpace(string(envType))))
+	if !IsKnownEnvironmentType(normalized) {
+		log.Warn().Msgf("Environment '%s' in metaplay-project.yaml has unknown 'type: %s'. Use development, staging or production.", envName, envType)
+	} else if normalized != envType {
+		log.Warn().Msgf("Environment '%s' in metaplay-project.yaml has 'type: %s'. Using '%s'. Change it to '%s' to remove this warning.", envName, envType, normalized, normalized)
+	}
+	return normalized
 }
 
 // Get the Kubernetes namespace for this environment. Same as HumanID but

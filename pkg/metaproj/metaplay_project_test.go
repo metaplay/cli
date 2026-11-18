@@ -845,53 +845,29 @@ func TestValidateProjectConfig_WebClients(t *testing.T) {
 	}
 }
 
-// The production gates in 'database reset' and 'database import-archive' compare 'type' exactly,
-// so a value such as 'Production' must fail the project load instead of skipping the gate.
-func TestValidateProjectConfig_EnvironmentType(t *testing.T) {
-	projectDir := t.TempDir()
-	for _, dir := range []string{"sdk", "Backend", "Shared"} {
-		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-
+// Hand-typed casings such as 'Production' must load as the canonical value, so the production
+// safety checks see 'production'. Unknown values load unchanged (with a warning).
+func TestApplyProjectConfigDefaults_NormalizesEnvironmentType(t *testing.T) {
 	testCases := []struct {
 		envType portalapi.EnvironmentType
-		wantErr bool
+		want    portalapi.EnvironmentType
 	}{
-		{envType: portalapi.EnvironmentTypeDevelopment, wantErr: false},
-		{envType: portalapi.EnvironmentTypeStaging, wantErr: false},
-		{envType: portalapi.EnvironmentTypeProduction, wantErr: false},
-		{envType: "Production", wantErr: true},
-		{envType: "PRODUCTION", wantErr: true},
-		{envType: "prod", wantErr: true},
+		{envType: "production", want: portalapi.EnvironmentTypeProduction},
+		{envType: "Production", want: portalapi.EnvironmentTypeProduction},
+		{envType: "PRODUCTION", want: portalapi.EnvironmentTypeProduction},
+		{envType: " Staging ", want: portalapi.EnvironmentTypeStaging},
+		{envType: "Development", want: portalapi.EnvironmentTypeDevelopment},
+		{envType: "Prod", want: "prod"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(string(tc.envType), func(t *testing.T) {
-			config := &ProjectConfig{
-				ProjectHumanID:        "test-project",
-				BuildRootDir:          ".",
-				SdkRootDir:            "sdk",
-				BackendDir:            "Backend",
-				SharedCodeDir:         "Shared",
-				DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
-				ServerChartVersion:    "0.9.0",
-				BotClientChartVersion: "0.9.0",
-				Environments: []ProjectEnvironmentConfig{{
-					Name:        "Test",
-					HumanID:     "test-project-dev",
-					HostingType: portalapi.HostingTypeSelfHosted,
-					StackDomain: "example.com",
-					Type:        tc.envType,
-				}},
+			config := &ProjectConfig{Environments: []ProjectEnvironmentConfig{{Name: "Test", Type: tc.envType}}}
+			if err := ApplyProjectConfigDefaults(config); err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
-			err := ValidateProjectConfig(projectDir, config)
-			if tc.wantErr && err == nil {
-				t.Errorf("expected an error for type %q", tc.envType)
-			}
-			if !tc.wantErr && err != nil {
-				t.Errorf("unexpected error for type %q: %v", tc.envType, err)
+			if got := config.Environments[0].Type; got != tc.want {
+				t.Errorf("got type %q, want %q", got, tc.want)
 			}
 		})
 	}
