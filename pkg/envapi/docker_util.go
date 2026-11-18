@@ -16,14 +16,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/moby/moby/api/types/image"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog/log"
 )
 
@@ -93,15 +92,14 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 // If that fails on macOS, it attempts to connect to the Docker Desktop socket as a fallback.
 func NewDockerClient() (*client.Client, error) {
 	// Try creating a client from environment variables (respects DOCKER_HOST).
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	dockerClient, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client from environment: %w", err)
 	}
 
-	// Ping the daemon to verify connectivity and to retrieve the version.
-	pingResponse, err := dockerClient.Ping(context.Background())
+	// Ping the daemon to verify connectivity and to negotiate the API version.
+	_, err = dockerClient.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true})
 	if err == nil {
-		dockerClient.NegotiateAPIVersionPing(pingResponse)
 		return dockerClient, nil // Success
 	}
 
@@ -118,20 +116,19 @@ func NewDockerClient() (*client.Client, error) {
 		host := "unix://" + socketPath
 
 		// Try again with the fallback host.
-		dockerClient, err = client.NewClientWithOpts(client.FromEnv, client.WithHost(host))
+		dockerClient, err = client.New(client.FromEnv, client.WithHost(host))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Docker client with fallback host '%s': %w", host, err)
 		}
 
 		// Ping again to verify the fallback connection.
-		pingResponse, err = dockerClient.Ping(context.Background())
+		_, err = dockerClient.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true})
 		if err != nil {
 			_ = dockerClient.Close()
 			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
 				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
 		}
 
-		dockerClient.NegotiateAPIVersionPing(pingResponse)
 		return dockerClient, nil // Success with fallback
 	}
 
@@ -171,7 +168,7 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 
 	// Use the helper function to convert inspect data to MetaplayImageInfo
 	// Pass imageInspect.ID as imageID, imageRefString as repoTag, and parsedRef for its Identifier method.
-	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect)
+	return newMetaplayImageInfoFromInspect(imageInspect.ID, imageRefString, parsedRef, imageInspect.InspectResponse)
 }
 
 // RemoteDockerImageDigests holds the two content digests that can identify a remote image. Which
@@ -349,14 +346,9 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	}
 	defer func() { _ = dockerClient.Close() }()
 
-	// Create filter for the project ID label
-	filterArgs := filters.NewArgs()
-	filterArgs.Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID))
-
-	// List all images from the local Docker daemon with the filter
-	images, err := dockerClient.ImageList(context.Background(), image.ListOptions{
-		All:     false,
-		Filters: filterArgs,
+	// List all images from the local Docker daemon with the project ID label.
+	images, err := dockerClient.ImageList(context.Background(), client.ImageListOptions{
+		Filters: make(client.Filters).Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID)),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list local docker images: %w", err)
@@ -364,7 +356,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 
 	// Parse the image information for all local images matching this project.
 	var matchingImages []MetaplayImageInfo
-	for _, img := range images {
+	for _, img := range images.Items {
 		// For each image ID, create a reference and fetch metadata
 		// log.Info().Msgf("Repo tags: %#v", img.RepoTags)
 		for _, repoTag := range img.RepoTags {
@@ -391,7 +383,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 				continue
 			}
 
-			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect)
+			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect.InspectResponse)
 			if err != nil {
 				// Log the error from newMetaplayImageInfoFromInspect, which might indicate parsing/validation failures.
 				log.Debug().Err(err).Msgf("Skipping image %s (repoTag %s) as it could not be processed: %v", img.ID, repoTag, err)
