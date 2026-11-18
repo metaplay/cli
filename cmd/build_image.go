@@ -401,8 +401,8 @@ func checkDockerAvailable(ctx context.Context) error {
 	if err == nil || ctx.Err() != nil {
 		return err // Available, or cancelled (runCommand reports cancellation)
 	}
-	if _, ok := errors.AsType[*clierrors.CLIError](err); ok {
-		return err // Timed out
+	if errors.Is(err, envapi.ErrDockerTimeout) {
+		return err // Already explained
 	}
 	if errors.Is(err, exec.ErrNotFound) {
 		return clierrors.Wrap(err, "Docker is not installed").
@@ -488,13 +488,26 @@ func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
 	// Use the explicit Go template syntax instead of the `json` shorthand —
 	// the shorthand was added in Docker CLI 22.06 and older clients render
 	// it as the literal string "json".
-	cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{json .}}")
+	// The wait is bounded and its stderr wait too, as for checkCommand.
+	var output []byte
 	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
+	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
+		cmd := exec.CommandContext(ctx, "docker", "version", "--format", "{{json .}}")
+		cmd.Stderr = &stderr
+		cmd.WaitDelay = 5 * time.Second
+		out, err := cmd.Output()
+		if err != nil && !errors.Is(err, exec.ErrWaitDelay) {
+			return err
+		}
+		output = out
+		return nil
+	})
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, false, ctxErr
+		}
+		if errors.Is(err, envapi.ErrDockerTimeout) {
+			return nil, false, err // The command may still be running, so stderr is not read
 		}
 		log.Debug().Err(err).Str("stderr", stderr.String()).Msgf("'docker version --format json' failed")
 		return nil, false, fmt.Errorf("failed to get Docker version: %w", err)

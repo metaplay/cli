@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -92,20 +93,26 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 // still-starting Docker Desktop accepts connections on its socket before its engine answers, and
 // without a bound a daemon that never answers hangs the command. Docker Desktop can take tens of
 // seconds to start its engine, and CI runners can be slow to start the daemon, so it is generous.
-const dockerResponseTimeout = 60 * time.Second
-
+//
 // WaitForDocker reports through onWaiting after dockerSlowAfter, and then every
 // dockerStillWaitingEvery, so a slow start doesn't look like a hang in a terminal or a CI log.
-const (
+//
+// They are variables so that tests can shorten them.
+var (
+	dockerResponseTimeout   = 60 * time.Second
 	dockerSlowAfter         = 3 * time.Second
 	dockerStillWaitingEvery = 10 * time.Second
 )
 
+// ErrDockerTimeout is in the chain of the error WaitForDocker returns when Docker did not respond
+// in time. That error is a *clierrors.CLIError that already explains the problem.
+var ErrDockerTimeout = errors.New("timed out waiting for Docker")
+
 // WaitForDocker runs check, which talks to Docker, with a deadline of dockerResponseTimeout. While
 // check runs, it reports progress messages through onWaiting, and it makes no further calls to
-// onWaiting after it returns. If the deadline passes, it returns a *clierrors.CLIError saying
-// Docker did not respond. Otherwise it returns check's error as is. Callers tell the timeout apart
-// from check's own errors by that type, so check must not return a *clierrors.CLIError.
+// onWaiting after it returns. It returns as soon as the deadline passes or ctx is cancelled, even if
+// check does not stop. On the deadline it returns an error with ErrDockerTimeout in its chain. On
+// cancellation it returns ctx's error. Otherwise it returns check's error as is.
 //
 // Inside a task runner task, pass the task output's AppendLine as onWaiting: logging directly would
 // garble the display. Outside one, pass LogWaiting.
@@ -123,17 +130,27 @@ func WaitForDocker(ctx context.Context, onWaiting func(message string), check fu
 	for {
 		select {
 		case err := <-checkDone:
-			if err != nil && ctx.Err() == nil && errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
-				return clierrors.Wrapf(err, "Docker did not respond within %d seconds", int(dockerResponseTimeout.Seconds())).
-					WithSuggestion("Make sure Docker is running and not paused, then try again")
+			// A check that fails because of the deadline reports it as its own error.
+			if err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+				return dockerTimeoutError()
 			}
 			return err
+		case <-checkCtx.Done():
+			if err := ctx.Err(); err != nil {
+				return err // Cancelled (runCommand reports cancellation)
+			}
+			return dockerTimeoutError()
 		case <-next.C:
 			onWaiting(message)
 			message = "Still waiting for Docker to respond..."
 			next.Reset(dockerStillWaitingEvery)
 		}
 	}
+}
+
+func dockerTimeoutError() error {
+	return clierrors.Wrapf(ErrDockerTimeout, "Docker did not respond within %d seconds", int(dockerResponseTimeout.Seconds())).
+		WithSuggestion("Make sure Docker is running and not paused, then try again")
 }
 
 // NewDockerClient creates a Docker client with a verified connection to the daemon at DOCKER_HOST,
@@ -154,6 +171,7 @@ func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*clie
 		return dockerClient, nil
 	}
 
+	// connectDocker explains its own failures (bad configuration, unsupported version, timeout).
 	if _, ok := errors.AsType[*clierrors.CLIError](err); ok || ctx.Err() != nil {
 		return nil, err // Already explained, or cancelled (runCommand reports cancellation)
 	}
@@ -179,20 +197,18 @@ func connectDocker(ctx context.Context, onWaiting func(message string), opts ...
 			WithSuggestion("Check the DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY environment variables")
 	}
 
-	var ping client.PingResult
 	err = WaitForDocker(ctx, onWaiting, func(ctx context.Context) error {
-		var pingErr error
-		ping, pingErr = dockerClient.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
-		return pingErr
+		ping, err := dockerClient.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
+		// Ping returns the daemon's API version along with the negotiation error. Check the version
+		// itself: the client reports other failures, such as any HTTP 400, as the same error type.
+		if err != nil && ping.APIVersion != "" && versions.LessThan(ping.APIVersion, client.MinAPIVersion) {
+			return clierrors.Wrapf(err, "Docker API version %s is not supported", ping.APIVersion).
+				WithSuggestion(fmt.Sprintf("Upgrade Docker to a version that supports API %s or newer", client.MinAPIVersion))
+		}
+		return err
 	})
 	if err != nil {
 		_ = dockerClient.Close()
-		// Ping returns the daemon's API version along with the negotiation error. Check the version
-		// itself: the client reports other failures, such as any HTTP 400, as the same error type.
-		if ping.APIVersion != "" && versions.LessThan(ping.APIVersion, client.MinAPIVersion) {
-			return nil, clierrors.Wrapf(err, "Docker API version %s is not supported", ping.APIVersion).
-				WithSuggestion(fmt.Sprintf("Upgrade Docker to a version that supports API %s or newer", client.MinAPIVersion))
-		}
 		return nil, err
 	}
 	return dockerClient, nil
@@ -433,13 +449,12 @@ func ReadLocalDockerImagesByProjectID(ctx context.Context, projectID string) ([]
 			// Get the image configuration using Docker SDK
 			if imageInspect == nil {
 				result, err := dockerClient.ImageInspect(ctx, img.ID)
-				if err != nil {
-					// Stop on cancellation, instead of returning a partial list.
-					if ctx.Err() != nil {
-						return nil, fmt.Errorf("failed to inspect local docker image %s: %w", img.ID, err)
-					}
-					log.Warn().Err(err).Msgf("Failed to inspect image %s (for repoTag %s), skipping", img.ID, repoTag)
-					break
+				if cerrdefs.IsNotFound(err) {
+					log.Debug().Msgf("Image %s was removed while listing, skipping", img.ID)
+					break // Removed since ImageList: none of its tags exist either
+				} else if err != nil {
+					// Fail instead of returning a partial list, which would look like missing images.
+					return nil, clierrors.Wrapf(err, "Failed to inspect local image %s", img.ID)
 				}
 				imageInspect = &result
 			}
