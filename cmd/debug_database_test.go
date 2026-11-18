@@ -58,6 +58,7 @@ func TestSelectDatabaseShard_NoDialog(t *testing.T) {
 		wantUsageErr bool
 	}{
 		{name: "explicit index", numShards: 3, index: 2, wantIndex: 2},
+		{name: "explicit index 0 with several shards", numShards: 3, index: 0, wantIndex: 0},
 		{name: "single shard, no index", numShards: 1, index: -1, wantIndex: 0},
 		{name: "index out of range", numShards: 2, index: 2, wantUsageErr: true},
 	}

@@ -34,7 +34,7 @@ type debugDatabaseOpts struct {
 	// Environment and pod selection
 	argEnvironment   string
 	argShardIndex    string
-	parsedShardIndex int      // parsed in Prepare, -1 when SHARD is not given
+	parsedShardIndex int      // parsed in Prepare, only meaningful when argShardIndex is set
 	extraArgs        []string // Extra arguments to pass to mariadb
 	flagReadWrite    bool     // If true, connect to read-write replica; otherwise, read-only
 	flagQuery        string   // If set, run this SQL query and exit, otherwise run in interactive mode
@@ -47,7 +47,7 @@ func init() {
 
 	args := o.Arguments()
 	args.AddStringArgumentOpt(&o.argEnvironment, "ENVIRONMENT", "Target environment name or id, eg, 'lovely-wombats-build-nimbly'.")
-	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Optional: Database shard index to connect to. If not specified, you choose from a list (or shard 0 is used if it is the only one). Required in non-interactive mode.")
+	args.AddStringArgumentOpt(&o.argShardIndex, "SHARD", "Database shard index to connect to. If not specified, you choose from a list (or shard 0 is used if it is the only one). Required in non-interactive mode.")
 	args.SetExtraArgs(&o.extraArgs, "Passed as-is to mariadb CLI.")
 
 	cmd := &cobra.Command{
@@ -119,7 +119,7 @@ func (o *debugDatabaseOpts) Prepare(cmd *cobra.Command, args []string) error {
 	}
 
 	// Parse shard index argument if provided
-	o.parsedShardIndex = -1 // not given: pick interactively, or shard 0 if there is only one
+	o.parsedShardIndex = 0
 	if o.argShardIndex != "" {
 		idx, err := strconv.Atoi(o.argShardIndex)
 		if err != nil {
@@ -173,7 +173,11 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Pick the shard before creating the debug pod, so a bad index or a cancelled dialog leaves no pod behind.
-	targetShard, err := selectDatabaseShard(shards, o.parsedShardIndex, o.chooseDatabaseShardDialog)
+	shardIndex := -1 // not given
+	if o.argShardIndex != "" {
+		shardIndex = o.parsedShardIndex
+	}
+	targetShard, err := selectDatabaseShard(shards, shardIndex, o.chooseDatabaseShardDialog)
 	if err != nil {
 		return err
 	}
@@ -197,7 +201,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 	replicaType := map[bool]string{false: "read-only", true: "read-write"}[o.flagReadWrite]
 	stderrLogger.Info().Msg("")
 	stderrLogger.Info().Msg("Target database:")
-	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(fmt.Sprintf("%d", targetShard.ShardIndex)), len(shards))
+	stderrLogger.Info().Msgf("  Shard index: %s (%d available)", styles.RenderTechnical(strconv.Itoa(targetShard.ShardIndex)), len(shards))
 	stderrLogger.Info().Msgf("  Replica:     %s", styles.RenderTechnical(replicaType))
 	stderrLogger.Info().Msg("")
 
