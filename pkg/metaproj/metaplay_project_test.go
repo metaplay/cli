@@ -845,6 +845,58 @@ func TestValidateProjectConfig_WebClients(t *testing.T) {
 	}
 }
 
+// The production gates in 'database reset' and 'database import-archive' compare 'type' exactly,
+// so a value such as 'Production' must fail the project load instead of skipping the gate.
+func TestValidateProjectConfig_EnvironmentType(t *testing.T) {
+	projectDir := t.TempDir()
+	for _, dir := range []string{"sdk", "Backend", "Shared"} {
+		if err := os.Mkdir(filepath.Join(projectDir, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	testCases := []struct {
+		envType portalapi.EnvironmentType
+		wantErr bool
+	}{
+		{envType: portalapi.EnvironmentTypeDevelopment, wantErr: false},
+		{envType: portalapi.EnvironmentTypeStaging, wantErr: false},
+		{envType: portalapi.EnvironmentTypeProduction, wantErr: false},
+		{envType: "Production", wantErr: true},
+		{envType: "PRODUCTION", wantErr: true},
+		{envType: "prod", wantErr: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(string(tc.envType), func(t *testing.T) {
+			config := &ProjectConfig{
+				ProjectHumanID:        "test-project",
+				BuildRootDir:          ".",
+				SdkRootDir:            "sdk",
+				BackendDir:            "Backend",
+				SharedCodeDir:         "Shared",
+				DotnetRuntimeVersion:  version.Must(version.NewVersion("10.0")),
+				ServerChartVersion:    "0.9.0",
+				BotClientChartVersion: "0.9.0",
+				Environments: []ProjectEnvironmentConfig{{
+					Name:        "Test",
+					HumanID:     "test-project-dev",
+					HostingType: portalapi.HostingTypeSelfHosted,
+					StackDomain: "example.com",
+					Type:        tc.envType,
+				}},
+			}
+			err := ValidateProjectConfig(projectDir, config)
+			if tc.wantErr && err == nil {
+				t.Errorf("expected an error for type %q", tc.envType)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("unexpected error for type %q: %v", tc.envType, err)
+			}
+		})
+	}
+}
+
 // A project whose SDK has not been installed yet must still load. The missing
 // SDK is reported when the metadata is needed, with a hint at the config.
 func TestSdkMetadata_MissingSdk(t *testing.T) {

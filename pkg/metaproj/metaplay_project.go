@@ -504,6 +504,11 @@ func ValidateProjectConfig(projectDir string, config *ProjectConfig) error {
 		if envConfig.Type == "" {
 			return fmt.Errorf("environment '%s' did not specify required field 'type'", envName)
 		}
+		// Exact values only: the production gates in the database commands compare against them.
+		if _, ok := environmentTypeToFamilyMapping[envConfig.Type]; !ok {
+			return fmt.Errorf("environment '%s' has invalid 'type' '%s': must be one of '%s', '%s' or '%s' (lowercase)", envName, envConfig.Type,
+				portalapi.EnvironmentTypeDevelopment, portalapi.EnvironmentTypeStaging, portalapi.EnvironmentTypeProduction)
+		}
 		if envConfig.ServerValuesFile != "" {
 			err := ValidateHelmValuesFile(filepath.Join(projectDir, envConfig.ServerValuesFile))
 			if err != nil {
