@@ -257,3 +257,14 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 
 	return stdOut.String(), stdErr.String(), nil
 }
+
+// RemoveFilesInDebugContainer removes files in the debug container with a single 'rm -f'. Files
+// that do not exist are not an error.
+func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, paths ...string) error {
+	log.Debug().Msgf("Remove files from debug container: %s", strings.Join(paths, " "))
+	_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, "rm -f "+strings.Join(paths, " "))
+	if err != nil {
+		return fmt.Errorf("failed to remove %s from the pod: %w", strings.Join(paths, " and "), err)
+	}
+	return nil
+}

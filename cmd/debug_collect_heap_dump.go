@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -199,8 +198,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	runner := tui.NewTaskRunner()
 
 	// Collect and retrieve heap dump using task runner
-	restorePod := o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
-	defer restorePod()
+	o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
 
 	// Run the tasks
 	if err := runner.Run(); err != nil {
@@ -212,44 +210,10 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// collectAndRetrieveHeapDump adds the tasks that collect and retrieve the heap dump. It returns a
-// function that undoes the tasks' changes to the pod which the tasks did not undo themselves:
-// when a task fails, or the command is interrupted, the tasks after it don't run.
-func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) (restorePod func()) {
-	// With mode==gcdump, the dump file gets written to /tmp.
-	// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
-	remoteDumpDir := "/tmp"
-	if o.flagCollectMode == "dump" {
-		// Access the target container filesystem via the server process root
-		remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
-	}
-	remoteDumpPath := fmt.Sprintf("%s/%s", remoteDumpDir, filepath.Base(o.flagOutputPath))
-
-	// What the pod has left to restore. Set before the step that changes it, since an interrupted
-	// step may have made the change.
-	var healthChecksOverridden, dumpFileMayExist atomic.Bool
-	enableHealthChecks := func(ctx context.Context) error {
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
-		)
-		if err != nil {
-			return fmt.Errorf("failed to reset healthz probe mode: %w", err)
-		}
-		healthChecksOverridden.Store(false)
-		return nil
-	}
-	removeDumpFile := func(ctx context.Context) error {
-		log.Debug().Msgf("Remove heap dump file %s from debug container...", remoteDumpPath)
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, "rm -f "+remoteDumpPath)
-		if err == nil {
-			dumpFileMayExist.Store(false)
-		}
-		return err
-	}
-
+// Helper function to collect and retrieve heap dump using task runner
+func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) {
 	// Set healthz probe to success mode
 	runner.AddTask("Disable health checks", func(output *tui.TaskOutput) error {
-		healthChecksOverridden.Store(true)
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Success",
 		)
@@ -279,7 +243,6 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		// Not cancelled with the command: cancelling the exec stream would not stop the collector in
 		// the pod, which keeps the server frozen and writes the dump file until it finishes. Only
 		// then can the health checks be re-enabled and the file removed.
-		dumpFileMayExist.Store(true)
 		_, _, err := kubeutil.ExecInDebugContainer(context.WithoutCancel(ctx), kubeCli, podName, debugContainerName, collectCmd)
 		dumpDuration = time.Since(startTime)
 		if err != nil {
@@ -293,56 +256,39 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		return nil
 	})
 
-	// Reset healthz probe. Also after an interrupt, so it doesn't use the command's context.
-	runner.AddTask("Re-enable health checks", func(output *tui.TaskOutput) error {
-		cleanupCtx, cancel := podCleanupContext(ctx)
-		defer cancel()
-		return enableHealthChecks(cleanupCtx)
-	})
-
-	// Copy heap dump to local machine & remove the remote file (regardless of copy success)
-	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
-		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
-
-		cleanupCtx, cancel := podCleanupContext(ctx)
-		defer cancel()
-		if removeErr := removeDumpFile(cleanupCtx); removeErr != nil {
-			// Don't fail the task for cleanup errors, just log a warning
-			output.AppendLinef("Failed to remove heap dump from debug container: %v", removeErr)
-		}
-
-		if copyErr != nil {
-			return fmt.Errorf("failed to copy heap dump: %w", copyErr)
+	// Reset healthz probe
+	runner.AddCleanupTask("Re-enable health checks", func(ctx context.Context, output *tui.TaskOutput) error {
+		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
+		)
+		if err != nil {
+			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s, which now always report healthy", podName).
+				WithSuggestion("Restart the pod, or run in it: curl localhost:8585/setOverride/healthz?mode=Passthrough")
 		}
 		return nil
 	})
 
-	return func() {
-		if !healthChecksOverridden.Load() && !dumpFileMayExist.Load() {
-			return
-		}
-		cleanupCtx, cancel := podCleanupContext(ctx)
-		defer cancel()
-		if healthChecksOverridden.Load() {
-			log.Info().Msg("Re-enabling the game server's health checks...")
-			if err := enableHealthChecks(cleanupCtx); err != nil {
-				log.Warn().Msgf("Failed to re-enable the health checks of pod %s, which now always report healthy: %v", podName, err)
-				log.Warn().Msgf("Restart the pod, or run in it: curl localhost:8585/setOverride/healthz?mode=Passthrough")
-			}
-		}
-		if dumpFileMayExist.Load() {
-			log.Info().Msg("Removing the heap dump from the pod...")
-			if err := removeDumpFile(cleanupCtx); err != nil {
-				log.Warn().Msgf("Failed to remove %s from pod %s: %v", remoteDumpPath, podName, err)
-			}
-		}
+	// With mode==gcdump, the dump file gets written to /tmp.
+	// With mode==dump, the dump file gets written to /proc/<pid>/root/tmp.
+	remoteDumpDir := "/tmp"
+	if o.flagCollectMode == "dump" {
+		// Access the target container filesystem via the server process root
+		remoteDumpDir = fmt.Sprintf("/proc/%d/root/tmp", processInfo.Pid)
 	}
-}
 
-// podCleanupContext returns the context for undoing a command's changes to a pod. It is not
-// cancelled with the command, so the changes are undone also after Ctrl-C, but it is bounded.
-func podCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	// Copy heap dump to local machine
+	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
+		if err != nil {
+			return fmt.Errorf("failed to copy heap dump: %w", err)
+		}
+		return nil
+	})
+
+	// Remove the remote file, also when the download failed
+	runner.AddCleanupTask("Remove heap dump from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
+		return kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, remoteDumpDir+"/"+filepath.Base(o.flagOutputPath))
+	})
 }
 
 // formatDuration converts a duration in seconds to a human-readable string

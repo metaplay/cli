@@ -136,6 +136,7 @@ func (to *TaskOutput) getLines() []string {
 type Task struct {
 	title     string        // Title for the task
 	runFunc   TaskRunFunc   // Run function for the task
+	cleanup   bool          // Runs also after an earlier task failed, see AddCleanupTask
 	status    TaskStatus    // Status of the task
 	error     error         // Error that was returned by the task execution function
 	startTime time.Time     // Time when the task was started
@@ -146,22 +147,25 @@ type Task struct {
 
 // TaskRunner manages and executes a sequence of tasks with visual progress
 type TaskRunner struct {
-	tasks          []*Task             // Tasks that the operation consists of, run sequentially
-	progress       *plainProgress      // Progress reporting once the display has closed
-	done           chan struct{}       // Signals when all tasks are complete
-	frameIndex     int                 // Current frame index for spinner animation
-	lastTick       time.Time           // Last time the spinner was updated
-	program        *tea.Program        // Reference to the tea program for quitting
-	programOptions []tea.ProgramOption // Extra Bubble Tea options, for tests
+	tasks      []*Task        // Tasks that the operation consists of, run sequentially
+	progress   *plainProgress // Progress reporting as log lines, when there is no display
+	done       chan struct{}  // Signals when all tasks are complete
+	frameIndex int            // Current frame index for spinner animation
+	lastTick   time.Time      // Last time the spinner was updated
+	program    *tea.Program   // Reference to the tea program for quitting
 }
 
-// plainProgress reports the tasks' progress as log lines after the user interrupted the command,
-// which closes the display while the tasks still run.
+// plainProgress reports the tasks' progress as log lines: in non-interactive mode, and after the
+// user interrupted the command, which closes the display while the tasks still run.
 type plainProgress struct {
-	mu            sync.Mutex
-	displayClosed bool  // The display closed before the tasks finished
-	current       *Task // The task being run, or nil
+	mu             sync.Mutex
+	logging        bool  // Report progress as log lines
+	reportFailures bool  // Log failures, which the command reports only as "Canceled." after an interrupt
+	current        *Task // The task being run, or nil
 }
+
+// cleanupTimeout bounds each cleanup task.
+const cleanupTimeout = 30 * time.Second
 
 // tickMsg is sent when the spinner should advance one frame
 type tickMsg struct{}
@@ -190,6 +194,23 @@ func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
 
 	// Add to runner
 	m.tasks = append(m.tasks, task)
+}
+
+// AddCleanupTask adds a task that undoes an earlier task's changes, such as a setting changed in a
+// pod. Unlike other tasks, it runs also when an earlier task failed or the command was interrupted.
+// Its context is not cancelled with the command's, and is bounded by cleanupTimeout. runFunc must
+// be safe to run when the change it undoes was never made.
+func (m *TaskRunner) AddCleanupTask(title string, runFunc func(ctx context.Context, output *TaskOutput) error) {
+	m.tasks = append(m.tasks, &Task{
+		title: title,
+		runFunc: func(output *TaskOutput) error {
+			ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+			defer cancel()
+			return runFunc(ctx, output)
+		},
+		cleanup: true,
+		status:  StatusPending,
+	})
 }
 
 // taskStatusStyle returns the appropriate style for a task based on its status
@@ -231,9 +252,9 @@ func (m *TaskRunner) Run() error {
 }
 
 // runInteractive runs tasks with an interactive TUI using Bubble Tea
-func (m *TaskRunner) runInteractive() error {
+func (m *TaskRunner) runInteractive(options ...tea.ProgramOption) error {
 	// Create and store the program instance
-	m.program = tea.NewProgram(m, m.programOptions...)
+	m.program = tea.NewProgram(m, options...)
 
 	// Start task execution in background
 	go m.executeTasks()
@@ -248,18 +269,16 @@ func (m *TaskRunner) runInteractive() error {
 		log.Warn().Msgf("Task progress display failed: %v", err)
 	}
 
-	// The display closes before the tasks finish when the user interrupts the command: Ctrl-C,
-	// which the display receives as a key press, or SIGINT (ErrInterrupted) or SIGTERM. Cancel the
-	// command's context, so a task that uses it stops. A task that ignores it runs to its end, and
-	// so do the tasks after it until one fails, as without the display. Either way, wait for the
-	// tasks: the caller may clean up after them.
+	// The display closes before the tasks finish when the user interrupts the command (Ctrl-C,
+	// SIGINT or SIGTERM). Cancel the command, as SIGINT does without the display, and wait for the
+	// tasks, reporting their progress as log lines.
 	select {
 	case <-m.done:
 	default:
 		if !displayFailed {
 			interrupt()
 		}
-		m.progress.closeDisplay()
+		m.progress.closeDisplay(!displayFailed)
 		<-m.done
 	}
 
@@ -267,10 +286,11 @@ func (m *TaskRunner) runInteractive() error {
 }
 
 // closeDisplay switches progress reporting to log lines, starting with the task still running.
-func (p *plainProgress) closeDisplay() {
+func (p *plainProgress) closeDisplay(interrupted bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.displayClosed = true
+	p.logging = true
+	p.reportFailures = interrupted
 	if p.current != nil {
 		log.Info().Msgf("Waiting for '%s' to finish...", p.current.title)
 	}
@@ -281,7 +301,7 @@ func (p *plainProgress) taskStarted(task *Task) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.current = task
-	if p.displayClosed {
+	if p.logging {
 		log.Info().Msgf("%s...", task.title)
 	}
 }
@@ -292,50 +312,25 @@ func (p *plainProgress) taskEnded(task *Task, err error, elapsed time.Duration) 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.current = nil
-	if !p.displayClosed {
+	if !p.logging {
 		return
 	}
 	switch {
 	case err == nil:
 		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
-	case !errors.Is(err, context.Canceled):
+	case p.reportFailures && !errors.Is(err, context.Canceled):
 		log.Error().Msgf(" %s '%s' failed: %v", styles.RenderError("✗"), task.title, err)
 	}
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
 func (m *TaskRunner) runNonInteractive() error {
-	for _, task := range m.tasks {
-		log.Info().Msgf("%s...", task.title)
-
-		task.mu.Lock()
-		task.status = StatusRunning
-		task.startTime = time.Now()
-		task.mu.Unlock()
-
-		if err := task.runFunc(&task.output); err != nil {
-			task.mu.Lock()
-			task.elapsed = time.Since(task.startTime)
-			task.status = StatusFailed
-			task.error = err
-			task.mu.Unlock()
-
-			// log.Error().Msgf(styleError.Render("ERROR: %v"), err)
-			return err
-		}
-
-		task.mu.Lock()
-		task.status = StatusCompleted
-		elapsed := time.Since(task.startTime)
-		task.elapsed = elapsed
-		task.mu.Unlock()
-
-		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
+	m.progress.logging = true
+	m.executeTasks()
+	if err := m.checkErrors(); err != nil {
+		return err
 	}
-
 	log.Info().Msg("")
-
-	close(m.done)
 	return nil
 }
 
@@ -357,10 +352,13 @@ func (m *TaskRunner) checkErrors() error {
 	return nil
 }
 
-// executeTasks runs all tasks sequentially in interactive mode
+// executeTasks runs the tasks sequentially. After a task fails, only cleanup tasks run.
 func (m *TaskRunner) executeTasks() {
 	var firstError error
 	for _, task := range m.tasks {
+		if firstError != nil && !task.cleanup {
+			continue
+		}
 		m.progress.taskStarted(task)
 
 		// Update task status to running and start timing
@@ -382,7 +380,6 @@ func (m *TaskRunner) executeTasks() {
 			if firstError == nil {
 				firstError = err
 			}
-			break
 		} else {
 			task.mu.Lock()
 			task.status = StatusCompleted
