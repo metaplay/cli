@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -29,7 +28,7 @@ func main() {
 	var interruptOnce sync.Once
 	interrupt := func() {
 		interruptOnce.Do(func() {
-			fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up... (press Ctrl+C again to force quit)")
+			tui.PrintNotice("\nInterrupted, cleaning up... (press Ctrl+C again to force quit)")
 			stop()
 		})
 	}

@@ -6,10 +6,10 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -146,12 +146,21 @@ type Task struct {
 
 // TaskRunner manages and executes a sequence of tasks with visual progress
 type TaskRunner struct {
-	tasks       []*Task       // Tasks that the operation consists of, run sequentially
-	interrupted *atomic.Bool  // Ctrl-C was pressed: start no further tasks
-	done        chan struct{} // Signals when all tasks are complete
-	frameIndex  int           // Current frame index for spinner animation
-	lastTick    time.Time     // Last time the spinner was updated
-	program     *tea.Program  // Reference to the tea program for quitting
+	tasks          []*Task             // Tasks that the operation consists of, run sequentially
+	progress       *plainProgress      // Progress reporting once the display has closed
+	done           chan struct{}       // Signals when all tasks are complete
+	frameIndex     int                 // Current frame index for spinner animation
+	lastTick       time.Time           // Last time the spinner was updated
+	program        *tea.Program        // Reference to the tea program for quitting
+	programOptions []tea.ProgramOption // Extra Bubble Tea options, for tests
+}
+
+// plainProgress reports the tasks' progress as log lines after the user interrupted the command,
+// which closes the display while the tasks still run.
+type plainProgress struct {
+	mu            sync.Mutex
+	displayClosed bool  // The display closed before the tasks finished
+	current       *Task // The task being run, or nil
 }
 
 // tickMsg is sent when the spinner should advance one frame
@@ -163,10 +172,10 @@ type doneMsg struct{ err error }
 // NewTaskRunner creates a new TaskRunner
 func NewTaskRunner() *TaskRunner {
 	return &TaskRunner{
-		tasks:       make([]*Task, 0),
-		interrupted: &atomic.Bool{},
-		done:        make(chan struct{}),
-		lastTick:    time.Now(),
+		tasks:    make([]*Task, 0),
+		progress: &plainProgress{},
+		done:     make(chan struct{}),
+		lastTick: time.Now(),
 	}
 }
 
@@ -224,32 +233,74 @@ func (m *TaskRunner) Run() error {
 // runInteractive runs tasks with an interactive TUI using Bubble Tea
 func (m *TaskRunner) runInteractive() error {
 	// Create and store the program instance
-	m.program = tea.NewProgram(m)
+	m.program = tea.NewProgram(m, m.programOptions...)
 
 	// Start task execution in background
 	go m.executeTasks()
 
-	// Run the TUI
-	if _, err := m.program.Run(); err != nil {
-		return fmt.Errorf("error running tasks: %w", err)
+	// Run the TUI. Notices printed meanwhile, such as main's "Interrupted" on SIGINT, are held
+	// back until the terminal is restored, so they don't garble the display.
+	beginDisplay()
+	_, err := m.program.Run()
+	endDisplay()
+	displayFailed := err != nil && !errors.Is(err, tea.ErrInterrupted)
+	if displayFailed {
+		log.Warn().Msgf("Task progress display failed: %v", err)
 	}
 
-	// Ctrl-C quit the display. Interrupt the command now that the terminal is restored, so the
-	// running task, which uses the command's context, stops.
-	if m.interrupted.Load() {
-		interrupt()
+	// The display closes before the tasks finish when the user interrupts the command: Ctrl-C,
+	// which the display receives as a key press, or SIGINT (ErrInterrupted) or SIGTERM. Cancel the
+	// command's context, so a task that uses it stops. A task that ignores it runs to its end, and
+	// so do the tasks after it until one fails, as without the display. Either way, wait for the
+	// tasks: the caller may clean up after them.
+	select {
+	case <-m.done:
+	default:
+		if !displayFailed {
+			interrupt()
+		}
+		m.progress.closeDisplay()
+		<-m.done
 	}
 
-	// Wait for all tasks to complete
-	<-m.done
+	return m.checkErrors()
+}
 
-	if err := m.checkErrors(); err != nil {
-		return err
+// closeDisplay switches progress reporting to log lines, starting with the task still running.
+func (p *plainProgress) closeDisplay() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.displayClosed = true
+	if p.current != nil {
+		log.Info().Msgf("Waiting for '%s' to finish...", p.current.title)
 	}
-	if m.interrupted.Load() {
-		return context.Canceled // A task finished despite Ctrl-C: the remaining ones did not run
+}
+
+// taskStarted records the task being run, and logs it once the display has closed.
+func (p *plainProgress) taskStarted(task *Task) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.current = task
+	if p.displayClosed {
+		log.Info().Msgf("%s...", task.title)
 	}
-	return nil
+}
+
+// taskEnded logs the task's result once the display has closed. A failure caused by the
+// cancellation is not logged: the command reports the cancellation itself.
+func (p *plainProgress) taskEnded(task *Task, err error, elapsed time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.current = nil
+	if !p.displayClosed {
+		return
+	}
+	switch {
+	case err == nil:
+		log.Info().Msgf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed))
+	case !errors.Is(err, context.Canceled):
+		log.Error().Msgf(" %s '%s' failed: %v", styles.RenderError("✗"), task.title, err)
+	}
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
@@ -310,9 +361,7 @@ func (m *TaskRunner) checkErrors() error {
 func (m *TaskRunner) executeTasks() {
 	var firstError error
 	for _, task := range m.tasks {
-		if m.interrupted.Load() {
-			break
-		}
+		m.progress.taskStarted(task)
 
 		// Update task status to running and start timing
 		task.mu.Lock()
@@ -327,7 +376,9 @@ func (m *TaskRunner) executeTasks() {
 			task.elapsed = time.Since(task.startTime)
 			task.status = StatusFailed
 			task.error = err
+			elapsed := task.elapsed
 			task.mu.Unlock()
+			m.progress.taskEnded(task, err, elapsed)
 			if firstError == nil {
 				firstError = err
 			}
@@ -338,6 +389,7 @@ func (m *TaskRunner) executeTasks() {
 			elapsed := time.Since(task.startTime)
 			task.elapsed = elapsed
 			task.mu.Unlock()
+			m.progress.taskEnded(task, nil, elapsed)
 			log.Debug().Msgf("Task completed: %s %s", task.title, humanizeElapsed(elapsed))
 		}
 	}
@@ -367,7 +419,6 @@ func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			m.interrupted.Store(true)
 			return m, tea.Quit
 		}
 	case tickMsg:

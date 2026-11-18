@@ -573,7 +573,7 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 		// Do a request.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout reached while waiting to establish connection to %s:%d", hostname, port)
+			return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
 		default:
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
@@ -681,7 +681,7 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		// Do a request.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
+			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
 		default:
 			// Create a new request with headers
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

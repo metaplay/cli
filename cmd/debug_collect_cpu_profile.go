@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -197,10 +198,11 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 	runner := tui.NewTaskRunner()
 
 	// Collect and retrieve CPU profile using task runner
-	err = o.collectAndRetrieveCPUProfile(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
+	restorePod, err := o.collectAndRetrieveCPUProfile(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
 	if err != nil {
 		return err
 	}
+	defer restorePod()
 
 	// Run the tasks
 	if err := runner.Run(); err != nil {
@@ -212,8 +214,10 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
-// Helper function to collect and retrieve CPU profile using task runner
-func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) error {
+// collectAndRetrieveCPUProfile adds the tasks that collect and retrieve the CPU profile. It returns
+// a function that removes the profile files from the pod if the tasks did not: when a task fails,
+// or the command is interrupted, the tasks after it don't run.
+func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) (restorePod func(), err error) {
 	// dotnet-trace always writes the raw nettrace capture to the path given via -o.
 	// For Speedscope/Chromium formats, it additionally writes the converted file at
 	// a sibling path produced by Path.ChangeExtension(-o, "speedscope.json"|"chromium.json"),
@@ -233,7 +237,31 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	case "Chromium":
 		remoteDownloadName = strings.TrimSuffix(remoteNettraceName, ".nettrace") + ".chromium.json"
 	default:
-		return fmt.Errorf("unexpected format: %s", o.flagFormat)
+		return nil, fmt.Errorf("unexpected format: %s", o.flagFormat)
+	}
+
+	// Remove both the nettrace capture and (if different) the converted file.
+	filesToRemove := []string{remoteNettracePath}
+	if remoteDownloadName != remoteNettraceName {
+		filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
+	}
+	var filesMayExist atomic.Bool // Set before collecting, since an interrupted collection may have written them
+	removeFiles := func(ctx context.Context) {
+		allRemoved := true
+		for _, f := range filesToRemove {
+			log.Debug().Msgf("Remove CPU profile file %s from debug container...", f)
+			_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
+				fmt.Sprintf("rm -f %s", f),
+			)
+			if removeErr != nil {
+				// Don't fail the task for cleanup errors, just log a warning
+				log.Warn().Msgf("Failed to remove %s from debug container: %v", f, removeErr)
+				allRemoved = false
+			}
+		}
+		if allRemoved {
+			filesMayExist.Store(false)
+		}
 	}
 
 	// Collect CPU profile
@@ -253,8 +281,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		}
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-		// Execute the command in the debug container
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
+		// Execute the command in the debug container. Not cancelled with the command: cancelling the
+		// exec stream would not stop dotnet-trace in the pod, which would write the profile files
+		// after they were removed. It stops after the requested duration.
+		filesMayExist.Store(true)
+		_, _, err := kubeutil.ExecInDebugContainer(context.WithoutCancel(ctx), kubeCli, podName, debugContainerName, collectCmd)
 		if err != nil {
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
@@ -266,21 +297,9 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
 		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
 
-		// Remove both the nettrace capture and (if different) the converted file.
-		filesToRemove := []string{remoteNettracePath}
-		if remoteDownloadName != remoteNettraceName {
-			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
-		}
-		for _, f := range filesToRemove {
-			log.Debug().Msgf("Remove CPU profile file %s from debug container...", f)
-			_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-				fmt.Sprintf("rm -f %s", f),
-			)
-			if removeErr != nil {
-				// Don't fail the task for cleanup errors, just log a warning
-				log.Warn().Msgf("Failed to remove %s from debug container: %v", f, removeErr)
-			}
-		}
+		cleanupCtx, cancel := podCleanupContext(ctx)
+		defer cancel()
+		removeFiles(cleanupCtx)
 
 		if copyErr != nil {
 			return fmt.Errorf("failed to copy CPU profile: %w", copyErr)
@@ -288,5 +307,13 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		return nil
 	})
 
-	return nil
+	return func() {
+		if !filesMayExist.Load() {
+			return
+		}
+		log.Info().Msg("Removing the CPU profile from the pod...")
+		cleanupCtx, cancel := podCleanupContext(ctx)
+		defer cancel()
+		removeFiles(cleanupCtx)
+	}, nil
 }
