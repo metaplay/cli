@@ -6,18 +6,17 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"strings"
 
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/pkg/jsonmessage"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
+	"github.com/moby/moby/api/pkg/authconfig"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -137,14 +136,14 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 	}
 	// The daemon decodes X-Registry-Auth as base64url. With standard base64, it silently
 	// drops credentials whose encoding contains '+' or '/' and sends the request anonymously.
-	authStr, err := registry.EncodeAuthConfig(authConfig)
+	authStr, err := authconfig.Encode(authConfig)
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to encode auth config")
 	}
 
 	// Pull the image
 	output.AppendLinef("Pulling image %s", remoteImageName)
-	pullResponseReader, err := cli.ImagePull(ctx, remoteImageName, image.PullOptions{
+	pullResponse, err := cli.ImagePull(ctx, remoteImageName, client.ImagePullOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
@@ -156,19 +155,12 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 		return clierrors.Wrap(err, "Failed to pull docker image").
 			WithSuggestion("Make sure Docker Desktop is running")
 	}
-	defer func() { _ = pullResponseReader.Close() }()
+	// Follow pull progress. JSONMessages closes the stream when it ends or ctx is cancelled.
+	progressIDs := []string{}                     // Track order of progress IDs
+	progresses := map[string]jsonstream.Message{} // Track progress by ID
 
-	// Follow pull progress
-	decoder := json.NewDecoder(pullResponseReader)
-	progressIDs := []string{}                          // Track order of progress IDs
-	progresses := map[string]jsonmessage.JSONMessage{} // Track progress by ID
-
-	for {
-		var progress jsonmessage.JSONMessage
-		if err := decoder.Decode(&progress); err != nil {
-			if errors.Is(err, io.EOF) {
-				break // End of stream
-			}
+	for progress, err := range pullResponse.JSONMessages(ctx) {
+		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return clierrors.New("Image pull cancelled")
 			}

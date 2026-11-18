@@ -6,18 +6,20 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+	"os"
 	"strings"
 
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/pkg/jsonmessage"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
+	"github.com/moby/moby/api/pkg/authconfig"
+	"github.com/moby/moby/api/types/jsonstream"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/jsonmessage"
+	"github.com/moby/term"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 )
@@ -200,7 +202,7 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	// If names don't match, tag the source image as the destination.
 	if srcImageName != dstImageName {
 		output.AppendLinef("Tagging image %s as %s", srcImageName, dstImageName)
-		if err := cli.ImageTag(ctx, srcImageName, dstImageName); err != nil {
+		if _, err := cli.ImageTag(ctx, client.ImageTagOptions{Source: srcImageName, Target: dstImageName}); err != nil {
 			return false, fmt.Errorf("failed to tag image: %w", err)
 		}
 	}
@@ -214,30 +216,24 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	}
 	// The daemon decodes X-Registry-Auth as base64url. With standard base64, it silently
 	// drops credentials whose encoding contains '+' or '/' and sends the request anonymously.
-	authStr, err := registry.EncodeAuthConfig(authConfig)
+	authStr, err := authconfig.Encode(authConfig)
 	if err != nil {
 		return false, fmt.Errorf("failed to encode auth config: %w", err)
 	}
 
-	pushResponseReader, err := cli.ImagePush(ctx, dstImageName, image.PushOptions{
+	pushResponse, err := cli.ImagePush(ctx, dstImageName, client.ImagePushOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
 		return false, fmt.Errorf("failed to push docker image: %w", err)
 	}
-	defer func() { _ = pushResponseReader.Close() }()
 
-	// Follow push progress
-	decoder := json.NewDecoder(pushResponseReader)
-	progressIDs := []string{}                          // Track order of progress IDs
-	progresses := map[string]jsonmessage.JSONMessage{} // Track progress by ID
+	// Follow push progress. JSONMessages closes the stream when it ends or ctx is cancelled.
+	progressIDs := []string{}                     // Track order of progress IDs
+	progresses := map[string]jsonstream.Message{} // Track progress by ID
 
-	for {
-		var progress jsonmessage.JSONMessage
-		if err := decoder.Decode(&progress); err != nil {
-			if err == io.EOF {
-				break
-			}
+	for progress, err := range pushResponse.JSONMessages(ctx) {
+		if err != nil {
 			return false, fmt.Errorf("failed to decode push response: %w", err)
 		}
 
@@ -266,8 +262,9 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 
 // updateDockerProgressOutput updates the task output with the current Docker push/pull progress information.
 // Shared by both image push and image pull commands.
-func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonmessage.JSONMessage) {
+func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, progresses map[string]jsonstream.Message) {
 	lines := []string{}
+	width := dockerProgressWidth()
 
 	for _, id := range progressIDs {
 		progress, exists := progresses[id]
@@ -296,10 +293,20 @@ func updateDockerProgressOutput(output *tui.TaskOutput, progressIDs []string, pr
 
 		progressLine := fmt.Sprintf("Layer %s: %s", id[:min(12, len(id))], status)
 		if progress.Progress != nil {
-			progressLine += fmt.Sprintf(" %s", progress.Progress.String())
+			progressLine += fmt.Sprintf(" %s", jsonmessage.RenderTUIProgress(*progress.Progress, width))
 		}
 		lines = append(lines, strings.TrimSpace(progressLine))
 	}
 
 	output.SetFooterLines(lines)
+}
+
+// dockerProgressWidth is the width of stdin's terminal, or 200 when stdin is not a
+// terminal. RenderTUIProgress draws the progress bar above 110 columns and the time
+// left above 50.
+func dockerProgressWidth() uint16 {
+	if ws, err := term.GetWinsize(os.Stdin.Fd()); err == nil {
+		return ws.Width
+	}
+	return 200
 }
