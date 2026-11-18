@@ -154,10 +154,11 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 	dockerCredentials := dstRepository.Credentials
 
 	// Create a Docker client
-	cli, err := envapi.NewDockerClient()
+	cli, err := envapi.NewDockerClient(ctx, output.AppendLine)
 	if err != nil {
 		return false, err
 	}
+	defer func() { _ = cli.Close() }()
 
 	// Extract tag from source image.
 	imageTag, err := extractDockerImageTag(imageName)
@@ -182,12 +183,12 @@ func pushDockerImage(ctx context.Context, output *tui.TaskOutput, imageName stri
 		// no-op we can skip) from "different image, same tag" (a hard error). The local image ID is
 		// the config digest under the legacy image store and the manifest digest under the
 		// containerd image store, so accept a match against either remote digest.
-		localImage, err := envapi.ReadLocalDockerImageMetadata(srcImageName)
+		localImage, err := cli.ImageInspect(ctx, srcImageName)
 		if err != nil {
-			return false, err
+			return false, clierrors.Wrapf(err, "Failed to inspect local image '%s'", srcImageName)
 		}
 
-		if localImage.ImageID == remoteDigests.ConfigDigest || localImage.ImageID == remoteDigests.ManifestDigest {
+		if localImage.ID == remoteDigests.ConfigDigest || localImage.ID == remoteDigests.ManifestDigest {
 			// Identical image already in the repository: nothing to do.
 			output.AppendLinef("Image %s is already present in the repository (identical digest), skipping push", dstImageName)
 			return false, nil

@@ -122,7 +122,7 @@ func (o *imagePullOpts) Run(cmd *cobra.Command) error {
 // Output progress into the task output.
 func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageName string, dockerCredentials *envapi.DockerCredentials) error {
 	// Create a Docker client
-	cli, err := envapi.NewDockerClient()
+	cli, err := envapi.NewDockerClient(ctx, output.AppendLine)
 	if err != nil {
 		return err
 	}
