@@ -635,5 +635,5 @@ func (o *testIntegrationOpts) buildDockerImages(ctx context.Context, project *me
 
 // dockerSupportsBuildx returns true if docker buildx is available.
 func dockerSupportsBuildx(ctx context.Context) bool {
-	return checkCommand(ctx, "docker", "buildx", "version") == nil
+	return runCommandAndDiscardOutput(ctx, "docker", "buildx", "version") == nil
 }

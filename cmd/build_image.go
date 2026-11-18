@@ -319,14 +319,16 @@ func resolveBuildEngine(engine string) (string, error) {
 	return "", fmt.Errorf("invalid Docker build engine '%s', must be one of: %v", engine, validBuildEngines)
 }
 
-func checkCommand(ctx context.Context, command string, args ...string) error {
-	_, err := commandOutput(ctx, command, args...)
+// runCommandAndDiscardOutput runs a command for its exit status only. On failure, the error
+// includes the command's stderr, or is ctx's error if ctx ended.
+func runCommandAndDiscardOutput(ctx context.Context, command string, args ...string) error {
+	_, err := runCommandAndCaptureStdout(ctx, command, args...)
 	return err
 }
 
-// commandOutput runs a command and returns its stdout. On failure, the error includes the command's
-// stderr, or is ctx's error if ctx ended.
-func commandOutput(ctx context.Context, command string, args ...string) ([]byte, error) {
+// runCommandAndCaptureStdout runs a command and returns its stdout. On failure, the error includes
+// the command's stderr, or is ctx's error if ctx ended.
+func runCommandAndCaptureStdout(ctx context.Context, command string, args ...string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -407,7 +409,7 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 // client, by envapi.WaitForDocker.
 func checkDockerAvailable(ctx context.Context) error {
 	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
-		return checkCommand(ctx, "docker", "info")
+		return runCommandAndDiscardOutput(ctx, "docker", "info")
 	})
 	if err == nil || ctx.Err() != nil {
 		return err // Available, or cancelled (runCommand reports cancellation)
@@ -421,7 +423,7 @@ func checkBuildEngineAvailable(ctx context.Context, buildEngine string) error {
 
 	switch buildEngine {
 	case "buildx":
-		err := checkCommand(ctx, "docker", "buildx", "version")
+		err := runCommandAndDiscardOutput(ctx, "docker", "buildx", "version")
 		if err != nil {
 			return clierrors.Wrap(err, "Docker buildx is not available").
 				WithSuggestion("Install Docker buildx or use --engine=buildkit instead")
@@ -478,7 +480,7 @@ func checkDockerVersion(ctx context.Context) (*dockerVersionInfo, bool, error) {
 	var output []byte
 	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
 		var err error
-		output, err = commandOutput(ctx, "docker", "version", "--format", "{{json .}}")
+		output, err = runCommandAndCaptureStdout(ctx, "docker", "version", "--format", "{{json .}}")
 		return err
 	})
 	if err != nil {

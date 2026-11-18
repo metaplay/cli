@@ -346,7 +346,7 @@ func TestIsDockerPermissionDenied(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := errors.New("exit status 1: " + tt.stderr) // As checkCommand formats it
+			err := errors.New("exit status 1: " + tt.stderr) // As runCommandAndDiscardOutput formats it
 			if got := IsDockerPermissionDenied(err); got != tt.want {
 				t.Errorf("IsDockerPermissionDenied = %v, want %v", got, tt.want)
 			}
