@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"log/slog"
 	"os"
 	"reflect"
@@ -75,11 +76,14 @@ var rootCmd = &cobra.Command{
 		// Initialize zerolog
 		initLogger(useColors, isVerbose)
 
-		// Helm logs through the global slog logger, whose default handler writes
-		// straight to stderr, garbling the interactive output. Send its logs to
-		// the debug log instead. This must run before any Helm action
-		// configuration is created, as each one copies the default handler.
+		// Helm logs some warnings through the global slog logger, whose default
+		// handler writes straight to stderr, garbling the interactive output.
+		// Send them to the debug log instead. SetDefault also routes the standard
+		// 'log' package through the handler, so restore its stderr output to keep
+		// other libraries' log messages visible, as before.
 		slog.SetDefault(slog.New(helmutil.NewDebugLogHandler()))
+		stdlog.SetOutput(os.Stderr)
+		stdlog.SetFlags(stdlog.LstdFlags)
 
 		// Check for common CI environment variables
 		isCI := envutil.IsCI()

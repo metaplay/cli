@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"helm.sh/helm/v4/pkg/action"
-	"helm.sh/helm/v4/pkg/kube"
 	v1 "helm.sh/helm/v4/pkg/release/v1"
 )
 
@@ -18,7 +17,7 @@ func UninstallRelease(actionConfig *action.Configuration, release *v1.Release) e
 	// Create Helm Uninstall action
 	uninstall := action.NewUninstall(actionConfig)
 	uninstall.Timeout = 5 * time.Minute
-	uninstall.WaitStrategy = kube.StatusWatcherStrategy // Wait for resources to be deleted
+	uninstall.WaitStrategy = helmWaitStrategy // Wait for resources to be deleted
 
 	// Execute the Uninstall action
 	_, err := uninstall.Run(release.Name)

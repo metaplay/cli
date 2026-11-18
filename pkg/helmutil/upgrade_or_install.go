@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
-	"strconv"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
@@ -65,7 +64,7 @@ func HelmUpgradeOrInstall(
 
 	// Pipe Helm's action log to the task output. The Kubernetes client keeps the
 	// debug log handler it got in NewActionConfig.
-	actionConfig.SetLogger(newLineHandler(output.AppendLine, false))
+	actionConfig.SetLogger(newTaskOutputLogHandler(output.AppendLine))
 
 	var installCmd *action.Install
 	var upgradeCmd *action.Upgrade
@@ -76,43 +75,12 @@ func HelmUpgradeOrInstall(
 	// - Use upgrade if a previous Helm release exists
 	if existingRelease == nil {
 		output.AppendLine("No existing release found, install new release")
-		installCmd = action.NewInstall(actionConfig)
-		installCmd.Version = chartVersion
-		installCmd.ReleaseName = releaseName
-		installCmd.Namespace = namespace
-		installCmd.Timeout = timeout
-		installCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
-		installCmd.Devel = true                                 // If version is development, accept it
-		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
+		installCmd = newInstallAction(actionConfig, namespace, releaseName, chartVersion, timeout, validateValuesSchema)
 		chartPathOptions = &installCmd.ChartPathOptions
 	} else {
 		output.AppendLinef("Existing release found (version %s), upgrade existing release", existingRelease.Chart.Metadata.Version)
-		upgradeCmd = action.NewUpgrade(actionConfig)
-		upgradeCmd.Version = chartVersion
-		upgradeCmd.Namespace = namespace
-		upgradeCmd.Timeout = timeout
-		upgradeCmd.WaitStrategy = kube.StatusWatcherStrategy    // Wait for resources to be ready
-		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
-		upgradeCmd.Devel = true                                 // If version is development, accept it
-		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
-		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
-		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
+		upgradeCmd = newUpgradeAction(actionConfig, namespace, chartVersion, timeout, validateValuesSchema)
 		chartPathOptions = &upgradeCmd.ChartPathOptions
-
-		// Upgrade with the apply method the release was last deployed with. Helm v4
-		// installs with server-side apply, and releases deployed with Helm v3 use
-		// client-side apply. This is what Helm's default "auto" does, made explicit
-		// so that ForceConflicts can follow it: Helm rejects ForceConflicts under
-		// client-side apply. Under server-side apply, a field someone changed with
-		// kubectl fails the upgrade with a conflict unless ForceConflicts is set.
-		// With it, the chart's value wins, as it does under client-side apply.
-		//
-		// Do not set ForceReplace: Helm rejects it under server-side apply, and
-		// under client-side apply it replaces whole objects, dropping labels and
-		// finalizers added by others (such as the operator).
-		serverSideApply := existingRelease.ApplyMethod == string(v1.ApplyMethodServerSideApply)
-		upgradeCmd.ServerSideApply = strconv.FormatBool(serverSideApply)
-		upgradeCmd.ForceConflicts = serverSideApply
 	}
 
 	// Load (download) Helm chart
@@ -203,6 +171,52 @@ func HelmUpgradeOrInstall(
 		}
 		return toV1Release(releaser)
 	}
+}
+
+// Deploys apply the chart the way Helm v3 did: with client-side apply and
+// Helm v3's readiness wait.
+//
+// Helm v4 defaults to server-side apply for new installs and keeps each
+// release's recorded apply method on upgrade. Releases deployed with Helm v3
+// use client-side apply, so the default would leave environments split between
+// the two methods, which accept different manifests and handle field
+// ownership differently. Do not set ForceReplace either: under client-side
+// apply it replaces whole objects, dropping labels and finalizers added by
+// others (such as the operator).
+//
+// Helm v4's default wait (kstatus) requires every replica to be updated and
+// fails while any pod is terminating. The legacy wait accepts a Deployment
+// once replicas minus maxUnavailable pods are ready, as Helm v3 did.
+const helmWaitStrategy = kube.LegacyStrategy
+
+// newInstallAction creates the Helm install action for a new release.
+func newInstallAction(actionConfig *action.Configuration, namespace, releaseName, chartVersion string, timeout time.Duration, validateValuesSchema bool) *action.Install {
+	installCmd := action.NewInstall(actionConfig)
+	installCmd.Version = chartVersion
+	installCmd.ReleaseName = releaseName
+	installCmd.Namespace = namespace
+	installCmd.Timeout = timeout
+	installCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+	installCmd.ServerSideApply = false                      // Client-side apply, as with Helm v3
+	installCmd.Devel = true                                 // If version is development, accept it
+	installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
+	return installCmd
+}
+
+// newUpgradeAction creates the Helm upgrade action for an existing release.
+func newUpgradeAction(actionConfig *action.Configuration, namespace, chartVersion string, timeout time.Duration, validateValuesSchema bool) *action.Upgrade {
+	upgradeCmd := action.NewUpgrade(actionConfig)
+	upgradeCmd.Version = chartVersion
+	upgradeCmd.Namespace = namespace
+	upgradeCmd.Timeout = timeout
+	upgradeCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+	upgradeCmd.ServerSideApply = "false"                    // Client-side apply, as with Helm v3
+	upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
+	upgradeCmd.Devel = true                                 // If version is development, accept it
+	upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
+	upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
+	upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
+	return upgradeCmd
 }
 
 // Combine two Helm values maps into one. On conflicts, the fields in 'override' win

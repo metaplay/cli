@@ -483,6 +483,10 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// If migrating from old operator to new operator, uninstall the old release first.
 	if uninstallExisting {
 		taskRunner.AddTask("Uninstall existing game server", func(output *tui.TaskOutput) error {
+			// Already uninstalled by the task above if the release was stuck in a pending state.
+			if existingRelease == nil {
+				return nil
+			}
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
 			return err

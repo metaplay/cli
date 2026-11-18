@@ -29,6 +29,7 @@ func HelmListReleases(actionConfig *action.Configuration, chartName string) ([]*
 		return nil, fmt.Errorf("failed to list Helm releases: %w", err)
 	}
 
+	// Helm v4 returns the Releaser interface, so convert to concrete releases.
 	releases := make([]*v1.Release, 0, len(releasers))
 	for _, releaser := range releasers {
 		rel, err := toV1Release(releaser)
