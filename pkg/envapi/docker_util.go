@@ -23,6 +23,7 @@ import (
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/client"
+	"github.com/moby/moby/client/pkg/versions"
 	"github.com/rs/zerolog/log"
 )
 
@@ -87,54 +88,79 @@ func newMetaplayImageInfo(imageID, repoTag, tag string, labels map[string]string
 	}, nil
 }
 
-// newDockerClient creates a new Docker client with a verified connection.
-// It first tries the default connection mechanism (via environment variables or default socket).
-// If that fails on macOS, it attempts to connect to the Docker Desktop socket as a fallback.
-func NewDockerClient() (*client.Client, error) {
-	// Try creating a client from environment variables (respects DOCKER_HOST).
-	dockerClient, err := client.New(client.FromEnv)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Docker client from environment: %w", err)
-	}
+// dockerResponseTimeout bounds how long WaitForDocker waits for Docker to answer. A paused or
+// still-starting Docker Desktop accepts connections on its socket before its engine answers, and
+// without a bound a daemon that never answers hangs the command. Docker Desktop can take tens of
+// seconds to start its engine, and CI runners can be slow to start the daemon, so it is generous.
+const dockerResponseTimeout = 60 * time.Second
 
-	// Ping the daemon to verify connectivity and to negotiate the API version.
-	_, err = dockerClient.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true})
+// WaitForDocker reports through onWaiting after dockerSlowAfter, and then every
+// dockerStillWaitingEvery, so a slow start doesn't look like a hang in a terminal or a CI log.
+const (
+	dockerSlowAfter         = 3 * time.Second
+	dockerStillWaitingEvery = 10 * time.Second
+)
+
+// WaitForDocker runs check, which talks to Docker, with a deadline of dockerResponseTimeout. While
+// check runs, it reports progress messages through onWaiting, and it makes no further calls to
+// onWaiting after it returns. If the deadline passes, it returns a *clierrors.CLIError saying
+// Docker did not respond. Otherwise it returns check's error as is. Callers tell the timeout apart
+// from check's own errors by that type, so check must not return a *clierrors.CLIError.
+//
+// Inside a task runner task, pass the task output's AppendLine as onWaiting: logging directly would
+// garble the display. Outside one, pass LogWaiting.
+func WaitForDocker(ctx context.Context, onWaiting func(message string), check func(ctx context.Context) error) error {
+	checkCtx, cancel := context.WithTimeout(ctx, dockerResponseTimeout)
+	defer cancel()
+
+	// Run check on its own goroutine, and report from this one: onWaiting then can't run after return.
+	checkDone := make(chan error, 1)
+	go func() { checkDone <- check(checkCtx) }()
+
+	next := time.NewTimer(dockerSlowAfter)
+	defer next.Stop()
+	message := "Waiting for Docker to respond..."
+	for {
+		select {
+		case err := <-checkDone:
+			if err != nil && ctx.Err() == nil && errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+				return clierrors.Wrapf(err, "Docker did not respond within %d seconds", int(dockerResponseTimeout.Seconds())).
+					WithSuggestion("Make sure Docker is running and not paused, then try again")
+			}
+			return err
+		case <-next.C:
+			onWaiting(message)
+			message = "Still waiting for Docker to respond..."
+			next.Reset(dockerStillWaitingEvery)
+		}
+	}
+}
+
+// NewDockerClient creates a Docker client with a verified connection to the daemon at DOCKER_HOST,
+// or at the default socket. On macOS, when DOCKER_HOST is unset and the default socket is not
+// reachable, it tries the Docker Desktop socket in the user's home directory.
+//
+// onWaiting receives progress messages while the daemon is slow to answer; see WaitForDocker.
+func NewDockerClient(ctx context.Context, onWaiting func(message string)) (*client.Client, error) {
+	dockerClient, err := connectDocker(ctx, onWaiting, client.FromEnv)
+	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" && os.Getenv(client.EnvOverrideHost) == "" {
+		if homeDir, homeErr := os.UserHomeDir(); homeErr == nil {
+			host := "unix://" + filepath.Join(homeDir, ".docker", "run", "docker.sock")
+			log.Debug().Msgf("Docker connection with default settings failed, trying Docker Desktop socket %s", host)
+			dockerClient, err = connectDocker(ctx, onWaiting, client.FromEnv, client.WithHost(host))
+		}
+	}
 	if err == nil {
-		return dockerClient, nil // Success
+		return dockerClient, nil
 	}
 
-	// If connection failed, decide if we should try a fallback.
-	if client.IsErrConnectionFailed(err) && runtime.GOOS == "darwin" {
-		log.Debug().Msg("Docker connection with default settings failed, trying Docker Desktop socket path as a fallback...")
-		_ = dockerClient.Close() // Close the failed client.
-
-		homeDir, homeErr := os.UserHomeDir()
-		if homeErr != nil {
-			return nil, fmt.Errorf("cannot find home directory to build fallback Docker socket path: %w", homeErr)
-		}
-		socketPath := filepath.Join(homeDir, ".docker", "run", "docker.sock")
-		host := "unix://" + socketPath
-
-		// Try again with the fallback host.
-		dockerClient, err = client.New(client.FromEnv, client.WithHost(host))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create Docker client with fallback host '%s': %w", host, err)
-		}
-
-		// Ping again to verify the fallback connection.
-		_, err = dockerClient.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true})
-		if err != nil {
-			_ = dockerClient.Close()
-			return nil, clierrors.Wrap(err, "Cannot connect to Docker").
-				WithSuggestion("Start Docker Desktop, or run 'open -a Docker' on macOS")
-		}
-
-		return dockerClient, nil // Success with fallback
+	if _, ok := errors.AsType[*clierrors.CLIError](err); ok || ctx.Err() != nil {
+		return nil, err // Already explained, or cancelled (runCommand reports cancellation)
 	}
-
-	// For non-connection errors, or non-macOS systems, return the original error.
 	dockerSuggestion := "Start Docker Desktop"
 	switch runtime.GOOS {
+	case "darwin":
+		dockerSuggestion = "Start Docker Desktop, or run 'open -a Docker'"
 	case "linux":
 		dockerSuggestion = "Start Docker with 'sudo systemctl start docker', or ensure your user is in the 'docker' group"
 	case "windows":
@@ -144,10 +170,40 @@ func NewDockerClient() (*client.Client, error) {
 		WithSuggestion(dockerSuggestion)
 }
 
+// connectDocker creates a client with opts, then pings the daemon to verify it answers and to
+// negotiate the API version.
+func connectDocker(ctx context.Context, onWaiting func(message string), opts ...client.Opt) (*client.Client, error) {
+	dockerClient, err := client.New(opts...)
+	if err != nil {
+		return nil, clierrors.Wrap(err, "Invalid Docker client configuration").
+			WithSuggestion("Check the DOCKER_HOST, DOCKER_API_VERSION, DOCKER_CERT_PATH and DOCKER_TLS_VERIFY environment variables")
+	}
+
+	var ping client.PingResult
+	err = WaitForDocker(ctx, onWaiting, func(ctx context.Context) error {
+		var pingErr error
+		ping, pingErr = dockerClient.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
+		return pingErr
+	})
+	if err != nil {
+		_ = dockerClient.Close()
+		// Ping returns the daemon's API version along with the negotiation error. Check the version
+		// itself: the client reports other failures, such as any HTTP 400, as the same error type.
+		if ping.APIVersion != "" && versions.LessThan(ping.APIVersion, client.MinAPIVersion) {
+			return nil, clierrors.Wrapf(err, "Docker API version %s is not supported", ping.APIVersion).
+				WithSuggestion(fmt.Sprintf("Upgrade Docker to a version that supports API %s or newer", client.MinAPIVersion))
+		}
+		return nil, err
+	}
+	return dockerClient, nil
+}
+
+// LogWaiting reports a WaitForDocker progress message outside a task runner task.
+func LogWaiting(message string) { log.Info().Msg(message) }
+
 // ReadLocalDockerImageMetadata retrieves metadata from a local Docker image.
-func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, error) {
-	// Create a new Docker client
-	dockerClient, err := NewDockerClient()
+func ReadLocalDockerImageMetadata(ctx context.Context, imageRefString string) (*MetaplayImageInfo, error) {
+	dockerClient, err := NewDockerClient(ctx, LogWaiting)
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
@@ -161,7 +217,7 @@ func ReadLocalDockerImageMetadata(imageRefString string) (*MetaplayImageInfo, er
 	}
 
 	// Inspect the image using the Docker SDK
-	imageInspect, err := dockerClient.ImageInspect(context.Background(), imageRefString)
+	imageInspect, err := dockerClient.ImageInspect(ctx, imageRefString)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect local docker image '%s': %w", imageRefString, err)
 	}
@@ -336,18 +392,17 @@ func newMetaplayImageInfoFromInspect(imageID string, repoTag string, imageRef na
 // ReadLocalDockerImagesByProjectID retrieves metadata for all local Docker images
 // that have the 'io.metaplay.project_id' label matching the provided projectID.
 // The images are returned in a timestamp order, latest first (highest timestamp first).
-func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, error) {
+func ReadLocalDockerImagesByProjectID(ctx context.Context, projectID string) ([]MetaplayImageInfo, error) {
 	log.Debug().Msgf("Reading local docker images for project ID: %s", projectID)
 
-	// Create a new Docker client using the helper function.
-	dockerClient, err := NewDockerClient()
+	dockerClient, err := NewDockerClient(ctx, LogWaiting)
 	if err != nil {
 		return nil, err // Pass up the detailed error from NewDockerClient
 	}
 	defer func() { _ = dockerClient.Close() }()
 
 	// List all images from the local Docker daemon with the project ID label.
-	images, err := dockerClient.ImageList(context.Background(), client.ImageListOptions{
+	images, err := dockerClient.ImageList(ctx, client.ImageListOptions{
 		Filters: make(client.Filters).Add("label", fmt.Sprintf("%s=%s", labelProjectID, projectID)),
 	})
 	if err != nil {
@@ -357,8 +412,7 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 	// Parse the image information for all local images matching this project.
 	var matchingImages []MetaplayImageInfo
 	for _, img := range images.Items {
-		// For each image ID, create a reference and fetch metadata
-		// log.Info().Msgf("Repo tags: %#v", img.RepoTags)
+		var imageInspect *client.ImageInspectResult // Inspected on the first usable tag, shared by all tags
 		for _, repoTag := range img.RepoTags {
 			if repoTag == "" {
 				continue
@@ -377,10 +431,17 @@ func ReadLocalDockerImagesByProjectID(projectID string) ([]MetaplayImageInfo, er
 			}
 
 			// Get the image configuration using Docker SDK
-			imageInspect, err := dockerClient.ImageInspect(context.Background(), img.ID)
-			if err != nil {
-				log.Warn().Err(err).Msgf("Failed to inspect image %s (for repoTag %s), skipping", img.ID, repoTag)
-				continue
+			if imageInspect == nil {
+				result, err := dockerClient.ImageInspect(ctx, img.ID)
+				if err != nil {
+					// Stop on cancellation, instead of returning a partial list.
+					if ctx.Err() != nil {
+						return nil, fmt.Errorf("failed to inspect local docker image %s: %w", img.ID, err)
+					}
+					log.Warn().Err(err).Msgf("Failed to inspect image %s (for repoTag %s), skipping", img.ID, repoTag)
+					break
+				}
+				imageInspect = &result
 			}
 
 			imageInfo, err := newMetaplayImageInfoFromInspect(img.ID, repoTag, imageRef, imageInspect.InspectResponse)

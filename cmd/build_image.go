@@ -7,17 +7,19 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/metaproj"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
@@ -325,7 +327,11 @@ func checkCommand(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	// Bound the wait for stderr to close after the process exits or ctx kills it: a child process
+	// (such as a docker CLI plugin) can hold the pipe open, and Run would then never return.
+	cmd.WaitDelay = 5 * time.Second
+	// Run returns ErrWaitDelay only when the process itself exited successfully, so treat it as success.
+	if err := cmd.Run(); err != nil && !errors.Is(err, exec.ErrWaitDelay) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
@@ -384,64 +390,42 @@ func rebasePath(targetPath, newBaseDir string) (string, error) {
 	return relativePath, nil
 }
 
-// Check if docker is available and running. Uses a short timeout as 'docker' invocation
-// can sometimes hang indefinitely. In CI environments, uses a longer timeout to account
-// for slower daemon startup.
+// checkDockerAvailable checks that the docker CLI is installed and that the daemon it talks to is
+// running. Commands that run the docker CLI use it: the CLI also follows 'docker context', which
+// the API client (envapi.NewDockerClient) does not. Waiting is bounded and reported as for the API
+// client, by envapi.WaitForDocker.
 func checkDockerAvailable(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
+	err := envapi.WaitForDocker(ctx, envapi.LogWaiting, func(ctx context.Context) error {
+		return checkCommand(ctx, "docker", "info")
+	})
+	if err == nil || ctx.Err() != nil {
+		return err // Available, or cancelled (runCommand reports cancellation)
 	}
-
-	// Use a longer timeout in CI where Docker daemon startup can be slower.
-	// GitHub Actions in particular is known to have long Docker init latencies.
-	timeout := 10 * time.Second
-	if envutil.IsCI() {
-		timeout = 60 * time.Second
+	if _, ok := errors.AsType[*clierrors.CLIError](err); ok {
+		return err // Timed out
 	}
-
-	// Run 'docker info' in background so we can handle timeouts (docker is known to hang
-	// indefinitely in some cases).
-	done := make(chan error)
-	go func() {
-		done <- checkCommand(ctx, "docker", "info")
-	}()
-
-	// Wait for docker to respond, printing a waiting message after 1sec.
-	select {
-	case err := <-done:
-		if err != nil {
-			return clierrors.Wrap(err, "Docker is not responding").
-				WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
+	if errors.Is(err, exec.ErrNotFound) {
+		return clierrors.Wrap(err, "Docker is not installed").
+			WithSuggestion("Install Docker Desktop, or Docker Engine on Linux, and make sure 'docker' is in your PATH")
+	}
+	if isDockerSocketPermissionError(err) {
+		suggestion := "Make sure your user has access to the Docker socket"
+		if runtime.GOOS == "linux" {
+			suggestion = "Add your user to the 'docker' group with 'sudo usermod -aG docker $USER', then log out and back in"
 		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(time.Second):
-		log.Info().Msgf("Waiting for docker daemon to respond...")
+		return clierrors.Wrap(err, "No permission to access Docker").WithSuggestion(suggestion)
 	}
+	return clierrors.Wrap(err, "Docker is not responding").
+		WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
+}
 
-	// In CI, keep logging every 10sec so the build doesn't look stuck.
-	// For non-CI, just wait for the remaining timeout silently.
-	tick := time.NewTicker(10 * time.Second)
-	defer tick.Stop()
-	deadline := time.After(timeout - time.Second)
-	for {
-		select {
-		case err := <-done:
-			if err != nil {
-				return clierrors.Wrap(err, "Docker is not responding").
-					WithSuggestion("Make sure Docker Desktop is running, or start the docker daemon")
-			}
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-tick.C:
-			log.Info().Msgf("Still waiting for docker daemon to respond...")
-		case <-deadline:
-			return clierrors.New("Docker daemon timed out").
-				WithSuggestion("Docker may be starting up or unresponsive. Try restarting Docker Desktop.")
-		}
-	}
+// isDockerSocketPermissionError reports whether a failed 'docker info' means the daemon's socket
+// refused this user. The docker CLI says "permission denied while trying to connect to the Docker
+// daemon socket" (older versions) or "... to the docker API" (newer). The phrase is matched, not
+// just "permission denied": the CLI also writes unrelated warnings to stderr, such as an
+// unreadable config file or an invalid plugin, next to the real error.
+func isDockerSocketPermissionError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "permission denied while trying to connect")
 }
 
 // Check that the specified docker build engine is available.

@@ -69,23 +69,22 @@ func (o *devImageOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Check that docker is installed and running
-	if err := checkCommand(ctx, "docker", "info"); err != nil {
-		return clierrors.New("Failed to invoke Docker").
-			WithSuggestion("Ensure Docker Desktop is installed and running")
+	if err := checkDockerAvailable(ctx); err != nil {
+		return err
 	}
 
 	// If no docker image specified, scan the images matching project from the local docker repo
 	// and then let the user choose from the images.
 	switch o.argImageTag {
 	case "":
-		selectedImage, err := selectDockerImageInteractively("Select Image to Run Locally", project.Config.ProjectHumanID)
+		selectedImage, err := selectDockerImageInteractively(ctx, "Select Image to Run Locally", project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
 		o.argImageTag = selectedImage.RepoTag
 	case "latest-local":
 		// Resolve the local docker images matching project human ID.
-		localImages, err := envapi.ReadLocalDockerImagesByProjectID(project.Config.ProjectHumanID)
+		localImages, err := envapi.ReadLocalDockerImagesByProjectID(ctx, project.Config.ProjectHumanID)
 		if err != nil {
 			return err
 		}
