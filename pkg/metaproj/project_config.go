@@ -54,6 +54,10 @@ type WebClientConfig struct {
 // Metaplay project config file, named `metaplay-project.yaml`.
 // Note: When adding new fields, remember to update ValidateProjectConfig().
 type ProjectConfig struct {
+	// Warnings found while loading the file. Callers print them on stderr, so they stay out of
+	// command output such as JSON.
+	LoadWarnings []string `yaml:"-" json:"-"`
+
 	ProjectHumanID string `yaml:"projectID"`     // The project's human ID (as in the portal)
 	BuildRootDir   string `yaml:"buildRootDir"`  // Relative path to the docker build root directory
 	SdkRootDir     string `yaml:"sdkRootDir"`    // Relative path to the MetaplaySDK directory

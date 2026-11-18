@@ -15,7 +15,6 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/kubeutil"
-	"github.com/metaplay/cli/pkg/portalapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -108,10 +107,8 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Check if this is a production environment and require additional confirmation
-	if envConfig.Type == portalapi.EnvironmentTypeProduction && !o.flagConfirmProduction {
-		return clierrors.Newf("Production environment detected: %s", envConfig.Name).
-			WithSuggestion("Use --confirm-production flag to confirm reset of production environments")
+	if err := requireProductionConfirmation(envConfig, o.flagConfirmProduction); err != nil {
+		return err
 	}
 
 	// Resolve target environment & game server

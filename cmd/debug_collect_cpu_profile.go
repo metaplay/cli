@@ -238,10 +238,8 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Collect CPU profile
 	runner.AddTask("Collect CPU profile", func(output *tui.TaskOutput) error {
-		// Format the duration as a TimeSpan (00:00:30 for 30 seconds)
-		durationFormatted := fmt.Sprintf("00:%02d:%02d", o.flagDuration/60, o.flagDuration%60)
 		collectCmd := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o %s",
-			processInfo.Pid, o.flagFormat, durationFormatted, remoteNettracePath)
+			processInfo.Pid, o.flagFormat, formatTraceDuration(o.flagDuration), remoteNettracePath)
 
 		// Add extra arguments if provided
 		if len(o.extrArgs) > 0 {
@@ -289,4 +287,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	})
 
 	return nil
+}
+
+// formatTraceDuration formats seconds as the hh:mm:ss TimeSpan that dotnet-trace's --duration
+// takes, for example 01:00:00 for 3600. Each field must be in its range: dotnet-trace rejects
+// 00:60:00.
+func formatTraceDuration(seconds int) string {
+	return fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
 }
