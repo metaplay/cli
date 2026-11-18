@@ -129,7 +129,10 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	// Resolve Helm chart version constraints. A local chart was validated in
 	// Prepare and is used as-is.

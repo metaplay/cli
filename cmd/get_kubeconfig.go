@@ -117,7 +117,10 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create environment helper.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	// Generate kubeconfig
 	var kubeconfigPayload string
@@ -132,7 +135,7 @@ func (o *getKubeConfigOpts) Run(cmd *cobra.Command) error {
 		// The proxy plugin answers with the default auth provider's token, so
 		// only an environment signing in with it may use the proxy.
 		var proxyAuthProvider *auth.AuthProviderConfig
-		if isDefaultAuthProviderName(envConfig.AuthProvider) {
+		if auth.IsDefaultAuthProviderName(envConfig.AuthProvider) {
 			proxyAuthProvider, err = auth.NewDefaultAuthProvider()
 			if err != nil {
 				return err

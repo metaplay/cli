@@ -92,7 +92,10 @@ func (o *debugImageRegistryOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	probe := targetEnv.ProbeImageRegistry()
 

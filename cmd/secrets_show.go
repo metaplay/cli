@@ -90,7 +90,10 @@ func (o *secretsShowOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create TargetEnvironment.
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	// Create the secret.
 	secret, err := targetEnv.GetSecret(cmd.Context(), o.argSecretName)

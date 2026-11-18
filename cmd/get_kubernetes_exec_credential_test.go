@@ -24,6 +24,7 @@ import (
 
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/auth"
+	"github.com/metaplay/cli/pkg/common"
 	"github.com/metaplay/cli/pkg/envapi"
 )
 
@@ -65,6 +66,44 @@ func accessTokenExpiringAt(t *testing.T, subject string, expiresAt time.Time) st
 	return token
 }
 
+// environmentToken is the access token the fake Portal of usePortal mints for
+// the plugin's environment in exchange for one with subject, expiring at
+// expiresAt.
+func environmentToken(t *testing.T, subject string, expiresAt time.Time) string {
+	t.Helper()
+	return accessTokenExpiringAt(t, subject+" in tiny-squids", expiresAt)
+}
+
+// usePortal points the CLI at a fake Portal, which answers a token exchange
+// with environmentToken for the presented token's subject. The token expires
+// when the presented one does, or after lifetime if that is sooner and not zero.
+func usePortal(t *testing.T, lifetime time.Duration) {
+	t.Helper()
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/tokens/get-environment-access-token" {
+			http.NotFound(w, r)
+			return
+		}
+		presented, _, err := jwt.NewParser().ParseUnverified(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), jwt.MapClaims{})
+		if err != nil {
+			http.Error(w, "not a token", http.StatusUnauthorized)
+			return
+		}
+		subject, _ := presented.Claims.GetSubject()
+		expiresAt, _ := presented.Claims.GetExpirationTime()
+		exp := expiresAt.Time
+		if lifetime != 0 && time.Now().Add(lifetime).Before(exp) {
+			exp = time.Now().Add(lifetime).Truncate(time.Second)
+		}
+		_, _ = w.Write([]byte(accessTokenExpiringAt(t, subject+" in "+r.URL.Query().Get("environment_human_id"), exp)))
+	}))
+	t.Cleanup(portal.Close)
+
+	previous := common.PortalBaseURL
+	common.PortalBaseURL = portal.URL
+	t.Cleanup(func() { common.PortalBaseURL = previous })
+}
+
 // useAuthProvider points the CLI at an auth provider with no session stored,
 // whose token endpoint answers a refresh with a token expiring at
 // refreshedExpiresAt.
@@ -91,6 +130,7 @@ func useAuthProviderAt(t *testing.T, tokenEndpoint http.HandlerFunc) *auth.AuthP
 
 	endpoint := httptest.NewServer(tokenEndpoint)
 	t.Cleanup(endpoint.Close)
+	usePortal(t, 0)
 
 	providerFile := filepath.Join(t.TempDir(), "provider.yaml")
 	providerYAML := "name: Test Auth\nclientId: test-client-id\n" +
@@ -198,8 +238,8 @@ func TestGetKubernetesExecCredential_ProxyRefreshesATokenExpiringWithinTheSkew(t
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != accessTokenExpiringAt(t, "refreshed", refreshedExpiresAt) {
-		t.Errorf("kubectl was handed the stored token, which expires within the skew")
+	if status.Token != environmentToken(t, "refreshed", refreshedExpiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the refreshed one")
 	}
 	if want := refreshedExpiresAt.Add(-envapi.ProxyExecCredentialSkew); status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(want) {
 		t.Errorf("expirationTimestamp = %v, want %v", status.ExpirationTimestamp, want)
@@ -217,8 +257,8 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenValidForLonger(t *testing
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
-		t.Errorf("kubectl was handed another token than the stored one")
+	if status.Token != environmentToken(t, "stored", expiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the stored one")
 	}
 	if want := expiresAt.Add(-envapi.ProxyExecCredentialSkew); status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(want) {
 		t.Errorf("expirationTimestamp = %v, want %v", status.ExpirationTimestamp, want)
@@ -261,8 +301,8 @@ func TestGetKubernetesExecCredential_ProxyIgnoresTheProjectItRunsIn(t *testing.T
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
-		t.Errorf("kubectl was handed another token than the stored one")
+	if status.Token != environmentToken(t, "stored", expiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the stored one")
 	}
 }
 
@@ -283,8 +323,8 @@ func TestGetKubernetesExecCredential_ProxyHandsOnATokenItCouldNotRefresh(t *test
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != accessTokenExpiringAt(t, "stored", expiresAt) {
-		t.Errorf("kubectl was handed another token than the stored one")
+	if status.Token != environmentToken(t, "stored", expiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the stored one")
 	}
 	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(expiresAt) {
 		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, expiresAt)
@@ -307,8 +347,8 @@ func TestGetKubernetesExecCredential_ProxyReportsAShortLivedTokensOwnExpiry(t *t
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != accessTokenExpiringAt(t, "refreshed", refreshedExpiresAt) {
-		t.Errorf("kubectl was handed the stored token, which expires within the skew")
+	if status.Token != environmentToken(t, "refreshed", refreshedExpiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the refreshed one")
 	}
 	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(refreshedExpiresAt) {
 		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, refreshedExpiresAt)
@@ -355,10 +395,61 @@ func TestGetKubernetesExecCredential_ProxyHandsOnAMachineTokenUntilItExpires(t *
 	}
 
 	status := decodeExecCredential(t, stdout)
-	if status.Token != machineTokens.AccessToken {
-		t.Errorf("kubectl was handed another token than the machine user's")
+	if status.Token != environmentToken(t, "machine", expiresAt) {
+		t.Errorf("kubectl was not handed the environment's token for the machine user's")
 	}
 	if status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(expiresAt) {
 		t.Errorf("expirationTimestamp = %v, want the token's own %v", status.ExpirationTimestamp, expiresAt)
+	}
+}
+
+// The session's own token, which every environment the user can reach accepts,
+// is never handed to kubectl: the plugin answers with the token the Portal
+// mints for the environment, and with that token's expiry.
+func TestGetKubernetesExecCredential_ProxyHandsOnTheEnvironmentsTokenAndItsExpiry(t *testing.T) {
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	sessionExpiresAt := time.Now().Add(time.Hour).Truncate(time.Second)
+	logIn(t, provider, sessionExpiresAt)
+	usePortal(t, 10*time.Minute)
+
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	status := decodeExecCredential(t, stdout)
+	if status.Token == accessTokenExpiringAt(t, "stored", sessionExpiresAt) {
+		t.Fatalf("kubectl was handed the session's own token")
+	}
+	claims := jwt.MapClaims{}
+	if _, _, err := jwt.NewParser().ParseUnverified(status.Token, claims); err != nil {
+		t.Fatalf("kubectl was handed something other than a token: %v", err)
+	}
+	if subject, _ := claims.GetSubject(); subject != "stored in tiny-squids" {
+		t.Errorf("token subject = %q, want the Portal's token for the stored session in tiny-squids", subject)
+	}
+	expiresAt, _ := claims.GetExpirationTime()
+	if want := expiresAt.Add(-envapi.ProxyExecCredentialSkew); status.ExpirationTimestamp == nil || !status.ExpirationTimestamp.Time.Equal(want) {
+		t.Errorf("expirationTimestamp = %v, want the environment token's %v less the skew", status.ExpirationTimestamp, want)
+	}
+}
+
+// Without an environment token there is no credential: the plugin fails rather
+// than fall back to handing kubectl the session's own.
+func TestGetKubernetesExecCredential_ProxyFailsWhenThePortalRefusesTheExchange(t *testing.T) {
+	provider := useAuthProvider(t, time.Now().Add(time.Hour))
+	logIn(t, provider, time.Now().Add(time.Hour))
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Environment 'tiny-squids' not found", http.StatusNotFound)
+	}))
+	t.Cleanup(portal.Close)
+	common.PortalBaseURL = portal.URL
+
+	stdout, _, err := runProxyPlugin(t, t.TempDir())
+	if err == nil {
+		t.Fatalf("answered without an environment token: %s", stdout)
+	}
+	if stdout != "" {
+		t.Errorf("stdout carries %q, want nothing", stdout)
 	}
 }

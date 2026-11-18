@@ -147,7 +147,10 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 	log.Debug().Str("source_env", metadata.Environment).Str("database", metadata.DatabaseName).Int("shards", metadata.NumShards).Msg("Import metadata validated")
 
 	// Resolve target environment & game server
-	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
+	targetEnv, err := envapi.NewTargetEnvironmentFromConfig(tokenSet, envConfig)
+	if err != nil {
+		return err
+	}
 
 	// Create Kubernetes client.
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
