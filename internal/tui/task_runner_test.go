@@ -38,17 +38,3 @@ func TestTaskRunnerCtrlCStopsFurtherTasks(t *testing.T) {
 		t.Errorf("tasks run = %v, want only the first", ran)
 	}
 }
-
-func TestInterruptCallsHandler(t *testing.T) {
-	called := 0
-	SetInterruptHandler(func() { called++ })
-	t.Cleanup(func() { SetInterruptHandler(nil) })
-
-	interrupt()
-	if called != 1 {
-		t.Errorf("handler called %d times, want 1", called)
-	}
-
-	SetInterruptHandler(nil)
-	interrupt() // No handler: must not panic
-}

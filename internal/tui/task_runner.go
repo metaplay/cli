@@ -243,10 +243,13 @@ func (m *TaskRunner) runInteractive() error {
 	// Wait for all tasks to complete
 	<-m.done
 
-	if err := m.checkErrors(); err != nil || !m.interrupted.Load() {
+	if err := m.checkErrors(); err != nil {
 		return err
 	}
-	return context.Canceled // A task finished despite Ctrl-C: the remaining ones did not run
+	if m.interrupted.Load() {
+		return context.Canceled // A task finished despite Ctrl-C: the remaining ones did not run
+	}
+	return nil
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
