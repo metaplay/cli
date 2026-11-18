@@ -139,12 +139,6 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// The Helm values below need a known environment type.
-	if !metaproj.IsKnownEnvironmentType(envConfig.Type) {
-		return clierrors.Newf("Environment '%s' has unknown type '%s'", envConfig.Name, envConfig.Type).
-			WithSuggestion("Set 'type' to development, staging or production in metaplay-project.yaml")
-	}
-
 	// Create TargetEnvironment.
 	targetEnv := envapi.NewTargetEnvironment(tokenSet, envConfig.StackDomain, envConfig.HumanID)
 
@@ -338,16 +332,25 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		untypedShardsConfig[i] = v
 	}
 
+	envFamily, err := envConfig.GetEnvironmentFamily()
+	if err != nil {
+		return err
+	}
+	runtimeOptionsFile, err := envConfig.GetEnvironmentSpecificRuntimeOptionsFile()
+	if err != nil {
+		return err
+	}
+
 	// Default Helm values. The user Helm values files are applied on top so
 	// all these values can be overridden by the user.
 	// \todo check for the existence of the runtime options files
 	helmDefaultValues := map[string]any{
 		"environment":       envConfig.Name,
-		"environmentFamily": envConfig.GetEnvironmentFamily(),
+		"environmentFamily": envFamily,
 		"config": map[string]any{
 			"files": []any{
 				"./Config/Options.base.yaml",
-				envConfig.GetEnvironmentSpecificRuntimeOptionsFile(),
+				runtimeOptionsFile,
 			},
 		},
 		"tenant": map[string]any{

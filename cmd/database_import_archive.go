@@ -130,10 +130,9 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Require confirmation for production. An unknown type counts as production. A dry run imports
-	// nothing, so it doesn't require --confirm-production.
-	if !envConfig.Type.IsKnownNonProduction() && !o.flagConfirmProduction && !o.flagDryRun {
-		return fmt.Errorf("production environment detected: %s. The --confirm-production flag is required when importing to production environments", envConfig.Name)
+	// A dry run imports nothing, so it doesn't require --confirm-production.
+	if err := requireProductionConfirmation(envConfig, o.flagConfirmProduction || o.flagDryRun); err != nil {
+		return err
 	}
 
 	// Open and validate the archive up front (local-only) so a bad input file fails fast, before any

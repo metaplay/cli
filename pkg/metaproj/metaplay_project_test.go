@@ -846,18 +846,21 @@ func TestValidateProjectConfig_WebClients(t *testing.T) {
 }
 
 // Hand-typed casings such as 'Production' must load as the canonical value, so the production
-// safety checks see 'production'. Unknown values load unchanged (with a warning).
+// safety checks see 'production'. Non-canonical values produce a load warning, and unknown
+// values are kept as written.
 func TestApplyProjectConfigDefaults_NormalizesEnvironmentType(t *testing.T) {
 	testCases := []struct {
-		envType portalapi.EnvironmentType
-		want    portalapi.EnvironmentType
+		envType     portalapi.EnvironmentType
+		want        portalapi.EnvironmentType
+		wantWarning bool
 	}{
 		{envType: "production", want: portalapi.EnvironmentTypeProduction},
-		{envType: "Production", want: portalapi.EnvironmentTypeProduction},
-		{envType: "PRODUCTION", want: portalapi.EnvironmentTypeProduction},
-		{envType: " Staging ", want: portalapi.EnvironmentTypeStaging},
-		{envType: "Development", want: portalapi.EnvironmentTypeDevelopment},
-		{envType: "Prod", want: "prod"},
+		{envType: "Production", want: portalapi.EnvironmentTypeProduction, wantWarning: true},
+		{envType: "PRODUCTION", want: portalapi.EnvironmentTypeProduction, wantWarning: true},
+		{envType: " Staging ", want: portalapi.EnvironmentTypeStaging, wantWarning: true},
+		{envType: "Development", want: portalapi.EnvironmentTypeDevelopment, wantWarning: true},
+		{envType: "Prod", want: "Prod", wantWarning: true},
+		{envType: "  ", want: ""}, // left for ValidateProjectConfig to report as missing
 	}
 
 	for _, tc := range testCases {
@@ -869,7 +872,29 @@ func TestApplyProjectConfigDefaults_NormalizesEnvironmentType(t *testing.T) {
 			if got := config.Environments[0].Type; got != tc.want {
 				t.Errorf("got type %q, want %q", got, tc.want)
 			}
+			if gotWarning := len(config.LoadWarnings) > 0; gotWarning != tc.wantWarning {
+				t.Errorf("got warnings %q, want warning: %v", config.LoadWarnings, tc.wantWarning)
+			}
 		})
+	}
+}
+
+// An unknown type must return an error from the getters 'deploy server' uses, not panic.
+func TestEnvironmentGetters_UnknownType(t *testing.T) {
+	envConfig := &ProjectEnvironmentConfig{Name: "Test", Type: "prod"}
+	if _, err := envConfig.GetEnvironmentFamily(); err == nil {
+		t.Error("GetEnvironmentFamily: expected an error")
+	}
+	if _, err := envConfig.GetEnvironmentSpecificRuntimeOptionsFile(); err == nil {
+		t.Error("GetEnvironmentSpecificRuntimeOptionsFile: expected an error")
+	}
+
+	envConfig.Type = portalapi.EnvironmentTypeProduction
+	if family, err := envConfig.GetEnvironmentFamily(); err != nil || family != EnvironmentFamilyProduction {
+		t.Errorf("GetEnvironmentFamily = %q, %v", family, err)
+	}
+	if file, err := envConfig.GetEnvironmentSpecificRuntimeOptionsFile(); err != nil || file == "" {
+		t.Errorf("GetEnvironmentSpecificRuntimeOptionsFile = %q, %v", file, err)
 	}
 }
 

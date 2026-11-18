@@ -107,10 +107,8 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Require confirmation for production. An unknown type counts as production.
-	if !envConfig.Type.IsKnownNonProduction() && !o.flagConfirmProduction {
-		return clierrors.Newf("Production environment detected: %s", envConfig.Name).
-			WithSuggestion("Use --confirm-production flag to confirm reset of production environments")
+	if err := requireProductionConfirmation(envConfig, o.flagConfirmProduction); err != nil {
+		return err
 	}
 
 	// Resolve target environment & game server

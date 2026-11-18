@@ -322,7 +322,11 @@ func ApplyProjectConfigDefaults(config *ProjectConfig) error {
 
 		// Accept any casing so that 'Production' is not skipped by the production safety checks.
 		if envConfig.Type != "" {
-			config.Environments[ndx].Type = normalizeEnvironmentType(envConfig.Name, envConfig.Type)
+			normalized, warning := normalizeEnvironmentType(envConfig.Name, envConfig.Type)
+			config.Environments[ndx].Type = normalized
+			if warning != "" {
+				config.LoadWarnings = append(config.LoadWarnings, warning)
+			}
 		}
 	}
 
