@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -14,7 +13,6 @@ import (
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/moby/moby/api/pkg/authconfig"
-	"github.com/moby/moby/api/types/jsonstream"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog/log"
@@ -121,7 +119,6 @@ func (o *imagePullOpts) Run(cmd *cobra.Command) error {
 // pullDockerImage pulls a docker image from a remote repository to the local machine.
 // Output progress into the task output.
 func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageName string, dockerCredentials *envapi.DockerCredentials) error {
-	// Create a Docker client
 	cli, err := envapi.NewDockerClient(ctx, output.AppendLine)
 	if err != nil {
 		return err
@@ -141,55 +138,22 @@ func pullDockerImage(ctx context.Context, output *tui.TaskOutput, remoteImageNam
 		return clierrors.Wrap(err, "Failed to encode auth config")
 	}
 
-	// Pull the image
 	output.AppendLinef("Pulling image %s", remoteImageName)
+	checkPull := func() envapi.RegistryAccess {
+		return envapi.CheckRegistryAccess(ctx, dockerCredentials, remoteImageName, false)
+	}
 	pullResponse, err := cli.ImagePull(ctx, remoteImageName, client.ImagePullOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
-		// Check for common errors like image not found
-		if strings.Contains(err.Error(), "manifest for") && strings.Contains(err.Error(), "not found") {
-			return clierrors.Newf("Image '%s' not found in the repository", remoteImageName).
-				WithSuggestion("Check the tag and environment are correct")
-		}
-		return clierrors.Wrap(err, "Failed to pull docker image").
-			WithSuggestion("Make sure Docker Desktop is running")
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
-	// Follow pull progress. JSONMessages closes the stream when it ends or ctx is cancelled.
-	progressIDs := []string{}                     // Track order of progress IDs
-	progresses := map[string]jsonstream.Message{} // Track progress by ID
-
-	for progress, err := range pullResponse.JSONMessages(ctx) {
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return clierrors.New("Image pull cancelled")
-			}
-			return clierrors.Wrap(err, "Failed to decode pull response")
+	if layersStarted, err := followDockerProgress(output, pullResponse.JSONMessages(ctx)); err != nil {
+		if layersStarted {
+			// The daemon pulls layers only after the registry let it read the manifest.
+			checkPull = nil
 		}
-
-		// Track progress by ID to show the latest status for each layer
-		if progress.ID != "" {
-			if _, exists := progresses[progress.ID]; !exists {
-				progressIDs = append(progressIDs, progress.ID)
-			}
-			progresses[progress.ID] = progress
-		}
-
-		// If progress has an error, return it
-		if progress.Error != nil {
-			return clierrors.Newf("Error pulling image: %s", progress.Error.Message)
-		}
-
-		// Update the output with current progress information (only in interactive mode).
-		if tui.IsInteractiveMode() {
-			updateDockerProgressOutput(output, progressIDs, progresses)
-		}
+		return dockerTransferFailed(ctx, err, "pull", remoteImageName, checkPull)
 	}
-
-	// Final update to ensure the last status is shown
-	if tui.IsInteractiveMode() {
-		updateDockerProgressOutput(output, progressIDs, progresses)
-	}
-
 	return nil
 }
