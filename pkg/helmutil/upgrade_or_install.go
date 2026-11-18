@@ -73,13 +73,40 @@ func HelmUpgradeOrInstall(
 	// Determine if install or upgrade based on existence of release:
 	// - Use install if no previous Helm release exists
 	// - Use upgrade if a previous Helm release exists
+	//
+	// Both apply the chart the way Helm v3 did, with client-side apply. Helm v4
+	// defaults to server-side apply for new installs and keeps each release's
+	// recorded apply method on upgrade. Releases deployed with Helm v3 use
+	// client-side apply, so the default would leave environments split between
+	// the two methods, which accept different manifests and handle field
+	// ownership differently. Do not set ForceReplace either: under client-side
+	// apply it replaces whole objects, dropping labels and finalizers added by
+	// others (such as the operator).
 	if existingRelease == nil {
 		output.AppendLine("No existing release found, install new release")
-		installCmd = newInstallAction(actionConfig, namespace, releaseName, chartVersion, timeout, validateValuesSchema)
+		installCmd = action.NewInstall(actionConfig)
+		installCmd.Version = chartVersion
+		installCmd.ReleaseName = releaseName
+		installCmd.Namespace = namespace
+		installCmd.Timeout = timeout
+		installCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+		installCmd.ServerSideApply = false                      // Client-side apply, as with Helm v3
+		installCmd.Devel = true                                 // If version is development, accept it
+		installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &installCmd.ChartPathOptions
 	} else {
 		output.AppendLinef("Existing release found (version %s), upgrade existing release", existingRelease.Chart.Metadata.Version)
-		upgradeCmd = newUpgradeAction(actionConfig, namespace, chartVersion, timeout, validateValuesSchema)
+		upgradeCmd = action.NewUpgrade(actionConfig)
+		upgradeCmd.Version = chartVersion
+		upgradeCmd.Namespace = namespace
+		upgradeCmd.Timeout = timeout
+		upgradeCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
+		upgradeCmd.ServerSideApply = "false"                    // Client-side apply, as with Helm v3
+		upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
+		upgradeCmd.Devel = true                                 // If version is development, accept it
+		upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
+		upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
+		upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
 		chartPathOptions = &upgradeCmd.ChartPathOptions
 	}
 
@@ -173,49 +200,9 @@ func HelmUpgradeOrInstall(
 	}
 }
 
-// Deploys apply the chart the way Helm v3 did, with client-side apply.
-//
-// Helm v4 defaults to server-side apply for new installs and keeps each
-// release's recorded apply method on upgrade. Releases deployed with Helm v3
-// use client-side apply, so the default would leave environments split between
-// the two methods, which accept different manifests and handle field
-// ownership differently. Do not set ForceReplace either: under client-side
-// apply it replaces whole objects, dropping labels and finalizers added by
-// others (such as the operator).
-//
-// Waits use Helm v4's default (kstatus), which waits for every replica to be
-// updated and available, and for custom resources to be reconciled.
+// The wait strategy for install, upgrade and uninstall: Helm v4's default
+// (kstatus), which waits for every replica to be updated and available.
 const helmWaitStrategy = kube.StatusWatcherStrategy
-
-// newInstallAction creates the Helm install action for a new release.
-func newInstallAction(actionConfig *action.Configuration, namespace, releaseName, chartVersion string, timeout time.Duration, validateValuesSchema bool) *action.Install {
-	installCmd := action.NewInstall(actionConfig)
-	installCmd.Version = chartVersion
-	installCmd.ReleaseName = releaseName
-	installCmd.Namespace = namespace
-	installCmd.Timeout = timeout
-	installCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
-	installCmd.ServerSideApply = false                      // Client-side apply, as with Helm v3
-	installCmd.Devel = true                                 // If version is development, accept it
-	installCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
-	return installCmd
-}
-
-// newUpgradeAction creates the Helm upgrade action for an existing release.
-func newUpgradeAction(actionConfig *action.Configuration, namespace, chartVersion string, timeout time.Duration, validateValuesSchema bool) *action.Upgrade {
-	upgradeCmd := action.NewUpgrade(actionConfig)
-	upgradeCmd.Version = chartVersion
-	upgradeCmd.Namespace = namespace
-	upgradeCmd.Timeout = timeout
-	upgradeCmd.WaitStrategy = helmWaitStrategy              // Wait for resources to be ready
-	upgradeCmd.ServerSideApply = "false"                    // Client-side apply, as with Helm v3
-	upgradeCmd.MaxHistory = 10                              // Keep 10 releases max
-	upgradeCmd.Devel = true                                 // If version is development, accept it
-	upgradeCmd.RollbackOnFailure = false                    // Don't rollback on failures to not hide errors
-	upgradeCmd.CleanupOnFail = true                         // Clean resources on failure
-	upgradeCmd.SkipSchemaValidation = !validateValuesSchema // Disable schema validation for legacy charts
-	return upgradeCmd
-}
 
 // Combine two Helm values maps into one. On conflicts, the fields in 'override' win
 // over 'base'. Maps are recursively merged. Sequences are replaced.
