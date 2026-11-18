@@ -319,6 +319,15 @@ func ApplyProjectConfigDefaults(config *ProjectConfig) error {
 			}
 			config.Environments[ndx].HostingType = hostingType
 		}
+
+		// Accept any casing so that 'Production' is not skipped by the production safety checks.
+		if envConfig.Type != "" {
+			normalized, warning := normalizeEnvironmentType(envConfig.Name, envConfig.Type)
+			config.Environments[ndx].Type = normalized
+			if warning != "" {
+				config.LoadWarnings = append(config.LoadWarnings, warning)
+			}
+		}
 	}
 
 	return nil

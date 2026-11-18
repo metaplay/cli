@@ -108,6 +108,7 @@ func (o *updateSdkOpts) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load project config: %w", err)
 	}
+	printProjectLoadWarnings(projectConfig)
 
 	// Resolve SDK root directory
 	sdkRootDir := filepath.Join(projectDir, projectConfig.SdkRootDir)

@@ -67,3 +67,27 @@ func TestIsMajorVersionOnly(t *testing.T) {
 		})
 	}
 }
+
+// Unknown types must not count as non-production, so the production safety checks apply to them.
+func TestEnvironmentType_Classification(t *testing.T) {
+	testCases := []struct {
+		envType           EnvironmentType
+		wantKnown         bool
+		wantNonProduction bool
+	}{
+		{EnvironmentTypeDevelopment, true, true},
+		{EnvironmentTypeStaging, true, true},
+		{EnvironmentTypeProduction, true, false},
+		{"Production", false, false},
+		{"prod", false, false},
+		{"", false, false},
+	}
+	for _, tc := range testCases {
+		if got := tc.envType.IsKnown(); got != tc.wantKnown {
+			t.Errorf("%q.IsKnown() = %v, want %v", tc.envType, got, tc.wantKnown)
+		}
+		if got := tc.envType.IsKnownNonProduction(); got != tc.wantNonProduction {
+			t.Errorf("%q.IsKnownNonProduction() = %v, want %v", tc.envType, got, tc.wantNonProduction)
+		}
+	}
+}
