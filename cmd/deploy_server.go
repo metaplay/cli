@@ -552,8 +552,13 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Install or upgrade the Helm chart.
+	// Install or upgrade the Helm chart. Record the game server's state just before, so
+	// the readiness wait can tell this deploy's pods from the earlier ones.
+	deployBaseline := &envapi.DeployBaseline{}
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
+		if err := targetEnv.CaptureDeployBaseline(cmd.Context(), deployBaseline); err != nil {
+			return err
+		}
 		_, err := helmutil.HelmUpgradeOrInstall(
 			output,
 			actionConfig,
@@ -572,9 +577,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	})
 
-	// Validate the game server status. The tasks run after this, so pods created from
-	// now on are from this deploy.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, time.Now())
+	// Validate the game server status.
+	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, deployBaseline)
 	if err != nil {
 		return err
 	}

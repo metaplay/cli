@@ -14,6 +14,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestBuildHealthCheckPacket(t *testing.T) {
@@ -162,11 +163,11 @@ const testRepository = "123.dkr.ecr.eu-west-1.amazonaws.com/game-gameserver"
 // testShardSet returns a shard set running the given image tag.
 func testShardSet(name string, replicas int32, tag string) appsv1.StatefulSet {
 	return appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(name + "-uid")},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: &replicas,
 			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				Containers: []corev1.Container{{Name: "shard-server", Image: testRepository + ":" + tag}},
+				Containers: []corev1.Container{{Name: shardServerContainerName, Image: testRepository + ":" + tag}},
 			}},
 		},
 		Status: appsv1.StatefulSetStatus{UpdateRevision: name + "-rev2"},
@@ -179,13 +180,14 @@ func testPod(shardSet string, ndx int, tag string, state corev1.ContainerState, 
 	return corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            fmt.Sprintf("%s-%d", shardSet, ndx),
+			UID:             types.UID(fmt.Sprintf("pod-%s-%d", shardSet, ndx)),
 			Labels:          map[string]string{"controller-revision-hash": shardSet + "-rev2"},
-			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: shardSet}},
+			OwnerReferences: []metav1.OwnerReference{{Kind: "StatefulSet", Name: shardSet, UID: types.UID(shardSet + "-uid")}},
 		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "shard-server", Image: testRepository + ":" + tag}}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: shardServerContainerName, Image: testRepository + ":" + tag}}},
 		Status: corev1.PodStatus{
 			Phase:             corev1.PodRunning,
-			ContainerStatuses: []corev1.ContainerStatus{{Name: "shard-server", State: state, Ready: ready}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: shardServerContainerName, State: state, Ready: ready}},
 		},
 	}
 }
@@ -193,7 +195,7 @@ func testPod(shardSet string, ndx int, tag string, state corev1.ContainerState, 
 func TestEvaluateGameServerReadiness(t *testing.T) {
 	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
 	crashing := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
-	deployStart := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 
 	unschedulable := testPod("all", 0, "new", corev1.ContainerState{}, false)
 	unschedulable.Status = corev1.PodStatus{
@@ -207,14 +209,24 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	}
 	previousRevision := testPod("all", 0, "new", running, true)
 	previousRevision.Labels["controller-revision-hash"] = "all-rev1"
-	restarted := testPod("all", 0, "new", running, false)
-	restarted.Status.ContainerStatuses[0].RestartCount = 2
-	restarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
+	// The operator recreates a StatefulSet under the same name: the pod of the previous
+	// one has the same name, image and revision, but another owner UID.
+	previousOwner := testPod("logic", 0, "new", running, true)
+	previousOwner.OwnerReferences[0].UID = "logic-previous-uid"
+	// restartedPod returns a pod whose server is running, not ready, and was restarted
+	// the given number of times, the last time at the given time.
+	restartedPod := func(restarts int32, startedAt time.Time) corev1.Pod {
+		pod := testPod("all", 0, "new", corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}}, false)
+		pod.Status.ContainerStatuses[0].RestartCount = restarts
+		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
+		return pod
+	}
 	readyRestarted := testPod("all", 0, "new", running, true)
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
-	newCrashing := testPod("all", 0, "new", crashing, false)
-	newCrashing.CreationTimestamp = metav1.NewTime(deployStart.Add(20 * time.Second))
+	exited := testPod("all", 0, "new", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}, false)
+	imagePullBackOff := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}, false)
+	containerCreating := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}, false)
 	staleShardSet := testShardSet("all", 1, "new")
 	staleShardSet.Generation = 3
 	staleShardSet.Status.ObservedGeneration = 2
@@ -231,6 +243,7 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 		lines     []string
 		problems  []string // None means ready
 		failedPod string
+		logs      podLogSource // Logs of failedPod to show
 	}{
 		{
 			// The operator has not yet applied the new image. The previous deployment's
@@ -307,21 +320,23 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			problems:  []string{"Shard set 'all' is still stopping the previous deployment"},
 		},
 		{
-			name:      "pods missing, from a previous revision, or starting",
+			name:      "pods missing, from a previous revision or StatefulSet, or starting",
 			target:    readinessTarget{imageTag: "new"},
-			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new"), testShardSet("logic", 2, "new")},
-			pods:      []corev1.Pod{previousRevision, testPod("logic", 1, "new", running, false)},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new"), testShardSet("logic", 3, "new")},
+			pods:      []corev1.Pod{previousRevision, previousOwner, testPod("logic", 1, "new", running, false)},
 			lines: []string{
 				"Shard set 'all': 0/1 pods ready",
 				"  all-0  Pending  Previous pod is waiting to be replaced",
-				"Shard set 'logic': 0/2 pods ready",
-				"  logic-0  Pending  Pod not created yet",
+				"Shard set 'logic': 0/3 pods ready",
+				"  logic-0  Pending  Previous pod is waiting to be replaced",
 				"  logic-1  Running  Server is starting",
+				"  logic-2  Pending  Pod not created yet",
 			},
 			problems: []string{
 				"Pod all-0 (Pending): Previous pod is waiting to be replaced",
-				"Pod logic-0 (Pending): Pod not created yet",
+				"Pod logic-0 (Pending): Previous pod is waiting to be replaced",
 				"Pod logic-1 (Running): Server is starting",
+				"Pod logic-2 (Pending): Pod not created yet",
 			},
 		},
 		{
@@ -338,13 +353,60 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 		{
 			// A server that hangs at startup is killed by its liveness probe, and shows
 			// as running again between the restarts.
-			name:      "restarted while starting",
+			name:      "restarted twice while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restarted},
+			pods:      []corev1.Pod{restartedPod(2, now.Add(-time.Minute))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			failedPod: "all-0",
+			logs:      previousPodLogs,
+		},
+		{
+			// A server may exit once while what it depends on is starting too.
+			name:      "restarted once while starting",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{restartedPod(1, now.Add(-time.Minute))},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 1 time, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 1 time, last exit code 137 (Error))"},
+		},
+		{
+			// The restarts are from the server's past, and it has run since.
+			name:      "not ready long after its restarts",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour))},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
+		},
+		{
+			name:      "exited",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{exited},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server exited: Error (exit code 1)"},
+			problems:  []string{"Pod all-0 (Failed): Server exited: Error (exit code 1)"},
+			failedPod: "all-0",
+			logs:      currentPodLogs,
+		},
+		{
+			name:      "image cannot be pulled",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{imagePullBackOff},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Container cannot start: ImagePullBackOff: Back-off pulling image"},
+			problems:  []string{"Pod all-0 (Failed): Container cannot start: ImagePullBackOff: Back-off pulling image"},
+			failedPod: "all-0",
+			logs:      noPodLogs,
+		},
+		{
+			name:      "container being created",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{containerCreating},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Pending  Container is waiting: ContainerCreating"},
+			problems:  []string{"Pod all-0 (Pending): Container is waiting: ContainerCreating"},
 		},
 		{
 			name:      "ready after a restart",
@@ -361,44 +423,67 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
 			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
 			failedPod: "all-0",
+			logs:      previousPodLogs,
 		},
 		{
-			// Redeploying the same image: the pod crashing from before the deploy may be
-			// about to be replaced, so it does not fail the wait at once.
-			name:      "crashing pod from before the deploy",
-			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart},
+			// A pod from before the deploy, which the operator may be about to replace,
+			// does not fail the wait.
+			name:      "crashing pod spared",
+			target:    readinessTarget{imageTag: "new", sparedPods: map[types.UID]bool{"pod-all-0": true}},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
 			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
 		},
 		{
-			// After the grace period, the operator is not going to replace the pod.
-			name:      "crashing pod from before the deploy, after the grace period",
-			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart, failOldPods: true},
+			name:      "crashing pod not spared",
+			target:    readinessTarget{imageTag: "new", sparedPods: map[types.UID]bool{"pod-all-1": true}},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
 			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
 			failedPod: "all-0",
+			logs:      previousPodLogs,
 		},
 		{
-			name:      "crashing pod created by the deploy",
-			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart},
-			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{newCrashing},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
-			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
-			failedPod: "all-0",
+			// When every declared shard set may run on an edge cluster, which is not
+			// checked, there is nothing to wait for on the primary cluster.
+			name:   "only edge shard sets declared",
+			target: readinessTarget{imageTag: "new", shardSets: map[string]bool{"edge-1": false, "edge-2": false}},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.target.now = now
 			got := evaluateGameServerReadiness(tt.target, tt.shardSets, tt.pods)
 			assert.Equal(t, tt.lines, got.lines)
 			assert.Equal(t, tt.problems, got.problems)
 			assert.Equal(t, len(tt.problems) == 0, got.ready())
 			assert.Equal(t, tt.failedPod, got.failedPod)
+			if tt.failedPod != "" {
+				assert.Equal(t, tt.logs, got.failedPodLogs)
+			}
+		})
+	}
+}
+
+func TestSparedPods(t *testing.T) {
+	baseline := &DeployBaseline{podUIDs: map[types.UID]bool{"old-pod": true}}
+	tests := []struct {
+		name      string
+		baseline  *DeployBaseline
+		crChanged bool
+		elapsed   time.Duration
+		want      map[types.UID]bool
+	}{
+		{name: "no deploy", baseline: nil, crChanged: true, elapsed: 0, want: nil},
+		{name: "deploy changed the CR", baseline: baseline, crChanged: true, elapsed: 10 * time.Second, want: baseline.podUIDs},
+		{name: "grace period over", baseline: baseline, crChanged: true, elapsed: oldPodGracePeriod, want: nil},
+		{name: "deploy changed nothing", baseline: baseline, crChanged: false, elapsed: 0, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sparedPods(tt.baseline, tt.crChanged, tt.elapsed))
 		})
 	}
 }
