@@ -542,6 +542,9 @@ func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostna
 			output.AppendLinef("Successfully resolved domain %s", hostname)
 			return nil
 		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
+		}
 
 		// Check for timeout.
 		if time.Now().After(timeoutAt) {
@@ -584,7 +587,10 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 			allSuccess := true
 			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
-				err := attemptTLSConnection(hostname, port)
+				err := attemptTLSConnection(ctx, hostname, port)
+				if ctx.Err() != nil {
+					return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
+				}
 				if err != nil {
 					output.AppendLinef("Connection attempt %d of %d failed: %v", iter+1, numAttempts, err)
 					allSuccess = false
@@ -611,15 +617,16 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 // attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
 // (client-speaks-first pattern to work behind TLS-terminating proxies), then
 // reads and validates the server's protocol header.
-func attemptTLSConnection(hostname string, port int) error {
+func attemptTLSConnection(ctx context.Context, hostname string, port int) error {
 	address := fmt.Sprintf("%s:%d", hostname, port)
-	conn, err := tls.Dial("tcp", address, &tls.Config{
-		ServerName: hostname,
-	})
+	dialer := &tls.Dialer{Config: &tls.Config{ServerName: hostname}}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() }) // Ends a read or write on cancel
+	defer stopClosing()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).

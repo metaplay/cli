@@ -255,6 +255,9 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		// exec stream would not stop dotnet-trace in the pod, which would write the profile files
 		// after they were removed. It stops after the requested duration, so after an interrupt,
 		// wait at most that long plus 5 minutes for the conversion.
+		if err := ctx.Err(); err != nil {
+			return err // Interrupted before the profile was started
+		}
 		collectCtx, cancel := kubeutil.ContinueAfterCancel(ctx, time.Duration(o.flagDuration)*time.Second+5*time.Minute)
 		defer cancel()
 		_, _, err := kubeutil.ExecInDebugContainer(collectCtx, kubeCli, podName, debugContainerName, collectCmd)

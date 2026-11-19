@@ -277,9 +277,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// ContinueAfterCancel returns a context that is not cancelled with ctx, so that work in a pod which
-// cancelling would not stop can finish after the command is interrupted. It is cancelled grace
-// after ctx is, so an interrupted command does not wait for it forever.
 // streamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
 // client-go flattens the cancellation into its error text, so without this, callers could not
 // tell a cancelled command from a failed one with errors.Is.
@@ -291,6 +288,9 @@ func streamWithContext(ctx context.Context, exec remotecommand.Executor, options
 	return err
 }
 
+// ContinueAfterCancel returns a context that is not cancelled with ctx, so that work in a pod which
+// cancelling would not stop can finish after the command is interrupted. It is cancelled grace
+// after ctx is, so an interrupted command does not wait for it forever.
 func ContinueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
 	continued, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopWaiting := context.AfterFunc(ctx, func() {

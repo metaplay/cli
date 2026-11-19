@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 // resetInterruptState gives the test a fresh interrupt state and records the errors the runner
@@ -202,6 +203,23 @@ func TestTaskRunnerSigintWaitsForTasks(t *testing.T) {
 	}
 }
 
+// A Ctrl-C key press while the display closes after the last task stops the command too, so the
+// command does not go on, or show its error a second time, without being cancelled.
+func TestTaskRunnerCtrlCAfterLastTaskStopsCommand(t *testing.T) {
+	d := newDisplayTest(t)
+	d.runner.AddTask("last", func(*TaskOutput) error {
+		interrupted.Store(true) // As Update does on the key press
+		return nil
+	})
+
+	if err := d.run(t); err != nil {
+		t.Errorf("error = %v, want nil: every task ran", err)
+	}
+	if got := d.interrupts.Load(); got != 1 {
+		t.Errorf("interrupt handler called %d times, want 1", got)
+	}
+}
+
 // Without Ctrl-C, the command is not interrupted, and the failure is left to the command to show.
 func TestTaskRunnerWithoutCtrlCDoesNotInterrupt(t *testing.T) {
 	d := newDisplayTest(t)
@@ -339,5 +357,46 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 	runner.progress.closeDisplay()
 	if !output.logsLines() {
 		t.Error("lines not logged after the display closed")
+	}
+}
+
+// Tasks skipped because an earlier task failed are not blamed on an interrupt that came later, and
+// the failure is the runner's error.
+func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
+	nonInteractive(t)
+	resetInterruptState(t)
+	r := &recorder{}
+	runner := NewTaskRunner()
+	runner.AddTask("collect", r.task("collect", errors.New("collect failed")))
+	runner.AddCleanupTask("re-enable", func(context.Context, *TaskOutput) error {
+		Interrupt()
+		return nil
+	})
+	runner.AddTask("download", r.task("download", nil))
+
+	if err := runner.Run(); err == nil || err.Error() != "collect failed" {
+		t.Errorf("error = %v, want the collection's", err)
+	}
+	if len(runner.notStarted) != 0 {
+		t.Errorf("not started because of the interrupt = %v, want none", runner.notStarted)
+	}
+}
+
+// A CLIError a cleanup task returns is shown as it is: the command's error display shows only a
+// CLIError's own message, so a title wrapped around it would be lost anyway.
+func TestTaskRunnerShowsCLIErrorAsItIs(t *testing.T) {
+	nonInteractive(t)
+	resetInterruptState(t)
+	var shown []error
+	errorDisplay = func(err error) { shown = append(shown, err) }
+	cleanupErr := clierrors.New("Failed to remove the dump")
+	runner := NewTaskRunner()
+	runner.AddTask("collect", func(*TaskOutput) error { return errors.New("collect failed") })
+	runner.AddCleanupTask("remove", func(context.Context, *TaskOutput) error { return cleanupErr })
+
+	_ = runner.Run()
+
+	if len(shown) != 1 || shown[0] != cleanupErr { //nolint:errorlint // The exact error, not a wrapper
+		t.Errorf("errors shown = %v, want the CLIError itself", shown)
 	}
 }

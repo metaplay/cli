@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
@@ -149,6 +150,8 @@ type TaskRunner struct {
 	frameIndex int            // Current frame index for spinner animation
 	lastTick   time.Time      // Last time the spinner was updated
 	program    *tea.Program   // Reference to the tea program for quitting
+
+	notStarted []string // Ordinary tasks the interrupt kept from starting, written by executeTasks
 }
 
 // plainProgress reports the tasks' progress as log lines: in non-interactive mode, and after the
@@ -270,13 +273,18 @@ func (m *TaskRunner) runInteractive(options ...tea.ProgramOption) error {
 
 	// The display closes before the tasks finish when the user interrupts the command (Ctrl-C,
 	// SIGINT or SIGTERM). Stop the command, as SIGINT does without the display, and wait for the
-	// tasks, reporting their progress as log lines.
+	// tasks, reporting their progress as log lines. A Ctrl-C key press also stops the command when
+	// the tasks finished while the display was closing.
+	tasksDone := false
 	select {
 	case <-m.done:
+		tasksDone = true
 	default:
-		if !displayFailed {
-			Interrupt()
-		}
+	}
+	if interrupted.Load() || (!tasksDone && !displayFailed) {
+		Interrupt()
+	}
+	if !tasksDone {
 		m.progress.closeDisplay()
 		<-m.done
 	}
@@ -336,19 +344,16 @@ func (m *TaskRunner) runNonInteractive() error {
 func (m *TaskRunner) result() error {
 	wasInterrupted := interrupted.Load()
 	var failed []*Task
-	var skipped []string
 	for _, task := range m.tasks {
 		task.mu.Lock()
 		if task.error != nil {
 			failed = append(failed, task)
-		} else if task.status == StatusPending && !task.cleanup {
-			skipped = append(skipped, task.title)
 		}
 		task.mu.Unlock()
 	}
 
 	// The interrupt kept tasks from running, so the command did not do all its work
-	canceled := wasInterrupted && len(skipped) > 0
+	canceled := len(m.notStarted) > 0
 
 	// The task whose failure is the error, if any
 	var returnedTask *Task
@@ -369,11 +374,11 @@ func (m *TaskRunner) result() error {
 		case wasInterrupted && !task.cleanup && errors.Is(task.error, context.Canceled):
 			// Caused by the interrupt
 		default:
-			errorDisplay(fmt.Errorf("%s: %w", task.title, task.error))
+			errorDisplay(withTaskTitle(task))
 		}
 	}
 	if canceled {
-		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(skipped, ", "))
+		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(m.notStarted, ", "))
 	}
 
 	if returnedTask != nil {
@@ -383,6 +388,15 @@ func (m *TaskRunner) result() error {
 		return context.Canceled
 	}
 	return nil
+}
+
+// withTaskTitle prefixes a failed task's error with its title. A CLIError is left as it is: its own
+// message describes the failure, and the command's error display would show only that message.
+func withTaskTitle(task *Task) error {
+	if _, ok := clierrors.AsCLIError(task.error); ok {
+		return task.error
+	}
+	return fmt.Errorf("%s: %w", task.title, task.error)
 }
 
 // executeTasks runs the tasks sequentially. After an ordinary task fails or the command is
@@ -395,7 +409,10 @@ func (m *TaskRunner) executeTasks() {
 			if !anyStarted {
 				continue // Nothing to undo
 			}
-		} else if stopped || interrupted.Load() {
+		} else if stopped {
+			continue
+		} else if interrupted.Load() {
+			m.notStarted = append(m.notStarted, task.title)
 			continue
 		}
 		anyStarted = true
