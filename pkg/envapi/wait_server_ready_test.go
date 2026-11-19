@@ -209,6 +209,10 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	previousRevision.Labels["controller-revision-hash"] = "all-rev1"
 	restarted := testPod("all", 0, "new", running, false)
 	restarted.Status.ContainerStatuses[0].RestartCount = 2
+	restarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
+	readyRestarted := testPod("all", 0, "new", running, true)
+	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
+	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
 	newCrashing := testPod("all", 0, "new", crashing, false)
 	newCrashing.CreationTimestamp = metav1.NewTime(deployStart.Add(20 * time.Second))
 	staleShardSet := testShardSet("all", 1, "new")
@@ -332,12 +336,22 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			problems: []string{"Pod all-0 (Pending): Cannot be scheduled: 0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector."},
 		},
 		{
-			name:      "restarted",
+			// A server that hangs at startup is killed by its liveness probe, and shows
+			// as running again between the restarts.
+			name:      "restarted while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{restarted},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 2 times)"},
-			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 2 times)"},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 2 times, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 2 times, last exit code 137 (Error))"},
+			failedPod: "all-0",
+		},
+		{
+			name:      "ready after a restart",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{readyRestarted},
+			lines:     []string{"Shard set 'all': 1/1 pods ready", "  all-0  Ready    (restarted 1 time, last exit code 137 (OOMKilled))"},
 		},
 		{
 			name:      "crashing",
@@ -357,6 +371,16 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
 			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
+		},
+		{
+			// After the grace period, the operator is not going to replace the pod.
+			name:      "crashing pod from before the deploy, after the grace period",
+			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart, failOldPods: true},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
+			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
+			failedPod: "all-0",
 		},
 		{
 			name:      "crashing pod created by the deploy",

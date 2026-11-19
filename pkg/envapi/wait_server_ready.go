@@ -173,6 +173,9 @@ type gameServerReadiness struct {
 	problems  []string // What is not ready yet, one line each, or none when ready
 	failedPod string   // Name of a pod whose server failed to start, or empty
 	failure   string   // Why failedPod failed
+	// Whether failedPod's server has been restarted, so that the logs of the failure
+	// are in its previous container.
+	failedPodRestarted bool
 }
 
 // ready tells whether everything is ready.
@@ -192,7 +195,15 @@ type readinessTarget struct {
 	// crashes. Older pods are from before the deploy and may be about to be replaced.
 	// When zero, any crashing pod fails the wait.
 	failPodsSince time.Time
+	// Whether crashing pods from before failPodsSince also fail the wait. Set once the
+	// operator has had time to replace them, so that a deploy that changes nothing
+	// does not wait for them until the timeout.
+	failOldPods bool
 }
+
+// How long the wait gives the operator to replace a crashing pod from before the
+// deploy. In testing, the operator acted within a few seconds of Helm finishing.
+const oldPodGracePeriod = 30 * time.Second
 
 // evaluateGameServerReadiness checks that the shard sets run the image the GameServer
 // CR asks for and that all their pods are ready.
@@ -273,9 +284,12 @@ func evaluateGameServerReadiness(target readinessTarget, shardSets []appsv1.Stat
 			}
 			r.problems = append(r.problems, fmt.Sprintf("Pod %s (%s): %s", podNames[ndx], status.Phase, status.Message))
 			isNewPod := pod != nil && !pod.CreationTimestamp.Time.Before(target.failPodsSince)
-			if status.Phase == PhaseFailed && isNewPod && r.failedPod == "" {
+			if status.Phase == PhaseFailed && (isNewPod || target.failOldPods) && r.failedPod == "" {
 				r.failedPod = podNames[ndx]
 				r.failure = status.Message
+				if container := findShardServerContainer(*pod); container != nil {
+					r.failedPodRestarted = container.RestartCount > 0
+				}
 			}
 		}
 
@@ -344,7 +358,11 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 
 	restarts := ""
 	if containerStatus.RestartCount > 0 {
-		restarts = fmt.Sprintf(" (restarted %d times)", containerStatus.RestartCount)
+		times := "times"
+		if containerStatus.RestartCount == 1 {
+			times = "time"
+		}
+		restarts = fmt.Sprintf(" (restarted %d %s%s)", containerStatus.RestartCount, times, lastExit(containerStatus))
 	}
 
 	state := containerStatus.State
@@ -353,7 +371,13 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 		if containerStatus.Ready {
 			return GameServerPodStatus{Phase: PhaseReady, Message: strings.TrimSpace(restarts)}
 		}
-		return GameServerPodStatus{Phase: PhaseRunning, Message: "Server is starting" + restarts}
+		// A server that is not ready and has been restarted failed its previous start.
+		// It may not have exited by itself: a server that hangs is killed by its liveness
+		// probe, and shows as running between the restarts.
+		if containerStatus.RestartCount > 0 {
+			return GameServerPodStatus{Phase: PhaseFailed, Message: "Server failed to start" + restarts}
+		}
+		return GameServerPodStatus{Phase: PhaseRunning, Message: "Server is starting"}
 
 	case state.Waiting != nil:
 		if state.Waiting.Reason == "CrashLoopBackOff" {
@@ -376,6 +400,16 @@ func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
 	}
 
 	return GameServerPodStatus{Phase: PhaseUnknown, Message: "Container state is unknown"}
+}
+
+// lastExit describes how the container's previous run ended, such as ", last exit
+// code 137 (Error)", or returns an empty string if it is not known.
+func lastExit(containerStatus *corev1.ContainerStatus) string {
+	terminated := containerStatus.LastTerminationState.Terminated
+	if terminated == nil {
+		return ""
+	}
+	return fmt.Sprintf(", last exit code %d (%s)", terminated.ExitCode, terminated.Reason)
 }
 
 // schedulerMessage shortens the scheduler's explanation of why a pod cannot be
@@ -423,8 +457,8 @@ func imageTag(image string) string {
 	return image[ndx+1:]
 }
 
-// readinessTarget returns what the GameServer CR declares. Only pods created at or
-// after failPodsSince fail the wait early when they crash.
+// readinessTarget returns what the GameServer CR declares, and when crashing pods fail
+// the wait.
 func (gs *TargetGameServer) readinessTarget(failPodsSince time.Time) readinessTarget {
 	target := readinessTarget{shardSets: map[string]bool{}, failPodsSince: failPodsSince}
 	if cr := gs.GameServerNewCR; cr != nil {
@@ -465,7 +499,8 @@ func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServ
 const nonInteractiveStatusInterval = 30 * time.Second
 
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
-// occurs. Only pods created at or after failPodsSince fail the wait early when they crash.
+// occurs. A crashing pod created at or after failPodsSince fails the wait at once, and an
+// older one after oldPodGracePeriod.
 func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration, failPodsSince time.Time) error {
 	// Get target gameServer. It is read after Helm has written it, so it holds the
 	// image that is being deployed.
@@ -490,6 +525,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	lastShown := ""
 	var lastShownAt time.Time
 	for {
+		target.failOldPods = time.Since(startTime) >= oldPodGracePeriod
 		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
 		if err != nil {
 			return clierrors.Wrap(err, "Failed to check the game server status")
@@ -515,7 +551,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
-			podLogs, err := fetchPodLogs(ctx, kubeCli, readiness.failedPod, shardServerContainerName)
+			podLogs, err := fetchPodLogs(ctx, kubeCli, readiness.failedPod, shardServerContainerName, readiness.failedPodRestarted)
 			if err != nil {
 				output.AppendLinef("Failed to get logs from pod %s: %v", readiness.failedPod, err)
 			} else {
@@ -551,14 +587,16 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	}
 }
 
-// fetchPodLogs fetches logs for a specific pod and container.
-func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerName string) (string, error) {
-	log.Debug().Msgf("Fetching logs for pod %s, container %s", podName, containerName)
+// fetchPodLogs fetches logs for a specific pod and container. With previous, it fetches
+// the logs of the container's previous run.
+func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerName string, previous bool) (string, error) {
+	log.Debug().Msgf("Fetching logs for pod %s, container %s (previous: %v)", podName, containerName, previous)
 	var numTailLines int64 = 100
 	logOptions := &corev1.PodLogOptions{
 		Container: containerName,
 		Follow:    false,
 		TailLines: &numTailLines,
+		Previous:  previous,
 	}
 
 	req := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).GetLogs(podName, logOptions)
@@ -780,7 +818,8 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 // WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
 // and the LiveOps Dashboard. A pod whose server crashes fails the wait at once only if it
 // was created at or after failPodsSince, such as the start of a deploy. Older pods may be
-// about to be replaced. With a zero failPodsSince, any crashing pod fails the wait.
+// about to be replaced, so they fail the wait only after a grace period. With a zero
+// failPodsSince, any crashing pod fails the wait.
 func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, failPodsSince time.Time) error {
 	// Fetch environment details.
 	envDetails, err := targetEnv.GetDetails()
