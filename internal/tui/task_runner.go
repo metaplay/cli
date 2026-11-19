@@ -70,24 +70,16 @@ func (to *TaskOutput) AppendLine(line string) {
 
 // AppendLinef appends a new formatted line at the end of the output using fmt.Sprintf.
 func (to *TaskOutput) AppendLinef(format string, a ...any) {
-	line := fmt.Sprintf(format, a...)
-	to.mu.Lock()
-	to.logLines = append(to.logLines, line)
-	to.mu.Unlock()
-
-	if to.logsLines() {
-		log.Info().Msgf("  %s", line)
-	}
+	to.AppendLine(fmt.Sprintf(format, a...))
 }
 
-// Update the header lines to the provided ones. Also logged in non-interactive mode.
+// Update the header lines to the provided ones. Also logged when there is no display.
 func (to *TaskOutput) SetHeaderLines(lines []string) {
 	to.mu.Lock()
 	to.headerLines = lines
 	to.mu.Unlock()
 
-	// If not in interactive mode, log the lines.
-	if !isInteractiveMode {
+	if to.logsLines() {
 		for _, line := range lines {
 			log.Info().Msgf("  %s", line)
 		}
@@ -97,14 +89,13 @@ func (to *TaskOutput) SetHeaderLines(lines []string) {
 // TaskOutputIndent is how many columns the task runner indents a task's output lines by.
 const TaskOutputIndent = 4
 
-// Update the footer lines to the provided ones. Also logged in non-interactive mode.
+// Update the footer lines to the provided ones. Also logged when there is no display.
 func (to *TaskOutput) SetFooterLines(lines []string) {
 	to.mu.Lock()
 	to.footerLines = lines
 	to.mu.Unlock()
 
-	// If not in interactive mode, log the lines.
-	if !isInteractiveMode {
+	if to.logsLines() {
 		for _, line := range lines {
 			log.Info().Msgf("  %s", line)
 		}
@@ -181,7 +172,7 @@ const cleanupTimeout = 30 * time.Second
 type tickMsg struct{}
 
 // doneMsg is sent when all tasks have completed or failed
-type doneMsg struct{ err error }
+type doneMsg struct{}
 
 // NewTaskRunner creates a new TaskRunner
 func NewTaskRunner() *TaskRunner {
@@ -195,16 +186,17 @@ func NewTaskRunner() *TaskRunner {
 
 // AddTask adds a new task to the runner
 func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
-	// Initialize task
-	task := &Task{
+	m.addTask(title, runFunc, false)
+}
+
+func (m *TaskRunner) addTask(title string, runFunc TaskRunFunc, cleanup bool) {
+	m.tasks = append(m.tasks, &Task{
 		title:   title,
 		runFunc: runFunc,
+		cleanup: cleanup,
 		status:  StatusPending,
 		output:  TaskOutput{progress: m.progress},
-	}
-
-	// Add to runner
-	m.tasks = append(m.tasks, task)
+	})
 }
 
 // AddCleanupTask adds a task that undoes an earlier task's changes, such as a setting changed in a
@@ -213,17 +205,11 @@ func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
 // context is not cancelled with the command's, and is bounded by cleanupTimeout. runFunc must be
 // safe to run when the change it undoes was not made.
 func (m *TaskRunner) AddCleanupTask(title string, runFunc func(ctx context.Context, output *TaskOutput) error) {
-	m.tasks = append(m.tasks, &Task{
-		title: title,
-		runFunc: func(output *TaskOutput) error {
-			ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-			defer cancel()
-			return runFunc(ctx, output)
-		},
-		cleanup: true,
-		status:  StatusPending,
-		output:  TaskOutput{progress: m.progress},
-	})
+	m.addTask(title, func(output *TaskOutput) error {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
+		return runFunc(ctx, output)
+	}, true)
 }
 
 // taskStatusStyle returns the appropriate style for a task based on its status
@@ -402,7 +388,6 @@ func (m *TaskRunner) result() error {
 // executeTasks runs the tasks sequentially. After an ordinary task fails or the command is
 // interrupted, only cleanup tasks run.
 func (m *TaskRunner) executeTasks() {
-	var firstError error
 	stopped := false
 	anyStarted := false
 	for _, task := range m.tasks {
@@ -440,9 +425,6 @@ func (m *TaskRunner) executeTasks() {
 
 		if err != nil {
 			log.Debug().Msgf("Task failed: %s: %v", task.title, err)
-			if firstError == nil {
-				firstError = err
-			}
 			if !task.cleanup {
 				stopped = true
 			}
@@ -454,7 +436,7 @@ func (m *TaskRunner) executeTasks() {
 	// Signal completion and quit the program if in interactive mode
 	close(m.done)
 	if m.program != nil {
-		m.program.Send(doneMsg{err: firstError})
+		m.program.Send(doneMsg{})
 	}
 	log.Debug().Msg("All tasks completed")
 }

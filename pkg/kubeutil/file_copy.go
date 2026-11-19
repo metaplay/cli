@@ -190,7 +190,7 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		log.Debug().Msgf("SPDY stream started (offset=%d): pod=%s container=%s path=%s", offset, podName, containerName, srcPath)
 
 		var stderrBuf bytes.Buffer
-		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -258,7 +258,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 		// Capture stderr from the remote command to diagnose tar failures
 		var stderrBuf bytes.Buffer
-		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -500,9 +500,8 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 			return nil
 		}
 
-		// After the command is cancelled no attempt can succeed, so stop. client-go flattens the
-		// cancellation into its error text, so wrap the context's error for errors.Is.
-		// The partial file is removed: only this process could resume it.
+		// After the command is cancelled no attempt can succeed, so stop. The partial file is
+		// removed: only this process could resume it.
 		if ctx.Err() != nil {
 			_ = os.Remove(destPath)
 			return fmt.Errorf("file copy stopped: %w", ctx.Err())

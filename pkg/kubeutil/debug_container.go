@@ -245,18 +245,13 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	stdOut := new(strings.Builder)
 	stdErr := new(strings.Builder)
 
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	err = streamWithContext(ctx, exec, remotecommand.StreamOptions{
 		Stdout: stdOut,
 		Stderr: stdErr,
 		Tty:    false,
 	})
 
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// client-go flattens the cancellation into its error text: wrap it again, so callers
-			// can tell a cancelled command from a failed one with errors.Is.
-			err = fmt.Errorf("%w: %w", ctxErr, err)
-		}
 		return stdOut.String(), stdErr.String(), fmt.Errorf("error streaming command: %w, stdout: %s, stderr: %s", err, stdOut.String(), stdErr.String())
 	}
 
@@ -285,9 +280,23 @@ func shellQuote(s string) string {
 // ContinueAfterCancel returns a context that is not cancelled with ctx, so that work in a pod which
 // cancelling would not stop can finish after the command is interrupted. It is cancelled grace
 // after ctx is, so an interrupted command does not wait for it forever.
+// streamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
+// client-go flattens the cancellation into its error text, so without this, callers could not
+// tell a cancelled command from a failed one with errors.Is.
+func streamWithContext(ctx context.Context, exec remotecommand.Executor, options remotecommand.StreamOptions) error {
+	err := exec.StreamWithContext(ctx, options)
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("%w: %w", ctx.Err(), err)
+	}
+	return err
+}
+
 func ContinueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
 	continued, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	stopWaiting := context.AfterFunc(ctx, func() { time.AfterFunc(grace, cancel) })
+	stopWaiting := context.AfterFunc(ctx, func() {
+		timer := time.AfterFunc(grace, cancel)
+		context.AfterFunc(continued, func() { timer.Stop() }) // Stops the timer when cancel is called early
+	})
 	return continued, func() {
 		stopWaiting()
 		cancel()

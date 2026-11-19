@@ -16,9 +16,8 @@ import (
 )
 
 func main() {
-	// tui.Interrupt stops the command on SIGINT (Ctrl+C) or SIGTERM, and on Ctrl+C pressed in a TUI,
-	// which receives it as a key press, not as SIGINT. It marks the command interrupted, so the task
-	// runner starts no further tasks, and then calls the handler below, which cancels ctx.
+	// SIGINT, SIGTERM and a Ctrl+C key press in a TUI all go through tui.Interrupt, which calls the
+	// handler below.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	signals := make(chan os.Signal, 1)
