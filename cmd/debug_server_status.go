@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
@@ -127,7 +128,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	taskRunner := tui.NewTaskRunner()
 
 	// Validate the game server status.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner)
+	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, time.Time{})
 	if err != nil {
 		return err
 	}

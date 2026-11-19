@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -168,27 +169,57 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 
 // gameServerReadiness is the result of one check of whether a game server is up.
 type gameServerReadiness struct {
-	ready     bool
 	lines     []string // Status of each shard set and its pods, for display
-	problems  []string // What is not ready yet, one line each
+	problems  []string // What is not ready yet, one line each, or none when ready
 	failedPod string   // Name of a pod whose server failed to start, or empty
 	failure   string   // Why failedPod failed
 }
 
+// ready tells whether everything is ready.
+func (r gameServerReadiness) ready() bool {
+	return len(r.problems) == 0
+}
+
+// readinessTarget is what the game server is expected to run, as declared by its
+// GameServer CR.
+type readinessTarget struct {
+	// Image tag of the server. When empty, any image is accepted.
+	imageTag string
+	// The shard sets the CR declares, mapped to whether they must exist on the primary
+	// cluster. Other StatefulSets are ignored. When empty, all StatefulSets found count.
+	shardSets map[string]bool
+	// Only pods created at or after this time fail the wait early when their server
+	// crashes. Older pods are from before the deploy and may be about to be replaced.
+	// When zero, any crashing pod fails the wait.
+	failPodsSince time.Time
+}
+
 // evaluateGameServerReadiness checks that the shard sets run the image the GameServer
-// CR asks for and that all their pods are ready. With an empty targetImageTag, any image
-// is accepted.
-func evaluateGameServerReadiness(targetImageTag string, shardSets []appsv1.StatefulSet, pods []corev1.Pod) gameServerReadiness {
-	r := gameServerReadiness{ready: true}
+// CR asks for and that all their pods are ready.
+func evaluateGameServerReadiness(target readinessTarget, shardSets []appsv1.StatefulSet, pods []corev1.Pod) gameServerReadiness {
+	var r gameServerReadiness
 	notReady := func(line string, problem string) {
-		r.ready = false
 		r.lines = append(r.lines, line)
 		r.problems = append(r.problems, problem)
 	}
 
-	if len(shardSets) == 0 {
+	// Keep only the declared shard sets, and report the required ones that are missing.
+	if len(target.shardSets) > 0 {
+		shardSets = slices.DeleteFunc(slices.Clone(shardSets), func(sts appsv1.StatefulSet) bool {
+			_, declared := target.shardSets[sts.Name]
+			return !declared
+		})
+		for _, name := range slices.Sorted(maps.Keys(target.shardSets)) {
+			found := slices.ContainsFunc(shardSets, func(sts appsv1.StatefulSet) bool { return sts.Name == name })
+			if target.shardSets[name] && !found {
+				notReady(
+					fmt.Sprintf("Shard set '%s': waiting for the operator to create it", name),
+					fmt.Sprintf("Shard set '%s' does not exist", name))
+			}
+		}
+	}
+	if len(shardSets) == 0 && len(r.problems) == 0 {
 		notReady("Waiting for the operator to create the shard sets", "No shard sets found")
-		return r
 	}
 
 	for _, shardSet := range shardSets {
@@ -196,11 +227,21 @@ func evaluateGameServerReadiness(targetImageTag string, shardSets []appsv1.State
 
 		// The operator applies a changed GameServer to the StatefulSets some time after
 		// Helm has written it. Until then, the StatefulSets and pods are the previous
-		// deployment's, and may well be ready.
-		if tag := imageTag(shardSetImage); targetImageTag != "" && tag != targetImageTag {
+		// deployment's, and may well be ready. An image without a tag (pinned by digest
+		// only) cannot be compared, so it is accepted.
+		if tag := imageTag(shardSetImage); target.imageTag != "" && tag != "" && tag != target.imageTag {
 			notReady(
 				fmt.Sprintf("Shard set '%s': waiting for the operator to apply the new image", shardSet.Name),
-				fmt.Sprintf("Shard set '%s' still runs image %s, not %s", shardSet.Name, tag, targetImageTag))
+				fmt.Sprintf("Shard set '%s' still runs image %s, not %s", shardSet.Name, tag, target.imageTag))
+			continue
+		}
+
+		// Until the StatefulSet controller has seen the latest change to the StatefulSet,
+		// its update revision is stale, and pods from the previous revision would match it.
+		if shardSet.Status.ObservedGeneration < shardSet.Generation {
+			notReady(
+				fmt.Sprintf("Shard set '%s': waiting for Kubernetes to apply the change", shardSet.Name),
+				fmt.Sprintf("Shard set '%s' has a change that Kubernetes has not applied yet", shardSet.Name))
 			continue
 		}
 
@@ -223,30 +264,27 @@ func evaluateGameServerReadiness(targetImageTag string, shardSets []appsv1.State
 		numReady := 0
 		for ndx := range numReplicas {
 			podNames[ndx] = fmt.Sprintf("%s-%d", shardSet.Name, ndx)
-			statuses[ndx] = resolveShardSetPodStatus(&shardSet, shardSetImage, findPod(pods, podNames[ndx]))
-			switch statuses[ndx].Phase {
-			case PhaseReady:
+			pod := findPod(pods, podNames[ndx])
+			statuses[ndx] = resolveShardSetPodStatus(&shardSet, shardSetImage, pod)
+			status := statuses[ndx]
+			if status.Phase == PhaseReady {
 				numReady++
-			case PhaseFailed:
-				if r.failedPod == "" {
-					r.failedPod = podNames[ndx]
-					r.failure = statuses[ndx].Message
-				}
+				continue
+			}
+			r.problems = append(r.problems, fmt.Sprintf("Pod %s (%s): %s", podNames[ndx], status.Phase, status.Message))
+			isNewPod := pod != nil && !pod.CreationTimestamp.Time.Before(target.failPodsSince)
+			if status.Phase == PhaseFailed && isNewPod && r.failedPod == "" {
+				r.failedPod = podNames[ndx]
+				r.failure = status.Message
 			}
 		}
 
-		// One line for the shard set, then one per pod with the columns aligned.
+		// One line for the shard set, then one per pod with the columns aligned. The
+		// last pod has the longest name.
 		r.lines = append(r.lines, fmt.Sprintf("Shard set '%s': %d/%d pods ready", shardSet.Name, numReady, numReplicas))
-		nameWidth := 0
-		for _, name := range podNames {
-			nameWidth = max(nameWidth, len(name))
-		}
+		nameWidth := len(podNames[numReplicas-1])
 		for ndx, status := range statuses {
 			r.lines = append(r.lines, strings.TrimRight(fmt.Sprintf("  %-*s  %-8s %s", nameWidth, podNames[ndx], status.Phase, status.Message), " "))
-			if status.Phase != PhaseReady {
-				r.ready = false
-				r.problems = append(r.problems, fmt.Sprintf("Pod %s (%s): %s", podNames[ndx], status.Phase, status.Message))
-			}
 		}
 	}
 
@@ -351,25 +389,25 @@ func schedulerMessage(message string) string {
 	return message
 }
 
+// Name of the game server's container in its pods.
+const shardServerContainerName = "shard-server"
+
 func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 	for _, status := range pod.Status.ContainerStatuses {
-		if status.Name == "shard-server" {
+		if status.Name == shardServerContainerName {
 			return &status
 		}
 	}
 	return nil
 }
 
-// shardServerImage returns the image of the shard-server container, or of the first
-// container if none has that name.
+// shardServerImage returns the image of the shard-server container, or an empty
+// string if there is none.
 func shardServerImage(podSpec corev1.PodSpec) string {
 	for _, container := range podSpec.Containers {
-		if container.Name == "shard-server" {
+		if container.Name == shardServerContainerName {
 			return container.Image
 		}
-	}
-	if len(podSpec.Containers) > 0 {
-		return podSpec.Containers[0].Image
 	}
 	return ""
 }
@@ -385,22 +423,31 @@ func imageTag(image string) string {
 	return image[ndx+1:]
 }
 
-// targetImageTag returns the image tag that the GameServer CR asks for, or an empty
-// string if it cannot be determined.
-func (gs *TargetGameServer) targetImageTag() string {
-	if gs.GameServerNewCR != nil {
-		return gs.GameServerNewCR.Spec.Image.Tag
+// readinessTarget returns what the GameServer CR declares. Only pods created at or
+// after failPodsSince fail the wait early when they crash.
+func (gs *TargetGameServer) readinessTarget(failPodsSince time.Time) readinessTarget {
+	target := readinessTarget{shardSets: map[string]bool{}, failPodsSince: failPodsSince}
+	if cr := gs.GameServerNewCR; cr != nil {
+		target.imageTag = cr.Spec.Image.Tag
+		// A shard with a cluster selector may run on an edge cluster, which is not
+		// checked, so it need not exist on the primary cluster.
+		for _, shard := range cr.Spec.Shards {
+			target.shardSets[shard.Name] = len(shard.ClusterLabelSelector) == 0
+		}
 	}
-	if gs.GameServerOldCR != nil {
-		return imageTag(shardServerImage(gs.GameServerOldCR.Spec.StatefulSetSpec.Template.Spec))
+	if cr := gs.GameServerOldCR; cr != nil {
+		target.imageTag = imageTag(shardServerImage(cr.Spec.StatefulSetSpec.Template.Spec))
+		for _, shard := range cr.Spec.ShardSpec {
+			target.shardSets[shard.Name] = true
+		}
 	}
-	return ""
+	return target
 }
 
 // checkGameServerReadiness fetches the game server's StatefulSets and pods and evaluates
 // whether they are ready.
 // \todo Handle edge clusters of multi-region game servers.
-func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, targetImageTag string) (gameServerReadiness, error) {
+func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, target readinessTarget) (gameServerReadiness, error) {
 	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer.GameServerNewCR, gameServer.GameServerOldCR)
 	if err != nil {
 		return gameServerReadiness{}, err
@@ -409,7 +456,7 @@ func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServ
 	if err != nil {
 		return gameServerReadiness{}, err
 	}
-	return evaluateGameServerReadiness(targetImageTag, shardSets, pods), nil
+	return evaluateGameServerReadiness(target, shardSets, pods), nil
 }
 
 // How often non-interactive mode repeats an unchanged status. Its output goes to an
@@ -417,23 +464,21 @@ func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServ
 // this often, to show that the wait is still going on.
 const nonInteractiveStatusInterval = 30 * time.Second
 
-// waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout occurs.
-func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration) error {
+// waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
+// occurs. Only pods created at or after failPodsSince fail the wait early when they crash.
+func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration, failPodsSince time.Time) error {
 	// Get target gameServer. It is read after Helm has written it, so it holds the
 	// image that is being deployed.
 	gameServer, err := targetEnv.GetGameServer(ctx)
 	if err != nil {
 		return err
 	}
-	if gameServer.GameServerNewCR == nil && gameServer.GameServerOldCR == nil {
-		return clierrors.New("No game server found in the environment")
-	}
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
-	targetTag := gameServer.targetImageTag()
-	log.Debug().Msgf("Waiting for game server pods with image tag '%s' (new CR: %v)", targetTag, gameServer.GameServerNewCR != nil)
+	target := gameServer.readinessTarget(failPodsSince)
+	log.Debug().Msgf("Waiting for game server: %+v (new CR: %v)", target, gameServer.GameServerNewCR != nil)
 
 	// Poll more often in interactive mode, where the status is redrawn in place.
 	pollInterval := 2 * time.Second
@@ -445,7 +490,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	lastShown := ""
 	var lastShownAt time.Time
 	for {
-		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, targetTag)
+		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
 		if err != nil {
 			return clierrors.Wrap(err, "Failed to check the game server status")
 		}
@@ -456,8 +501,8 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		status := strings.Join(readiness.lines, "\n")
 		if tui.IsInteractiveMode() || status != lastShown || time.Since(lastShownAt) >= nonInteractiveStatusInterval {
 			header := fmt.Sprintf("Elapsed %s of %s", elapsed.Round(time.Second), timeout)
-			if targetTag != "" {
-				header = fmt.Sprintf("Image %s, elapsed %s of %s", targetTag, elapsed.Round(time.Second), timeout)
+			if target.imageTag != "" {
+				header = fmt.Sprintf("Image %s, elapsed %s of %s", target.imageTag, elapsed.Round(time.Second), timeout)
 			}
 			headerLines := []string{header}
 			for _, line := range readiness.lines {
@@ -470,7 +515,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
-			podLogs, err := fetchPodLogs(ctx, kubeCli, readiness.failedPod, "shard-server")
+			podLogs, err := fetchPodLogs(ctx, kubeCli, readiness.failedPod, shardServerContainerName)
 			if err != nil {
 				output.AppendLinef("Failed to get logs from pod %s: %v", readiness.failedPod, err)
 			} else {
@@ -488,7 +533,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 				WithSuggestion(fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID))
 		}
 
-		if readiness.ready {
+		if readiness.ready() {
 			return nil
 		}
 
@@ -732,7 +777,11 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 	}
 }
 
-func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner) error {
+// WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
+// and the LiveOps Dashboard. A pod whose server crashes fails the wait at once only if it
+// was created at or after failPodsSince, such as the start of a deploy. Older pods may be
+// about to be replaced. With a zero failPodsSince, any crashing pod fails the wait.
+func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, failPodsSince time.Time) error {
 	// Fetch environment details.
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
@@ -745,7 +794,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	// This can take a long time when larger changes are being applied (eg,
 	// enabling the new operator).
 	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
-		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute)
+		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute, failPodsSince)
 	})
 
 	// CHECK CLIENT-FACING NETWORKING

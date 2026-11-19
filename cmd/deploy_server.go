@@ -572,8 +572,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		return err
 	})
 
-	// Validate the game server status.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner)
+	// Validate the game server status. The tasks run after this, so pods created from
+	// now on are from this deploy.
+	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, time.Now())
 	if err != nil {
 		return err
 	}

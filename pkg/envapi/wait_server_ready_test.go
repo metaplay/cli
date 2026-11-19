@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
@@ -192,6 +193,7 @@ func testPod(shardSet string, ndx int, tag string, state corev1.ContainerState, 
 func TestEvaluateGameServerReadiness(t *testing.T) {
 	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}
 	crashing := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	deployStart := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
 
 	unschedulable := testPod("all", 0, "new", corev1.ContainerState{}, false)
 	unschedulable.Status = corev1.PodStatus{
@@ -207,35 +209,44 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	previousRevision.Labels["controller-revision-hash"] = "all-rev1"
 	restarted := testPod("all", 0, "new", running, false)
 	restarted.Status.ContainerStatuses[0].RestartCount = 2
+	newCrashing := testPod("all", 0, "new", crashing, false)
+	newCrashing.CreationTimestamp = metav1.NewTime(deployStart.Add(20 * time.Second))
+	staleShardSet := testShardSet("all", 1, "new")
+	staleShardSet.Generation = 3
+	staleShardSet.Status.ObservedGeneration = 2
+	digestShardSet := testShardSet("all", 1, "new")
+	digestShardSet.Spec.Template.Spec.Containers[0].Image = testRepository + "@sha256:abcd"
+	digestPod := testPod("all", 0, "new", running, true)
+	digestPod.Spec.Containers[0].Image = testRepository + "@sha256:abcd"
 
 	tests := []struct {
 		name      string
-		target    string
+		target    readinessTarget
 		shardSets []appsv1.StatefulSet
 		pods      []corev1.Pod
-		ready     bool
 		lines     []string
+		problems  []string // None means ready
 		failedPod string
 	}{
 		{
 			// The operator has not yet applied the new image. The previous deployment's
 			// pod is ready, but must not count.
 			name:      "previous image",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "old")},
 			pods:      []corev1.Pod{testPod("all", 0, "old", running, true)},
 			lines:     []string{"Shard set 'all': waiting for the operator to apply the new image"},
+			problems:  []string{"Shard set 'all' still runs image old, not new"},
 		},
 		{
 			name:      "ready",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new", shardSets: map[string]bool{"all": true, "logic": true}},
 			shardSets: []appsv1.StatefulSet{testShardSet("logic", 2, "new"), testShardSet("all", 1, "new")},
 			pods: []corev1.Pod{
 				testPod("all", 0, "new", running, true),
 				testPod("logic", 0, "new", running, true),
 				testPod("logic", 1, "new", running, true),
 			},
-			ready: true,
 			lines: []string{
 				"Shard set 'logic': 2/2 pods ready",
 				"  logic-0  Ready",
@@ -248,22 +259,52 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			name:      "no target image accepts any image",
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "old")},
 			pods:      []corev1.Pod{testPod("all", 0, "old", running, true)},
-			ready:     true,
 			lines:     []string{"Shard set 'all': 1/1 pods ready", "  all-0  Ready"},
 		},
 		{
-			name:  "no shard sets",
-			lines: []string{"Waiting for the operator to create the shard sets"},
+			name:      "image pinned by digest only is accepted",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{digestShardSet},
+			pods:      []corev1.Pod{digestPod},
+			lines:     []string{"Shard set 'all': 1/1 pods ready", "  all-0  Ready"},
+		},
+		{
+			name:     "no shard sets",
+			lines:    []string{"Waiting for the operator to create the shard sets"},
+			problems: []string{"No shard sets found"},
+		},
+		{
+			// A StatefulSet the CR does not declare, such as one left over from a removed
+			// shard, is ignored. A declared shard set on an edge cluster need not exist.
+			name:      "undeclared shard set ignored, declared one missing",
+			target:    readinessTarget{imageTag: "new", shardSets: map[string]bool{"all": true, "logic": true, "edge": false}},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new"), testShardSet("removed", 1, "old")},
+			pods:      []corev1.Pod{testPod("all", 0, "new", running, true), testPod("removed", 0, "old", running, true)},
+			lines: []string{
+				"Shard set 'logic': waiting for the operator to create it",
+				"Shard set 'all': 1/1 pods ready",
+				"  all-0  Ready",
+			},
+			problems: []string{"Shard set 'logic' does not exist"},
+		},
+		{
+			name:      "Kubernetes has not applied the shard set change",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{staleShardSet},
+			pods:      []corev1.Pod{testPod("all", 0, "new", running, true)},
+			lines:     []string{"Shard set 'all': waiting for Kubernetes to apply the change"},
+			problems:  []string{"Shard set 'all' has a change that Kubernetes has not applied yet"},
 		},
 		{
 			name:      "stopping the previous deployment",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 0, "new")},
 			lines:     []string{"Shard set 'all': stopping the previous deployment"},
+			problems:  []string{"Shard set 'all' is still stopping the previous deployment"},
 		},
 		{
 			name:      "pods missing, from a previous revision, or starting",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new"), testShardSet("logic", 2, "new")},
 			pods:      []corev1.Pod{previousRevision, testPod("logic", 1, "new", running, false)},
 			lines: []string{
@@ -273,44 +314,67 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 				"  logic-0  Pending  Pod not created yet",
 				"  logic-1  Running  Server is starting",
 			},
+			problems: []string{
+				"Pod all-0 (Pending): Previous pod is waiting to be replaced",
+				"Pod logic-0 (Pending): Pod not created yet",
+				"Pod logic-1 (Running): Server is starting",
+			},
 		},
 		{
 			name:      "unschedulable",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{unschedulable},
 			lines: []string{
 				"Shard set 'all': 0/1 pods ready",
 				"  all-0  Pending  Cannot be scheduled: 0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
 			},
+			problems: []string{"Pod all-0 (Pending): Cannot be scheduled: 0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector."},
 		},
 		{
 			name:      "restarted",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{restarted},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 2 times)"},
+			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 2 times)"},
 		},
 		{
 			name:      "crashing",
-			target:    "new",
+			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
+			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
+			failedPod: "all-0",
+		},
+		{
+			// Redeploying the same image: the pod crashing from before the deploy may be
+			// about to be replaced, so it does not fail the wait at once.
+			name:      "crashing pod from before the deploy",
+			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
+			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
+		},
+		{
+			name:      "crashing pod created by the deploy",
+			target:    readinessTarget{imageTag: "new", failPodsSince: deployStart},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{newCrashing},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
+			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
 			failedPod: "all-0",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := evaluateGameServerReadiness(tt.target, tt.shardSets, tt.pods)
-			assert.Equal(t, tt.ready, got.ready)
 			assert.Equal(t, tt.lines, got.lines)
+			assert.Equal(t, tt.problems, got.problems)
+			assert.Equal(t, len(tt.problems) == 0, got.ready())
 			assert.Equal(t, tt.failedPod, got.failedPod)
-			if tt.ready {
-				assert.Empty(t, got.problems)
-			} else {
-				assert.NotEmpty(t, got.problems)
-			}
 		})
 	}
 }
