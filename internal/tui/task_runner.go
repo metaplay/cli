@@ -397,7 +397,7 @@ func (m *TaskRunner) result(ctx context.Context) error {
 		switch {
 		case !wasInterrupted && task == returnedTask:
 			// The command shows it
-		case wasInterrupted && !task.cleanup && errors.Is(task.error, context.Canceled):
+		case !task.cleanup && causedByCancellation(ctx, task.error):
 			// Caused by the interrupt
 		default:
 			unreported = append(unreported, withTaskTitle(task))
@@ -418,6 +418,11 @@ func (m *TaskRunner) result(ctx context.Context) error {
 		return &TasksError{Err: err, Unreported: unreported}
 	}
 	return err
+}
+
+// causedByCancellation reports whether a task's failure is the cancellation of ctx stopping it.
+func causedByCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
 }
 
 // withTaskTitle prefixes a failed task's error with its title. A CLIError is left as it is: its own
@@ -474,8 +479,7 @@ func (m *TaskRunner) executeTasks(ctx context.Context) {
 		if err != nil {
 			log.Debug().Msgf("Task failed: %s: %v", task.title, err)
 			// A failure that the cancellation caused leaves the skipping to the check of ctx above
-			causedByCancellation := ctx.Err() != nil && errors.Is(err, context.Canceled)
-			if !task.cleanup && !causedByCancellation {
+			if !task.cleanup && !causedByCancellation(ctx, err) {
 				stopped = true
 			}
 		} else {
