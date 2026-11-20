@@ -5,8 +5,6 @@
 package cmd
 
 import (
-	"fmt"
-
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -36,15 +34,18 @@ func init() {
 		Long: renderLong(&o, `
 			Check the current status of a game server deployment.
 
-			Runs the checks of 'deploy server' once, without waiting for them to pass:
+			Runs the kinds of checks that 'deploy server' waits for, once, without waiting
+			for them to pass:
 			- All expected pods are present, run the deployed image, and are ready.
 			- Client-facing domain name resolves.
-			- Game server accepts client connections.
+			- Game server accepts 5 client connections at once.
 			- LiveOps Dashboard domain name resolves.
 			- LiveOps Dashboard responds with a success or a redirect to its login.
 
-			All checks run, and each one prints its result. The command fails with exit
-			code 1 if any check fails, including while a deployment is still starting.
+			Each check prints its result. A check of an endpoint is skipped when its domain
+			name does not resolve. If a pod's server failed to start, its last logs are
+			shown. The command fails with exit code 1 if any check fails, including while
+			a deployment is still starting.
 
 			{Arguments}
 
@@ -93,7 +94,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %w", err)
+		return clierrors.Wrap(err, "Failed to initialize Helm config")
 	}
 
 	// Determine if there's an existing release deployed.
@@ -115,7 +116,8 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
 		log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
 		// Print image name/tag from chart values
-		if imageTag, ok := existingRelease.Config["image"].(map[string]any)["tag"].(string); ok {
+		imageConfig, _ := existingRelease.Config["image"].(map[string]any)
+		if imageTag, ok := imageConfig["tag"].(string); ok {
 			log.Info().Msgf("  Image tag:         %s", styles.RenderTechnical(imageTag))
 		} else {
 			log.Info().Msg("  Image tag:         <not available>")
@@ -128,10 +130,12 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 
+	log.Info().Msg(styles.RenderMuted("Checking the game server status..."))
 	status, err := targetEnv.CheckServerStatus(cmd.Context())
 	if err != nil {
 		return err
 	}
+	log.Info().Msg("")
 
 	log.Info().Msg("Game server status:")
 	for _, check := range status.Checks {
@@ -151,6 +155,16 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 		}
 	}
 	log.Info().Msg("")
+
+	for _, note := range status.Notes {
+		log.Info().Msg(styles.RenderAttention(note))
+	}
+	if len(status.FailedPodLogs) > 0 {
+		for _, line := range status.FailedPodLogs {
+			log.Info().Msg(line)
+		}
+		log.Info().Msg("")
+	}
 
 	if err := status.Err(); err != nil {
 		return err

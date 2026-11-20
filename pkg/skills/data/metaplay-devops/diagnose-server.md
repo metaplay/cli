@@ -22,7 +22,7 @@ Whole-server triage. For a single player's incident report from the dashboard, u
 
 ## Health checks (what `server-status` actually checks)
 
-`metaplay debug server-status <env>` runs the checks of `metaplay deploy server` once, without waiting, and prints the result of each. It takes a few seconds, and exits with code 1 if any check fails, including while a deploy is still rolling out:
+`metaplay debug server-status <env>` runs the kinds of checks that `metaplay deploy server` waits for, once, without waiting, and prints the result of each. It usually takes a few seconds, shows the last logs of a pod whose server failed to start, and exits with code 1 if any check fails, including while a deploy is still rolling out:
 
 1. All expected pods are present, run the deployed image, and are ready.
 2. Client-facing domain resolves.

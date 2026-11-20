@@ -750,27 +750,38 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 // showPodLogs shows the last logs of a game server pod's server container that show its
 // failure in the task output, or why they could not be fetched.
 func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) {
+	notes, logLines := failedPodLogLines(ctx, kubeCli, podName, source)
+	for _, note := range notes {
+		output.AppendLinef("%s", note)
+	}
+	// Route pod logs through TaskOutput footer to avoid writing directly to stdout while
+	// Bubble Tea is managing the terminal. Footer lines are not subject to the log line cap.
+	if len(logLines) > 0 {
+		output.SetFooterLines(logLines)
+	}
+}
+
+// failedPodLogLines returns the last logs of a game server pod's server container that
+// show its failure, with a heading, and notes on why logs could not be fetched.
+func failedPodLogLines(ctx context.Context, kubeCli *KubeClient, podName string, source podLogSource) (notes []string, logLines []string) {
 	if source == noPodLogs {
-		return
+		return nil, nil
 	}
 	podLogs, err := fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, source == previousPodLogs)
 	// The previous container's logs are gone if Kubernetes has cleaned the container up.
 	// The current container's logs may show the same failure in progress.
 	if err != nil && source == previousPodLogs {
-		output.AppendLinef("Failed to get the logs of the previous run of pod %s, showing the current run: %v", podName, err)
+		notes = append(notes, fmt.Sprintf("Failed to get the logs of the previous run of pod %s, showing the current run: %v", podName, err))
 		podLogs, err = fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, false)
 	}
 	if err != nil {
-		output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
-		return
+		return append(notes, fmt.Sprintf("Failed to get logs from pod %s: %v", podName, err)), nil
 	}
-	// Route pod logs through TaskOutput footer to avoid writing directly to stdout while
-	// Bubble Tea is managing the terminal. Footer lines are not subject to the log line cap.
-	logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
+	logLines = []string{fmt.Sprintf("Logs from pod %s:", podName)}
 	for line := range strings.SplitSeq(podLogs, "\n") {
 		logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
 	}
-	output.SetFooterLines(logLines)
+	return notes, logLines
 }
 
 // fetchPodLogs fetches logs for a specific pod and container. With previous, it fetches
@@ -951,27 +962,31 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 // \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
 const gameServerClientPort = 9339
 
+// The HTTP client of probeHTTPServer.
+var probeHTTPClient = &http.Client{
+	Timeout: 5 * time.Second,
+	// Check the status of the response itself, not of where it redirects to.
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 // probeHTTPServer makes one GET request to url. A success or a redirect status passes:
 // the LiveOps Dashboard redirects to its login. It returns the status of the response,
 // if there was one, and an error unless it passed.
 func probeHTTPServer(ctx context.Context, url string) (string, error) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		// Check the status of the response itself, not of where it redirects to.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	// With this header, StackAPI responds with a 302 redirect instead of 403 Forbidden.
 	req.Header.Add("Sec-Fetch-Mode", "navigate")
-	resp, err := client.Do(req)
+	resp, err := probeHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
+	// Read the body, so that the connection can be reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
 		return resp.Status, fmt.Errorf("received status %s", resp.Status)
@@ -1011,8 +1026,8 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 }
 
 // WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
-// and the LiveOps Dashboard after a deploy. baseline is the state before the deploy,
-// which CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from
+// and the LiveOps Dashboard after a deploy. baseline, which must not be nil, is the state
+// before the deploy, which CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from
 // before the deploy then fails the wait only once the operator has had time to replace
 // it. CheckServerStatus makes the same checks once, without waiting.
 func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {

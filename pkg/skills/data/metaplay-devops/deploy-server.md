@@ -37,7 +37,7 @@ Always deploy a unique tag. Never reuse a tag (e.g. `latest`, `latest-local`, or
 
 ## Verification
 
-`deploy server` waits at the end until the health checks of `debug server-status` pass:
+`deploy server` waits at the end until these health checks pass. `debug server-status` makes the same kinds of checks once:
 
 - All expected pods are present, healthy, and ready.
 - Client-facing domain resolves and the game server responds.
