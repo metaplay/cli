@@ -7,6 +7,7 @@ package kubeutil
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -245,7 +246,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	stdOut := new(strings.Builder)
 	stdErr := new(strings.Builder)
 
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	err = streamWithContext(ctx, exec, remotecommand.StreamOptions{
 		Stdout: stdOut,
 		Stderr: stdErr,
 		Tty:    false,
@@ -256,4 +257,74 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	}
 
 	return stdOut.String(), stdErr.String(), nil
+}
+
+// RemoveFilesInDebugContainer removes files in the debug container with a single exec. Files that
+// do not exist are not an error.
+func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, paths ...string) error {
+	command := removeFilesCommand(paths)
+	log.Debug().Msgf("Remove files from debug container: %s", command)
+	_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, command)
+	return err
+}
+
+// removeFilesCommand returns the bash command that removes the files. It first stops a download of
+// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
+// the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
+// container ends.
+func removeFilesCommand(paths []string) string {
+	var command strings.Builder
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
+		// The pattern matches the download's shell and its 'dd'. Its [d] keeps it from matching
+		// this command's own shell. Killing the shell's children stops the 'gzip'.
+		pattern := shellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
+		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
+	}
+	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
+}
+
+// shellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
+// one built from a user's --output, means only itself.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// streamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
+// client-go flattens the cancellation into its error text, so without this, callers could not
+// tell a cancelled command from a failed one with errors.Is.
+func streamWithContext(ctx context.Context, exec remotecommand.Executor, options remotecommand.StreamOptions) error {
+	err := exec.StreamWithContext(ctx, options)
+	if err != nil && ctx.Err() != nil {
+		return fmt.Errorf("%w: %w", ctx.Err(), err)
+	}
+	return err
+}
+
+// ExecInDebugContainerUntilDone is ExecInDebugContainer for a command that must not be abandoned
+// when ctx is cancelled: cancelling the exec stream does not stop the process in the pod, which
+// would go on unobserved. The command is given up only grace after ctx is cancelled, so an
+// interrupted CLI command does not wait for it forever. The caller must not call this with a ctx
+// that is already cancelled: the task runner does not start a task then.
+func ExecInDebugContainerUntilDone(ctx context.Context, grace time.Duration, kubeCli *envapi.KubeClient, podName, debugContainerName, command string) (string, string, error) {
+	continued, cancel := continueAfterCancel(ctx, grace)
+	defer cancel()
+	return ExecInDebugContainer(continued, kubeCli, podName, debugContainerName, command)
+}
+
+// continueAfterCancel returns a context that is not cancelled with ctx, but grace after ctx is.
+func continueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+	continued, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	stopWaiting := context.AfterFunc(ctx, func() {
+		select {
+		case <-time.After(grace):
+			cancel()
+		case <-continued.Done(): // cancel was called early
+		}
+	})
+	return continued, func() {
+		stopWaiting()
+		cancel()
+	}
 }
