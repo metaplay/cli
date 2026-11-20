@@ -294,15 +294,30 @@ func shellQuote(s string) string {
 
 // StreamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
 // client-go flattens the cancellation into its error text, so without this, callers could not
-// tell a cancelled command from a failed one with errors.Is. An error that already is ctx's error
-// is returned as it is.
+// tell a cancelled command from a failed one with errors.Is.
 func StreamWithContext(ctx context.Context, exec remotecommand.Executor, options remotecommand.StreamOptions) error {
 	err := exec.StreamWithContext(ctx, options)
 	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
-		return fmt.Errorf("%w: %w", ctx.Err(), err)
+		return &endedStreamError{ctxErr: ctx.Err(), streamErr: err}
 	}
 	return err
 }
+
+// endedStreamError is the error of a stream that failed after its context was done.
+type endedStreamError struct {
+	ctxErr    error
+	streamErr error
+}
+
+// Error names the context's error once: client-go's text usually ends with it already.
+func (e *endedStreamError) Error() string {
+	if strings.Contains(e.streamErr.Error(), e.ctxErr.Error()) {
+		return e.streamErr.Error()
+	}
+	return e.ctxErr.Error() + ": " + e.streamErr.Error()
+}
+
+func (e *endedStreamError) Unwrap() []error { return []error{e.ctxErr, e.streamErr} }
 
 // ExecInDebugContainerUntilDone is ExecInDebugContainer for a command that must not be abandoned
 // when ctx is cancelled: cancelling the exec stream does not stop the process in the pod, which

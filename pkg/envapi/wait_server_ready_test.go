@@ -5,15 +5,19 @@
 package envapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/metaplay/cli/internal/tui"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func TestBuildHealthCheckPacket(t *testing.T) {
@@ -158,7 +162,8 @@ func TestValidateProtocolHeader(t *testing.T) {
 }
 
 // A cancellation ends the wait for an HTTP server at once, with the cancellation as the error:
-// both while a request is in flight and during the pause between two requests.
+// both while a request is in flight and during the pause between two requests. The cancelled
+// request is not logged as a connection error that is retried.
 func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
 	cases := map[string]http.HandlerFunc{
 		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
@@ -173,6 +178,16 @@ func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			time.AfterFunc(100*time.Millisecond, cancel)
 
+			// With no display, the wait's output lines are logged
+			tui.SetInteractiveMode(false)
+			var logged bytes.Buffer
+			previous := log.Logger
+			log.Logger = zerolog.New(&logged)
+			t.Cleanup(func() {
+				log.Logger = previous
+				tui.SetInteractiveMode(true)
+			})
+
 			start := time.Now()
 			err := waitForHTTPServerToRespond(ctx, &tui.TaskOutput{}, server.URL, time.Minute)
 
@@ -183,6 +198,26 @@ func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
 			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
 				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
 			}
+			if strings.Contains(logged.String(), "Error connecting") {
+				t.Errorf("the cancelled request was logged as a connection error:\n%s", logged.String())
+			}
 		})
 	}
+}
+
+// pause ends at once when the context is done, and reports which of the two ended it.
+func TestPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		start := time.Now()
+		if !pause(ctx, time.Second) || time.Since(start) != time.Second {
+			t.Errorf("pause returned after %s, want true after 1s", time.Since(start))
+		}
+
+		time.AfterFunc(100*time.Millisecond, cancel)
+		start = time.Now()
+		if pause(ctx, time.Second) || time.Since(start) != 100*time.Millisecond {
+			t.Errorf("pause returned after %s, want false at the cancellation at 100ms", time.Since(start))
+		}
+	})
 }

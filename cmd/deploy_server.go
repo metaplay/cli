@@ -474,6 +474,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		})
 	}
 
+	// Whether a task below has uninstalled the existing release, or tried to
+	uninstalled := false
+
 	// If there's a pending release, uninstall it first.
 	if uninstallExistingRelease {
 		taskRunner.AddTask("Uninstall existing Helm release", func(output *tui.TaskOutput) error {
@@ -485,6 +488,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				return fmt.Errorf("failed to uninstall Helm release %s: %w", existingRelease.Name, err)
 			}
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			uninstalled = true
 			return nil
 		})
 	}
@@ -498,6 +502,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			}
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			uninstalled = true
 			return err
 		})
 	}
@@ -554,8 +559,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
+		// An interrupt while the chart loads stops the deploy before it changes anything. Not after
+		// an uninstall: stopping then would leave the environment without a game server.
+		ctx := cmd.Context()
+		if uninstalled {
+			ctx = context.WithoutCancel(ctx)
+		}
 		_, err := helmutil.HelmUpgradeOrInstall(
-			cmd.Context(),
+			ctx,
 			output,
 			actionConfig,
 			existingRelease,

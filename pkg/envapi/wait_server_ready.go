@@ -442,6 +442,16 @@ func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *Tar
 	return isReady, statusLines, nil
 }
 
+// pause waits for d between two attempts of a wait. It returns false at once when ctx is done.
+func pause(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout occurs.
 func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration) error {
 	// Get target gameServer.
@@ -491,10 +501,12 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		}
 
 		// Wait a bit to check again (slower updates in non-interactive mode to avoid spamming the log).
+		interval := 2 * time.Second
 		if tui.IsInteractiveMode() {
-			time.Sleep(200 * time.Millisecond)
-		} else {
-			time.Sleep(2 * time.Second)
+			interval = 200 * time.Millisecond
+		}
+		if !pause(ctx, interval) {
+			return fmt.Errorf("stopped waiting for pods to be ready: %w", ctx.Err())
 		}
 	}
 	return errors.New("timeout waiting for pods to be ready")
@@ -560,10 +572,8 @@ func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostna
 		attemptNdx += 1
 
 		// Delay before trying again -- these can take a while so avoid spamming the log
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, 5*time.Second) {
 			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
-		case <-time.After(5 * time.Second):
 		}
 	}
 }
@@ -604,7 +614,10 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 				return nil
 			}
 
-			time.Sleep(1 * time.Second) // Wait before retrying
+			// Wait before retrying
+			if !pause(ctx, 1*time.Second) {
+				return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
+			}
 		}
 
 		// Check for timeout.
@@ -731,10 +744,8 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		}
 
 		// Wait before retrying.
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, 1*time.Second) {
 			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-		case <-time.After(1 * time.Second):
 		}
 
 		// Check for timeout.

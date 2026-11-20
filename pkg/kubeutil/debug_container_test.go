@@ -90,8 +90,8 @@ func (f fakeExecutor) StreamWithContext(context.Context, remotecommand.StreamOpt
 	return f.err
 }
 
-// Once the context is done, a stream's error counts as a cancellation, and the context's error is
-// not repeated in the text when the stream already returned it.
+// Once the context is done, a stream's error counts as a cancellation, and the text names the
+// cancellation once: also when client-go has flattened it into its own error text.
 func TestStreamWithContextWrapsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	failure := errors.New("error sending request")
@@ -104,6 +104,14 @@ func TestStreamWithContextWrapsCancellation(t *testing.T) {
 	err := StreamWithContext(ctx, fakeExecutor{failure}, remotecommand.StreamOptions{})
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, failure) {
 		t.Errorf("error = %v, want both the cancellation and the stream's error", err)
+	}
+	if got, want := err.Error(), "context canceled: error sending request"; got != want {
+		t.Errorf("error text = %q, want %q", got, want)
+	}
+	flattened := errors.New(`error sending request: Post "https://host/exec": context canceled`)
+	err = StreamWithContext(ctx, fakeExecutor{flattened}, remotecommand.StreamOptions{})
+	if !errors.Is(err, context.Canceled) || err.Error() != flattened.Error() {
+		t.Errorf("error = %v, want a cancellation with the stream's text as it is", err)
 	}
 	err = StreamWithContext(ctx, fakeExecutor{context.Canceled}, remotecommand.StreamOptions{})
 	if err == nil || err.Error() != "context canceled" {
