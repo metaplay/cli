@@ -41,11 +41,16 @@ type NewGameServerCR struct {
 		} `json:"image"`
 
 		Shards []struct {
+			ClusterName          *string           `json:"clusterName,omitempty"`
 			ClusterLabelSelector map[string]string `json:"clusterLabelSelector,omitempty"`
-			MaxNodeCount         *int              `json:"maxNodeCount,omitempty"`
-			MinNodeCount         *int              `json:"minNodeCount,omitempty"`
-			Name                 string            `json:"name,omitempty"`
-			PodTemplate          struct {
+			Image                *struct {
+				Repository string `json:"repository,omitempty"`
+				Tag        string `json:"tag,omitempty"`
+			} `json:"image,omitempty"`
+			MaxNodeCount *int   `json:"maxNodeCount,omitempty"`
+			MinNodeCount *int   `json:"minNodeCount,omitempty"`
+			Name         string `json:"name,omitempty"`
+			PodTemplate  struct {
 				ContainerTemplate struct {
 					ExtraPorts []corev1.ContainerPort      `json:"extraPorts,omitempty"`
 					Resources  corev1.ResourceRequirements `json:"resources"`

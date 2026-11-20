@@ -5,6 +5,7 @@
 package envapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -226,6 +227,14 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
 	exited := testPod("all", 0, "new", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}, false)
+	exited.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
+	exitedAgain := exited
+	exitedAgain.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:                 shardServerContainerName,
+		State:                exited.Status.ContainerStatuses[0].State,
+		RestartCount:         2,
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}},
+	}}
 	imagePullBackOff := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}, false)
 	invalidImage := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "InvalidImageName", Message: "couldn't parse image name"}}, false)
 	// A pod that ran before, and now cannot start a container: its previous run's logs
@@ -387,14 +396,37 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
 		},
 		{
-			name:      "exited",
+			// Kubernetes restarts the server, and one restart is allowed.
+			name:      "exited once",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{exited},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server exited: Error (exit code 1)"},
-			problems:  []string{"Pod all-0 (Failed): Server exited: Error (exit code 1)"},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Pending  Server exited: Error (exit code 1), restarting"},
+			problems:  []string{"Pod all-0 (Pending): Server exited: Error (exit code 1), restarting"},
+		},
+		{
+			name:      "exited after two restarts",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{exitedAgain},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server exited: Error (exit code 1) (restarted 2 times, last exit code 1 (Error))"},
+			problems:  []string{"Pod all-0 (Failed): Server exited: Error (exit code 1) (restarted 2 times, last exit code 1 (Error))"},
 			failedPod: "all-0",
 			logs:      currentPodLogs,
+		},
+		{
+			name:      "shard set with its own image",
+			target:    readinessTarget{imageTag: "new", shardImageTags: map[string]string{"canary": "pinned"}},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new"), testShardSet("canary", 1, "pinned")},
+			pods:      []corev1.Pod{testPod("all", 0, "new", running, true), testPod("canary", 0, "pinned", running, true)},
+			lines:     []string{"Shard set 'all': 1/1 pods ready", "  all-0  Ready", "Shard set 'canary': 1/1 pods ready", "  canary-0  Ready"},
+		},
+		{
+			name:      "shard set with its own image, not applied yet",
+			target:    readinessTarget{imageTag: "new", shardImageTags: map[string]string{"canary": "pinned"}},
+			shardSets: []appsv1.StatefulSet{testShardSet("canary", 1, "new")},
+			lines:     []string{"Shard set 'canary': waiting for the operator to apply the new image"},
+			problems:  []string{"Shard set 'canary' still runs image new, not pinned"},
 		},
 		{
 			// Kubernetes retries the pull, which may succeed.
@@ -471,10 +503,19 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			logs:      previousPodLogs,
 		},
 		{
-			// When every declared shard set may run on an edge cluster, which is not
-			// checked, there is nothing to wait for on the primary cluster.
-			name:   "only edge shard sets declared",
-			target: readinessTarget{imageTag: "new", shardSets: map[string]bool{"edge-1": false, "edge-2": false}},
+			// When every declared shard set may run on an edge cluster, one on the
+			// primary cluster is still waited for.
+			name:     "only edge shard sets declared, none created",
+			target:   readinessTarget{imageTag: "new", shardSets: map[string]bool{"edge-1": false, "edge-2": false}},
+			lines:    []string{"Waiting for the operator to create the shard sets"},
+			problems: []string{"No shard sets found"},
+		},
+		{
+			name:      "only edge shard sets declared, one on the primary cluster",
+			target:    readinessTarget{imageTag: "new", shardSets: map[string]bool{"edge-1": false, "edge-2": false}},
+			shardSets: []appsv1.StatefulSet{testShardSet("edge-1", 1, "new")},
+			pods:      []corev1.Pod{testPod("edge-1", 0, "new", running, true)},
+			lines:     []string{"Shard set 'edge-1': 1/1 pods ready", "  edge-1-0  Ready"},
 		},
 	}
 	for _, tt := range tests {
@@ -487,6 +528,21 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			assert.Equal(t, tt.logs, got.failedPodLogs)
 		})
 	}
+}
+
+func TestReadinessTarget(t *testing.T) {
+	var cr NewGameServerCR
+	err := json.Unmarshal([]byte(`{"spec": {"image": {"tag": "new"}, "shards": [
+		{"name": "all"},
+		{"name": "by-selector", "clusterLabelSelector": {"region": "eu"}},
+		{"name": "by-name", "clusterName": "metaplay-d1-us"},
+		{"name": "canary", "image": {"tag": "pinned"}}
+	]}}`), &cr)
+	assert.NoError(t, err)
+	target := (&TargetGameServer{GameServerNewCR: &cr}).readinessTarget()
+	assert.Equal(t, "new", target.imageTag)
+	assert.Equal(t, map[string]bool{"all": true, "by-selector": false, "by-name": false, "canary": true}, target.shardSets)
+	assert.Equal(t, map[string]string{"canary": "pinned"}, target.shardImageTags)
 }
 
 func TestSparedPods(t *testing.T) {

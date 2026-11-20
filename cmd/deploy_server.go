@@ -562,7 +562,8 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			if cmd.Context().Err() != nil {
 				return err
 			}
-			output.AppendLinef("Warning: %v. Continuing without it, so a server that was failing before the deploy may fail the wait.", err)
+			output.AppendLinef("Warning: Could not record the game server's state before the deploy, continuing without it: %v", err)
+			output.AppendLinef("A server that was failing before the deploy may now fail the readiness wait before it is replaced.")
 		}
 		_, err := helmutil.HelmUpgradeOrInstall(
 			output,
