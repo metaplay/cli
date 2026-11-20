@@ -124,6 +124,9 @@ func TestTaskRunnerCtrlCCancelsRunningTaskAndSkipsTheRest(t *testing.T) {
 	if got := unreported(err); got != "" {
 		t.Errorf("unreported failures = %q, want none: the failure was caused by the interrupt", got)
 	}
+	if got := strings.Join(d.runner.notStarted, ","); got != "download" {
+		t.Errorf("not started because of the interrupt = %q, want download", got)
+	}
 }
 
 // A task that ignores the context runs to its end after Ctrl-C, but the next ordinary task does not

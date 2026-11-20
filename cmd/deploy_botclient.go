@@ -327,6 +327,7 @@ func (o *deployBotClientOpts) Run(cmd *cobra.Command) error {
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy loadtest Helm chart", func(output *tui.TaskOutput) error {
 		_, err = helmutil.HelmUpgradeOrInstall(
+			cmd.Context(),
 			output,
 			actionConfig,
 			existingRelease,
