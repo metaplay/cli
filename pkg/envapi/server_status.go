@@ -94,9 +94,15 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	dashboardURL := "https://" + envDetails.Deployment.AdminHostname
 	var pods, serverDomain, endpoint, dashboardDomain, dashboard ServerCheck
 	var readiness gameServerReadiness
+	var notes, failedPodLogs []string
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		pods, readiness = checkPods(ctx, kubeCli, gameServer)
+		if readiness.failedPod != "" {
+			logsCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
+			defer cancel()
+			notes, failedPodLogs = failedPodLogLines(logsCtx, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+		}
 	})
 	wg.Go(func() {
 		name := fmt.Sprintf("Game server endpoint %s:%d", serverHostname, gameServerClientPort)
@@ -112,32 +118,25 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	})
 	wg.Wait()
 
-	status := ServerStatus{Checks: []ServerCheck{pods, serverDomain, endpoint, dashboardDomain, dashboard}}
-	if readiness.failedPod != "" {
-		logsCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
-		defer cancel()
-		status.Notes, status.FailedPodLogs = failedPodLogLines(logsCtx, kubeCli, readiness.failedPod, readiness.failedPodLogs)
-	}
 	if ctx.Err() != nil {
 		return ServerStatus{}, clierrors.Wrap(ctx.Err(), "Stopped checking the game server status")
 	}
-	status.suggestion = targetEnv.notReadySuggestion(pods, readiness, len(status.FailedPodLogs) > 0)
-	return status, nil
+	return ServerStatus{
+		Checks:        []ServerCheck{pods, serverDomain, endpoint, dashboardDomain, dashboard},
+		FailedPodLogs: failedPodLogs,
+		Notes:         notes,
+		suggestion:    targetEnv.notReadySuggestion(pods.Failed(), readiness),
+	}, nil
 }
 
-// notReadySuggestion tells what to do when the game server is not ready, given the check
-// of its pods.
-func (targetEnv *TargetEnvironment) notReadySuggestion(pods ServerCheck, readiness gameServerReadiness, hasLogs bool) string {
-	logsCommand := fmt.Sprintf("metaplay debug logs %s", targetEnv.HumanID)
+// notReadySuggestion tells what to do when the game server is not ready, given whether
+// the check of its pods failed and their readiness.
+func (targetEnv *TargetEnvironment) notReadySuggestion(podsFailed bool, readiness gameServerReadiness) string {
 	switch {
-	case readiness.failedPod != "" && readiness.failedPodLogs == noPodLogs:
-		return fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", readiness.failedPod)
-	case readiness.failedPod != "" && hasLogs:
-		return "Check the pod logs above for details, or run: " + logsCommand
 	case readiness.failedPod != "":
-		return "Check the server logs with: " + logsCommand
-	case pods.Failed():
-		return "Run this command again to see whether the game server is still starting, or check the server logs with: " + logsCommand
+		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs)
+	case podsFailed:
+		return fmt.Sprintf("Run this command again to see whether the game server is still starting, or check the server logs with: metaplay debug logs %s", targetEnv.HumanID)
 	default:
 		return "The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to 15 minutes to resolve"
 	}

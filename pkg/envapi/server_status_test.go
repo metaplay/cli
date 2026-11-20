@@ -113,24 +113,20 @@ func TestServerStatusErr(t *testing.T) {
 
 func TestNotReadySuggestion(t *testing.T) {
 	targetEnv := &TargetEnvironment{HumanID: "nimbly"}
-	podsFailed := ServerCheck{Name: "Pods", Problems: []string{"Pod all-0 (Pending): starting"}}
-	podsReady := ServerCheck{Name: "Pods"}
 	tests := []struct {
-		name      string
-		pods      ServerCheck
-		readiness gameServerReadiness
-		hasLogs   bool
-		want      string
+		name       string
+		podsFailed bool
+		readiness  gameServerReadiness
+		want       string
 	}{
-		{name: "never started", pods: podsFailed, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: noPodLogs}, want: "did not start, so it has no logs"},
-		{name: "failed with logs shown", pods: podsFailed, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: previousPodLogs}, hasLogs: true, want: "Check the pod logs above"},
-		{name: "failed, logs not fetched", pods: podsFailed, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: currentPodLogs}, want: "Check the server logs with: metaplay debug logs nimbly"},
-		{name: "starting", pods: podsFailed, want: "still starting"},
-		{name: "network only", pods: podsReady, want: "DNS or the load balancer"},
+		{name: "never started", podsFailed: true, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: noPodLogs}, want: "pod all-0 did not start, so it has no logs"},
+		{name: "failed with logs", podsFailed: true, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: previousPodLogs}, want: "Check the pod logs above for details, or run: metaplay debug logs nimbly"},
+		{name: "starting", podsFailed: true, want: "still starting"},
+		{name: "network only", podsFailed: false, want: "DNS or the load balancer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, targetEnv.notReadySuggestion(tt.pods, tt.readiness, tt.hasLogs), tt.want)
+			assert.Contains(t, targetEnv.notReadySuggestion(tt.podsFailed, tt.readiness), tt.want)
 		})
 	}
 }

@@ -724,13 +724,9 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
 			showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
-			suggestion := fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID)
-			if readiness.failedPodLogs == noPodLogs {
-				suggestion = "The server container did not start, so it has no logs. Fix the cause above, and deploy again"
-			}
 			return clierrors.New("Game server failed to start").
 				WithDetails(fmt.Sprintf("Pod %s: %s", readiness.failedPod, readiness.failure)).
-				WithSuggestion(suggestion)
+				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs))
 		}
 
 		if readiness.ready() {
@@ -759,6 +755,15 @@ func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClien
 	if len(logLines) > 0 {
 		output.SetFooterLines(logLines)
 	}
+}
+
+// failedPodSuggestion tells what to do about a pod whose server failed to start, after
+// its logs have been shown with showPodLogs or failedPodLogLines.
+func failedPodSuggestion(humanID, podName string, source podLogSource) string {
+	if source == noPodLogs {
+		return fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", podName)
+	}
+	return fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", humanID)
 }
 
 // failedPodLogLines returns the last logs of a game server pod's server container that
