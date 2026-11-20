@@ -383,11 +383,11 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 	runner.AddTask("install", func(*TaskOutput) error { return nil })
 	output := &runner.tasks[0].output
 
-	if output.logsLines() {
+	if output.LogsLines() {
 		t.Error("lines logged while the display is on screen")
 	}
 	runner.progress.closeDisplay()
-	if !output.logsLines() {
+	if !output.LogsLines() {
 		t.Error("lines not logged after the display closed")
 	}
 }

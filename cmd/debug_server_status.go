@@ -127,7 +127,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	taskRunner := tui.NewTaskRunner()
 
 	// Validate the game server status.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner)
+	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, nil)
 	if err != nil {
 		return err
 	}

@@ -51,8 +51,9 @@ type TaskOutput struct {
 	progress *plainProgress // The runner's progress reporting, which logs lines once the display has closed
 }
 
-// logsLines reports whether appended lines are logged, which they are when there is no display.
-func (to *TaskOutput) logsLines() bool {
+// LogsLines reports whether the output is logged, which it is when there is no display: in
+// non-interactive mode, and once the display has closed. Each update is then a new log line.
+func (to *TaskOutput) LogsLines() bool {
 	return !isInteractiveMode || (to.progress != nil && to.progress.isLogging())
 }
 
@@ -68,7 +69,7 @@ func (to *TaskOutput) AppendLine(line string) {
 	to.logLines = append(to.logLines, line)
 	to.mu.Unlock()
 
-	if to.logsLines() {
+	if to.LogsLines() {
 		log.Info().Msgf("  %s", line)
 	}
 }
@@ -89,7 +90,7 @@ func (to *TaskOutput) SetHeaderLines(lines []string) {
 
 // logWhenNoDisplay logs the lines when there is no display to show them on.
 func (to *TaskOutput) logWhenNoDisplay(lines []string) {
-	if to.logsLines() {
+	if to.LogsLines() {
 		for _, line := range lines {
 			log.Info().Msgf("  %s", line)
 		}

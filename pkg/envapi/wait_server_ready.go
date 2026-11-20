@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -21,7 +22,9 @@ import (
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // \todo is there an official k8s type for this?
@@ -92,17 +95,16 @@ func validateProtocolHeader(info protocolHeaderInfo) error {
 type GameServerPodStatus struct {
 	Phase   GameServerPodPhase `json:"phase"`
 	Message string             `json:"message"`
-	Details any                `json:"details,omitempty"`
+	logs    podLogSource       // For a failed pod, which of its logs show the failure
 }
 
-// Fetch all game server stateful sets (belonging to a particular gameserver deployment).
-// \todo If gameServer is specified (only for old operator), only accept statefulsets owned by said gameServer
+// Fetch all game server stateful sets. With the old operator's CR, only those it owns.
 // \todo For new operator, figure out how to filter them (they currently have no labels)
-func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameServer *NewGameServerCR, oldGameServer *OldGameServerCR) ([]appsv1.StatefulSet, error) {
+func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, oldGameServer *OldGameServerCR) ([]appsv1.StatefulSet, error) {
 	// Fetch all stateful sets from namespace.
 	// log.Debug().Msgf("Fetch game server stateful sets in namespace: %s", namespace)
 	statefulSets, err := kubeCli.Clientset.AppsV1().StatefulSets(kubeCli.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=metaplay-server", // \todo only old operator adds this label for now
+		LabelSelector: metaplayGameServerPodLabelSelector, // \todo only old operator adds this label for now
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch stateful sets: %w", err)
@@ -137,7 +139,7 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 				}
 			}
 		} else {
-			// No owner, gameserver specified accept all stateful sets
+			// Without the old operator's CR, accept all stateful sets
 			// \todo Figure out how to handle proper owner & revision
 			ownedSets = append(ownedSets, sts)
 		}
@@ -152,14 +154,12 @@ func fetchGameServerShardSets(ctx context.Context, kubeCli *KubeClient, newGameS
 	return ownedSets, nil
 }
 
-// FetchGameServerPods retrieves pods with a specific label selector in a namespace.
-// If (optional) shardSets is specified, only return pods owned by said stateful set.
-// Otherwise, all pods are returned.
+// FetchGameServerPods returns all game server pods in the environment's namespace.
 // \todo Figure out how to handle multi-region gameservers
 func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod, error) {
 	log.Debug().Msgf("Fetch game server pods in namespace: %s", kubeCli.Namespace)
 	pods, err := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=metaplay-server",
+		LabelSelector: metaplayGameServerPodLabelSelector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch pods: %w", err)
@@ -167,279 +167,414 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 	return pods.Items, nil
 }
 
-// shardPodStates holds the shard name and its pod states in order.
-type shardPodStates struct {
-	ShardName string
-	Pods      []*corev1.Pod
+// gameServerReadiness is the result of one check of whether a game server is up.
+type gameServerReadiness struct {
+	lines         []string     // Status of each shard set and its pods, for display
+	problems      []string     // What is not ready yet, one line each, or none when ready
+	failedPod     string       // Name of a pod whose server failed to start, or empty
+	failure       string       // Why failedPod failed
+	failedPodLogs podLogSource // Which logs of failedPod show the failure
 }
 
-// Fetch all game server pods from a namespace for the given shardSets.
-// Return a slice of (shardName, []pods) in the same order as shardSets.
-func fetchGameServerPodsByShardSet(ctx context.Context, kubeCli *KubeClient, shardSets []appsv1.StatefulSet) ([]shardPodStates, error) {
-	// Fetch all gameserver pods in the namespace
+// podLogSource tells which logs of a pod's server container show its failure.
+type podLogSource int
+
+const (
+	noPodLogs       podLogSource = iota // The server never started, so it has no logs
+	currentPodLogs                      // The current container's
+	previousPodLogs                     // The previous container's, as it has been restarted since
+)
+
+// ready tells whether everything is ready.
+func (r gameServerReadiness) ready() bool {
+	return len(r.problems) == 0
+}
+
+// readinessTarget is what the game server is expected to run, as declared by its
+// GameServer CR, plus the state of the current check: previousPods and now are set
+// before each one.
+type readinessTarget struct {
+	// Image tag of the server. When empty, any image is accepted.
+	imageTag string
+	// Image tags of the shard sets that override imageTag, by shard set name.
+	shardImageTags map[string]string
+	// The shard sets the CR declares, mapped to whether they must exist on the primary
+	// cluster. Other StatefulSets are ignored. When empty, all StatefulSets found count.
+	shardSets map[string]bool
+	// Pods from before the deploy that count as previous ones, by UID. See previousPods.
+	previousPods map[types.UID]bool
+	// The current time, to tell how recently a server was restarted.
+	now time.Time
+}
+
+// How long the pods from before a deploy that changed the GameServer CR count as
+// previous ones, which the operator is about to replace. Until then, they neither make
+// the game server ready nor fail the wait. In testing, the operator acted within a few
+// seconds of Helm finishing. A change that the operator applies without replacing the
+// pods delays the wait by this long. This matters only when the deploy keeps the image
+// tag: otherwise, the image check holds back the old pods until they are replaced.
+const oldPodGracePeriod = 30 * time.Second
+
+// How recently a pod must have been created for its server's restarts to count as a
+// failure to start, rather than as ones in its past.
+const recentRestartWindow = 10 * time.Minute
+
+// DeployBaseline is the game server's state just before a deploy changes it. The
+// readiness wait uses it to tell the deploy's pods from those before it.
+type DeployBaseline struct {
+	podUIDs      map[types.UID]bool // Game server pods before the deploy
+	crUID        types.UID          // GameServer CR before the deploy, or empty if none
+	crGeneration int64              // Generation of that CR
+}
+
+// CaptureDeployBaseline records the game server pods and GameServer CR into baseline.
+// Call it just before Helm deploys the game server. If it fails, the baseline stays
+// empty, which the readiness wait treats as no baseline.
+func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, baseline *DeployBaseline) error {
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
+	if err != nil {
+		return err
+	}
 	pods, err := FetchGameServerPods(ctx, kubeCli)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	// Bypass the cache of GetGameServer, as the CR changes during the deploy. There is
+	// none before the first deploy.
+	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
+	if err != nil && !errors.Is(err, errNoGameServer) {
+		return err
+	}
+	baseline.podUIDs = map[types.UID]bool{}
+	for _, pod := range pods {
+		baseline.podUIDs[pod.UID] = true
+	}
+	if gameServer != nil {
+		baseline.crUID, baseline.crGeneration = gameServer.crVersion()
+	}
+	log.Debug().Msgf("Deploy baseline: %d pods, CR UID '%s' generation %d", len(baseline.podUIDs), baseline.crUID, baseline.crGeneration)
+	return nil
+}
+
+// previousPods returns the pods from before the deploy while the operator may still
+// replace them. It does so only if the deploy changed the GameServer CR, and is given
+// oldPodGracePeriod to start. Without a baseline (no deploy), there are none.
+func previousPods(baseline *DeployBaseline, crChanged bool, elapsed time.Duration) map[types.UID]bool {
+	if baseline == nil || !crChanged || elapsed >= oldPodGracePeriod {
+		return nil
+	}
+	return baseline.podUIDs
+}
+
+// evaluateGameServerReadiness checks that the shard sets run the image the GameServer
+// CR asks for and that all their pods are ready.
+func evaluateGameServerReadiness(target readinessTarget, shardSets []appsv1.StatefulSet, pods []corev1.Pod) gameServerReadiness {
+	var r gameServerReadiness
+	notReady := func(line string, problem string) {
+		r.lines = append(r.lines, line)
+		r.problems = append(r.problems, problem)
 	}
 
-	// Prepare ordered result
-	result := make([]shardPodStates, 0, len(shardSets))
-
-	// Check that all expected pods from StatefulSets exist.
-	for _, shardSet := range shardSets {
-		numExpectedReplicas := int(*shardSet.Spec.Replicas)
-		log.Debug().Msgf("StatefulSet '%s': expecting %d pod(s)", shardSet.Name, numExpectedReplicas)
-
-		// Allocate a state for each expected pod in the stateful set.
-		shardPods := make([]*corev1.Pod, numExpectedReplicas)
-
-		// Check that all expected pods are found.
-		for shardNdx := range numExpectedReplicas {
-			// Find matching pod with name '<shardSet>-<index>'
-			podName := fmt.Sprintf("%s-%d", shardSet.Name, shardNdx)
-			var foundPod *corev1.Pod = nil
-			for _, pod := range pods {
-				if pod.Name == podName {
-					// Check if pod belongs to this StatefulSet through owner references
-					belongsToStatefulSet := false
-					for _, ownerRef := range pod.OwnerReferences {
-						if ownerRef.Kind == "StatefulSet" && ownerRef.Name == shardSet.Name {
-							belongsToStatefulSet = true
-							break
-						}
-					}
-					if !belongsToStatefulSet {
-						log.Debug().Msgf("Pod %s does not belong to StatefulSet", pod.Name)
-						continue
-					}
-
-					// Verify pod has matching docker image version
-					if len(pod.Spec.Containers) == 0 {
-						continue
-					}
-					podImage := pod.Spec.Containers[0].Image
-					statefulSetImage := shardSet.Spec.Template.Spec.Containers[0].Image
-					if podImage != statefulSetImage {
-						log.Debug().Msgf("Pod %s has mismatched image version. Expected %s, got %s", pod.Name, statefulSetImage, podImage)
-						continue
-					}
-
-					// Check pod is not terminating
-					if pod.DeletionTimestamp != nil {
-						log.Debug().Msgf("Pod %s is being terminated", pod.Name)
-						continue
-					}
-
-					// Check generation matches
-					if pod.Labels["controller-revision-hash"] != "" &&
-						pod.Labels["controller-revision-hash"] != shardSet.Status.UpdateRevision {
-						log.Debug().Msgf("Pod %s has outdated revision hash", pod.Name)
-						continue
-					}
-
-					// Store pod (found or not).
-					foundPod = &pod
-					break
-				}
+	// Keep only the declared shard sets, and report the required ones that are missing.
+	if len(target.shardSets) > 0 {
+		shardSets = slices.DeleteFunc(slices.Clone(shardSets), func(sts appsv1.StatefulSet) bool {
+			_, declared := target.shardSets[sts.Name]
+			return !declared
+		})
+		for _, name := range slices.Sorted(maps.Keys(target.shardSets)) {
+			isRequired := target.shardSets[name]
+			if isRequired && !slices.ContainsFunc(shardSets, func(sts appsv1.StatefulSet) bool { return sts.Name == name }) {
+				notReady(
+					fmt.Sprintf("Shard set '%s': waiting for the operator to create it", name),
+					fmt.Sprintf("Shard set '%s' does not exist", name))
 			}
-			shardPods[shardNdx] = foundPod
+		}
+	}
+	// A game server needs at least one shard set. When none is required, as all may run
+	// on edge clusters, one on the primary cluster is still waited for: it usually runs
+	// some, and the operator recreates them during a deploy.
+	if len(shardSets) == 0 && len(r.problems) == 0 {
+		notReady("Waiting for the operator to create the shard sets", "No shard sets found")
+	}
+
+	for _, shardSet := range shardSets {
+		shardSetImage := shardServerImage(shardSet.Spec.Template.Spec)
+
+		// The operator applies a changed GameServer to the StatefulSets some time after
+		// Helm has written it. Until then, the StatefulSets and pods are the previous
+		// deployment's, and may well be ready. An image without a tag (pinned by digest
+		// only) cannot be compared, so it is accepted.
+		wantTag := target.imageTag
+		if shardTag, found := target.shardImageTags[shardSet.Name]; found {
+			wantTag = shardTag
+		}
+		if tag := imageTag(shardSetImage); wantTag != "" && tag != "" && tag != wantTag {
+			notReady(
+				fmt.Sprintf("Shard set '%s': waiting for the operator to apply the new image", shardSet.Name),
+				fmt.Sprintf("Shard set '%s' still runs image %s, not %s", shardSet.Name, tag, wantTag))
+			continue
 		}
 
-		result = append(result, shardPodStates{
-			ShardName: shardSet.Name,
-			Pods:      shardPods,
-		})
+		// Until the StatefulSet controller has seen the latest change to the StatefulSet,
+		// its update revision is stale, and pods from the previous revision would match it.
+		if shardSet.Status.ObservedGeneration < shardSet.Generation {
+			notReady(
+				fmt.Sprintf("Shard set '%s': waiting for Kubernetes to apply the change", shardSet.Name),
+				fmt.Sprintf("Shard set '%s' has a change that Kubernetes has not applied yet", shardSet.Name))
+			continue
+		}
+
+		// To update a deployment, the operator first scales the StatefulSets to zero, waits
+		// for the pods to stop, and then scales them back up.
+		numReplicas := 1
+		if shardSet.Spec.Replicas != nil {
+			numReplicas = int(*shardSet.Spec.Replicas)
+		}
+		if numReplicas == 0 {
+			notReady(
+				fmt.Sprintf("Shard set '%s': stopping the previous deployment", shardSet.Name),
+				fmt.Sprintf("Shard set '%s' is still stopping the previous deployment", shardSet.Name))
+			continue
+		}
+
+		// Resolve the status of each pod.
+		podNames := make([]string, numReplicas)
+		statuses := make([]GameServerPodStatus, numReplicas)
+		numReady := 0
+		for ndx := range numReplicas {
+			podNames[ndx] = fmt.Sprintf("%s-%d", shardSet.Name, ndx)
+			pod := findPod(pods, podNames[ndx])
+			isPrevious := pod != nil && target.previousPods[pod.UID]
+			status := resolveShardSetPodStatus(&shardSet, shardSetImage, pod, isPrevious, target.now)
+			statuses[ndx] = status
+			if status.Phase == PhaseReady {
+				numReady++
+				continue
+			}
+			r.problems = append(r.problems, fmt.Sprintf("Pod %s (%s): %s", podNames[ndx], status.Phase, status.Message))
+			if status.Phase == PhaseFailed && r.failedPod == "" && pod != nil {
+				r.failedPod = podNames[ndx]
+				r.failure = status.Message
+				r.failedPodLogs = status.logs
+			}
+		}
+
+		// One line for the shard set, then one per pod with the columns aligned. The
+		// last pod has the longest name.
+		r.lines = append(r.lines, fmt.Sprintf("Shard set '%s': %d/%d pods ready", shardSet.Name, numReady, numReplicas))
+		nameWidth := len(podNames[numReplicas-1])
+		for ndx, status := range statuses {
+			r.lines = append(r.lines, strings.TrimRight(fmt.Sprintf("  %-*s  %-8s %s", nameWidth, podNames[ndx], status.Phase, status.Message), " "))
+		}
 	}
 
-	return result, nil
+	return r
+}
+
+// findPod returns the pod with the given name, or nil.
+func findPod(pods []corev1.Pod, name string) *corev1.Pod {
+	for ndx := range pods {
+		if pods[ndx].Name == name {
+			return &pods[ndx]
+		}
+	}
+	return nil
+}
+
+// resolveShardSetPodStatus resolves the status of a shard set's pod. A pod that is
+// missing, shutting down, from an earlier revision of the shard set, or isPrevious (from
+// before the deploy, see previousPods) is pending.
+func resolveShardSetPodStatus(shardSet *appsv1.StatefulSet, shardSetImage string, pod *corev1.Pod, isPrevious bool, now time.Time) GameServerPodStatus {
+	if pod == nil {
+		return GameServerPodStatus{Phase: PhasePending, Message: "Pod not created yet"}
+	}
+	if pod.DeletionTimestamp != nil {
+		return GameServerPodStatus{Phase: PhasePending, Message: "Previous pod is shutting down"}
+	}
+	isOwned := slices.ContainsFunc(pod.OwnerReferences, func(ref metav1.OwnerReference) bool {
+		// The operator recreates StatefulSets under the same name, so match the UID.
+		return ref.Kind == "StatefulSet" && ref.UID == shardSet.UID
+	})
+	podImage := shardServerImage(pod.Spec)
+	revision := pod.Labels["controller-revision-hash"]
+	isCurrentRevision := revision == "" || revision == shardSet.Status.UpdateRevision
+	if isPrevious || !isOwned || podImage != shardSetImage || !isCurrentRevision {
+		log.Debug().Msgf("Pod %s is from a previous deployment: from before the deploy: %v, owned by current StatefulSet: %v, image: %s (StatefulSet: %s), revision: %s (StatefulSet: %s)",
+			pod.Name, isPrevious, isOwned, podImage, shardSetImage, revision, shardSet.Status.UpdateRevision)
+		return GameServerPodStatus{Phase: PhasePending, Message: "Previous pod is waiting to be replaced"}
+	}
+	return resolvePodStatus(*pod, now)
 }
 
 // resolvePodStatus determines the game server pod's phase and status message.
-func resolvePodStatus(pod corev1.Pod) GameServerPodStatus {
+func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	containerStatus := findShardServerContainer(pod)
 	if containerStatus == nil {
 		// If there is no container created yet, try to resolve the cause
 		if pod.Status.Phase == corev1.PodPending {
 			for _, condition := range pod.Status.Conditions {
 				if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
-					if condition.Reason == "Unschedulable" {
+					if condition.Reason == corev1.PodReasonUnschedulable {
 						return GameServerPodStatus{
 							Phase:   PhasePending,
-							Message: "Pod is Unschedulable",
+							Message: "Cannot be scheduled: " + schedulerMessage(condition.Message),
 						}
 					}
-					return GameServerPodStatus{
-						Phase:   PhasePending,
-						Message: "Pod is not yet scheduled on any node",
-					}
+					return GameServerPodStatus{Phase: PhasePending, Message: "Waiting to be scheduled on a node"}
 				}
 			}
-			return GameServerPodStatus{
-				Phase:   PhasePending,
-				Message: "Pod is Pending",
-			}
+			return GameServerPodStatus{Phase: PhasePending, Message: "Pod is starting"}
 		}
-		if len(pod.Status.ContainerStatuses) == 0 {
-			return GameServerPodStatus{
-				Phase:   PhaseUnknown,
-				Message: "ContainerStatuses is empty",
-			}
-		}
-		return GameServerPodStatus{
-			Phase:   PhaseUnknown,
-			Message: "Shard server container not found",
-		}
+		return GameServerPodStatus{Phase: PhaseUnknown, Message: "Server container not found"}
 	}
 
-	// Enable for really detailed status logging
-	// log.Debug().Msgf("Pod %s container status: %+v", pod.Name, containerStatus)
-	state := containerStatus.State
+	restarts := ""
+	if containerStatus.RestartCount > 0 {
+		times := "times"
+		if containerStatus.RestartCount == 1 {
+			times = "time"
+		}
+		restarts = fmt.Sprintf(" (restarted %d %s%s)", containerStatus.RestartCount, times, lastExit(containerStatus))
+	}
 
+	// A server that is not ready and keeps being restarted fails to start. It may not
+	// exit by itself: a server that hangs is killed by its liveness probe, and shows as
+	// running between the restarts. One restart is allowed, as a server may exit once
+	// while what it depends on is starting too. Kubernetes counts the restarts over the
+	// pod's lifetime, so they count only for a recently created pod: in an older one,
+	// they may be from the server's past.
+	isNewPod := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
+	keepsRestarting := containerStatus.RestartCount >= 2 && isNewPod
+
+	state := containerStatus.State
 	switch {
 	case state.Running != nil:
 		if containerStatus.Ready {
-			return GameServerPodStatus{
-				Phase:   PhaseReady,
-				Message: fmt.Sprintf("Container %s is ready", containerStatus.Name),
-				Details: state.Running,
-			}
+			return GameServerPodStatus{Phase: PhaseReady, Message: strings.TrimSpace(restarts)}
 		}
-		return GameServerPodStatus{
-			Phase:   PhaseRunning,
-			Message: fmt.Sprintf("Container %s is running but not yet ready (app is starting)", containerStatus.Name),
-			Details: state.Running,
+		if keepsRestarting {
+			// The previous run is the one that failed.
+			return GameServerPodStatus{Phase: PhaseFailed, Message: "Server failed to start" + restarts, logs: previousPodLogs}
 		}
+		return GameServerPodStatus{Phase: PhaseRunning, Message: "Server is starting" + restarts}
 
 	case state.Waiting != nil:
-		// Check for CrashLoopBackOff specifically
 		if state.Waiting.Reason == "CrashLoopBackOff" {
+			// Waits to restart the server that crashed in its previous run.
 			return GameServerPodStatus{
 				Phase:   PhaseFailed,
-				Message: fmt.Sprintf("Container %s is in CrashLoopBackOff: %s", containerStatus.Name, state.Waiting.Message),
-				Details: state.Waiting,
+				Message: "Server keeps crashing (CrashLoopBackOff)" + restarts,
+				logs:    previousPodLogs,
 			}
 		}
-		return GameServerPodStatus{
-			Phase:   PhasePending,
-			Message: fmt.Sprintf("Container %s is waiting: %s", containerStatus.Name, state.Waiting.Reason),
-			Details: state.Waiting,
+		message := state.Waiting.Reason
+		if state.Waiting.Message != "" {
+			message += ": " + state.Waiting.Message
 		}
+		// These do not resolve without a change to the image or the configuration. The
+		// container did not start, and an earlier run's logs do not show why.
+		if slices.Contains(unrecoverableWaitingReasons, state.Waiting.Reason) {
+			return GameServerPodStatus{Phase: PhaseFailed, Message: "Container cannot start: " + message}
+		}
+		return GameServerPodStatus{Phase: PhasePending, Message: "Container is waiting: " + message}
 
 	case state.Terminated != nil:
-		return GameServerPodStatus{
-			Phase:   PhaseFailed,
-			Message: fmt.Sprintf("Container %s is terminated: %s", containerStatus.Name, state.Terminated.Reason),
-			Details: state.Terminated,
+		// Kubernetes restarts an exited server, so it fails only when it keeps
+		// restarting, as when running.
+		exited := fmt.Sprintf("Server exited: %s (exit code %d)", state.Terminated.Reason, state.Terminated.ExitCode)
+		if keepsRestarting {
+			// Not restarted yet, so the current run is the one that exited.
+			return GameServerPodStatus{Phase: PhaseFailed, Message: exited + restarts, logs: currentPodLogs}
 		}
+		return GameServerPodStatus{Phase: PhasePending, Message: exited + ", restarting" + restarts}
 	}
 
-	return GameServerPodStatus{
-		Phase:   PhaseUnknown,
-		Message: "Container state is unknown",
-	}
+	return GameServerPodStatus{Phase: PhaseUnknown, Message: "Container state is unknown"}
 }
+
+// Reasons for a container waiting that Kubernetes does not retry: the image reference is
+// invalid, or the pull policy forbids pulling it. Failed pulls (ErrImagePull,
+// ImagePullBackOff) and missing secrets or config maps (CreateContainerConfigError) are
+// retried and may resolve, so they are left to the timeout.
+var unrecoverableWaitingReasons = []string{"InvalidImageName", "ErrImageNeverPull"}
+
+// lastExit describes how the container's previous run ended, such as ", last exit
+// code 137 (Error)", or returns an empty string if it is not known.
+func lastExit(containerStatus *corev1.ContainerStatus) string {
+	terminated := containerStatus.LastTerminationState.Terminated
+	if terminated == nil {
+		return ""
+	}
+	return fmt.Sprintf(", last exit code %d (%s)", terminated.ExitCode, terminated.Reason)
+}
+
+// schedulerMessage shortens the scheduler's explanation of why a pod cannot be
+// scheduled to its first sentence, which says why the nodes did not fit. For example,
+// "0/3 nodes are available: 3 Insufficient cpu. preemption: ..." gives
+// "0/3 nodes are available: 3 Insufficient cpu."
+func schedulerMessage(message string) string {
+	if before, _, found := strings.Cut(message, ". "); found {
+		return before + "."
+	}
+	return message
+}
+
+// Name of the game server's container in its pods.
+const shardServerContainerName = "shard-server"
 
 func findShardServerContainer(pod corev1.Pod) *corev1.ContainerStatus {
 	for _, status := range pod.Status.ContainerStatuses {
-		if status.Name == "shard-server" {
+		if status.Name == shardServerContainerName {
 			return &status
 		}
 	}
 	return nil
 }
 
-// Check if the given gameserver CR (old or new) is ready.
-// Only works with the old gameserver CRs (for now anyway).
-// \todo Provide more detailed output as to what the status is -- to be used in various diagnostics
-// \todo Consider using this with new operator as well: requires multi-region handling & proper CR<->sts ownership/revision relationships
-func isGameServerReady(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, output *tui.TaskOutput) (bool, []string, error) {
-	// Must have either old or new operator CR.
-	newCR := gameServer.GameServerNewCR
-	oldCR := gameServer.GameServerOldCR
-	if newCR == nil && oldCR == nil {
-		log.Panic().Msg("Either old or new game server CR must be specified")
-	} else if newCR != nil && oldCR != nil {
-		log.Panic().Msg("Both new and old game server CRs cannot be specified")
-	}
-
-	// Fetch all game server StatefulSets owned by the game server.
-	// \todo this only works in single-region setups .. use only with old operator?
-	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, newCR, oldCR)
-	if err != nil {
-		return false, nil, err
-	}
-
-	// If no matching StatefulSets, server is not ready.
-	if len(shardSets) == 0 {
-		return false, []string{"  No matching StatefulSets found"}, nil
-	}
-
-	// Fetch all the game server pods in the namespace.
-	podsByShard, err := fetchGameServerPodsByShardSet(ctx, kubeCli, shardSets)
-	if err != nil {
-		return false, nil, err
-	}
-
-	// Check that all pods belonging to all shards are ready.
-	allPodsReady := true
-	statusLines := []string{}
-	for _, shardPods := range podsByShard {
-		// To update a deployment, metaplay-operator first scales StatefulSets to replicas=0, waits for shutdown and then recreates
-		// the new setup. Hence, if StatefulSets.replicas = 0, we are still waiting for previous deployment to shut down.
-		if len(shardPods.Pods) == 0 {
-			statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' shutting down previous deployment", shardPods.ShardName))
-			allPodsReady = false
-			continue
+// shardServerImage returns the image of the shard-server container, or an empty
+// string if there is none.
+func shardServerImage(podSpec corev1.PodSpec) string {
+	for _, container := range podSpec.Containers {
+		if container.Name == shardServerContainerName {
+			return container.Image
 		}
-		// Check that all expected pods are found.
-		statusLines = append(statusLines, fmt.Sprintf("  ShardSet '%s' pods (%d):", shardPods.ShardName, len(shardPods.Pods)))
-		for podNdx, pod := range shardPods.Pods {
-			// Check that the pod is healthy & ready.
-			podName := fmt.Sprintf("%s-%d", shardPods.ShardName, podNdx)
-			if pod != nil {
-				status := resolvePodStatus(*pod)
-				statusLines = append(statusLines, fmt.Sprintf("    %s: %s [%s]", podName, status.Phase, status.Message))
-				if status.Phase != PhaseReady {
-					allPodsReady = false
-				}
+	}
+	return ""
+}
 
-				// If pod failed, bail out with the logs from the pod
-				if status.Phase == PhaseFailed {
-					podLogs, err := fetchPodLogs(ctx, kubeCli, podName, "shard-server")
-					if err != nil {
-						output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
-					} else {
-						// Route pod logs through TaskOutput footer to avoid writing
-						// directly to stdout while Bubble Tea is managing the terminal.
-						// Footer lines are not subject to the log line cap.
-						logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
-						for line := range strings.SplitSeq(podLogs, "\n") {
-							logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
-						}
-						logLines = append(logLines, fmt.Sprintf("Pod %s failed: %s", podName, status.Message))
-						output.SetFooterLines(logLines)
-					}
-					return false, nil, fmt.Errorf("pod %s failed to deploy", podName)
-				}
-			} else {
-				statusLines = append(statusLines, fmt.Sprintf("    %s: not found", podName))
-				allPodsReady = false
+// imageTag returns the tag of a container image reference, or an empty string if it
+// has none. For example, "registry:5000/repo:tag@sha256:..." gives "tag".
+func imageTag(image string) string {
+	image, _, _ = strings.Cut(image, "@")
+	ndx := strings.LastIndex(image, ":")
+	if ndx == -1 || strings.Contains(image[ndx:], "/") {
+		return ""
+	}
+	return image[ndx+1:]
+}
+
+// readinessTarget returns what the GameServer CR declares.
+func (gs *TargetGameServer) readinessTarget() readinessTarget {
+	target := readinessTarget{shardSets: map[string]bool{}, shardImageTags: map[string]string{}}
+	if cr := gs.GameServerNewCR; cr != nil {
+		target.imageTag = cr.Spec.Image.Tag
+		// A shard placed by a cluster name or selector may run on an edge cluster,
+		// which is not checked, so it need not exist on the primary cluster.
+		for _, shard := range cr.Spec.Shards {
+			hasClusterName := shard.ClusterName != nil && *shard.ClusterName != ""
+			target.shardSets[shard.Name] = !hasClusterName && len(shard.ClusterLabelSelector) == 0
+			if shard.Image != nil && shard.Image.Tag != "" {
+				target.shardImageTags[shard.Name] = shard.Image.Tag
 			}
 		}
 	}
-
-	// For the new game server, also check the CR status.
-	isCRReady := true
-	// \todo Check disabled for now due to operator not always setting CR phase reliably
-	// if newCR != nil {
-	// 	log.Debug().Msgf("New gameserver CR status.phase = %s", newCR.Status.Phase)
-	// 	isCRReady = newCR.Status.Phase == "Running"
-	// 	statusLines = append(statusLines, fmt.Sprintf("CR status: %s", newCR.Status.Phase))
-	// }
-
-	// Return whether everything is ready.
-	isReady := isCRReady && allPodsReady
-	return isReady, statusLines, nil
+	if cr := gs.GameServerOldCR; cr != nil {
+		target.imageTag = imageTag(shardServerImage(cr.Spec.StatefulSetSpec.Template.Spec))
+		for _, shard := range cr.Spec.ShardSpec {
+			target.shardSets[shard.Name] = true
+		}
+	}
+	return target
 }
 
 // pause waits for d between two attempts of a wait. It returns false at once when ctx is done.
@@ -452,74 +587,202 @@ func pause(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout occurs.
-func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration) error {
-	// Get target gameServer.
-	gameServer, err := targetEnv.GetGameServer(ctx)
+// crVersion returns the UID and generation of the game server's CR.
+func (gs *TargetGameServer) crVersion() (types.UID, int64) {
+	if cr := gs.GameServerNewCR; cr != nil {
+		return cr.UID, cr.Generation
+	}
+	if cr := gs.GameServerOldCR; cr != nil {
+		return cr.Metadata.UID, cr.Metadata.Generation
+	}
+	return "", 0
+}
+
+// checkGameServerReadiness fetches the game server's StatefulSets and pods and evaluates
+// whether they are ready.
+// \todo Handle edge clusters of multi-region game servers.
+func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, target readinessTarget) (gameServerReadiness, error) {
+	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer.GameServerOldCR)
+	if err != nil {
+		return gameServerReadiness{}, err
+	}
+	pods, err := FetchGameServerPods(ctx, kubeCli)
+	if err != nil {
+		return gameServerReadiness{}, err
+	}
+	return evaluateGameServerReadiness(target, shardSets, pods), nil
+}
+
+// How often an unchanged status is repeated when it is logged: in non-interactive mode,
+// or once the display has closed. The log is append-only (such as in CI), so the status
+// is printed when it changes and otherwise only this often, to show that the wait is
+// still going on.
+const loggedStatusInterval = 30 * time.Second
+
+// How long checks of the game server status may keep failing, for example on a
+// transient Kubernetes API error, before the wait gives up.
+const maxFailingChecksDuration = 15 * time.Second
+
+// waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
+// occurs. See WaitForServerToBeReady for baseline.
+func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration, baseline *DeployBaseline) error {
+	startTime := time.Now()
+	stopped := func() error {
+		return clierrors.Wrap(ctx.Err(), "Stopped waiting for the game server to be ready")
+	}
+	waitForNextPoll := func() error {
+		// Poll more often when the status is redrawn in place than when it is logged.
+		pollInterval := 1 * time.Second
+		if output.LogsLines() {
+			pollInterval = 2 * time.Second
+		}
+		if !pause(ctx, pollInterval) {
+			return stopped()
+		}
+		return nil
+	}
+	// A failed Kubernetes API call is retried, until calls have failed for
+	// maxFailingChecksDuration. One fails also when the wait is cancelled.
+	lastSuccessAt := startTime
+	retryFailedCheck := func(err error, failure string) error {
+		if ctx.Err() != nil {
+			return stopped()
+		}
+		if errors.Is(err, errNoGameServer) {
+			return err
+		}
+		isPermanent := apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
+		if isPermanent || time.Since(lastSuccessAt) >= maxFailingChecksDuration {
+			return clierrors.Wrap(err, failure)
+		}
+		output.AppendLinef("%s, retrying: %v", failure, err)
+		return waitForNextPoll()
+	}
+
+	// Read the game server's CR, which holds the image being deployed. Bypass the cache
+	// of GetGameServer, which may hold the CR from before Helm wrote it.
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
 		return err
 	}
-
-	// Keep checking the gameservers until they are ready, or timeout is hit.
-	startTime := time.Now()
-	for time.Since(startTime) < timeout {
-		// Get kube client for primary cluster.
-		kubeCli, err := targetEnv.GetPrimaryKubeClient()
-		if err != nil {
+	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
+	for err != nil {
+		if err := retryFailedCheck(err, "Failed to read the GameServer resource"); err != nil {
 			return err
 		}
+		gameServer, err = targetEnv.fetchGameServer(ctx, kubeCli)
+	}
+	lastSuccessAt = time.Now()
+	target := gameServer.readinessTarget()
+	crUID, crGeneration := gameServer.crVersion()
+	crChanged := baseline != nil && (baseline.crUID != crUID || baseline.crGeneration != crGeneration)
+	log.Debug().Msgf("Waiting for game server: %+v (new CR: %v, CR changed by the deploy: %v)", target, gameServer.GameServerNewCR != nil, crChanged)
 
-		// Must have either old or new CR.
-		if gameServer.GameServerNewCR == nil && gameServer.GameServerOldCR == nil {
-			return fmt.Errorf("only new or old CR must be defined, not both")
-		}
-
-		// Get status of the deployment.
-		// \todo handle edge clusters (for new CR only)
-		isReady, statusLines, err := isGameServerReady(ctx, kubeCli, gameServer, output)
+	notReadyError := func(problems []string) error {
+		return clierrors.Newf("Game server was not ready within %s", timeout).
+			WithDetails(problems...).
+			WithSuggestion(fmt.Sprintf("Check the pod states above for details, or the server logs with: metaplay debug logs %s", targetEnv.HumanID))
+	}
+	headerPrefix := "Elapsed"
+	if target.imageTag != "" {
+		headerPrefix = fmt.Sprintf("Image %s, elapsed", target.imageTag)
+	}
+	lastShown := ""
+	var lastShownAt time.Time
+	var lastProblems []string // Of the last successful check
+	for {
+		target.now = time.Now()
+		target.previousPods = previousPods(baseline, crChanged, time.Since(startTime))
+		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
+		elapsed := time.Since(startTime)
 		if err != nil {
-			return clierrors.Wrap(err, "Game server failed to start").
-				WithSuggestion(fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID))
+			// At the deadline, what was not ready tells more than the failed check.
+			if elapsed >= timeout && lastProblems != nil && ctx.Err() == nil {
+				return notReadyError(lastProblems)
+			}
+			if err := retryFailedCheck(err, "Failed to check the game server status"); err != nil {
+				return err
+			}
+			continue
+		}
+		lastSuccessAt = time.Now()
+		lastProblems = readiness.problems
+
+		// Show the status. When it is logged (in non-interactive mode, or after the
+		// display has closed), only when it has changed or has not been shown for a while.
+		status := strings.Join(readiness.lines, "\n")
+		if !output.LogsLines() || status != lastShown || time.Since(lastShownAt) >= loggedStatusInterval {
+			headerLines := []string{fmt.Sprintf("%s %s of %s", headerPrefix, elapsed.Round(time.Second), timeout)}
+			for _, line := range readiness.lines {
+				headerLines = append(headerLines, "  "+line)
+			}
+			output.SetHeaderLines(headerLines)
+			lastShown = status
+			lastShownAt = time.Now()
 		}
 
-		// Resolve status lines to show.
-		crVersion := "new"
-		if gameServer.GameServerOldCR != nil {
-			crVersion = "old"
+		// If a pod failed, bail out with the logs from the pod.
+		if readiness.failedPod != "" {
+			showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+			suggestion := fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID)
+			if readiness.failedPodLogs == noPodLogs {
+				suggestion = "The server container did not start, so it has no logs. Fix the cause above, and deploy again"
+			}
+			return clierrors.New("Game server failed to start").
+				WithDetails(fmt.Sprintf("Pod %s: %s", readiness.failedPod, readiness.failure)).
+				WithSuggestion(suggestion)
 		}
-		headerLines := append(
-			[]string{fmt.Sprintf("Game server pod states (%s CR):", crVersion)},
-			statusLines...,
-		)
 
-		// Show the game server shard/pod states.
-		output.SetHeaderLines(headerLines)
-
-		// If gamserver is ready, we're done.
-		if isReady {
+		if readiness.ready() {
 			return nil
 		}
 
-		// Wait a bit to check again (slower updates in non-interactive mode to avoid spamming the log).
-		interval := 2 * time.Second
-		if tui.IsInteractiveMode() {
-			interval = 200 * time.Millisecond
+		if elapsed >= timeout {
+			return notReadyError(readiness.problems)
 		}
-		if !pause(ctx, interval) {
-			return fmt.Errorf("stopped waiting for pods to be ready: %w", ctx.Err())
+
+		if err := waitForNextPoll(); err != nil {
+			return err
 		}
 	}
-	return errors.New("timeout waiting for pods to be ready")
 }
 
-// fetchPodLogs fetches logs for a specific pod and container.
-func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerName string) (string, error) {
-	log.Debug().Msgf("Fetching logs for pod %s, container %s", podName, containerName)
+// showPodLogs shows the last logs of a game server pod's server container that show its
+// failure in the task output, or why they could not be fetched.
+func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) {
+	if source == noPodLogs {
+		return
+	}
+	podLogs, err := fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, source == previousPodLogs)
+	// The previous container's logs are gone if Kubernetes has cleaned the container up.
+	// The current container's logs may show the same failure in progress.
+	if err != nil && source == previousPodLogs {
+		output.AppendLinef("Failed to get the logs of the previous run of pod %s, showing the current run: %v", podName, err)
+		podLogs, err = fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, false)
+	}
+	if err != nil {
+		output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
+		return
+	}
+	// Route pod logs through TaskOutput footer to avoid writing directly to stdout while
+	// Bubble Tea is managing the terminal. Footer lines are not subject to the log line cap.
+	logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
+	for line := range strings.SplitSeq(podLogs, "\n") {
+		logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
+	}
+	output.SetFooterLines(logLines)
+}
+
+// fetchPodLogs fetches logs for a specific pod and container. With previous, it fetches
+// the logs of the container's previous run.
+func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerName string, previous bool) (string, error) {
+	log.Debug().Msgf("Fetching logs for pod %s, container %s (previous: %v)", podName, containerName, previous)
 	var numTailLines int64 = 100
 	logOptions := &corev1.PodLogOptions{
 		Container: containerName,
 		Follow:    false,
 		TailLines: &numTailLines,
+		Previous:  previous,
 	}
 
 	req := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).GetLogs(podName, logOptions)
@@ -755,7 +1018,12 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 	}
 }
 
-func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner) error {
+// WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
+// and the LiveOps Dashboard. After a deploy, baseline is the state before it, which
+// CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from before
+// the deploy then fails the wait only once the operator has had time to replace it.
+// Without a deploy, baseline is nil, and any failing pod fails the wait.
+func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {
 	// Fetch environment details.
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
@@ -768,7 +1036,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	// This can take a long time when larger changes are being applied (eg,
 	// enabling the new operator).
 	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
-		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute)
+		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute, baseline)
 	})
 
 	// CHECK CLIENT-FACING NETWORKING
