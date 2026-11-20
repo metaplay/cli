@@ -15,48 +15,38 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/interrupt"
 )
 
-// resetInterruptState gives the test a fresh interrupt state and records the errors the runner
-// shows. It restores the package's state afterwards.
-func resetInterruptState(t *testing.T) *[]string {
-	t.Helper()
-	interrupted.Store(false)
-	previousDisplay := errorDisplay
-	shown := &[]string{}
-	errorDisplay = func(err error) { *shown = append(*shown, err.Error()) }
-	t.Cleanup(func() {
-		interrupted.Store(false)
-		errorDisplay = previousDisplay
-		SetInterruptHandler(nil)
-	})
-	return shown
+// unreported returns the failures that the runner's error reports besides the command's error.
+func unreported(err error) string {
+	tasksErr, ok := errors.AsType[*TasksError](err)
+	if !ok {
+		return ""
+	}
+	var messages []string
+	for _, failure := range tasksErr.Unreported {
+		messages = append(messages, failure.Error())
+	}
+	return strings.Join(messages, "|")
 }
 
 // displayTest runs a task runner's display, which reads key presses from keys and draws nowhere.
-// Its interrupt handler cancels ctx, as main's cancels the command's context.
 type displayTest struct {
-	runner     *TaskRunner
-	keys       io.Writer
-	input      io.Reader
-	ctx        context.Context
-	interrupts atomic.Int32
-	shown      *[]string // Errors the runner showed
+	runner  *TaskRunner
+	keys    io.Writer
+	input   io.Reader
+	ctx     context.Context // The command's context, which an interrupt cancels
+	notices atomic.Int32    // Times the user was told about the interrupt
 }
 
 func newDisplayTest(t *testing.T) *displayTest {
 	t.Helper()
-	shown := resetInterruptState(t)
 	input, keys := io.Pipe()
 	t.Cleanup(func() { _ = keys.Close() })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	d := &displayTest{runner: NewTaskRunner(), keys: keys, input: input, ctx: ctx, shown: shown}
-	SetInterruptHandler(func() {
-		d.interrupts.Add(1)
-		cancel()
-	})
+	d := &displayTest{runner: NewTaskRunner(), keys: keys, input: input}
+	d.ctx = interrupt.WithCancel(t.Context(), func() { d.notices.Add(1) })
 	return d
 }
 
@@ -65,7 +55,7 @@ func (d *displayTest) run(t *testing.T) error {
 	t.Helper()
 	result := make(chan error, 1)
 	go func() {
-		result <- d.runner.runInteractive(tea.WithInput(d.input), tea.WithOutput(io.Discard), tea.WithoutSignalHandler())
+		result <- d.runner.runInteractive(d.ctx, tea.WithInput(d.input), tea.WithOutput(io.Discard))
 	}()
 	select {
 	case err := <-result:
@@ -76,8 +66,7 @@ func (d *displayTest) run(t *testing.T) error {
 	}
 }
 
-// pressCtrlC sends Ctrl-C to the display and waits until the command is cancelled, as it is once
-// the display has closed.
+// pressCtrlC sends Ctrl-C to the display and waits until the command is cancelled.
 func (d *displayTest) pressCtrlC() {
 	_, _ = io.WriteString(d.keys, "\x03")
 	<-d.ctx.Done()
@@ -93,7 +82,7 @@ func (r *recorder) task(name string, err error) TaskRunFunc {
 	}
 }
 
-func (r *recorder) cleanup(name string, err error) func(context.Context, *TaskOutput) error {
+func (r *recorder) cleanup(name string, err error) CleanupTaskRunFunc {
 	return func(ctx context.Context, _ *TaskOutput) error {
 		r.ran = append(r.ran, name)
 		if ctx.Err() != nil {
@@ -123,14 +112,17 @@ func TestTaskRunnerCtrlCCancelsRunningTaskAndSkipsTheRest(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	if got := d.interrupts.Load(); got != 1 {
-		t.Errorf("interrupt handler called %d times, want 1", got)
+	if cause := context.Cause(d.ctx); !errors.Is(cause, interrupt.ErrInterrupted) {
+		t.Errorf("cause of the cancellation = %v, want ErrInterrupted", cause)
+	}
+	if got := d.notices.Load(); got != 1 {
+		t.Errorf("interrupt notice shown %d times, want 1", got)
 	}
 	if got := r.order(); got != "collect,remove" {
 		t.Errorf("tasks run = %s, want collect,remove", got)
 	}
-	if len(*d.shown) != 0 {
-		t.Errorf("errors shown = %v, want none: the failure was caused by the interrupt", *d.shown)
+	if got := unreported(err); got != "" {
+		t.Errorf("unreported failures = %q, want none: the failure was caused by the interrupt", got)
 	}
 }
 
@@ -156,8 +148,8 @@ func TestTaskRunnerCtrlCSkipsTasksAfterOneIgnoringContext(t *testing.T) {
 	}
 }
 
-// A real failure after Ctrl-C, which the command reports only as "Canceled.", is shown by the
-// runner, and so is a cleanup task's failure.
+// A real failure after Ctrl-C, which the command reports only as "Canceled.", is reported as
+// unreported by the command's error, and so is a cleanup task's failure.
 func TestTaskRunnerShowsRealFailuresAfterCtrlC(t *testing.T) {
 	d := newDisplayTest(t)
 	r := &recorder{}
@@ -168,27 +160,29 @@ func TestTaskRunnerShowsRealFailuresAfterCtrlC(t *testing.T) {
 	})
 	d.runner.AddCleanupTask("re-enable", r.cleanup("re-enable", errors.New("curl failed")))
 
-	if err := d.run(t); err == nil || err.Error() != "helm: release failed" {
+	err := d.run(t)
+
+	if err == nil || err.Error() != "helm: release failed" {
 		t.Errorf("error = %v, want the deploy's", err)
 	}
 	want := "deploy: helm: release failed|re-enable: curl failed"
-	if got := strings.Join(*d.shown, "|"); got != want {
-		t.Errorf("errors shown = %q, want %q", got, want)
+	if got := unreported(err); got != want {
+		t.Errorf("unreported failures = %q, want %q", got, want)
 	}
 }
 
-// SIGINT while the display is on screen, which Bubble Tea turns into an InterruptMsg, is handled as
-// the Ctrl-C key press: the runner waits for the running task instead of returning ErrInterrupted.
-func TestTaskRunnerSigintWaitsForTasks(t *testing.T) {
+// An interrupt from a signal while the display is on screen, which cancels the context without a
+// key press, is handled as the Ctrl-C key press: the runner waits for the running task.
+func TestTaskRunnerSignalWaitsForTasks(t *testing.T) {
 	d := newDisplayTest(t)
 	finished := false
 	d.runner.AddTask("first", func(*TaskOutput) error {
-		d.runner.program.Send(tea.InterruptMsg{})
-		<-d.ctx.Done()
+		interrupt.Trigger(d.ctx)          // As main does on SIGINT and SIGTERM
 		time.Sleep(50 * time.Millisecond) // Cleanup that takes a while
 		finished = true
 		return d.ctx.Err()
 	})
+	d.runner.AddTask("second", func(*TaskOutput) error { return nil })
 
 	err := d.run(t)
 
@@ -198,25 +192,84 @@ func TestTaskRunnerSigintWaitsForTasks(t *testing.T) {
 	if !finished {
 		t.Error("runner returned before the task finished")
 	}
-	if got := d.interrupts.Load(); got != 1 {
-		t.Errorf("interrupt handler called %d times, want 1", got)
+	if got := d.notices.Load(); got != 1 {
+		t.Errorf("interrupt notice shown %d times, want 1", got)
 	}
 }
 
-// A Ctrl-C key press while the display closes after the last task stops the command too, so the
-// command does not go on, or show its error a second time, without being cancelled.
-func TestTaskRunnerCtrlCAfterLastTaskStopsCommand(t *testing.T) {
+// A cancellation that is not an interrupt, such as a deadline, stops the runner the same way, and
+// the runner returns the context's error.
+func TestTaskRunnerDeadlineStopsTasks(t *testing.T) {
+	d := newDisplayTest(t)
+	ctx, cancel := context.WithTimeout(d.ctx, 10*time.Millisecond)
+	defer cancel()
+	d.ctx = ctx
+	r := &recorder{}
+	d.runner.AddTask("first", func(*TaskOutput) error {
+		r.ran = append(r.ran, "first")
+		<-ctx.Done()
+		return nil
+	})
+	d.runner.AddTask("second", r.task("second", nil))
+
+	err := d.run(t)
+
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if got := r.order(); got != "first" {
+		t.Errorf("tasks run = %s, want first", got)
+	}
+	if got := d.notices.Load(); got != 0 {
+		t.Errorf("interrupt notice shown %d times, want 0", got)
+	}
+}
+
+// A Ctrl-C key press during the last task stops the command too, although the runner returns no
+// error because every task ran: the command's context is cancelled.
+func TestTaskRunnerCtrlCDuringLastTaskStopsCommand(t *testing.T) {
 	d := newDisplayTest(t)
 	d.runner.AddTask("last", func(*TaskOutput) error {
-		interrupted.Store(true) // As Update does on the key press
+		d.pressCtrlC()
 		return nil
 	})
 
 	if err := d.run(t); err != nil {
 		t.Errorf("error = %v, want nil: every task ran", err)
 	}
-	if got := d.interrupts.Load(); got != 1 {
-		t.Errorf("interrupt handler called %d times, want 1", got)
+	if d.ctx.Err() == nil {
+		t.Error("the command's context was not cancelled")
+	}
+}
+
+// A cleanup task's context keeps the values of the command's context, and is not cancelled with it.
+func TestTaskRunnerCleanupContext(t *testing.T) {
+	nonInteractive(t)
+	type key struct{}
+	ctx := context.WithValue(interrupt.WithCancel(t.Context(), nil), key{}, "value")
+	runner := NewTaskRunner()
+	runner.AddTask("first", func(*TaskOutput) error {
+		interrupt.Trigger(ctx)
+		return nil
+	})
+	var value any
+	var cleanupErr error
+	hasDeadline := false
+	runner.AddCleanupTask("undo", func(ctx context.Context, _ *TaskOutput) error {
+		value = ctx.Value(key{})
+		cleanupErr = ctx.Err()
+		_, hasDeadline = ctx.Deadline()
+		return nil
+	})
+
+	if err := runner.Run(ctx); err != nil {
+		t.Errorf("error = %v, want nil: every task ran", err)
+	}
+	if value != "value" {
+		t.Errorf("value in the cleanup task's context = %v, want the command's", value)
+	}
+	if cleanupErr != nil || !hasDeadline {
+		t.Errorf("cleanup task's context: err = %v, has deadline = %v, want not cancelled and bounded", cleanupErr, hasDeadline)
 	}
 }
 
@@ -226,14 +279,16 @@ func TestTaskRunnerWithoutCtrlCDoesNotInterrupt(t *testing.T) {
 	d.runner.AddTask("first", func(*TaskOutput) error { return nil })
 	d.runner.AddTask("second", func(*TaskOutput) error { return errors.New("failed") })
 
-	if err := d.run(t); err == nil || err.Error() != "failed" {
+	err := d.run(t)
+
+	if err == nil || err.Error() != "failed" {
 		t.Errorf("error = %v, want the second task's error", err)
 	}
-	if got := d.interrupts.Load(); got != 0 {
-		t.Errorf("interrupt handler called %d times, want 0", got)
+	if d.ctx.Err() != nil {
+		t.Errorf("the command's context was cancelled: %v", d.ctx.Err())
 	}
-	if len(*d.shown) != 0 {
-		t.Errorf("errors shown = %v, want none", *d.shown)
+	if got := unreported(err); got != "" {
+		t.Errorf("unreported failures = %q, want none", got)
 	}
 }
 
@@ -246,10 +301,9 @@ func nonInteractive(t *testing.T) {
 }
 
 // After an ordinary task fails, only cleanup tasks run. The runner returns the first ordinary
-// failure, and shows the cleanup task's failure, which that error does not cover.
+// failure, and reports the cleanup task's failure, which that error does not cover.
 func TestTaskRunnerRunsOnlyCleanupAfterFailure(t *testing.T) {
 	nonInteractive(t)
-	shown := resetInterruptState(t)
 	r := &recorder{}
 	runner := NewTaskRunner()
 	runner.AddTask("disable", r.task("disable", nil))
@@ -258,7 +312,7 @@ func TestTaskRunnerRunsOnlyCleanupAfterFailure(t *testing.T) {
 	runner.AddTask("download", r.task("download", nil))
 	runner.AddCleanupTask("remove", r.cleanup("remove", nil))
 
-	err := runner.Run()
+	err := runner.Run(context.Background())
 
 	if err == nil || err.Error() != "collect failed" {
 		t.Errorf("error = %v, want the collection's", err)
@@ -266,8 +320,8 @@ func TestTaskRunnerRunsOnlyCleanupAfterFailure(t *testing.T) {
 	if got := r.order(); got != "disable,collect,re-enable,remove" {
 		t.Errorf("tasks run = %s", got)
 	}
-	if got := strings.Join(*shown, "|"); got != "re-enable: curl failed" {
-		t.Errorf("errors shown = %q", got)
+	if got := unreported(err); got != "re-enable: curl failed" {
+		t.Errorf("unreported failures = %q", got)
 	}
 }
 
@@ -275,7 +329,6 @@ func TestTaskRunnerRunsOnlyCleanupAfterFailure(t *testing.T) {
 // when no ordinary task failed.
 func TestTaskRunnerCleanupFailureDoesNotSkipTasks(t *testing.T) {
 	nonInteractive(t)
-	shown := resetInterruptState(t)
 	r := &recorder{}
 	runner := NewTaskRunner()
 	runner.AddTask("collect", r.task("collect", nil))
@@ -283,7 +336,7 @@ func TestTaskRunnerCleanupFailureDoesNotSkipTasks(t *testing.T) {
 	runner.AddTask("download", r.task("download", nil))
 	runner.AddCleanupTask("remove", r.cleanup("remove", nil))
 
-	err := runner.Run()
+	err := runner.Run(context.Background())
 
 	if err == nil || err.Error() != "curl failed" {
 		t.Errorf("error = %v, want the cleanup task's", err)
@@ -291,8 +344,8 @@ func TestTaskRunnerCleanupFailureDoesNotSkipTasks(t *testing.T) {
 	if got := r.order(); got != "collect,re-enable,download,remove" {
 		t.Errorf("tasks run = %s", got)
 	}
-	if len(*shown) != 0 {
-		t.Errorf("errors shown = %v, want none: the command shows its error", *shown)
+	if got := unreported(err); got != "" {
+		t.Errorf("unreported failures = %q, want none: the command shows its error", got)
 	}
 }
 
@@ -300,19 +353,19 @@ func TestTaskRunnerCleanupFailureDoesNotSkipTasks(t *testing.T) {
 // does not run when no task before it started.
 func TestTaskRunnerInterruptWithoutDisplay(t *testing.T) {
 	nonInteractive(t)
-	resetInterruptState(t)
+	ctx := interrupt.WithCancel(t.Context(), nil)
 	r := &recorder{}
 	runner := NewTaskRunner()
 	runner.AddCleanupTask("nothing to undo", r.cleanup("nothing to undo", nil))
 	runner.AddTask("first", func(*TaskOutput) error {
 		r.ran = append(r.ran, "first")
-		Interrupt()
+		interrupt.Trigger(ctx)
 		return nil
 	})
 	runner.AddTask("second", r.task("second", nil))
 	runner.AddCleanupTask("undo first", r.cleanup("undo first", nil))
 
-	if err := runner.Run(); !errors.Is(err, context.Canceled) {
+	if err := runner.Run(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
 	if got := r.order(); got != "first,undo first" {
@@ -320,33 +373,9 @@ func TestTaskRunnerInterruptWithoutDisplay(t *testing.T) {
 	}
 }
 
-// A notice printed while the display is on screen is held back until it closes.
-func TestPrintNoticeWaitsForDisplay(t *testing.T) {
-	var out strings.Builder
-	previous := noticeOutput
-	noticeOutput = &out
-	t.Cleanup(func() { noticeOutput = previous })
-
-	beginDisplay()
-	PrintNotice("Interrupted")
-	if out.Len() != 0 {
-		t.Fatalf("notice printed over the display: %q", out.String())
-	}
-	endDisplay()
-	if out.String() != "Interrupted\n" {
-		t.Errorf("output after the display closed = %q", out.String())
-	}
-
-	PrintNotice("Again")
-	if out.String() != "Interrupted\nAgain\n" {
-		t.Errorf("output without a display = %q", out.String())
-	}
-}
-
 // Once the display has closed after an interrupt, a task's output lines are logged, so a task that
 // still runs, such as a Helm install, shows its progress.
 func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
-	resetInterruptState(t)
 	runner := NewTaskRunner()
 	runner.AddTask("install", func(*TaskOutput) error { return nil })
 	output := &runner.tasks[0].output
@@ -364,17 +393,17 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 // the failure is the runner's error.
 func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
 	nonInteractive(t)
-	resetInterruptState(t)
+	ctx := interrupt.WithCancel(t.Context(), nil)
 	r := &recorder{}
 	runner := NewTaskRunner()
 	runner.AddTask("collect", r.task("collect", errors.New("collect failed")))
 	runner.AddCleanupTask("re-enable", func(context.Context, *TaskOutput) error {
-		Interrupt()
+		interrupt.Trigger(ctx)
 		return nil
 	})
 	runner.AddTask("download", r.task("download", nil))
 
-	if err := runner.Run(); err == nil || err.Error() != "collect failed" {
+	if err := runner.Run(ctx); err == nil || err.Error() != "collect failed" {
 		t.Errorf("error = %v, want the collection's", err)
 	}
 	if len(runner.notStarted) != 0 {
@@ -382,21 +411,19 @@ func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
 	}
 }
 
-// A CLIError a cleanup task returns is shown as it is: the command's error display shows only a
+// A CLIError a cleanup task returns is reported as it is: the command's error display shows only a
 // CLIError's own message, so a title wrapped around it would be lost anyway.
 func TestTaskRunnerShowsCLIErrorAsItIs(t *testing.T) {
 	nonInteractive(t)
-	resetInterruptState(t)
-	var shown []error
-	errorDisplay = func(err error) { shown = append(shown, err) }
 	cleanupErr := clierrors.New("Failed to remove the dump")
 	runner := NewTaskRunner()
 	runner.AddTask("collect", func(*TaskOutput) error { return errors.New("collect failed") })
 	runner.AddCleanupTask("remove", func(context.Context, *TaskOutput) error { return cleanupErr })
 
-	_ = runner.Run()
+	err := runner.Run(context.Background())
 
-	if len(shown) != 1 || shown[0] != cleanupErr { //nolint:errorlint // The exact error, not a wrapper
-		t.Errorf("errors shown = %v, want the CLIError itself", shown)
+	tasksErr, ok := errors.AsType[*TasksError](err)
+	if !ok || len(tasksErr.Unreported) != 1 || tasksErr.Unreported[0] != cleanupErr { //nolint:errorlint // The exact error, not a wrapper
+		t.Errorf("error = %#v, want the CLIError itself as the only unreported failure", err)
 	}
 }

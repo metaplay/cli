@@ -64,6 +64,7 @@ type compactListModel struct {
 	selected *compactListItem
 	quitting bool
 	err      error
+	ctrlCExit
 }
 
 func newCompactListModel(title string, model list.Model) compactListModel {
@@ -84,7 +85,11 @@ func (m compactListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			m.ctrlC = true
+			m.quitting = true
+			return m, tea.Quit
+		case "q":
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
@@ -152,6 +157,7 @@ type multiSelectModel struct {
 	done     bool
 	quitting bool
 	err      error
+	ctrlCExit
 }
 
 func newMultiSelectModel(title string, footer string, model list.Model, checked map[int]bool) multiSelectModel {
@@ -175,6 +181,7 @@ func (m multiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch msg.String() {
 		case "ctrl+c":
+			m.ctrlC = true
 			m.quitting = true
 			return m, tea.Quit
 		case "space":
@@ -236,14 +243,12 @@ func chooseFromListWithSubtitle(title string, subtitle string, items []list.Item
 	}
 	model := newCompactListModel(title, list)
 	model.subtitle = subtitle
-	program := tea.NewProgram(model)
-	finalModel, err := program.Run()
+	finalM, err := runDialog(model, "project selection")
 	if err != nil {
-		return -1, fmt.Errorf("failed to run project selection: %w", err)
+		return -1, err
 	}
 
 	// Check if a project was selected
-	finalM := finalModel.(compactListModel)
 	if finalM.err != nil {
 		return -1, finalM.err
 	}
@@ -374,13 +379,11 @@ func ChooseMultipleFromListDialogWithDefaults[TItem any](
 		return nil, err
 	}
 	model := newMultiSelectModel(title, footer, l, checked)
-	program := tea.NewProgram(model)
-	finalModel, err := program.Run()
+	finalM, err := runDialog(model, "multi-select dialog")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run multi-select dialog: %w", err)
+		return nil, err
 	}
 
-	finalM := finalModel.(multiSelectModel)
 	if finalM.err != nil {
 		return nil, finalM.err
 	}
@@ -513,12 +516,10 @@ func ChooseFromListDialogMultiline[TItem any](
 		return nil, err
 	}
 	model := newCompactListMultilineModel(title, l)
-	program := tea.NewProgram(model)
-	finalModel, err := program.Run()
+	finalM, err := runDialog(model, "selection dialog")
 	if err != nil {
-		return nil, fmt.Errorf("failed to run selection dialog: %w", err)
+		return nil, err
 	}
-	finalM := finalModel.(compactListMultilineModel)
 	if finalM.err != nil {
 		return nil, finalM.err
 	}
@@ -537,6 +538,7 @@ type compactListMultilineModel struct {
 	selectedIndex int
 	quitting      bool
 	err           error
+	ctrlCExit
 }
 
 func newCompactListMultilineModel(title string, model list.Model) compactListMultilineModel {
@@ -552,7 +554,11 @@ func (m compactListMultilineModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
+		case "ctrl+c":
+			m.ctrlC = true
+			m.quitting = true
+			return m, tea.Quit
+		case "q":
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":

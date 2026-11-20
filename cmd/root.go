@@ -161,9 +161,6 @@ var rootCmd = &cobra.Command{
 // It accepts a context for cancellation support: main cancels it on Ctrl+C, SIGINT and SIGTERM.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func ExecuteContext(ctx context.Context) {
-	// The task runner shows failures that a command's returned error does not cover the same way.
-	tui.SetErrorDisplay(displayError)
-
 	if err := checkUnknownSubcommand(rootCmd, os.Args[1:]); err != nil {
 		displayCobraError(err)
 		os.Exit(2)
@@ -432,6 +429,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
+			displayUnreportedTaskFailures(err)
 			if wasInterrupted(cmd, err) {
 				exitInterrupted()
 			}
@@ -483,6 +481,17 @@ func exitInterrupted() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
 	os.Exit(130)
+}
+
+// displayUnreportedTaskFailures shows the task failures that the command's error does not cover:
+// see tui.TasksError. They are shown also when the command was interrupted, which is otherwise
+// reported only as "Canceled.".
+func displayUnreportedTaskFailures(err error) {
+	if tasksErr, ok := errors.AsType[*tui.TasksError](err); ok {
+		for _, unreported := range tasksErr.Unreported {
+			displayError(unreported)
+		}
+	}
 }
 
 // isCLIError checks if the error is a CLIError type.

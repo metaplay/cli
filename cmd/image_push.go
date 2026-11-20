@@ -109,7 +109,7 @@ func (o *imagePushOpts) Run(cmd *cobra.Command) error {
 	})
 
 	// Run the tasks.
-	if err = taskRunner.Run(); err != nil {
+	if err = taskRunner.Run(cmd.Context()); err != nil {
 		return err
 	}
 

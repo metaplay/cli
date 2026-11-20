@@ -203,7 +203,7 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Run the tasks
-	if err := runner.Run(); err != nil {
+	if err := runner.Run(cmd.Context()); err != nil {
 		return err
 	}
 
@@ -251,16 +251,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		}
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-		// Execute the command in the debug container. Not cancelled with the command: cancelling the
-		// exec stream would not stop dotnet-trace in the pod, which would write the profile files
-		// after they were removed. It stops after the requested duration, so after an interrupt,
-		// wait at most that long plus 5 minutes for the conversion.
-		if err := ctx.Err(); err != nil {
-			return err // Interrupted before the profile was started
-		}
-		collectCtx, cancel := kubeutil.ContinueAfterCancel(ctx, time.Duration(o.flagDuration)*time.Second+5*time.Minute)
-		defer cancel()
-		_, _, err := kubeutil.ExecInDebugContainer(collectCtx, kubeCli, podName, debugContainerName, collectCmd)
+		// Not cancelled with the command: dotnet-trace would go on in the pod and write the profile
+		// files after they were removed. It stops after the requested duration, so after an
+		// interrupt, wait at most that long plus 5 minutes for the conversion.
+		grace := time.Duration(o.flagDuration)*time.Second + 5*time.Minute
+		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, grace, kubeCli, podName, debugContainerName, collectCmd)
 		if err != nil {
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}

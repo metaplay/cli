@@ -155,6 +155,7 @@ func calculateLocalFileMD5(filePath string) (string, error) {
 
 // streamFileFromOffset streams file content from a byte offset using dd.
 // This enables resumable transfers by skipping already-transferred bytes.
+// The 'dd if=<path> ' form of the commands is what removeFilesCommand stops.
 func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcPath string, offset int64, useCompression bool) (io.Reader, func() error, error) {
 	// Use dd with skip_bytes to start from the offset, then optionally compress
 	var command string

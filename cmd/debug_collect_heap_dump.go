@@ -19,6 +19,7 @@ import (
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // \todo Implement cleaning up ephemeral containers from the target pod.
@@ -202,7 +203,7 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	o.collectAndRetrieveHeapDump(cmd.Context(), kubeCli, pod.Name, debugContainerName, processInfo, runner)
 
 	// Run the tasks
-	if err := runner.Run(); err != nil {
+	if err := runner.Run(cmd.Context()); err != nil {
 		return err
 	}
 
@@ -222,15 +223,17 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	}
 	remotePath := remoteDumpDir + "/" + filepath.Base(o.flagOutputPath)
 
+	const reenableHealthChecksCmd = "curl localhost:8585/setOverride/healthz?mode=Passthrough"
+
 	// What the cleanup tasks need to know
 	overrideSet := false    // The health checks may be forced to "Success"
 	collectStarted := false // The collector was started in the pod
-	collected := false      // The collector finished
+	collectEnded := false   // The collector is known to have ended, successfully or not
 
 	// Set healthz probe to success mode
 	runner.AddTask("Disable health checks", func(output *tui.TaskOutput) error {
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-			"curl localhost:8585/setOverride/healthz?mode=Success",
+			"curl localhost:8585/setOverride/healthz?mode=Success", // Undone by reenableHealthChecksCmd
 		)
 		// A cancelled request may have set the override before it was cancelled
 		overrideSet = err == nil || errors.Is(err, context.Canceled)
@@ -257,24 +260,24 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		}
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-		// Not cancelled with the command: cancelling the exec stream would not stop the collector in
-		// the pod, which keeps the server frozen and writes the dump file until it finishes. Only
-		// then can the health checks be re-enabled and the file removed. After an interrupt, wait
-		// at most 10 minutes plus 3 times the estimated duration.
-		// Don't start a collection that would freeze the server after the command was interrupted.
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+		// Not cancelled with the command: the collector would go on in the pod, keeping the server
+		// frozen and writing the dump file until it finishes. Only then can the health checks be
+		// re-enabled and the file removed. After an interrupt, wait at most 10 minutes plus 3 times
+		// the estimated duration.
 		estimated := time.Duration(processInfo.MemoryGB * 10 * float64(time.Second))
-		collectCtx, cancel := kubeutil.ContinueAfterCancel(ctx, 10*time.Minute+3*estimated)
-		defer cancel()
 		collectStarted = true
-		_, _, err := kubeutil.ExecInDebugContainer(collectCtx, kubeCli, podName, debugContainerName, collectCmd)
+		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, 10*time.Minute+3*estimated, kubeCli, podName, debugContainerName, collectCmd)
 		dumpDuration = time.Since(startTime)
 		if err != nil {
+			// An exit code means that the collector's process ended. That ends a gcdump, which
+			// dotnet-gcdump does itself. It does not end a full dump: createdump, a child of the
+			// server process, goes on writing it after dotnet-dump has exited.
+			if _, exited := errors.AsType[utilexec.CodeExitError](err); exited && o.flagCollectMode == "gcdump" {
+				collectEnded = true
+			}
 			return fmt.Errorf("failed to collect heap dump: %w", err)
 		}
-		collected = true
+		collectEnded = true
 
 		// Calculate and log dump rate
 		dumpSeconds := dumpDuration.Seconds()
@@ -288,7 +291,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		if !overrideSet {
 			return nil // Nothing to undo
 		}
-		if collectStarted && !collected {
+		if collectStarted && !collectEnded {
 			// The collection failed or was given up, possibly while the collector still freezes the
 			// server: re-enabling the health checks now could get the server restarted mid-dump.
 			return clierrors.Newf("Left the health checks of pod %s disabled, because the heap dump collector may still be running and freezing the server", podName).
@@ -296,14 +299,12 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 					"The health checks report healthy until the override expires, 30 minutes after it was set",
 					"The collector may still write the dump to "+remotePath,
 				).
-				WithSuggestion("Once the collector has finished, re-enable the health checks by running in the pod: curl localhost:8585/setOverride/healthz?mode=Passthrough, and remove the dump file")
+				WithSuggestion("Once the collector has finished, re-enable the health checks by running in the pod: " + reenableHealthChecksCmd + ", and remove the dump file")
 		}
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-			"curl localhost:8585/setOverride/healthz?mode=Passthrough",
-		)
+		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, reenableHealthChecksCmd)
 		if err != nil {
 			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s, which report healthy until the override expires 30 minutes after it was set", podName).
-				WithSuggestion("To re-enable them sooner, run in the pod: curl localhost:8585/setOverride/healthz?mode=Passthrough")
+				WithSuggestion("To re-enable them sooner, run in the pod: " + reenableHealthChecksCmd)
 		}
 		return nil
 	})
@@ -321,6 +322,9 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Remove the remote file, also when the download failed
 	runner.AddCleanupTask("Remove heap dump from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
+		if !collectStarted {
+			return nil // No file was written
+		}
 		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "heap dump", o.flagOutputPath, downloaded, remotePath)
 	})
 }

@@ -15,6 +15,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/interrupt"
 	"github.com/metaplay/cli/pkg/styles"
 	"github.com/rs/zerolog/log"
 )
@@ -58,6 +59,9 @@ func (to *TaskOutput) logsLines() bool {
 // TaskRunFunc is the function signature for task execution functions
 type TaskRunFunc func(output *TaskOutput) error
 
+// CleanupTaskRunFunc is the function signature for cleanup tasks, see AddCleanupTask.
+type CleanupTaskRunFunc func(ctx context.Context, output *TaskOutput) error
+
 // Append a new line at the end of the output.
 func (to *TaskOutput) AppendLine(line string) {
 	to.mu.Lock()
@@ -80,6 +84,11 @@ func (to *TaskOutput) SetHeaderLines(lines []string) {
 	to.headerLines = lines
 	to.mu.Unlock()
 
+	to.logWhenNoDisplay(lines)
+}
+
+// logWhenNoDisplay logs the lines when there is no display to show them on.
+func (to *TaskOutput) logWhenNoDisplay(lines []string) {
 	if to.logsLines() {
 		for _, line := range lines {
 			log.Info().Msgf("  %s", line)
@@ -96,11 +105,7 @@ func (to *TaskOutput) SetFooterLines(lines []string) {
 	to.footerLines = lines
 	to.mu.Unlock()
 
-	if to.logsLines() {
-		for _, line := range lines {
-			log.Info().Msgf("  %s", line)
-		}
-	}
+	to.logWhenNoDisplay(lines)
 }
 
 // getLines returns a copy of the current output lines.
@@ -131,15 +136,15 @@ func (to *TaskOutput) getLines() []string {
 
 // Task represents a single task with its title, function, and status
 type Task struct {
-	title     string        // Title for the task
-	runFunc   TaskRunFunc   // Run function for the task
-	cleanup   bool          // Runs also after an earlier task failed, see AddCleanupTask
-	status    TaskStatus    // Status of the task
-	error     error         // Error that was returned by the task execution function
-	startTime time.Time     // Time when the task was started
-	elapsed   time.Duration // Amount of time elapsed while running the task
-	mu        sync.Mutex    // Protects status, error, startTime, and elapsed
-	output    TaskOutput    // Output from the task
+	title     string             // Title for the task
+	run       CleanupTaskRunFunc // Runs the task, given the context of the runner's Run call
+	cleanup   bool               // Runs also after an earlier task failed, see AddCleanupTask
+	status    TaskStatus         // Status of the task
+	error     error              // Error that was returned by the task execution function
+	startTime time.Time          // Time when the task was started
+	elapsed   time.Duration      // Amount of time elapsed while running the task
+	mu        sync.Mutex         // Protects status, error, startTime, and elapsed
+	output    TaskOutput         // Output from the task
 }
 
 // TaskRunner manages and executes a sequence of tasks with visual progress
@@ -150,6 +155,7 @@ type TaskRunner struct {
 	frameIndex int            // Current frame index for spinner animation
 	lastTick   time.Time      // Last time the spinner was updated
 	program    *tea.Program   // Reference to the tea program for quitting
+	interrupt  func()         // Interrupts the command, called on a Ctrl-C key press
 
 	notStarted []string // Ordinary tasks the interrupt kept from starting, written by executeTasks
 }
@@ -177,6 +183,9 @@ type tickMsg struct{}
 // doneMsg is sent when all tasks have completed or failed
 type doneMsg struct{}
 
+// canceledMsg is sent when the command's context is done, which closes the display
+type canceledMsg struct{}
+
 // NewTaskRunner creates a new TaskRunner
 func NewTaskRunner() *TaskRunner {
 	return &TaskRunner{
@@ -189,13 +198,13 @@ func NewTaskRunner() *TaskRunner {
 
 // AddTask adds a new task to the runner
 func (m *TaskRunner) AddTask(title string, runFunc TaskRunFunc) {
-	m.addTask(title, runFunc, false)
+	m.addTask(title, func(_ context.Context, output *TaskOutput) error { return runFunc(output) }, false)
 }
 
-func (m *TaskRunner) addTask(title string, runFunc TaskRunFunc, cleanup bool) {
+func (m *TaskRunner) addTask(title string, run CleanupTaskRunFunc, cleanup bool) {
 	m.tasks = append(m.tasks, &Task{
 		title:   title,
-		runFunc: runFunc,
+		run:     run,
 		cleanup: cleanup,
 		status:  StatusPending,
 		output:  TaskOutput{progress: m.progress},
@@ -205,11 +214,11 @@ func (m *TaskRunner) addTask(title string, runFunc TaskRunFunc, cleanup bool) {
 // AddCleanupTask adds a task that undoes an earlier task's changes, such as a setting changed in a
 // pod. Unlike other tasks, it runs also when an earlier task failed or the command was interrupted,
 // as long as some task before it started. Its own failure does not stop the tasks after it. Its
-// context is not cancelled with the command's, and is bounded by cleanupTimeout. runFunc must be
-// safe to run when the change it undoes was not made.
-func (m *TaskRunner) AddCleanupTask(title string, runFunc func(ctx context.Context, output *TaskOutput) error) {
-	m.addTask(title, func(output *TaskOutput) error {
-		ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+// context has the values of the context given to Run, but is not cancelled with it, and is bounded
+// by cleanupTimeout. runFunc must be safe to run when the change it undoes was not made.
+func (m *TaskRunner) AddCleanupTask(title string, runFunc CleanupTaskRunFunc) {
+	m.addTask(title, func(ctx context.Context, output *TaskOutput) error {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
 		defer cancel()
 		return runFunc(ctx, output)
 	}, true)
@@ -245,51 +254,53 @@ func (m *TaskRunner) getStatusSymbol(status TaskStatus) string {
 	}
 }
 
-// Run starts executing tasks sequentially and displays the progress
-func (m *TaskRunner) Run() error {
+// Run executes the tasks sequentially and displays the progress. ctx is the command's context,
+// which the tasks use too. Once it is done, the running task is waited for, and no further tasks
+// start except cleanup tasks. A Ctrl-C key press in the display interrupts ctx, see the interrupt
+// package.
+//
+// The returned error is a *TasksError if more failed than the command's error tells.
+func (m *TaskRunner) Run(ctx context.Context) error {
 	if isInteractiveMode {
-		return m.runInteractive()
+		return m.runInteractive(ctx)
 	}
-	return m.runNonInteractive()
+	return m.runNonInteractive(ctx)
 }
 
 // runInteractive runs tasks with an interactive TUI using Bubble Tea
-func (m *TaskRunner) runInteractive(options ...tea.ProgramOption) error {
-	// Create and store the program instance
-	m.program = tea.NewProgram(m, options...)
+func (m *TaskRunner) runInteractive(ctx context.Context, options ...tea.ProgramOption) error {
+	// Create and store the program instance. The interrupt package watches the signals: an
+	// interrupt reaches the display as the cancellation of ctx, whatever caused it.
+	m.interrupt = func() { interrupt.Trigger(ctx) }
+	m.program = tea.NewProgram(m, append([]tea.ProgramOption{tea.WithoutSignalHandler()}, options...)...)
+	stopWatching := context.AfterFunc(ctx, func() { m.program.Send(canceledMsg{}) })
+	defer stopWatching()
+
+	// The interrupt notice is held back until the terminal is restored, so it does not garble the
+	// display.
+	releaseNotice := interrupt.HoldNotice(ctx)
 
 	// Start task execution in background
-	go m.executeTasks()
+	go m.executeTasks(ctx)
 
-	// Run the TUI. Notices printed meanwhile, such as main's "Interrupted" on SIGINT, are held
-	// back until the terminal is restored, so they don't garble the display.
-	beginDisplay()
+	// Run the TUI
 	_, err := m.program.Run()
-	endDisplay()
-	displayFailed := err != nil && !errors.Is(err, tea.ErrInterrupted)
-	if displayFailed {
+	releaseNotice()
+	if err != nil {
 		log.Warn().Msgf("Task progress display failed: %v", err)
 	}
 
-	// The display closes before the tasks finish when the user interrupts the command (Ctrl-C,
-	// SIGINT or SIGTERM). Stop the command, as SIGINT does without the display, and wait for the
-	// tasks, reporting their progress as log lines. A Ctrl-C key press also stops the command when
-	// the tasks finished while the display was closing.
-	tasksDone := false
+	// The display closes before the tasks finish when the command is interrupted, or when the
+	// display fails. Wait for the tasks, reporting their progress as log lines, so a command never
+	// cleans up while a task is still running.
 	select {
 	case <-m.done:
-		tasksDone = true
 	default:
-	}
-	if interrupted.Load() || (!tasksDone && !displayFailed) {
-		Interrupt()
-	}
-	if !tasksDone {
 		m.progress.closeDisplay()
 		<-m.done
 	}
 
-	return m.result()
+	return m.result(ctx)
 }
 
 // closeDisplay switches progress reporting to log lines, starting with the task still running.
@@ -323,26 +334,40 @@ func (p *plainProgress) taskEnded(err error, elapsed time.Duration) {
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
-func (m *TaskRunner) runNonInteractive() error {
+func (m *TaskRunner) runNonInteractive(ctx context.Context) error {
 	m.progress.logging = true
-	m.executeTasks()
-	err := m.result()
+	m.executeTasks(ctx)
+	err := m.result(ctx)
 	if err == nil {
 		log.Info().Msg("")
 	}
 	return err
 }
 
-// result returns the error for the command, once the tasks have finished, and shows the failures
-// that error does not cover. The error is the first ordinary task's failure. Without one, it is
-// context.Canceled if an interrupt skipped tasks, or else the first cleanup task's failure.
+// TasksError is the error of a task run in which more failed than the command's error tells.
+type TasksError struct {
+	Err error // The command's error
+
+	// Failures that showing the command's error does not cover, to show before it: a cleanup task's
+	// failure after an earlier failure, and failures after an interrupt, which the command reports
+	// only as "Canceled.".
+	Unreported []error
+}
+
+func (e *TasksError) Error() string { return e.Err.Error() }
+
+func (e *TasksError) Unwrap() error { return e.Err }
+
+// result returns the error for the command, once the tasks have finished. The error is the first
+// ordinary task's failure. Without one, it is ctx's error if its cancellation skipped tasks, or
+// else the first cleanup task's failure.
 //
-// The command shows its error itself, except after an interrupt: then it shows only "Canceled.",
-// so result shows the failures here. It leaves out ordinary tasks' failures that wrap
-// context.Canceled, which the interrupt caused. Cleanup tasks don't use the command's context, so
-// their failures are always shown.
-func (m *TaskRunner) result() error {
-	wasInterrupted := interrupted.Load()
+// The command shows its error itself, except when ctx is done: then it shows only "Canceled.". The
+// other failures are returned as TasksError.Unreported. That leaves out ordinary tasks' failures
+// that wrap context.Canceled once ctx is done, which the cancellation caused. Cleanup tasks don't
+// use the command's context, so their failures are always reported.
+func (m *TaskRunner) result(ctx context.Context) error {
+	wasInterrupted := ctx.Err() != nil
 	var failed []*Task
 	for _, task := range m.tasks {
 		task.mu.Lock()
@@ -367,6 +392,7 @@ func (m *TaskRunner) result() error {
 		returnedTask = failed[0]
 	}
 
+	var unreported []error
 	for _, task := range failed {
 		switch {
 		case !wasInterrupted && task == returnedTask:
@@ -374,20 +400,24 @@ func (m *TaskRunner) result() error {
 		case wasInterrupted && !task.cleanup && errors.Is(task.error, context.Canceled):
 			// Caused by the interrupt
 		default:
-			errorDisplay(withTaskTitle(task))
+			unreported = append(unreported, withTaskTitle(task))
 		}
 	}
 	if canceled {
 		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(m.notStarted, ", "))
 	}
 
-	if returnedTask != nil {
-		return returnedTask.error
+	var err error
+	switch {
+	case returnedTask != nil:
+		err = returnedTask.error
+	case canceled:
+		err = ctx.Err()
 	}
-	if canceled {
-		return context.Canceled
+	if len(unreported) > 0 {
+		return &TasksError{Err: err, Unreported: unreported}
 	}
-	return nil
+	return err
 }
 
 // withTaskTitle prefixes a failed task's error with its title. A CLIError is left as it is: its own
@@ -399,9 +429,9 @@ func withTaskTitle(task *Task) error {
 	return fmt.Errorf("%s: %w", task.title, task.error)
 }
 
-// executeTasks runs the tasks sequentially. After an ordinary task fails or the command is
-// interrupted, only cleanup tasks run.
-func (m *TaskRunner) executeTasks() {
+// executeTasks runs the tasks sequentially. After an ordinary task fails or ctx is done, only
+// cleanup tasks run.
+func (m *TaskRunner) executeTasks(ctx context.Context) {
 	stopped := false
 	anyStarted := false
 	for _, task := range m.tasks {
@@ -411,7 +441,7 @@ func (m *TaskRunner) executeTasks() {
 			}
 		} else if stopped {
 			continue
-		} else if interrupted.Load() {
+		} else if ctx.Err() != nil {
 			m.notStarted = append(m.notStarted, task.title)
 			continue
 		}
@@ -426,7 +456,7 @@ func (m *TaskRunner) executeTasks() {
 
 		// Execute the task
 		log.Debug().Msgf("Task start: %s", task.title)
-		err := task.runFunc(&task.output)
+		err := task.run(ctx, &task.output)
 
 		task.mu.Lock()
 		task.elapsed = time.Since(task.startTime)
@@ -475,9 +505,9 @@ func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
-			// Mark the command interrupted at once, so no further task starts while the display
-			// closes. runInteractive cancels the command once the terminal is restored.
-			interrupted.Store(true)
+			// Cancels the command's context at once, so no further task starts while the display
+			// closes.
+			m.interrupt()
 			return m, tea.Quit
 		}
 	case tickMsg:
@@ -501,7 +531,7 @@ func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.tick()
-	case doneMsg:
+	case doneMsg, canceledMsg:
 		return m, tea.Quit
 	}
 	return m, nil

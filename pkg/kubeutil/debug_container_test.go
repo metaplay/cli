@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -31,33 +32,48 @@ func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	}
 }
 
+// Before removing a file, the command stops a cancelled download that still reads it, without
+// matching its own shell or a file whose name only starts the same.
+func TestRemoveFilesCommand(t *testing.T) {
+	got := removeFilesCommand([]string{"/tmp/a.gcdump", "/tmp/it's"})
+	want := `for pid in $(pgrep -f -- '[d]d if=/tmp/a\.gcdump '); do pkill -P $pid; kill $pid; done; ` +
+		`for pid in $(pgrep -f -- '[d]d if=/tmp/it'\''s '); do pkill -P $pid; kill $pid; done; ` +
+		`rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`
+	if got != want {
+		t.Errorf("removeFilesCommand =\n%s\nwant\n%s", got, want)
+	}
+}
+
 // The continued context outlives the parent's cancellation by the grace period, and no longer.
 func TestContinueAfterCancel(t *testing.T) {
-	parent, cancelParent := context.WithCancel(context.Background())
-	continued, cancel := ContinueAfterCancel(parent, 100*time.Millisecond)
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		parent, cancelParent := context.WithCancel(context.Background())
+		continued, cancel := continueAfterCancel(parent, time.Minute)
+		defer cancel()
 
-	cancelParent()
-	time.Sleep(20 * time.Millisecond)
-	if err := continued.Err(); err != nil {
-		t.Fatalf("continued context cancelled with the parent: %v", err)
-	}
-	select {
-	case <-continued.Done():
-	case <-time.After(5 * time.Second):
-		t.Fatal("continued context not cancelled after the grace period")
-	}
+		cancelParent()
+		time.Sleep(59 * time.Second)
+		if err := continued.Err(); err != nil {
+			t.Fatalf("continued context cancelled before the grace period ended: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+		if continued.Err() == nil {
+			t.Fatal("continued context not cancelled after the grace period")
+		}
+	})
 }
 
 // Without a cancellation of the parent, only the returned cancel function ends the context.
 func TestContinueAfterCancelWithoutParentCancel(t *testing.T) {
-	continued, cancel := ContinueAfterCancel(context.Background(), time.Millisecond)
-	time.Sleep(20 * time.Millisecond)
-	if err := continued.Err(); err != nil {
-		t.Fatalf("continued context cancelled without a parent cancellation: %v", err)
-	}
-	cancel()
-	if continued.Err() == nil {
-		t.Fatal("cancel did not cancel the context")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		continued, cancel := continueAfterCancel(context.Background(), time.Second)
+		time.Sleep(time.Minute)
+		if err := continued.Err(); err != nil {
+			t.Fatalf("continued context cancelled without a parent cancellation: %v", err)
+		}
+		cancel()
+		if continued.Err() == nil {
+			t.Fatal("cancel did not cancel the context")
+		}
+	})
 }

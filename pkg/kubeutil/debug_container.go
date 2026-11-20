@@ -7,6 +7,7 @@ package kubeutil
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -258,17 +259,30 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	return stdOut.String(), stdErr.String(), nil
 }
 
-// RemoveFilesInDebugContainer removes files in the debug container with a single 'rm -f'. Files
-// that do not exist are not an error.
+// RemoveFilesInDebugContainer removes files in the debug container with a single exec. Files that
+// do not exist are not an error.
 func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, paths ...string) error {
-	quoted := make([]string, len(paths))
-	for i, path := range paths {
-		quoted[i] = shellQuote(path)
-	}
-	command := "rm -f -- " + strings.Join(quoted, " ")
+	command := removeFilesCommand(paths)
 	log.Debug().Msgf("Remove files from debug container: %s", command)
 	_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, command)
 	return err
+}
+
+// removeFilesCommand returns the bash command that removes the files. It first stops a download of
+// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
+// the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
+// container ends.
+func removeFilesCommand(paths []string) string {
+	var command strings.Builder
+	quoted := make([]string, len(paths))
+	for i, path := range paths {
+		quoted[i] = shellQuote(path)
+		// The pattern matches the download's shell and its 'dd'. Its [d] keeps it from matching
+		// this command's own shell. Killing the shell's children stops the 'gzip'.
+		pattern := shellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
+		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
+	}
+	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
 }
 
 // shellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
@@ -288,14 +302,26 @@ func streamWithContext(ctx context.Context, exec remotecommand.Executor, options
 	return err
 }
 
-// ContinueAfterCancel returns a context that is not cancelled with ctx, so that work in a pod which
-// cancelling would not stop can finish after the command is interrupted. It is cancelled grace
-// after ctx is, so an interrupted command does not wait for it forever.
-func ContinueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
+// ExecInDebugContainerUntilDone is ExecInDebugContainer for a command that must not be abandoned
+// when ctx is cancelled: cancelling the exec stream does not stop the process in the pod, which
+// would go on unobserved. The command is given up only grace after ctx is cancelled, so an
+// interrupted CLI command does not wait for it forever. The caller must not call this with a ctx
+// that is already cancelled: the task runner does not start a task then.
+func ExecInDebugContainerUntilDone(ctx context.Context, grace time.Duration, kubeCli *envapi.KubeClient, podName, debugContainerName, command string) (string, string, error) {
+	continued, cancel := continueAfterCancel(ctx, grace)
+	defer cancel()
+	return ExecInDebugContainer(continued, kubeCli, podName, debugContainerName, command)
+}
+
+// continueAfterCancel returns a context that is not cancelled with ctx, but grace after ctx is.
+func continueAfterCancel(ctx context.Context, grace time.Duration) (context.Context, context.CancelFunc) {
 	continued, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	stopWaiting := context.AfterFunc(ctx, func() {
-		timer := time.AfterFunc(grace, cancel)
-		context.AfterFunc(continued, func() { timer.Stop() }) // Stops the timer when cancel is called early
+		select {
+		case <-time.After(grace):
+			cancel()
+		case <-continued.Done(): // cancel was called early
+		}
 	})
 	return continued, func() {
 		stopWaiting()
