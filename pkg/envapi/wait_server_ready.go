@@ -669,10 +669,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		} else {
 			numFailedChecks = 0
 
-			// Show the status. In non-interactive mode, only when it has changed or has
-			// not been shown for a while.
+			// Show the status. When it is logged (in non-interactive mode, or after the
+			// display has closed), only when it has changed or has not been shown for a while.
 			status := strings.Join(readiness.lines, "\n")
-			if tui.IsInteractiveMode() || status != lastShown || time.Since(lastShownAt) >= nonInteractiveStatusInterval {
+			if !output.LogsLines() || status != lastShown || time.Since(lastShownAt) >= nonInteractiveStatusInterval {
 				headerLines := []string{fmt.Sprintf("%s %s of %s", headerPrefix, elapsed.Round(time.Second), timeout)}
 				for _, line := range readiness.lines {
 					headerLines = append(headerLines, "  "+line)
