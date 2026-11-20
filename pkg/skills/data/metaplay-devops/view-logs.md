@@ -34,7 +34,7 @@ metaplay debug logs <env> --pod service-0
 
 ## Pod naming
 
-Pod names follow `<role>-<index>` — e.g. `service-0`, `entity-0`, `all-0`. Discover the running pod set via `metaplay debug server-status <env>`.
+Pod names follow `<role>-<index>` — e.g. `service-0`, `entity-0`, `all-0`. Discover the running pod set from the prefix of each line of `metaplay debug logs <env>`, or via `metaplay debug server-status <env>`, which lists the pods of a shard set only once it runs the deployed image.
 
 ## Filtering and triage
 
@@ -73,4 +73,4 @@ Avoid omitting `--since` on a busy env — the default is *all available logs* a
 - **`401` / auth:** `metaplay auth login`.
 - **`403`:** user lacks `api.logs.view` for the env.
 - **`no pods found`:** no game server is deployed — `metaplay deploy server` first.
-- **`pod not found`:** `--pod` value doesn't match any running pod; check `metaplay debug server-status <env>`.
+- **`pod not found`:** `--pod` value doesn't match any running pod; run `metaplay debug logs <env>` without `--pod` and read the pod names from the line prefixes.

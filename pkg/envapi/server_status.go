@@ -63,13 +63,13 @@ const statusCheckTimeout = 10 * time.Second
 
 // How many connections CheckServerStatus makes to the game server's client endpoint.
 // Several, to show an endpoint that serves only some of them, such as one with a
-// broken load balancer target.
+// broken load balancer target or address.
 const statusClientConnections = 5
 
 // CheckServerStatus checks once whether the game server serves clients and the LiveOps
-// Dashboard: the checks of WaitForServerToBeReady, without waiting. The checks run
-// concurrently. The client endpoint check makes statusClientConnections connections at
-// once, where the deploy's wait requires 10 in a row. It returns an error only if the
+// Dashboard: the kinds of checks of WaitForServerToBeReady, without waiting. The checks
+// run concurrently. The client endpoint check makes statusClientConnections connections,
+// where the deploy's wait requires 10 in a row. It returns an error only if the
 // checks could not be made, such as when no game server is deployed, or were stopped.
 func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (ServerStatus, error) {
 	envDetails, err := targetEnv.GetDetails()
@@ -94,10 +94,11 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	dashboardURL := "https://" + envDetails.Deployment.AdminHostname
 	var pods, serverDomain, endpoint, dashboardDomain, dashboard ServerCheck
 	var readiness gameServerReadiness
+	var podsErr error
 	var notes, failedPodLogs []string
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		pods, readiness = checkPods(ctx, kubeCli, gameServer)
+		pods, readiness, podsErr = checkPods(ctx, kubeCli, gameServer)
 		if readiness.failedPod != "" {
 			logsCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 			defer cancel()
@@ -125,18 +126,21 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 		Checks:        []ServerCheck{pods, serverDomain, endpoint, dashboardDomain, dashboard},
 		FailedPodLogs: failedPodLogs,
 		Notes:         notes,
-		suggestion:    targetEnv.notReadySuggestion(pods.Failed(), readiness),
+		suggestion:    targetEnv.notReadySuggestion(pods.Failed(), podsErr, readiness, len(failedPodLogs) > 0),
 	}, nil
 }
 
 // notReadySuggestion tells what to do when the game server is not ready, given whether
-// the check of its pods failed and their readiness.
-func (targetEnv *TargetEnvironment) notReadySuggestion(podsFailed bool, readiness gameServerReadiness) string {
+// the check of its pods failed, the error that stopped it, their readiness, and whether
+// the logs of a failed pod were fetched.
+func (targetEnv *TargetEnvironment) notReadySuggestion(podsFailed bool, podsErr error, readiness gameServerReadiness, hasLogs bool) string {
 	switch {
+	case podsErr != nil:
+		return "The status of the game server pods could not be read from Kubernetes. Run this command again, and if it fails the same way, check that your account can read the environment's pods and stateful sets"
 	case readiness.failedPod != "":
-		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs)
+		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs, hasLogs)
 	case podsFailed:
-		return fmt.Sprintf("Run this command again to see whether the game server is still starting, or check the server logs with: metaplay debug logs %s", targetEnv.HumanID)
+		return "If a deploy just started, run this command again in a minute. Otherwise, the pod lines above show what blocks it"
 	default:
 		return "The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to 15 minutes to resolve"
 	}
@@ -154,8 +158,8 @@ func checkDomainThen(ctx context.Context, domainName, hostname, name string, che
 }
 
 // checkPods checks once whether the game server's pods run the image of its CR and are
-// ready. A failed Kubernetes API call fails the check.
-func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (ServerCheck, gameServerReadiness) {
+// ready. A failed Kubernetes API call fails the check, and is returned.
+func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (ServerCheck, gameServerReadiness, error) {
 	check := ServerCheck{Name: "Game server pods"}
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
@@ -165,7 +169,7 @@ func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameS
 	if err != nil {
 		check.Summary = "failed to check"
 		check.Problems = []string{fmt.Sprintf("Failed to check the game server pods: %v", err)}
-		return check, readiness
+		return check, readiness, err
 	}
 	check.Lines = readiness.lines
 	check.Problems = readiness.problems
@@ -173,15 +177,16 @@ func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameS
 	if !readiness.ready() {
 		check.Summary = "not ready"
 	}
-	return check, readiness
+	return check, readiness, nil
 }
 
-// checkDomain checks once that hostname resolves.
+// checkDomain checks once that hostname resolves. It looks up the fully qualified name,
+// so that the search domains of this machine do not make it resolve.
 func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
 	check := ServerCheck{Name: fmt.Sprintf("%s %s", name, hostname)}
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupHost(ctx, hostname)
+	addrs, err := net.DefaultResolver.LookupHost(ctx, strings.TrimSuffix(hostname, ".")+".")
 	if err != nil {
 		check.Summary = "does not resolve"
 		check.Problems = []string{fmt.Sprintf("Domain %s does not resolve: %v", hostname, err)}
@@ -192,16 +197,17 @@ func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
 }
 
 // checkClientEndpoint connects to the game server's client endpoint
-// statusClientConnections times at once, and checks that each connection succeeds.
+// statusClientConnections times, and checks that each connection succeeds. The
+// connections are made one after another, as each looks up the hostname again, and so
+// may reach another of the load balancer's addresses. Concurrent lookups of one
+// hostname share a single answer.
 func checkClientEndpoint(ctx context.Context, name, hostname string, port int) ServerCheck {
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
 	errs := make([]error, statusClientConnections)
-	var wg sync.WaitGroup
 	for ndx := range errs {
-		wg.Go(func() { errs[ndx] = attemptTLSConnection(ctx, hostname, port) })
+		errs[ndx] = attemptTLSConnection(ctx, hostname, port)
 	}
-	wg.Wait()
 
 	numFailed := 0
 	var firstErr error
@@ -232,7 +238,10 @@ func checkHTTPServer(ctx context.Context, name, url string) ServerCheck {
 		check.Summary = "responds with " + status
 	}
 	if err != nil {
-		check.Problems = []string{fmt.Sprintf("%s: %v", url, err)}
+		if status != "" {
+			err = fmt.Errorf("%s: %w", url, err)
+		}
+		check.Problems = []string{err.Error()}
 	}
 	return check
 }

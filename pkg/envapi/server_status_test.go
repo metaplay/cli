@@ -6,8 +6,10 @@ package envapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
@@ -59,6 +61,7 @@ func TestProbeHTTPServerNoResponse(t *testing.T) {
 	assert.True(t, check.Failed())
 	assert.Equal(t, "does not respond", check.Summary)
 	assert.Len(t, check.Problems, 1)
+	assert.Equal(t, 1, strings.Count(check.Problems[0], url), "the URL is named once: %s", check.Problems[0])
 }
 
 func TestCheckDomain(t *testing.T) {
@@ -113,20 +116,25 @@ func TestServerStatusErr(t *testing.T) {
 
 func TestNotReadySuggestion(t *testing.T) {
 	targetEnv := &TargetEnvironment{HumanID: "nimbly"}
+	failed := gameServerReadiness{failedPod: "all-0", failedPodLogs: previousPodLogs}
 	tests := []struct {
 		name       string
 		podsFailed bool
+		podsErr    error
 		readiness  gameServerReadiness
+		hasLogs    bool
 		want       string
 	}{
+		{name: "pods not read", podsFailed: true, podsErr: errors.New("forbidden"), want: "could not be read from Kubernetes"},
 		{name: "never started", podsFailed: true, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: noPodLogs}, want: "pod all-0 did not start, so it has no logs"},
-		{name: "failed with logs", podsFailed: true, readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: previousPodLogs}, want: "Check the pod logs above for details, or run: metaplay debug logs nimbly"},
-		{name: "starting", podsFailed: true, want: "still starting"},
+		{name: "failed with logs", podsFailed: true, readiness: failed, hasLogs: true, want: "Check the pod logs above for details, or run: metaplay debug logs nimbly"},
+		{name: "failed, logs not fetched", podsFailed: true, readiness: failed, want: "Check the server logs with: metaplay debug logs nimbly"},
+		{name: "starting", podsFailed: true, want: "run this command again in a minute"},
 		{name: "network only", podsFailed: false, want: "DNS or the load balancer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, targetEnv.notReadySuggestion(tt.podsFailed, tt.readiness), tt.want)
+			assert.Contains(t, targetEnv.notReadySuggestion(tt.podsFailed, tt.podsErr, tt.readiness, tt.hasLogs), tt.want)
 		})
 	}
 }

@@ -232,6 +232,9 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
 		return pod
 	}
+	// A pod created long ago whose server keeps crashing: its last run ended recently.
+	crashLoopingOldPod := restartedPod(6, now.Add(-3*time.Hour))
+	crashLoopingOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-time.Minute))
 	readyRestarted := testPod("all", 0, "new", running, true)
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
@@ -403,6 +406,17 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
+		},
+		{
+			// In a pod created long ago, restarts count when the server exited recently.
+			name:      "keeps restarting in an old pod",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{crashLoopingOldPod},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 6 times, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 6 times, last exit code 137 (Error))"},
+			failedPod: "all-0",
+			logs:      previousPodLogs,
 		},
 		{
 			// Kubernetes restarts the server, and one restart is allowed.
@@ -586,7 +600,7 @@ func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
 			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
 				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
 			}
-			if strings.Contains(logged.String(), "Error connecting") {
+			if strings.Contains(logged.String(), "context canceled") {
 				t.Errorf("the cancelled request was logged as a connection error:\n%s", logged.String())
 			}
 		})

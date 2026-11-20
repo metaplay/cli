@@ -32,7 +32,7 @@ Whole-server triage. For a single player's incident report from the dashboard, u
 
 A check of an endpoint is skipped when its domain does not resolve.
 
-Failure in (1) is a Kubernetes / image / config issue. Failures in (2)/(4) are DNS or load-balancer issues, not game-server bugs. Failures in (3)/(5) usually mean the pod is up but the process itself is broken — go to logs.
+Failure in (1) is a Kubernetes / image / config issue. Failures in (2)/(4) are DNS or load-balancer issues, not game-server bugs. Failures in (3)/(5) while (1) passes are usually in DNS, the load balancer or the ingress, as the pods are ready. The admin endpoint (5) is answered by the ingress and its authentication, not by the game server. When (1) fails too, start from the pod lines and the logs.
 
 ## Pods and the shard layout
 

@@ -215,8 +215,8 @@ type readinessTarget struct {
 // tag: otherwise, the image check holds back the old pods until they are replaced.
 const oldPodGracePeriod = 30 * time.Second
 
-// How recently a pod must have been created for its server's restarts to count as a
-// failure to start, rather than as ones in its past.
+// How recently a pod must have been created, or its server last exited, for the
+// server's restarts to count as a failure to start, rather than as ones in its past.
 const recentRestartWindow = 10 * time.Minute
 
 // DeployBaseline is the game server's state just before a deploy changes it. The
@@ -441,10 +441,14 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	// exit by itself: a server that hangs is killed by its liveness probe, and shows as
 	// running between the restarts. One restart is allowed, as a server may exit once
 	// while what it depends on is starting too. Kubernetes counts the restarts over the
-	// pod's lifetime, so they count only for a recently created pod: in an older one,
-	// they may be from the server's past.
-	isNewPod := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
-	keepsRestarting := containerStatus.RestartCount >= 2 && isNewPod
+	// pod's lifetime, so they count only for a recently created pod, or one whose server
+	// exited recently: otherwise, they may be from the server's past. A server that keeps
+	// crashing exits at least every 5 minutes, the longest back-off of Kubernetes.
+	recentlyStarted := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
+	if lastRun := containerStatus.LastTerminationState.Terminated; lastRun != nil && lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) {
+		recentlyStarted = true
+	}
+	keepsRestarting := containerStatus.RestartCount >= 2 && recentlyStarted
 
 	state := containerStatus.State
 	switch {
@@ -723,10 +727,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
-			showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+			hasLogs := showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
 			return clierrors.New("Game server failed to start").
 				WithDetails(fmt.Sprintf("Pod %s: %s", readiness.failedPod, readiness.failure)).
-				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs))
+				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs, hasLogs))
 		}
 
 		if readiness.ready() {
@@ -744,8 +748,9 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 }
 
 // showPodLogs shows the last logs of a game server pod's server container that show its
-// failure in the task output, or why they could not be fetched.
-func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) {
+// failure in the task output, or why they could not be fetched. It tells whether it
+// showed any logs.
+func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) bool {
 	notes, logLines := failedPodLogLines(ctx, kubeCli, podName, source)
 	for _, note := range notes {
 		output.AppendLinef("%s", note)
@@ -755,15 +760,20 @@ func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClien
 	if len(logLines) > 0 {
 		output.SetFooterLines(logLines)
 	}
+	return len(logLines) > 0
 }
 
 // failedPodSuggestion tells what to do about a pod whose server failed to start, after
-// its logs have been shown with showPodLogs or failedPodLogLines.
-func failedPodSuggestion(humanID, podName string, source podLogSource) string {
-	if source == noPodLogs {
+// showPodLogs or failedPodLogLines. hasLogs tells whether they gave any logs to show.
+func failedPodSuggestion(humanID, podName string, source podLogSource, hasLogs bool) string {
+	switch {
+	case source == noPodLogs:
 		return fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", podName)
+	case !hasLogs:
+		return fmt.Sprintf("Check the server logs with: metaplay debug logs %s", humanID)
+	default:
+		return fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", humanID)
 	}
-	return fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", humanID)
 }
 
 // failedPodLogLines returns the last logs of a game server pod's server container that
@@ -781,6 +791,10 @@ func failedPodLogLines(ctx context.Context, kubeCli *KubeClient, podName string,
 	}
 	if err != nil {
 		return append(notes, fmt.Sprintf("Failed to get logs from pod %s: %v", podName, err)), nil
+	}
+	podLogs = strings.TrimRight(podLogs, "\n")
+	if podLogs == "" {
+		return append(notes, fmt.Sprintf("The server of pod %s wrote no logs", podName)), nil
 	}
 	logLines = []string{fmt.Sprintf("Logs from pod %s:", podName)}
 	for line := range strings.SplitSeq(podLogs, "\n") {
@@ -1034,7 +1048,7 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 // and the LiveOps Dashboard after a deploy. baseline, which must not be nil, is the state
 // before the deploy, which CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from
 // before the deploy then fails the wait only once the operator has had time to replace
-// it. CheckServerStatus makes the same checks once, without waiting.
+// it. CheckServerStatus makes the same kinds of checks once, without waiting.
 func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {
 	// Fetch environment details.
 	envDetails, err := targetEnv.GetDetails()
