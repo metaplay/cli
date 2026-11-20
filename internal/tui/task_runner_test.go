@@ -127,7 +127,7 @@ func TestTaskRunnerCtrlCCancelsRunningTaskAndSkipsTheRest(t *testing.T) {
 	if got := unreported(err); got != "" {
 		t.Errorf("unreported failures = %q, want none: the failure was caused by the interrupt", got)
 	}
-	if got := strings.Join(d.runner.progress.notStarted, ","); got != "download" {
+	if got := strings.Join(d.runner.notStarted, ","); got != "download" {
 		t.Errorf("not started because of the interrupt = %q, want download", got)
 	}
 }
@@ -443,8 +443,8 @@ func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
 	if err := runner.Run(ctx); err == nil || err.Error() != "collect failed" {
 		t.Errorf("error = %v, want the collection's", err)
 	}
-	if len(runner.progress.notStarted) != 0 {
-		t.Errorf("not started because of the interrupt = %v, want none", runner.progress.notStarted)
+	if len(runner.notStarted) != 0 {
+		t.Errorf("not started because of the interrupt = %v, want none", runner.notStarted)
 	}
 }
 
@@ -485,7 +485,7 @@ func TestTaskRunnerInterruptedBeforeDisplayStarts(t *testing.T) {
 	if err := d.run(t); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	if got := strings.Join(d.runner.progress.notStarted, ","); got != "first,second" {
+	if got := strings.Join(d.runner.notStarted, ","); got != "first,second" {
 		t.Errorf("not started because of the interrupt = %q, want first,second", got)
 	}
 }
@@ -533,19 +533,52 @@ func TestTaskRunnerLogsNothingWithDisplay(t *testing.T) {
 }
 
 // A task that the interrupt stops at once, with nothing to report, is not announced as waited for.
+// The progress reporting is driven directly: with the display, whether the task ends before the
+// display has closed depends on timing.
 func TestTaskRunnerDoesNotAnnounceWaitForTaskStoppedAtOnce(t *testing.T) {
+	logged := captureLog(t)
+	runner := NewTaskRunner()
+	runner.AddTask("collect", func(*TaskOutput) error { return nil })
+	runner.AddCleanupTask("remove", func(context.Context, *TaskOutput) error { return nil })
+	progress := runner.progress
+
+	progress.taskStarted(runner.tasks[0])
+	progress.displayClosing()
+	progress.taskEnded(context.Canceled, time.Second)
+	progress.taskStarted(runner.tasks[1])
+	progress.displayClosed()
+	progress.taskEnded(nil, time.Second)
+
+	got := logged.String()
+	if strings.Contains(got, "Waiting for") || !strings.Contains(got, "remove...") || !strings.Contains(got, "Done") {
+		t.Errorf("log = %s, want the cleanup task's start and \"Done\", and no \"Waiting for\" line", got)
+	}
+}
+
+// After a signal, the display learns of the interrupt later than the tasks do. A cleanup task that
+// starts in between is logged from its start, and not as a task that was waited for.
+func TestTaskRunnerLogsCleanupTaskStartedBeforeDisplayLearnsOfSignal(t *testing.T) {
 	logged := captureLog(t)
 	d := newDisplayTest(t)
 	d.runner.AddTask("collect", func(*TaskOutput) error {
-		d.pressCtrlC()
+		interrupt.Trigger(d.ctx) // As a signal does: cancels the context without telling the display
 		return d.ctx.Err()
 	})
-	d.runner.AddCleanupTask("remove", func(context.Context, *TaskOutput) error { return nil })
+	d.runner.AddCleanupTask("remove", func(_ context.Context, output *TaskOutput) error {
+		output.AppendLine("removed")
+		return nil
+	})
 
 	if err := d.run(t); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	if got := logged.String(); strings.Contains(got, "Waiting for") || !strings.Contains(got, "remove...") {
-		t.Errorf("log = %s, want the cleanup task's progress and no \"Waiting for\" line", got)
+	got := logged.String()
+	for _, want := range []string{"remove...", "removed", "Done"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log = %s, want it to contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "Waiting for 'remove'") {
+		t.Errorf("log = %s, want the cleanup task logged from its start", got)
 	}
 }

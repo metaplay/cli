@@ -54,15 +54,18 @@ type TaskOutput struct {
 // logWhenNoDisplay logs the lines when there is no display to show them on. An output that belongs to no
 // runner has no display in non-interactive mode.
 func (to *TaskOutput) logWhenNoDisplay(lines ...string) {
-	for _, line := range lines {
-		switch {
-		case to.progress != nil:
-			to.progress.log("  " + line)
-		case !isInteractiveMode:
-			log.Info().Msgf("  %s", line)
+	switch {
+	case to.progress != nil:
+		to.progress.log(taskOutputLogIndent, lines...)
+	case !isInteractiveMode:
+		for _, line := range lines {
+			log.Info().Msg(taskOutputLogIndent + line)
 		}
 	}
 }
+
+// taskOutputLogIndent precedes a task's output line in the log.
+const taskOutputLogIndent = "  "
 
 // TaskRunFunc is the function signature for task execution functions
 type TaskRunFunc func(output *TaskOutput) error
@@ -153,52 +156,61 @@ type TaskRunner struct {
 	lastTick   time.Time      // Last time the spinner was updated
 	program    *tea.Program   // Reference to the tea program for quitting
 	interrupt  func()         // Interrupts the command, called on a Ctrl-C key press
+
+	notStarted []string // Ordinary tasks the interrupt kept from starting. Written by executeTasks, read after it
 }
 
 // plainProgress reports the tasks' progress as log lines: in non-interactive mode, and after the
 // user interrupted the command, which closes the display while the tasks still run.
-//
-// The display's model is a copy of the TaskRunner, which Bubble Tea copies again on each update.
-// State that executeTasks writes while the display runs is kept here, behind a pointer, so that
-// those copies do not read it.
 type plainProgress struct {
 	mu      sync.Mutex
-	logging bool     // Report progress as log lines
-	closing bool     // The display is closing: hold progress in pending until it has closed
-	pending []string // Progress made while the display was closing
+	mode    progressMode
+	pending []string // Progress made while the mode was progressHeld
 	current *Task    // The task being run, or nil
 
 	// The current task started on the display, so no log line names it yet. Its first line of
 	// progress that is not shown on the display is preceded by a line that does.
 	unannounced bool
-
-	notStarted []string // Ordinary tasks the interrupt kept from starting. Written by executeTasks, read after it
 }
 
-// log reports a line of progress, unless the display shows the progress.
-func (p *plainProgress) log(line string) {
+// progressMode is where the tasks' progress goes.
+type progressMode int
+
+const (
+	progressShown  progressMode = iota // The display shows it
+	progressHeld                       // The display is closing: held in pending until it has closed
+	progressLogged                     // Logged
+)
+
+// log reports lines of progress, each preceded by indent, unless the display shows the progress.
+func (p *plainProgress) log(indent string, lines ...string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.logLocked(line)
-}
-
-func (p *plainProgress) logLocked(line string) {
-	if !p.logging && !p.closing {
+	if p.mode == progressShown {
 		return
 	}
+	p.announce()
+	for _, line := range lines {
+		p.emit(indent + line)
+	}
+}
+
+// announce names the current task before its first line in the log, if no log line named it yet.
+func (p *plainProgress) announce() {
 	if p.unannounced {
 		p.unannounced = false
 		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
 	}
-	p.emit(line)
 }
 
 // emit logs a line, or holds it while the display is closing.
 func (p *plainProgress) emit(line string) {
-	if p.logging {
-		log.Info().Msg(line)
-	} else {
+	switch p.mode {
+	case progressShown:
+	case progressHeld:
 		p.pending = append(p.pending, line)
+	case progressLogged:
+		log.Info().Msg(line)
 	}
 }
 
@@ -333,7 +345,9 @@ func (m *TaskRunner) runInteractive(ctx context.Context, options ...tea.ProgramO
 func (p *plainProgress) displayClosing() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.closing = !p.logging
+	if p.mode == progressShown {
+		p.mode = progressHeld
+	}
 }
 
 // displayClosed is called once the terminal is restored. It logs the progress made while the
@@ -342,41 +356,37 @@ func (p *plainProgress) displayClosing() {
 func (p *plainProgress) displayClosed() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.closing = false
-	p.logging = true
+	p.mode = progressLogged
 	for _, line := range p.pending {
-		log.Info().Msg(line)
+		p.emit(line)
 	}
 	p.pending = nil
-	if p.unannounced {
-		p.unannounced = false
-		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
-	}
+	p.announce()
 }
 
 // taskStarted records the task being run, and logs it unless the display shows it.
 func (p *plainProgress) taskStarted(task *Task) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.current = task
-	p.unannounced = !p.logging && !p.closing
-	p.logLocked(task.title + "...")
+	p.unannounced = p.mode == progressShown
+	p.mu.Unlock()
+	p.log("", task.title+"...")
 }
 
 // taskEnded logs a task's success unless the display shows it. Failures are shown by result.
 func (p *plainProgress) taskEnded(err error, elapsed time.Duration) {
+	if err == nil {
+		p.log("", fmt.Sprintf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed)))
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err == nil {
-		p.logLocked(fmt.Sprintf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed)))
-	}
 	p.current = nil
 	p.unannounced = false
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells
 func (m *TaskRunner) runNonInteractive(ctx context.Context) error {
-	m.progress.logging = true
+	m.progress.mode = progressLogged
 	m.executeTasks(ctx)
 	err := m.result(ctx)
 	if err == nil {
@@ -419,7 +429,7 @@ func (m *TaskRunner) result(ctx context.Context) error {
 	}
 
 	// The interrupt kept tasks from running, so the command did not do all its work
-	canceled := len(m.progress.notStarted) > 0
+	canceled := len(m.notStarted) > 0
 
 	// The task whose failure is the error, if any
 	var returnedTask *Task
@@ -445,7 +455,7 @@ func (m *TaskRunner) result(ctx context.Context) error {
 		}
 	}
 	if canceled {
-		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(m.progress.notStarted, ", "))
+		log.Warn().Msgf("Not started because of the interrupt: %s", strings.Join(m.notStarted, ", "))
 	}
 
 	var err error
@@ -489,10 +499,15 @@ func (m *TaskRunner) executeTasks(ctx context.Context) {
 		} else if stopped {
 			continue
 		} else if ctx.Err() != nil {
-			m.progress.notStarted = append(m.progress.notStarted, task.title)
+			m.notStarted = append(m.notStarted, task.title)
 			continue
 		}
 		anyStarted = true
+		if ctx.Err() != nil {
+			// The display closes once it learns of the cancellation, which can be after this task
+			// has started. It is a task that the display does not show from its start.
+			m.progress.displayClosing()
+		}
 		m.progress.taskStarted(task)
 
 		// Update task status to running and start timing
@@ -537,7 +552,7 @@ func (m *TaskRunner) executeTasks(ctx context.Context) {
 }
 
 // Init implements tea.Model
-func (m TaskRunner) Init() tea.Cmd {
+func (m *TaskRunner) Init() tea.Cmd {
 	return m.tick() // Start the spinner ticker
 }
 
@@ -549,7 +564,7 @@ func (m *TaskRunner) tick() tea.Cmd {
 }
 
 // Update implements tea.Model
-func (m TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *TaskRunner) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
 		if msg.String() == "ctrl+c" {
@@ -595,7 +610,7 @@ func humanizeElapsed(d time.Duration) string {
 }
 
 // View implements tea.Model
-func (m TaskRunner) View() tea.View {
+func (m *TaskRunner) View() tea.View {
 	// Build the content starting with the title
 	var lines []string
 
