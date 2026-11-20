@@ -398,7 +398,7 @@ func (m *TaskRunner) result(ctx context.Context) error {
 		switch {
 		case !wasInterrupted && task == returnedTask:
 			// The command shows it
-		case wasInterrupted && !task.cleanup && errors.Is(task.error, context.Canceled):
+		case !task.cleanup && causedByCancellation(ctx, task.error):
 			// Caused by the interrupt
 		default:
 			unreported = append(unreported, withTaskTitle(task))
@@ -421,6 +421,11 @@ func (m *TaskRunner) result(ctx context.Context) error {
 	return err
 }
 
+// causedByCancellation reports whether a task's failure is the cancellation of ctx stopping it.
+func causedByCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && errors.Is(err, context.Canceled)
+}
+
 // withTaskTitle prefixes a failed task's error with its title. A CLIError is left as it is: its own
 // message describes the failure, and the command's error display would show only that message.
 func withTaskTitle(task *Task) error {
@@ -431,7 +436,8 @@ func withTaskTitle(task *Task) error {
 }
 
 // executeTasks runs the tasks sequentially. After an ordinary task fails or ctx is done, only
-// cleanup tasks run.
+// cleanup tasks run. Ordinary tasks skipped because ctx is done are recorded as not started: also
+// those after a task that the cancellation made fail.
 func (m *TaskRunner) executeTasks(ctx context.Context) {
 	stopped := false
 	anyStarted := false
@@ -473,7 +479,8 @@ func (m *TaskRunner) executeTasks(ctx context.Context) {
 
 		if err != nil {
 			log.Debug().Msgf("Task failed: %s: %v", task.title, err)
-			if !task.cleanup {
+			// A failure that the cancellation caused leaves the skipping to the check of ctx above
+			if !task.cleanup && !causedByCancellation(ctx, err) {
 				stopped = true
 			}
 		} else {

@@ -474,6 +474,9 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 		})
 	}
 
+	// Whether a task below has uninstalled the existing release, or tried to
+	uninstalled := false
+
 	// If there's a pending release, uninstall it first.
 	if uninstallExistingRelease {
 		taskRunner.AddTask("Uninstall existing Helm release", func(output *tui.TaskOutput) error {
@@ -485,6 +488,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 				return fmt.Errorf("failed to uninstall Helm release %s: %w", existingRelease.Name, err)
 			}
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			uninstalled = true
 			return nil
 		})
 	}
@@ -498,6 +502,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 			}
 			err := helmutil.UninstallRelease(actionConfig, existingRelease)
 			existingRelease = nil // Mark as uninstalled, so deploy doesn't try to upgrade
+			uninstalled = true
 			return err
 		})
 	}
@@ -556,16 +561,19 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// the readiness wait can tell this deploy's pods from the earlier ones.
 	deployBaseline := &envapi.DeployBaseline{}
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
+		// An interrupt while the chart loads stops the deploy before it changes anything. Not after
+		// an uninstall: stopping then would leave the environment without a game server.
+		ctx := cmd.Context()
+		if uninstalled {
+			ctx = context.WithoutCancel(ctx)
+		}
 		// The deploy does not need the baseline, so continue without it on failure.
-		if err := targetEnv.CaptureDeployBaseline(cmd.Context(), deployBaseline); err != nil && cmd.Context().Err() == nil {
+		if err := targetEnv.CaptureDeployBaseline(ctx, deployBaseline); err != nil && ctx.Err() == nil {
 			output.AppendLinef("Warning: Could not record the game server's state before the deploy, continuing without it: %v", err)
 			output.AppendLinef("A server that was failing before the deploy may now fail the readiness wait before it is replaced.")
 		}
-		// Helm does not stop on an interrupt, so do not start it after one.
-		if err := cmd.Context().Err(); err != nil {
-			return err
-		}
 		_, err := helmutil.HelmUpgradeOrInstall(
+			ctx,
 			output,
 			actionConfig,
 			existingRelease,

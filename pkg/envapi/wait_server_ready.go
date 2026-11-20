@@ -577,6 +577,16 @@ func (gs *TargetGameServer) readinessTarget() readinessTarget {
 	return target
 }
 
+// pause waits for d between two attempts of a wait. It returns false at once when ctx is done.
+func pause(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // crVersion returns the UID and generation of the game server's CR.
 func (gs *TargetGameServer) crVersion() (types.UID, int64) {
 	if cr := gs.GameServerNewCR; cr != nil {
@@ -626,12 +636,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		if output.LogsLines() {
 			pollInterval = 2 * time.Second
 		}
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, pollInterval) {
 			return stopped()
-		case <-time.After(pollInterval):
-			return nil
 		}
+		return nil
 	}
 	// A failed Kubernetes API call is retried, until calls have failed for
 	// maxFailingChecksDuration. One fails also when the wait is cancelled.
@@ -827,10 +835,8 @@ func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostna
 		attemptNdx += 1
 
 		// Delay before trying again -- these can take a while so avoid spamming the log
-		select {
-		case <-ctx.Done():
+		if !pause(ctx, 5*time.Second) {
 			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
-		case <-time.After(5 * time.Second):
 		}
 	}
 }
@@ -871,7 +877,10 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 				return nil
 			}
 
-			time.Sleep(1 * time.Second) // Wait before retrying
+			// Wait before retrying
+			if !pause(ctx, 1*time.Second) {
+				return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
+			}
 		}
 
 		// Check for timeout.
@@ -975,6 +984,9 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			// Execute the request
 			resp, err := client.Do(req)
 			if err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
+				}
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				switch {
@@ -995,7 +1007,9 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		}
 
 		// Wait before retrying.
-		time.Sleep(1 * time.Second)
+		if !pause(ctx, 1*time.Second) {
+			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
+		}
 
 		// Check for timeout.
 		if time.Now().After(timeoutAt) {
