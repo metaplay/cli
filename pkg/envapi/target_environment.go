@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -245,23 +246,34 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 	if err != nil {
 		return nil, err
 	}
-	if gameServer == nil {
-		return nil, errNoGameServer
-	}
 	target.targetGameServer = gameServer
 	return gameServer, nil
 }
 
-var errNoGameServer = errors.New("neither old nor new gameserver CR found in Kubernetes")
+// errNoGameServer is returned when the environment has no GameServer CR.
+var errNoGameServer = clierrors.New("No game server is deployed in the environment").
+	WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 
 // fetchGameServer reads the gameserver from its CR, the new operator's or the old one's,
-// without the cache of GetGameServer. It returns nil if there is neither.
+// without the cache of GetGameServer. It returns errNoGameServer if there is neither.
 func (target *TargetEnvironment) fetchGameServer(ctx context.Context, kubeCli *KubeClient) (*TargetGameServer, error) {
+	// A cluster has the resource type of only one of the operators: listing the other
+	// one's fails with NotFound.
 	gameServer, err := target.tryGetGameServerNewCR(ctx, kubeCli)
-	if err != nil || gameServer != nil {
-		return gameServer, err
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
 	}
-	return target.tryGetGameServerOldCR(ctx, kubeCli)
+	if gameServer != nil {
+		return gameServer, nil
+	}
+	gameServer, err = target.tryGetGameServerOldCR(ctx, kubeCli)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if gameServer == nil {
+		return nil, errNoGameServer
+	}
+	return gameServer, nil
 }
 
 // Request details about an environment from the StackAPI.

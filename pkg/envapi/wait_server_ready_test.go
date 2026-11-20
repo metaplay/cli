@@ -485,16 +485,26 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 		{
 			// A pod from before the deploy, which the operator may be about to replace,
 			// does not fail the wait.
-			name:      "crashing pod spared",
-			target:    readinessTarget{imageTag: "new", sparedPods: map[types.UID]bool{"pod-all-0": true}},
+			name:      "crashing pod from before the deploy",
+			target:    readinessTarget{imageTag: "new", previousPods: map[types.UID]bool{"pod-all-0": true}},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
-			problems:  []string{"Pod all-0 (Failed): Server keeps crashing (CrashLoopBackOff)"},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Pending  Previous pod is waiting to be replaced"},
+			problems:  []string{"Pod all-0 (Pending): Previous pod is waiting to be replaced"},
 		},
 		{
-			name:      "crashing pod not spared",
-			target:    readinessTarget{imageTag: "new", sparedPods: map[types.UID]bool{"pod-all-1": true}},
+			// Nor does it make the game server ready, as with the same image tag, the
+			// operator may not have applied the deploy yet.
+			name:      "ready pod from before the deploy",
+			target:    readinessTarget{imageTag: "new", previousPods: map[types.UID]bool{"pod-all-0": true}},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{testPod("all", 0, "new", running, true)},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Pending  Previous pod is waiting to be replaced"},
+			problems:  []string{"Pod all-0 (Pending): Previous pod is waiting to be replaced"},
+		},
+		{
+			name:      "crashing pod after the deploy",
+			target:    readinessTarget{imageTag: "new", previousPods: map[types.UID]bool{"pod-all-1": true}},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{testPod("all", 0, "new", crashing, false)},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server keeps crashing (CrashLoopBackOff)"},
@@ -536,16 +546,17 @@ func TestReadinessTarget(t *testing.T) {
 		{"name": "all"},
 		{"name": "by-selector", "clusterLabelSelector": {"region": "eu"}},
 		{"name": "by-name", "clusterName": "metaplay-d1-us"},
+		{"name": "empty-name", "clusterName": ""},
 		{"name": "canary", "image": {"tag": "pinned"}}
 	]}}`), &cr)
 	assert.NoError(t, err)
 	target := (&TargetGameServer{GameServerNewCR: &cr}).readinessTarget()
 	assert.Equal(t, "new", target.imageTag)
-	assert.Equal(t, map[string]bool{"all": true, "by-selector": false, "by-name": false, "canary": true}, target.shardSets)
+	assert.Equal(t, map[string]bool{"all": true, "by-selector": false, "by-name": false, "empty-name": true, "canary": true}, target.shardSets)
 	assert.Equal(t, map[string]string{"canary": "pinned"}, target.shardImageTags)
 }
 
-func TestSparedPods(t *testing.T) {
+func TestPreviousPods(t *testing.T) {
 	baseline := &DeployBaseline{podUIDs: map[types.UID]bool{"old-pod": true}}
 	tests := []struct {
 		name      string
@@ -561,7 +572,7 @@ func TestSparedPods(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, sparedPods(tt.baseline, tt.crChanged, tt.elapsed))
+			assert.Equal(t, tt.want, previousPods(tt.baseline, tt.crChanged, tt.elapsed))
 		})
 	}
 }
