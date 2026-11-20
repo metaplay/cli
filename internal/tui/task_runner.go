@@ -55,16 +55,18 @@ type TaskOutput struct {
 // non-interactive mode, and from the moment the display starts closing. Each update is then a new
 // log line.
 func (to *TaskOutput) LogsLines() bool {
-	return !isInteractiveMode || (to.progress != nil && to.progress.logs())
+	if to.progress != nil {
+		return to.progress.logs()
+	}
+	return !isInteractiveMode // An output that belongs to no runner has no display in non-interactive mode
 }
 
-// logWhenNoDisplay logs the lines when there is no display to show them on. An output that belongs to no
-// runner has no display in non-interactive mode.
+// logWhenNoDisplay logs the lines when there is no display to show them on, see LogsLines.
 func (to *TaskOutput) logWhenNoDisplay(lines ...string) {
 	switch {
 	case to.progress != nil:
 		to.progress.log(taskOutputLogIndent, lines...)
-	case !isInteractiveMode:
+	case to.LogsLines():
 		for _, line := range lines {
 			log.Info().Msg(taskOutputLogIndent + line)
 		}
@@ -199,7 +201,7 @@ func (p *plainProgress) logs() bool {
 func (p *plainProgress) log(indent string, lines ...string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.mode == progressShown {
+	if p.mode == progressShown || len(lines) == 0 {
 		return
 	}
 	p.announce()

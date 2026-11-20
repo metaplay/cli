@@ -471,6 +471,36 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &logged
 }
 
+// The display holds progress for the log when it closes because the command's context is done, as
+// after a signal, and not when it closes because the tasks have finished.
+func TestTaskRunnerHoldsProgressWhenClosingOnCancellation(t *testing.T) {
+	runner := NewTaskRunner()
+	if _, cmd := runner.Update(doneMsg{}); cmd == nil || runner.progress.logs() {
+		t.Errorf("after the tasks finished: quits = %v, holds progress = %v, want a quit without a hold", cmd != nil, runner.progress.logs())
+	}
+	if _, cmd := runner.Update(canceledMsg{}); cmd == nil || !runner.progress.logs() {
+		t.Errorf("after the cancellation: quits = %v, holds progress = %v, want both", cmd != nil, runner.progress.logs())
+	}
+}
+
+// A task's update without lines, such as an empty footer, announces no wait.
+func TestTaskRunnerDoesNotAnnounceWaitForEmptyUpdate(t *testing.T) {
+	logged := captureLog(t)
+	runner := NewTaskRunner()
+	runner.AddTask("push", func(*TaskOutput) error { return nil })
+	progress := runner.progress
+
+	progress.taskStarted(runner.tasks[0])
+	progress.displayClosing()
+	runner.tasks[0].output.SetFooterLines(nil)
+	progress.taskEnded(context.Canceled, time.Second)
+	progress.displayClosed()
+
+	if logged.Len() != 0 {
+		t.Errorf("log = %s, want nothing", logged.String())
+	}
+}
+
 // wantLogged fails the test unless the log has each of wants in that order, and none of unwanted.
 func wantLogged(t *testing.T, logged *bytes.Buffer, wants []string, unwanted ...string) {
 	t.Helper()
@@ -511,6 +541,7 @@ func TestTaskRunnerInterruptedBeforeDisplayStarts(t *testing.T) {
 func TestTaskRunnerLogsProgressMadeWhileDisplayCloses(t *testing.T) {
 	logged := captureLog(t)
 	d := newDisplayTest(t)
+	d.ctx = interrupt.WithCancel(t.Context(), func() { log.Info().Msg("interrupt notice") })
 	d.runner.AddTask("collect", func(output *TaskOutput) error {
 		d.pressCtrlC()
 		output.AppendLine("collect stopped")
@@ -524,7 +555,7 @@ func TestTaskRunnerLogsProgressMadeWhileDisplayCloses(t *testing.T) {
 	if err := d.run(t); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	wantLogged(t, logged, []string{"Waiting for 'collect' to finish...", "collect stopped", "remove...", "removed the file", "Done"})
+	wantLogged(t, logged, []string{"interrupt notice", "Waiting for 'collect' to finish...", "collect stopped", "remove...", "removed the file", "Done"})
 }
 
 // Without an interrupt, nothing is logged: the display shows it all.
