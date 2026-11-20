@@ -556,14 +556,14 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// the readiness wait can tell this deploy's pods from the earlier ones.
 	deployBaseline := &envapi.DeployBaseline{}
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
-		// The deploy does not need the baseline, so continue without it on failure, unless
-		// the deploy was interrupted: Helm does not stop on the interrupt.
-		if err := targetEnv.CaptureDeployBaseline(cmd.Context(), deployBaseline); err != nil {
-			if cmd.Context().Err() != nil {
-				return err
-			}
+		// The deploy does not need the baseline, so continue without it on failure.
+		if err := targetEnv.CaptureDeployBaseline(cmd.Context(), deployBaseline); err != nil && cmd.Context().Err() == nil {
 			output.AppendLinef("Warning: Could not record the game server's state before the deploy, continuing without it: %v", err)
 			output.AppendLinef("A server that was failing before the deploy may now fail the readiness wait before it is replaced.")
+		}
+		// Helm does not stop on an interrupt, so do not start it after one.
+		if err := cmd.Context().Err(); err != nil {
+			return err
 		}
 		_, err := helmutil.HelmUpgradeOrInstall(
 			output,

@@ -22,7 +22,6 @@ import (
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -237,23 +236,19 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 	if err != nil {
 		return err
 	}
-	// Read the CR directly: GetGameServer caches it, and the readiness wait needs the
-	// version that Helm writes. Only one of the two CR types exists in a cluster, so a
-	// missing type is not an error.
-	var gs TargetGameServer
-	if gs.GameServerNewCR, err = getGameServerNewCR(ctx, kubeCli); err != nil && !apierrors.IsNotFound(err) {
+	// Bypass the cache of GetGameServer, as the CR changes during the deploy. There is
+	// none before the first deploy.
+	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
+	if err != nil {
 		return err
-	}
-	if gs.GameServerNewCR == nil {
-		if gs.GameServerOldCR, err = getGameServerOldCR(ctx, kubeCli); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
 	}
 	baseline.podUIDs = map[types.UID]bool{}
 	for _, pod := range pods {
 		baseline.podUIDs[pod.UID] = true
 	}
-	baseline.crUID, baseline.crGeneration = gs.crVersion()
+	if gameServer != nil {
+		baseline.crUID, baseline.crGeneration = gameServer.crVersion()
+	}
 	log.Debug().Msgf("Deploy baseline: %d pods, CR UID '%s' generation %d", len(baseline.podUIDs), baseline.crUID, baseline.crGeneration)
 	return nil
 }
@@ -476,7 +471,8 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 		return GameServerPodStatus{Phase: PhasePending, Message: "Container is waiting: " + message}
 
 	case state.Terminated != nil:
-		// Kubernetes restarts an exited server, so an exit counts like a restart.
+		// Kubernetes restarts an exited server, so it fails only when it keeps
+		// restarting, as when running.
 		exited := fmt.Sprintf("Server exited: %s (exit code %d)", state.Terminated.Reason, state.Terminated.ExitCode)
 		if keepsRestarting {
 			return GameServerPodStatus{Phase: PhaseFailed, Message: exited + restarts}
@@ -630,16 +626,19 @@ const maxFailingChecksDuration = 15 * time.Second
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
 // occurs. See WaitForServerToBeReady for baseline.
 func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, output *tui.TaskOutput, timeout time.Duration, baseline *DeployBaseline) error {
-	// Poll more often in interactive mode, where the status is redrawn in place.
-	pollInterval := 2 * time.Second
-	if tui.IsInteractiveMode() {
-		pollInterval = 1 * time.Second
-	}
 	startTime := time.Now()
+	stopped := func() error {
+		return clierrors.Wrap(ctx.Err(), "Stopped waiting for the game server to be ready")
+	}
 	waitForNextPoll := func() error {
+		// Poll more often when the status is redrawn in place than when it is logged.
+		pollInterval := 1 * time.Second
+		if output.LogsLines() {
+			pollInterval = 2 * time.Second
+		}
 		select {
 		case <-ctx.Done():
-			return clierrors.Wrap(ctx.Err(), "Stopped waiting for the game server to be ready")
+			return stopped()
 		case <-time.After(pollInterval):
 			return nil
 		}
@@ -649,7 +648,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	lastSuccessAt := startTime
 	retryFailedCheck := func(err error, failure string) error {
 		if ctx.Err() != nil {
-			return clierrors.Wrap(ctx.Err(), "Stopped waiting for the game server to be ready")
+			return stopped()
 		}
 		if time.Since(lastSuccessAt) >= maxFailingChecksDuration {
 			return clierrors.Wrap(err, failure)
@@ -658,20 +657,27 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		return waitForNextPoll()
 	}
 
-	// Get target gameServer. It is read after Helm has written it, so it holds the
-	// image that is being deployed.
-	gameServer, err := targetEnv.GetGameServer(ctx)
+	// Read the game server's CR, which holds the image being deployed. Bypass the cache
+	// of GetGameServer, which may hold the CR from before Helm wrote it.
+	kubeCli, err := targetEnv.GetPrimaryKubeClient()
+	if err != nil {
+		return err
+	}
+	fetchGameServer := func() (*TargetGameServer, error) {
+		gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
+		if err == nil && gameServer == nil {
+			err = errNoGameServer
+		}
+		return gameServer, err
+	}
+	gameServer, err := fetchGameServer()
 	for err != nil {
 		if err := retryFailedCheck(err, "Failed to read the GameServer resource"); err != nil {
 			return err
 		}
-		gameServer, err = targetEnv.GetGameServer(ctx)
+		gameServer, err = fetchGameServer()
 	}
 	lastSuccessAt = time.Now()
-	kubeCli, err := targetEnv.GetPrimaryKubeClient()
-	if err != nil {
-		return err // Not reached: GetGameServer has created the client
-	}
 	target := gameServer.readinessTarget()
 	crUID, crGeneration := gameServer.crVersion()
 	crChanged := baseline == nil || baseline.crUID != crUID || baseline.crGeneration != crGeneration

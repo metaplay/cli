@@ -241,27 +241,27 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 		return nil, err
 	}
 
-	// Try to resolve the gameserver with new CR.
-	newGameServer, err := target.tryGetGameServerNewCR(ctx, kubeCli)
+	gameServer, err := target.fetchGameServer(ctx, kubeCli)
 	if err != nil {
 		return nil, err
 	}
-	if newGameServer != nil {
-		target.targetGameServer = newGameServer
-		return newGameServer, nil
+	if gameServer == nil {
+		return nil, errNoGameServer
 	}
+	target.targetGameServer = gameServer
+	return gameServer, nil
+}
 
-	// Try to resolve the gameserver with old CR.
-	oldGameServer, err := target.tryGetGameServerOldCR(ctx, kubeCli)
-	if err != nil {
-		return nil, err
-	}
-	if oldGameServer != nil {
-		target.targetGameServer = oldGameServer
-		return oldGameServer, nil
-	}
+var errNoGameServer = errors.New("neither old nor new gameserver CR found in Kubernetes")
 
-	return nil, fmt.Errorf("neither old nor new gameserver CR found in Kubernetes")
+// fetchGameServer reads the gameserver from its CR, the new operator's or the old one's,
+// without the cache of GetGameServer. It returns nil if there is neither.
+func (target *TargetEnvironment) fetchGameServer(ctx context.Context, kubeCli *KubeClient) (*TargetGameServer, error) {
+	gameServer, err := target.tryGetGameServerNewCR(ctx, kubeCli)
+	if err != nil || gameServer != nil {
+		return gameServer, err
+	}
+	return target.tryGetGameServerOldCR(ctx, kubeCli)
 }
 
 // Request details about an environment from the StackAPI.
