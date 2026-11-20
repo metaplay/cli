@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -55,47 +56,57 @@ func TestProbeHTTPServerNoResponse(t *testing.T) {
 	assert.Error(t, err)
 
 	check := checkHTTPServer(context.Background(), "Dashboard", url)
-	assert.Equal(t, CheckFailed, check.Result)
+	assert.True(t, check.Failed())
 	assert.Equal(t, "does not respond", check.Summary)
 	assert.Len(t, check.Problems, 1)
 }
 
 func TestCheckDomain(t *testing.T) {
 	check := checkDomain(context.Background(), "Domain", "localhost")
-	assert.Equal(t, CheckPassed, check.Result, check.Problems)
+	assert.False(t, check.Failed(), check.Problems)
 	assert.Equal(t, "Domain localhost", check.Name)
 	assert.Empty(t, check.Problems)
 
 	// The .invalid top-level domain never resolves (RFC 2606).
 	check = checkDomain(context.Background(), "Domain", "server.invalid")
-	assert.Equal(t, CheckFailed, check.Result)
+	assert.True(t, check.Failed())
 	assert.Equal(t, "does not resolve", check.Summary)
 	assert.Len(t, check.Problems, 1)
 }
 
-func TestCheckAfterDomain(t *testing.T) {
-	passed := ServerCheck{Name: "Domain", Result: CheckPassed}
-	failed := ServerCheck{Name: "Domain", Result: CheckFailed, Problems: []string{"does not resolve"}}
-	endpoint := ServerCheck{Name: "Endpoint", Result: CheckFailed, Problems: []string{"refused"}}
+func TestCheckDomainThen(t *testing.T) {
+	endpoint := ServerCheck{Name: "Endpoint", Problems: []string{"refused"}}
 
-	assert.Equal(t, endpoint, checkAfterDomain(passed, "Endpoint", func() ServerCheck { return endpoint }))
+	domain, check := checkDomainThen(context.Background(), "Domain", "localhost", "Endpoint", func() ServerCheck { return endpoint })
+	assert.False(t, domain.Failed())
+	assert.Equal(t, endpoint, check)
 
-	skipped := checkAfterDomain(failed, "Endpoint", func() ServerCheck {
+	domain, check = checkDomainThen(context.Background(), "Domain", "server.invalid", "Endpoint", func() ServerCheck {
 		t.Error("the check ran although the domain does not resolve")
 		return endpoint
 	})
-	assert.Equal(t, CheckSkipped, skipped.Result)
-	assert.Equal(t, "Endpoint", skipped.Name)
-	assert.Empty(t, skipped.Problems, "a skipped check adds no problem of its own")
+	assert.True(t, domain.Failed())
+	assert.True(t, check.Skipped)
+	assert.Equal(t, "Endpoint", check.Name)
+	assert.False(t, check.Failed(), "a skipped check adds no problem of its own")
 }
 
-func TestServerStatusProblems(t *testing.T) {
-	status := ServerStatus{Checks: []ServerCheck{
-		{Name: "Pods", Result: CheckFailed, Problems: []string{"Pod all-0 (Starting): starting"}},
-		{Name: "Domain", Result: CheckFailed, Problems: []string{"does not resolve"}},
-		{Name: "Endpoint", Result: CheckSkipped},
-		{Name: "Dashboard", Result: CheckPassed},
-	}}
+func TestServerStatusErr(t *testing.T) {
+	status := ServerStatus{
+		Checks: []ServerCheck{
+			{Name: "Pods", Problems: []string{"Pod all-0 (Starting): starting"}},
+			{Name: "Domain", Problems: []string{"does not resolve"}},
+			{Name: "Endpoint", Skipped: true},
+			{Name: "Dashboard"},
+		},
+		suggestion: "Run this command again",
+	}
 	assert.Equal(t, []string{"Pod all-0 (Starting): starting", "does not resolve"}, status.Problems())
-	assert.Empty(t, ServerStatus{Checks: []ServerCheck{{Name: "Pods", Result: CheckPassed}}}.Problems())
+	err, ok := clierrors.AsCLIError(status.Err())
+	assert.True(t, ok)
+	assert.Equal(t, "Game server is not ready", err.Message)
+	assert.Equal(t, status.Problems(), err.Details)
+	assert.Equal(t, "Run this command again", err.Suggestion)
+
+	assert.NoError(t, ServerStatus{Checks: []ServerCheck{{Name: "Pods"}}}.Err())
 }

@@ -132,19 +132,16 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if err := cmd.Context().Err(); err != nil {
-		return clierrors.Wrap(err, "Stopped checking the game server status")
-	}
 
 	log.Info().Msg("Game server status:")
 	for _, check := range status.Checks {
 		marker := styles.RenderSuccess("✓")
 		summary := check.Summary
-		switch check.Result {
-		case envapi.CheckFailed:
+		switch {
+		case check.Failed():
 			marker = styles.RenderError("✗")
 			summary = styles.RenderError(summary)
-		case envapi.CheckSkipped:
+		case check.Skipped:
 			marker = styles.RenderMuted("-")
 			summary = styles.RenderMuted(summary)
 		}
@@ -155,20 +152,9 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	}
 	log.Info().Msg("")
 
-	problems := status.Problems()
-	if len(problems) == 0 {
-		log.Info().Msg(styles.RenderSuccess("Game server is ready"))
-		return nil
+	if err := status.Err(); err != nil {
+		return err
 	}
-
-	suggestion := fmt.Sprintf("Run this command again to see whether the game server is still starting, or check the server logs with: metaplay debug logs %s", envConfig.HumanID)
-	if status.FailedPod != "" {
-		suggestion = fmt.Sprintf("Check the logs of the failed pod with: metaplay debug logs %s --pod %s", envConfig.HumanID, status.FailedPod)
-		if !status.FailedPodHasLog {
-			suggestion = fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", status.FailedPod)
-		}
-	}
-	return clierrors.New("Game server is not ready").
-		WithDetails(problems...).
-		WithSuggestion(suggestion)
+	log.Info().Msg(styles.RenderSuccess("Game server is ready"))
+	return nil
 }
