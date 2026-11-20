@@ -22,6 +22,7 @@ import (
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -210,41 +211,49 @@ type readinessTarget struct {
 // Helm finishing.
 const oldPodGracePeriod = 30 * time.Second
 
-// How recently a server must have been restarted for a restart to count as a failure to
-// start, rather than one in its past.
+// How recently a pod must have been created for its server's restarts to count as a
+// failure to start, rather than as ones in its past.
 const recentRestartWindow = 10 * time.Minute
 
 // DeployBaseline is the game server's state just before a deploy changes it. The
 // readiness wait uses it to tell the deploy's pods from those before it.
 type DeployBaseline struct {
+	captured     bool               // Whether CaptureDeployBaseline succeeded
 	podUIDs      map[types.UID]bool // Game server pods before the deploy
 	crUID        types.UID          // GameServer CR before the deploy, or empty if none
 	crGeneration int64              // Generation of that CR
 }
 
 // CaptureDeployBaseline records the game server pods and GameServer CR into baseline.
-// Call it just before Helm deploys the game server.
+// Call it just before Helm deploys the game server. If it fails, the baseline stays
+// empty, and the readiness wait works as without one.
 func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, baseline *DeployBaseline) error {
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
-		return err
+		return clierrors.Wrap(err, "Failed to connect to the environment's Kubernetes cluster")
 	}
 	pods, err := FetchGameServerPods(ctx, kubeCli)
 	if err != nil {
-		return err
+		return clierrors.Wrap(err, "Failed to list the game server pods")
+	}
+	// Read the CR directly: GetGameServer caches it, and the readiness wait needs the
+	// version that Helm writes. Only one of the two CR types exists in a cluster, so a
+	// missing type is not an error.
+	var gs TargetGameServer
+	if gs.GameServerNewCR, err = getGameServerNewCR(ctx, kubeCli); err != nil && !apierrors.IsNotFound(err) {
+		return clierrors.Wrap(err, "Failed to read the GameServer resource")
+	}
+	if gs.GameServerNewCR == nil {
+		if gs.GameServerOldCR, err = getGameServerOldCR(ctx, kubeCli); err != nil && !apierrors.IsNotFound(err) {
+			return clierrors.Wrap(err, "Failed to read the GameServer resource")
+		}
 	}
 	baseline.podUIDs = map[types.UID]bool{}
 	for _, pod := range pods {
 		baseline.podUIDs[pod.UID] = true
 	}
-	// Read the CR directly: GetGameServer caches it, and the readiness wait needs the
-	// version that Helm writes.
-	baseline.crUID, baseline.crGeneration = "", 0
-	if cr, err := getGameServerNewCR(ctx, kubeCli); err == nil && cr != nil {
-		baseline.crUID, baseline.crGeneration = cr.UID, cr.Generation
-	} else if cr, err := getGameServerOldCR(ctx, kubeCli); err == nil && cr != nil {
-		baseline.crUID, baseline.crGeneration = cr.Metadata.UID, cr.Metadata.Generation
-	}
+	baseline.crUID, baseline.crGeneration = gs.crVersion()
+	baseline.captured = true
 	log.Debug().Msgf("Deploy baseline: %d pods, CR UID '%s' generation %d", len(baseline.podUIDs), baseline.crUID, baseline.crGeneration)
 	return nil
 }
@@ -433,10 +442,11 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 		// A server that is not ready and keeps being restarted fails to start. It may not
 		// exit by itself: a server that hangs is killed by its liveness probe, and shows
 		// as running between the restarts. One restart is allowed, as a server may exit
-		// once while what it depends on is starting too. Restarts before the current run
-		// was started a while ago are from the server's past, not from this start.
-		isRecentRestart := state.Running.StartedAt.After(now.Add(-recentRestartWindow))
-		if containerStatus.RestartCount >= 2 && isRecentRestart {
+		// once while what it depends on is starting too. Kubernetes counts the restarts
+		// over the pod's lifetime, so they count only for a recently created pod: in an
+		// older one, they may be from the server's past.
+		isNewPod := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
+		if containerStatus.RestartCount >= 2 && isNewPod {
 			return GameServerPodStatus{Phase: PhaseFailed, Message: "Server failed to start" + restarts}
 		}
 		return GameServerPodStatus{Phase: PhaseRunning, Message: "Server is starting" + restarts}
@@ -468,11 +478,11 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	return GameServerPodStatus{Phase: PhaseUnknown, Message: "Container state is unknown"}
 }
 
-// Reasons for a container waiting that do not resolve by themselves: the image cannot be
-// pulled (after retries) or is invalid, or the container's configuration refers to
-// something missing, such as a secret. ErrImagePull is left out, as a pull often
-// succeeds when retried.
-var unrecoverableWaitingReasons = []string{"ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull", "CreateContainerConfigError"}
+// Reasons for a container waiting that Kubernetes does not retry: the image reference is
+// invalid, or the pull policy forbids pulling it. Failed pulls (ErrImagePull,
+// ImagePullBackOff) and missing secrets or config maps (CreateContainerConfigError) are
+// retried and may resolve, so they are left to the timeout.
+var unrecoverableWaitingReasons = []string{"InvalidImageName", "ErrImageNeverPull"}
 
 // failureLogSource tells which logs of a failed server container show the failure.
 func failureLogSource(containerStatus *corev1.ContainerStatus) podLogSource {
@@ -481,10 +491,15 @@ func failureLogSource(containerStatus *corev1.ContainerStatus) podLogSource {
 		return noPodLogs
 	case containerStatus.State.Terminated != nil:
 		return currentPodLogs // The server has exited and was not restarted yet
-	case containerStatus.RestartCount > 0, containerStatus.State.Waiting != nil && containerStatus.State.Waiting.Reason == "CrashLoopBackOff":
-		return previousPodLogs
 	case containerStatus.State.Waiting != nil:
-		return noPodLogs // The container never started
+		// A crash loop waits to restart the server that crashed. Any other wait is to
+		// start a container, and an earlier run's logs do not show why it cannot start.
+		if containerStatus.State.Waiting.Reason == "CrashLoopBackOff" {
+			return previousPodLogs
+		}
+		return noPodLogs
+	case containerStatus.RestartCount > 0:
+		return previousPodLogs
 	default:
 		return currentPodLogs
 	}
@@ -611,7 +626,11 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	}
 	kubeCli, err := targetEnv.GetPrimaryKubeClient()
 	if err != nil {
-		return clierrors.Wrap(err, "Failed to connect to the environment's Kubernetes cluster")
+		return err // Not reached: GetGameServer has created the client
+	}
+	// An empty baseline, if recording it failed, works as no baseline.
+	if baseline != nil && !baseline.captured {
+		baseline = nil
 	}
 	target := gameServer.readinessTarget()
 	crUID, crGeneration := gameServer.crVersion()
@@ -624,6 +643,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		pollInterval = 1 * time.Second
 	}
 
+	headerPrefix := "Elapsed"
+	if target.imageTag != "" {
+		headerPrefix = fmt.Sprintf("Image %s, elapsed", target.imageTag)
+	}
 	startTime := time.Now()
 	lastShown := ""
 	var lastShownAt time.Time
@@ -634,6 +657,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
 		elapsed := time.Since(startTime)
 		if err != nil {
+			// A check fails when the wait is cancelled, which is not a failure to retry.
+			if ctx.Err() != nil {
+				return clierrors.Wrap(ctx.Err(), "Stopped waiting for the game server to be ready")
+			}
 			numFailedChecks++
 			if numFailedChecks >= maxFailedChecksInRow || elapsed >= timeout {
 				return clierrors.Wrap(err, "Failed to check the game server status")
@@ -646,11 +673,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 			// not been shown for a while.
 			status := strings.Join(readiness.lines, "\n")
 			if tui.IsInteractiveMode() || status != lastShown || time.Since(lastShownAt) >= nonInteractiveStatusInterval {
-				header := fmt.Sprintf("Elapsed %s of %s", elapsed.Round(time.Second), timeout)
-				if target.imageTag != "" {
-					header = fmt.Sprintf("Image %s, elapsed %s of %s", target.imageTag, elapsed.Round(time.Second), timeout)
-				}
-				headerLines := []string{header}
+				headerLines := []string{fmt.Sprintf("%s %s of %s", headerPrefix, elapsed.Round(time.Second), timeout)}
 				for _, line := range readiness.lines {
 					headerLines = append(headerLines, "  "+line)
 				}

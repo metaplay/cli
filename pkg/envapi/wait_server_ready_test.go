@@ -213,10 +213,11 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	// one has the same name, image and revision, but another owner UID.
 	previousOwner := testPod("logic", 0, "new", running, true)
 	previousOwner.OwnerReferences[0].UID = "logic-previous-uid"
-	// restartedPod returns a pod whose server is running, not ready, and was restarted
-	// the given number of times, the last time at the given time.
-	restartedPod := func(restarts int32, startedAt time.Time) corev1.Pod {
-		pod := testPod("all", 0, "new", corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(startedAt)}}, false)
+	// restartedPod returns a pod created at the given time, whose server is running, not
+	// ready, and was restarted the given number of times.
+	restartedPod := func(restarts int32, createdAt time.Time) corev1.Pod {
+		pod := testPod("all", 0, "new", running, false)
+		pod.CreationTimestamp = metav1.NewTime(createdAt)
 		pod.Status.ContainerStatuses[0].RestartCount = restarts
 		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
 		return pod
@@ -226,6 +227,11 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
 	exited := testPod("all", 0, "new", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}, false)
 	imagePullBackOff := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}, false)
+	invalidImage := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "InvalidImageName", Message: "couldn't parse image name"}}, false)
+	// A pod that ran before, and now cannot start a container: its previous run's logs
+	// do not show why.
+	invalidImageRestarted := invalidImage
+	invalidImageRestarted.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: shardServerContainerName, State: invalidImage.Status.ContainerStatuses[0].State, RestartCount: 1}}
 	containerCreating := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}, false)
 	staleShardSet := testShardSet("all", 1, "new")
 	staleShardSet.Generation = 3
@@ -372,8 +378,8 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 1 time, last exit code 137 (Error))"},
 		},
 		{
-			// The restarts are from the server's past, and it has run since.
-			name:      "not ready long after its restarts",
+			// In a pod created long ago, the restarts may be from the server's past.
+			name:      "restarted in an old pod",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour))},
@@ -391,12 +397,31 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			logs:      currentPodLogs,
 		},
 		{
-			name:      "image cannot be pulled",
+			// Kubernetes retries the pull, which may succeed.
+			name:      "image pull backing off",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
 			pods:      []corev1.Pod{imagePullBackOff},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Container cannot start: ImagePullBackOff: Back-off pulling image"},
-			problems:  []string{"Pod all-0 (Failed): Container cannot start: ImagePullBackOff: Back-off pulling image"},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Pending  Container is waiting: ImagePullBackOff: Back-off pulling image"},
+			problems:  []string{"Pod all-0 (Pending): Container is waiting: ImagePullBackOff: Back-off pulling image"},
+		},
+		{
+			name:      "invalid image",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{invalidImage},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Container cannot start: InvalidImageName: couldn't parse image name"},
+			problems:  []string{"Pod all-0 (Failed): Container cannot start: InvalidImageName: couldn't parse image name"},
+			failedPod: "all-0",
+			logs:      noPodLogs,
+		},
+		{
+			name:      "invalid image after a restart",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{invalidImageRestarted},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Container cannot start: InvalidImageName: couldn't parse image name"},
+			problems:  []string{"Pod all-0 (Failed): Container cannot start: InvalidImageName: couldn't parse image name"},
 			failedPod: "all-0",
 			logs:      noPodLogs,
 		},
@@ -458,11 +483,8 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			got := evaluateGameServerReadiness(tt.target, tt.shardSets, tt.pods)
 			assert.Equal(t, tt.lines, got.lines)
 			assert.Equal(t, tt.problems, got.problems)
-			assert.Equal(t, len(tt.problems) == 0, got.ready())
 			assert.Equal(t, tt.failedPod, got.failedPod)
-			if tt.failedPod != "" {
-				assert.Equal(t, tt.logs, got.failedPodLogs)
-			}
+			assert.Equal(t, tt.logs, got.failedPodLogs)
 		})
 	}
 }
