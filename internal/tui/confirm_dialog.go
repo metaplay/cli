@@ -21,6 +21,7 @@ type confirmDialog struct {
 	choice     bool
 	canceled   bool
 	quitting   bool
+	ctrlCExit
 }
 
 func newConfirmDialog(_ context.Context, title string, body string, question string, defaultYes bool) confirmDialog {
@@ -48,8 +49,12 @@ func (m confirmDialog) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.choice = false
 			m.quitting = true
 			return m, tea.Quit
-		case "q", "ctrl+c":
+		case "q":
 			m.canceled = true
+			m.quitting = true
+			return m, tea.Quit
+		case "ctrl+c":
+			m.ctrlC = true
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
@@ -103,13 +108,10 @@ func runConfirmDialog(ctx context.Context, title string, body string, question s
 		return false, err
 	}
 
-	p := tea.NewProgram(newConfirmDialog(ctx, title, body, question, defaultYes))
-	m, err := p.Run()
+	finalM, err := runDialog(newConfirmDialog(ctx, title, body, question, defaultYes), "confirmation dialog")
 	if err != nil {
-		return false, fmt.Errorf("failed to run confirmation dialog: %w", err)
+		return false, err
 	}
-
-	finalM := m.(confirmDialog)
 	if finalM.canceled {
 		return false, fmt.Errorf("confirmation canceled")
 	}

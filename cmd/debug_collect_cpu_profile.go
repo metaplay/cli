@@ -203,7 +203,7 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Run the tasks
-	if err := runner.Run(); err != nil {
+	if err := runner.Run(cmd.Context()); err != nil {
 		return err
 	}
 
@@ -251,8 +251,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		}
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-		// Execute the command in the debug container
-		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, collectCmd)
+		// Not cancelled with the command: dotnet-trace would go on in the pod and write the profile
+		// files after they were removed. It stops after the requested duration, so after an
+		// interrupt, wait at most that long plus 5 minutes for the conversion.
+		grace := time.Duration(o.flagDuration)*time.Second + 5*time.Minute
+		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, grace, kubeCli, podName, debugContainerName, collectCmd)
 		if err != nil {
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
@@ -260,30 +263,24 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		return nil
 	})
 
-	// Copy CPU profile to local machine & remove remote files (even if copy failed)
+	// Copy CPU profile to local machine
+	downloaded := false
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
-		copyErr := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
+		if err != nil {
+			return fmt.Errorf("failed to copy CPU profile: %w", err)
+		}
+		downloaded = true
+		return nil
+	})
 
-		// Remove both the nettrace capture and (if different) the converted file.
+	// Remove the nettrace capture and the converted file, if any, also when the download failed
+	runner.AddCleanupTask("Remove CPU profile from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
 		filesToRemove := []string{remoteNettracePath}
 		if remoteDownloadName != remoteNettraceName {
 			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
 		}
-		for _, f := range filesToRemove {
-			log.Debug().Msgf("Remove CPU profile file %s from debug container...", f)
-			_, _, removeErr := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-				fmt.Sprintf("rm -f %s", f),
-			)
-			if removeErr != nil {
-				// Don't fail the task for cleanup errors, just log a warning
-				log.Warn().Msgf("Failed to remove %s from debug container: %v", f, removeErr)
-			}
-		}
-
-		if copyErr != nil {
-			return fmt.Errorf("failed to copy CPU profile: %w", copyErr)
-		}
-		return nil
+		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "CPU profile", o.flagOutputPath, downloaded, filesToRemove...)
 	})
 
 	return nil

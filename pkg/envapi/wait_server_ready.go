@@ -527,7 +527,7 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 }
 
 // waitForDomainResolution waits for a domain to resolve within a 15-minute timeout.
-func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout time.Duration) error {
+func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostname string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
 
 	output.SetHeaderLines([]string{
@@ -537,10 +537,13 @@ func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout ti
 	attemptNdx := 0
 	for {
 		// Do a DNS lookup.
-		_, err := net.LookupHost(hostname)
+		_, err := net.DefaultResolver.LookupHost(ctx, hostname)
 		if err == nil {
 			output.AppendLinef("Successfully resolved domain %s", hostname)
 			return nil
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
 		}
 
 		// Check for timeout.
@@ -557,7 +560,11 @@ func waitForDomainResolution(output *tui.TaskOutput, hostname string, timeout ti
 		attemptNdx += 1
 
 		// Delay before trying again -- these can take a while so avoid spamming the log
-		time.Sleep(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -573,14 +580,17 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 		// Do a request.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout reached while waiting to establish connection to %s:%d", hostname, port)
+			return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
 		default:
 			// Require 10 subsequent successful connections to treat the endpoint as healthy.
 			const numAttempts = 10
 			allSuccess := true
 			for iter := range numAttempts {
 				// Attempt a connection & bail out on errors.
-				err := attemptTLSConnection(hostname, port)
+				err := attemptTLSConnection(ctx, hostname, port)
+				if ctx.Err() != nil {
+					return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
+				}
 				if err != nil {
 					output.AppendLinef("Connection attempt %d of %d failed: %v", iter+1, numAttempts, err)
 					allSuccess = false
@@ -607,15 +617,16 @@ func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.T
 // attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
 // (client-speaks-first pattern to work behind TLS-terminating proxies), then
 // reads and validates the server's protocol header.
-func attemptTLSConnection(hostname string, port int) error {
+func attemptTLSConnection(ctx context.Context, hostname string, port int) error {
 	address := fmt.Sprintf("%s:%d", hostname, port)
-	conn, err := tls.Dial("tcp", address, &tls.Config{
-		ServerName: hostname,
-	})
+	dialer := &tls.Dialer{Config: &tls.Config{ServerName: hostname}}
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() }) // Ends a read or write on cancel
+	defer stopClosing()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).
@@ -681,7 +692,7 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		// Do a request.
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout reached while waiting for %s to respond", url)
+			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
 		default:
 			// Create a new request with headers
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -750,7 +761,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for the primary domain name to resolve to an IP address.
 	taskRunner.AddTask("Wait for game server domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(output, serverPrimaryAddress, 15*time.Minute)
+		return waitForDomainResolution(ctx, output, serverPrimaryAddress, 15*time.Minute)
 	})
 
 	// Wait for server to respond to client traffic.
@@ -762,7 +773,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for the admin domain name to resolve to an IP address.
 	taskRunner.AddTask("Wait for LiveOps Dashboard domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(output, envDetails.Deployment.AdminHostname, 15*time.Minute)
+		return waitForDomainResolution(ctx, output, envDetails.Deployment.AdminHostname, 15*time.Minute)
 	})
 
 	// Wait for admin API to successfully respond to an HTTP request.

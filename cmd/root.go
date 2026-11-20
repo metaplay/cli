@@ -158,7 +158,7 @@ var rootCmd = &cobra.Command{
 }
 
 // ExecuteContext adds all child commands to the root command and sets flags appropriately.
-// It accepts a context for cancellation support (e.g., from signal.NotifyContext for Ctrl+C handling).
+// It accepts a context for cancellation support: main cancels it on Ctrl+C, SIGINT and SIGTERM.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func ExecuteContext(ctx context.Context) {
 	if err := checkUnknownSubcommand(rootCmd, os.Args[1:]); err != nil {
@@ -429,6 +429,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 		// Run the command.
 		err = opts.Run(cmd)
 		if err != nil {
+			displayUnreportedTaskFailures(err)
 			if wasInterrupted(cmd, err) {
 				exitInterrupted()
 			}
@@ -450,7 +451,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 // interrupt looks identical to "pnpm not installed").
 //
 // We check three signals in order of specificity:
-//  1. the root context was canceled via SIGINT/SIGTERM (matches signal.NotifyContext);
+//  1. the root context was canceled: main cancels it on Ctrl+C, SIGINT and SIGTERM;
 //  2. the error chain itself carries context.Canceled (e.g. an interactive prompt);
 //  3. a SignaledError from execChildInteractive (defensive — covers the case
 //     where a forwarded signal killed the child but didn't reach our context).
@@ -480,6 +481,17 @@ func exitInterrupted() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
 	os.Exit(130)
+}
+
+// displayUnreportedTaskFailures shows the task failures that the command's error does not cover:
+// see tui.TasksError. They are shown also when the command was interrupted, which is otherwise
+// reported only as "Canceled.".
+func displayUnreportedTaskFailures(err error) {
+	if tasksErr, ok := errors.AsType[*tui.TasksError](err); ok {
+		for _, unreported := range tasksErr.Unreported {
+			displayError(unreported)
+		}
+	}
 }
 
 // isCLIError checks if the error is a CLIError type.

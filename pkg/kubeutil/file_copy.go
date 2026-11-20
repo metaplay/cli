@@ -155,6 +155,7 @@ func calculateLocalFileMD5(filePath string) (string, error) {
 
 // streamFileFromOffset streams file content from a byte offset using dd.
 // This enables resumable transfers by skipping already-transferred bytes.
+// The 'dd if=<path> ' form of the commands is what removeFilesCommand stops.
 func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcPath string, offset int64, useCompression bool) (io.Reader, func() error, error) {
 	// Use dd with skip_bytes to start from the offset, then optionally compress
 	var command string
@@ -190,7 +191,7 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		log.Debug().Msgf("SPDY stream started (offset=%d): pod=%s container=%s path=%s", offset, podName, containerName, srcPath)
 
 		var stderrBuf bytes.Buffer
-		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -258,7 +259,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 		// Capture stderr from the remote command to diagnose tar failures
 		var stderrBuf bytes.Buffer
-		err := exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -498,6 +499,13 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 				}
 			}
 			return nil
+		}
+
+		// After the command is cancelled no attempt can succeed, so stop. The partial file is
+		// removed: only this process could resume it.
+		if ctx.Err() != nil {
+			_ = os.Remove(destPath)
+			return fmt.Errorf("file copy stopped: %w", ctx.Err())
 		}
 
 		// Check if progress was made - if so, reset failure counter

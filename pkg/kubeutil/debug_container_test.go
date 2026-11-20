@@ -1,0 +1,79 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package kubeutil
+
+import (
+	"context"
+	"os/exec"
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+)
+
+// shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
+// argument even for names with spaces, wildcards or quotes.
+func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not found")
+	}
+	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf"}
+	for _, name := range names {
+		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+shellQuote(name)).Output()
+		if err != nil {
+			t.Fatalf("bash failed for %q: %v", name, err)
+		}
+		if got := strings.TrimSuffix(string(out), "\n"); got != name {
+			t.Errorf("shellQuote(%q) through bash = %q", name, got)
+		}
+	}
+}
+
+// Before removing a file, the command stops a cancelled download that still reads it, without
+// matching its own shell or a file whose name only starts the same.
+func TestRemoveFilesCommand(t *testing.T) {
+	got := removeFilesCommand([]string{"/tmp/a.gcdump", "/tmp/it's"})
+	want := `for pid in $(pgrep -f -- '[d]d if=/tmp/a\.gcdump '); do pkill -P $pid; kill $pid; done; ` +
+		`for pid in $(pgrep -f -- '[d]d if=/tmp/it'\''s '); do pkill -P $pid; kill $pid; done; ` +
+		`rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`
+	if got != want {
+		t.Errorf("removeFilesCommand =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// The continued context outlives the parent's cancellation by the grace period, and no longer.
+func TestContinueAfterCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		parent, cancelParent := context.WithCancel(context.Background())
+		continued, cancel := continueAfterCancel(parent, time.Minute)
+		defer cancel()
+
+		cancelParent()
+		time.Sleep(59 * time.Second)
+		if err := continued.Err(); err != nil {
+			t.Fatalf("continued context cancelled before the grace period ended: %v", err)
+		}
+		time.Sleep(2 * time.Second)
+		if continued.Err() == nil {
+			t.Fatal("continued context not cancelled after the grace period")
+		}
+	})
+}
+
+// Without a cancellation of the parent, only the returned cancel function ends the context.
+func TestContinueAfterCancelWithoutParentCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		continued, cancel := continueAfterCancel(context.Background(), time.Second)
+		time.Sleep(time.Minute)
+		if err := continued.Err(); err != nil {
+			t.Fatalf("continued context cancelled without a parent cancellation: %v", err)
+		}
+		cancel()
+		if continued.Err() == nil {
+			t.Fatal("cancel did not cancel the context")
+		}
+	})
+}
