@@ -708,6 +708,9 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 			// Execute the request
 			resp, err := client.Do(req)
 			if err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
+				}
 				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
 			} else {
 				switch {
@@ -728,7 +731,11 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		}
 
 		// Wait before retrying.
-		time.Sleep(1 * time.Second)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
+		case <-time.After(1 * time.Second):
+		}
 
 		// Check for timeout.
 		if time.Now().After(timeoutAt) {

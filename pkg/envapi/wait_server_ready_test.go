@@ -5,8 +5,15 @@
 package envapi
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/metaplay/cli/internal/tui"
 )
 
 func TestBuildHealthCheckPacket(t *testing.T) {
@@ -145,6 +152,36 @@ func TestValidateProtocolHeader(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// A cancellation ends the wait for an HTTP server at once, with the cancellation as the error:
+// both while a request is in flight and during the pause between two requests.
+func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
+		"pause between requests": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		},
+	}
+	for name, handler := range cases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			ctx, cancel := context.WithCancel(t.Context())
+			time.AfterFunc(100*time.Millisecond, cancel)
+
+			start := time.Now()
+			err := waitForHTTPServerToRespond(ctx, &tui.TaskOutput{}, server.URL, time.Minute)
+
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("error = %v, want context.Canceled", err)
+			}
+			// The pause between requests is 1 second, which a cancelled wait must not sit out
+			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
+				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
 			}
 		})
 	}

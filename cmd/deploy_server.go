@@ -555,6 +555,7 @@ func (o *deployGameServerOpts) Run(cmd *cobra.Command) error {
 	// Install or upgrade the Helm chart.
 	taskRunner.AddTask("Deploy game server using Helm", func(output *tui.TaskOutput) error {
 		_, err := helmutil.HelmUpgradeOrInstall(
+			cmd.Context(),
 			output,
 			actionConfig,
 			existingRelease,

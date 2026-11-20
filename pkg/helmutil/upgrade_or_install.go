@@ -5,6 +5,7 @@
 package helmutil
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"reflect"
@@ -36,7 +37,11 @@ import (
 //
 // If checkChart is not nil, it is called with the loaded chart before anything is installed or
 // upgraded, and an error from it is returned as is.
+//
+// If ctx is done before the install or upgrade starts, nothing is deployed and ctx's error is
+// returned. Once started, Helm runs to its end: ctx does not stop it.
 func HelmUpgradeOrInstall(
+	ctx context.Context,
 	output *tui.TaskOutput,
 	actionConfig *action.Configuration,
 	existingRelease *v1.Release,
@@ -179,6 +184,11 @@ func HelmUpgradeOrInstall(
 		log.Warn().Msgf("Failed to marshal values as YAML: %+v", finalValueMap)
 	} else {
 		log.Debug().Msgf("Final Helm values:\n%s", finalValuesYAML)
+	}
+
+	// Don't start a deployment that the user has interrupted while the chart was loaded
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("stopped before starting the Helm deployment: %w", err)
 	}
 
 	// Run install or upgrade install

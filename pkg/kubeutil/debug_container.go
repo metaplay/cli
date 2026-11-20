@@ -6,6 +6,7 @@ package kubeutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -246,7 +247,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	stdOut := new(strings.Builder)
 	stdErr := new(strings.Builder)
 
-	err = streamWithContext(ctx, exec, remotecommand.StreamOptions{
+	err = StreamWithContext(ctx, exec, remotecommand.StreamOptions{
 		Stdout: stdOut,
 		Stderr: stdErr,
 		Tty:    false,
@@ -291,12 +292,13 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// streamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
+// StreamWithContext runs a remote command's stream. When ctx is done, the error wraps ctx's error:
 // client-go flattens the cancellation into its error text, so without this, callers could not
-// tell a cancelled command from a failed one with errors.Is.
-func streamWithContext(ctx context.Context, exec remotecommand.Executor, options remotecommand.StreamOptions) error {
+// tell a cancelled command from a failed one with errors.Is. An error that already is ctx's error
+// is returned as it is.
+func StreamWithContext(ctx context.Context, exec remotecommand.Executor, options remotecommand.StreamOptions) error {
 	err := exec.StreamWithContext(ctx, options)
-	if err != nil && ctx.Err() != nil {
+	if err != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
 		return fmt.Errorf("%w: %w", ctx.Err(), err)
 	}
 	return err

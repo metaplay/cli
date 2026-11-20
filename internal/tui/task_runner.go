@@ -430,7 +430,8 @@ func withTaskTitle(task *Task) error {
 }
 
 // executeTasks runs the tasks sequentially. After an ordinary task fails or ctx is done, only
-// cleanup tasks run.
+// cleanup tasks run. Ordinary tasks skipped because ctx is done are recorded as not started: also
+// those after a task that the cancellation made fail.
 func (m *TaskRunner) executeTasks(ctx context.Context) {
 	stopped := false
 	anyStarted := false
@@ -472,7 +473,9 @@ func (m *TaskRunner) executeTasks(ctx context.Context) {
 
 		if err != nil {
 			log.Debug().Msgf("Task failed: %s: %v", task.title, err)
-			if !task.cleanup {
+			// A failure that the cancellation caused leaves the skipping to the check of ctx above
+			causedByCancellation := ctx.Err() != nil && errors.Is(err, context.Canceled)
+			if !task.cleanup && !causedByCancellation {
 				stopped = true
 			}
 		} else {

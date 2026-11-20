@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/url"
 
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/rs/zerolog/log"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
@@ -55,7 +56,7 @@ func execRemoteKubernetesCommand(ctx context.Context, restConfig *restclient.Con
 			log.Info().Msg("Press ENTER to continue..")
 		}
 
-		err := exec.StreamWithContext(ctx, streamOptions)
+		err := kubeutil.StreamWithContext(ctx, exec, streamOptions)
 		log.Debug().Msgf("Stream terminated with result: %v", err)
 		return err
 	}

@@ -6,11 +6,14 @@ package kubeutil
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"k8s.io/client-go/tools/remotecommand"
 )
 
 // shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
@@ -76,4 +79,34 @@ func TestContinueAfterCancelWithoutParentCancel(t *testing.T) {
 			t.Fatal("cancel did not cancel the context")
 		}
 	})
+}
+
+// fakeExecutor is a remote command whose stream ends with err.
+type fakeExecutor struct{ err error }
+
+func (f fakeExecutor) Stream(remotecommand.StreamOptions) error { return f.err }
+
+func (f fakeExecutor) StreamWithContext(context.Context, remotecommand.StreamOptions) error {
+	return f.err
+}
+
+// Once the context is done, a stream's error counts as a cancellation, and the context's error is
+// not repeated in the text when the stream already returned it.
+func TestStreamWithContextWrapsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	failure := errors.New("error sending request")
+
+	if err := StreamWithContext(ctx, fakeExecutor{failure}, remotecommand.StreamOptions{}); err != failure { //nolint:errorlint // The exact error, not a wrapper
+		t.Errorf("error before the cancellation = %v, want the stream's error as it is", err)
+	}
+
+	cancel()
+	err := StreamWithContext(ctx, fakeExecutor{failure}, remotecommand.StreamOptions{})
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, failure) {
+		t.Errorf("error = %v, want both the cancellation and the stream's error", err)
+	}
+	err = StreamWithContext(ctx, fakeExecutor{context.Canceled}, remotecommand.StreamOptions{})
+	if err == nil || err.Error() != "context canceled" {
+		t.Errorf("error = %v, want the cancellation once", err)
+	}
 }

@@ -191,7 +191,7 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		log.Debug().Msgf("SPDY stream started (offset=%d): pod=%s container=%s path=%s", offset, podName, containerName, srcPath)
 
 		var stderrBuf bytes.Buffer
-		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
+		err := StreamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -259,7 +259,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 		// Capture stderr from the remote command to diagnose tar failures
 		var stderrBuf bytes.Buffer
-		err := streamWithContext(ctx, exec, remotecommand.StreamOptions{
+		err := StreamWithContext(ctx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
