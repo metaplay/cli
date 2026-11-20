@@ -162,12 +162,15 @@ type TaskRunner struct {
 // State that executeTasks writes while the display runs is kept here, behind a pointer, so that
 // those copies do not read it.
 type plainProgress struct {
-	mu        sync.Mutex
-	logging   bool     // Report progress as log lines
-	closing   bool     // The display is closing: hold progress in pending until it has closed
-	pending   []string // Progress made while the display was closing
-	waitedFor bool     // pending starts with the "Waiting for" line of the current task
-	current   *Task    // The task being run, or nil
+	mu      sync.Mutex
+	logging bool     // Report progress as log lines
+	closing bool     // The display is closing: hold progress in pending until it has closed
+	pending []string // Progress made while the display was closing
+	current *Task    // The task being run, or nil
+
+	// The current task started on the display, so no log line names it yet. Its first line of
+	// progress that is not shown on the display is preceded by a line that does.
+	unannounced bool
 
 	notStarted []string // Ordinary tasks the interrupt kept from starting. Written by executeTasks, read after it
 }
@@ -180,10 +183,21 @@ func (p *plainProgress) log(line string) {
 }
 
 func (p *plainProgress) logLocked(line string) {
-	switch {
-	case p.logging:
+	if !p.logging && !p.closing {
+		return
+	}
+	if p.unannounced {
+		p.unannounced = false
+		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
+	}
+	p.emit(line)
+}
+
+// emit logs a line, or holds it while the display is closing.
+func (p *plainProgress) emit(line string) {
+	if p.logging {
 		log.Info().Msg(line)
-	case p.closing:
+	} else {
 		p.pending = append(p.pending, line)
 	}
 }
@@ -319,54 +333,45 @@ func (m *TaskRunner) runInteractive(ctx context.Context, options ...tea.ProgramO
 func (p *plainProgress) displayClosing() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.closing || p.logging {
-		return
-	}
-	p.closing = true
-	if p.current != nil {
-		p.pending = append(p.pending, fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
-		p.waitedFor = true
-	}
+	p.closing = !p.logging
 }
 
 // displayClosed is called once the terminal is restored. It logs the progress made while the
-// display was closing, and switches progress reporting to log lines if a task is still running:
-// after a normal run, nothing more is logged.
+// display was closing, and switches progress reporting to log lines. A task that is still running
+// is named, so the user knows what the command waits for.
 func (p *plainProgress) displayClosed() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !p.closing && p.current != nil {
-		// The display failed, without closing in an orderly way
-		p.pending = append(p.pending, fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
-	}
+	p.closing = false
+	p.logging = true
 	for _, line := range p.pending {
 		log.Info().Msg(line)
 	}
 	p.pending = nil
-	p.logging = p.closing || p.current != nil
-	p.closing = false
+	if p.unannounced {
+		p.unannounced = false
+		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
+	}
 }
 
-// taskStarted records the task being run, and logs it once the display has closed.
+// taskStarted records the task being run, and logs it unless the display shows it.
 func (p *plainProgress) taskStarted(task *Task) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.current = task
+	p.unannounced = !p.logging && !p.closing
 	p.logLocked(task.title + "...")
 }
 
-// taskEnded logs a task's success once the display has closed. Failures are shown by result.
+// taskEnded logs a task's success unless the display shows it. Failures are shown by result.
 func (p *plainProgress) taskEnded(err error, elapsed time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.current = nil
-	if err != nil && p.closing && len(p.pending) == 1 && p.waitedFor {
-		p.pending = nil // The task ended without more to report: nothing was waited for
-	}
-	p.waitedFor = false
 	if err == nil {
 		p.logLocked(fmt.Sprintf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed)))
 	}
+	p.current = nil
+	p.unannounced = false
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells

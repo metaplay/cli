@@ -403,6 +403,29 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 	}
 }
 
+// A display that fails between two tasks, without closing in an orderly way, leaves the later
+// tasks' progress to the log.
+func TestTaskRunnerLogsProgressAfterDisplayFailedBetweenTasks(t *testing.T) {
+	logged := captureLog(t)
+	runner := NewTaskRunner()
+	runner.AddTask("install", func(*TaskOutput) error { return nil })
+
+	runner.progress.displayClosed()
+	runner.progress.taskStarted(runner.tasks[0])
+	runner.tasks[0].output.AppendLine("installing")
+	runner.progress.taskEnded(nil, time.Second)
+
+	got := logged.String()
+	for _, want := range []string{"install...", "installing", "Done"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("log = %s, want it to contain %q", got, want)
+		}
+	}
+	if strings.Contains(got, "Waiting for") {
+		t.Errorf("log = %s, want no wait announced for a task started after the display closed", got)
+	}
+}
+
 // Tasks skipped because an earlier task failed are not blamed on an interrupt that came later, and
 // the failure is the runner's error.
 func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
