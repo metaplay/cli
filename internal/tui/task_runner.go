@@ -51,6 +51,13 @@ type TaskOutput struct {
 	progress *plainProgress // The runner's progress reporting, which logs lines once the display has closed
 }
 
+// LogsLines reports whether the output is logged, which it is when there is no display: in
+// non-interactive mode, and from the moment the display starts closing. Each update is then a new
+// log line.
+func (to *TaskOutput) LogsLines() bool {
+	return !isInteractiveMode || (to.progress != nil && to.progress.logs())
+}
+
 // logWhenNoDisplay logs the lines when there is no display to show them on. An output that belongs to no
 // runner has no display in non-interactive mode.
 func (to *TaskOutput) logWhenNoDisplay(lines ...string) {
@@ -166,11 +173,10 @@ type plainProgress struct {
 	mu      sync.Mutex
 	mode    progressMode
 	pending []string // Progress made while the mode was progressHeld
-	current *Task    // The task being run, or nil
 
-	// The current task started on the display, so no log line names it yet. Its first line of
-	// progress that is not shown on the display is preceded by a line that does.
-	unannounced bool
+	// The running task, if it started on the display, so that no log line names it yet. Its first
+	// line of progress that is not shown on the display is preceded by a line that does.
+	unannounced *Task
 }
 
 // progressMode is where the tasks' progress goes.
@@ -181,6 +187,13 @@ const (
 	progressHeld                       // The display is closing: held in pending until it has closed
 	progressLogged                     // Logged
 )
+
+// logs reports whether progress is logged, now or once the display has closed.
+func (p *plainProgress) logs() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mode != progressShown
+}
 
 // log reports lines of progress, each preceded by indent, unless the display shows the progress.
 func (p *plainProgress) log(indent string, lines ...string) {
@@ -195,21 +208,19 @@ func (p *plainProgress) log(indent string, lines ...string) {
 	}
 }
 
-// announce names the current task before its first line in the log, if no log line named it yet.
+// announce names the running task before its first line in the log, if no log line named it yet.
 func (p *plainProgress) announce() {
-	if p.unannounced {
-		p.unannounced = false
-		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", p.current.title))
+	if task := p.unannounced; task != nil {
+		p.unannounced = nil
+		p.emit(fmt.Sprintf("Waiting for '%s' to finish...", task.title))
 	}
 }
 
 // emit logs a line, or holds it while the display is closing.
 func (p *plainProgress) emit(line string) {
-	switch p.mode {
-	case progressShown:
-	case progressHeld:
+	if p.mode == progressHeld {
 		p.pending = append(p.pending, line)
-	case progressLogged:
+	} else {
 		log.Info().Msg(line)
 	}
 }
@@ -364,24 +375,26 @@ func (p *plainProgress) displayClosed() {
 	p.announce()
 }
 
-// taskStarted records the task being run, and logs it unless the display shows it.
+// taskStarted logs the start of a task, unless the display shows it.
 func (p *plainProgress) taskStarted(task *Task) {
 	p.mu.Lock()
-	p.current = task
-	p.unannounced = p.mode == progressShown
-	p.mu.Unlock()
-	p.log("", task.title+"...")
+	defer p.mu.Unlock()
+	if p.mode == progressShown {
+		p.unannounced = task
+		return
+	}
+	p.emit(task.title + "...")
 }
 
 // taskEnded logs a task's success unless the display shows it. Failures are shown by result.
 func (p *plainProgress) taskEnded(err error, elapsed time.Duration) {
-	if err == nil {
-		p.log("", fmt.Sprintf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed)))
-	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.current = nil
-	p.unannounced = false
+	if err == nil && p.mode != progressShown {
+		p.announce()
+		p.emit(fmt.Sprintf(" %s %s %s", styles.RenderSuccess("✓"), "Done", humanizeElapsed(elapsed)))
+	}
+	p.unannounced = nil
 }
 
 // runNonInteractive runs tasks with basic logging for non-interactive shells

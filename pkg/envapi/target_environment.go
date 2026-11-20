@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -241,27 +242,38 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 		return nil, err
 	}
 
-	// Try to resolve the gameserver with new CR.
-	newGameServer, err := target.tryGetGameServerNewCR(ctx, kubeCli)
+	gameServer, err := target.fetchGameServer(ctx, kubeCli)
 	if err != nil {
 		return nil, err
 	}
-	if newGameServer != nil {
-		target.targetGameServer = newGameServer
-		return newGameServer, nil
-	}
+	target.targetGameServer = gameServer
+	return gameServer, nil
+}
 
-	// Try to resolve the gameserver with old CR.
-	oldGameServer, err := target.tryGetGameServerOldCR(ctx, kubeCli)
-	if err != nil {
+// errNoGameServer is returned when the environment has no GameServer CR.
+var errNoGameServer = clierrors.New("No game server is deployed in the environment").
+	WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
+
+// fetchGameServer reads the gameserver from its CR, the new operator's or the old one's,
+// without the cache of GetGameServer. It returns errNoGameServer if there is neither.
+func (target *TargetEnvironment) fetchGameServer(ctx context.Context, kubeCli *KubeClient) (*TargetGameServer, error) {
+	// A cluster has the resource type of only one of the operators: listing the other
+	// one's fails with NotFound.
+	gameServer, err := target.tryGetGameServerNewCR(ctx, kubeCli)
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	if oldGameServer != nil {
-		target.targetGameServer = oldGameServer
-		return oldGameServer, nil
+	if gameServer != nil {
+		return gameServer, nil
 	}
-
-	return nil, fmt.Errorf("neither old nor new gameserver CR found in Kubernetes")
+	gameServer, err = target.tryGetGameServerOldCR(ctx, kubeCli)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if gameServer == nil {
+		return nil, errNoGameServer
+	}
+	return gameServer, nil
 }
 
 // Request details about an environment from the StackAPI.

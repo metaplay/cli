@@ -388,7 +388,7 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 	output := &runner.tasks[0].output
 
 	output.AppendLine("shown by the display")
-	if logged.Len() != 0 {
+	if logged.Len() != 0 || output.LogsLines() {
 		t.Errorf("logged while the display is on screen:\n%s", logged.String())
 	}
 	runner.progress.displayClosing()
@@ -396,11 +396,15 @@ func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
 	if logged.Len() != 0 {
 		t.Errorf("logged before the terminal was restored:\n%s", logged.String())
 	}
+	if !output.LogsLines() {
+		t.Error("lines are not reported as logged while the display closes")
+	}
 	runner.progress.displayClosed()
 	output.AppendLine("made after closing")
-	if got := logged.String(); !strings.Contains(got, "made while closing") || !strings.Contains(got, "made after closing") || strings.Contains(got, "shown by the display") {
-		t.Errorf("log = %s, want the lines made while and after closing only", got)
+	if !output.LogsLines() {
+		t.Error("lines are not reported as logged after the display closed")
 	}
+	wantLogged(t, logged, []string{"made while closing", "made after closing"}, "shown by the display")
 }
 
 // A display that fails between two tasks, without closing in an orderly way, leaves the later
@@ -415,15 +419,7 @@ func TestTaskRunnerLogsProgressAfterDisplayFailedBetweenTasks(t *testing.T) {
 	runner.tasks[0].output.AppendLine("installing")
 	runner.progress.taskEnded(nil, time.Second)
 
-	got := logged.String()
-	for _, want := range []string{"install...", "installing", "Done"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("log = %s, want it to contain %q", got, want)
-		}
-	}
-	if strings.Contains(got, "Waiting for") {
-		t.Errorf("log = %s, want no wait announced for a task started after the display closed", got)
-	}
+	wantLogged(t, logged, []string{"install...", "installing", "Done"}, "Waiting for")
 }
 
 // Tasks skipped because an earlier task failed are not blamed on an interrupt that came later, and
@@ -475,6 +471,26 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &logged
 }
 
+// wantLogged fails the test unless the log has each of wants in that order, and none of unwanted.
+func wantLogged(t *testing.T, logged *bytes.Buffer, wants []string, unwanted ...string) {
+	t.Helper()
+	got := logged.String()
+	rest := got
+	for _, want := range wants {
+		_, after, found := strings.Cut(rest, want)
+		if !found {
+			t.Errorf("log lacks %q, or has it out of order:\n%s", want, got)
+			return
+		}
+		rest = after
+	}
+	for _, text := range unwanted {
+		if strings.Contains(got, text) {
+			t.Errorf("log has %q:\n%s", text, got)
+		}
+	}
+}
+
 // A command interrupted before its display starts runs no task, with the display on screen.
 func TestTaskRunnerInterruptedBeforeDisplayStarts(t *testing.T) {
 	d := newDisplayTest(t)
@@ -508,11 +524,7 @@ func TestTaskRunnerLogsProgressMadeWhileDisplayCloses(t *testing.T) {
 	if err := d.run(t); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	for _, want := range []string{"Waiting for 'collect' to finish...", "collect stopped", "remove...", "removed the file", "Done"} {
-		if !strings.Contains(logged.String(), want) {
-			t.Errorf("log lacks %q:\n%s", want, logged.String())
-		}
-	}
+	wantLogged(t, logged, []string{"Waiting for 'collect' to finish...", "collect stopped", "remove...", "removed the file", "Done"})
 }
 
 // Without an interrupt, nothing is logged: the display shows it all.
@@ -549,10 +561,7 @@ func TestTaskRunnerDoesNotAnnounceWaitForTaskStoppedAtOnce(t *testing.T) {
 	progress.displayClosed()
 	progress.taskEnded(nil, time.Second)
 
-	got := logged.String()
-	if strings.Contains(got, "Waiting for") || !strings.Contains(got, "remove...") || !strings.Contains(got, "Done") {
-		t.Errorf("log = %s, want the cleanup task's start and \"Done\", and no \"Waiting for\" line", got)
-	}
+	wantLogged(t, logged, []string{"remove...", "Done"}, "Waiting for")
 }
 
 // After a signal, the display learns of the interrupt later than the tasks do. A cleanup task that
@@ -572,13 +581,5 @@ func TestTaskRunnerLogsCleanupTaskStartedBeforeDisplayLearnsOfSignal(t *testing.
 	if err := d.run(t); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
-	got := logged.String()
-	for _, want := range []string{"remove...", "removed", "Done"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("log = %s, want it to contain %q", got, want)
-		}
-	}
-	if strings.Contains(got, "Waiting for 'remove'") {
-		t.Errorf("log = %s, want the cleanup task logged from its start", got)
-	}
+	wantLogged(t, logged, []string{"remove...", "removed", "Done"}, "Waiting for 'remove'")
 }
