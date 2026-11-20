@@ -7,7 +7,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/metaplay/cli/internal/tui"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/styles"
@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Deploy a game server to the target environment with specified docker image version.
+// Check the current status of a game server deployment, without waiting.
 type debugCheckServerStatus struct {
 	UsePositionalArgs
 
@@ -34,19 +34,23 @@ func init() {
 		Short:   "Check the status of a game server deployment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			Check the status of a game server deployment.
+			Check the current status of a game server deployment.
 
-			Runs the same checks as 'deploy server' but without deploying anything:
-			- All expected pods are present, healthy, and ready.
-			- Client-facing domain name resolves correctly.
-			- Game server responds to client traffic.
-			- Admin domain name resolves correctly.
-			- Admin endpoint responds with a success code.
+			Runs the checks of 'deploy server' once, without waiting for them to pass:
+			- All expected pods are present, run the deployed image, and are ready.
+			- Client-facing domain name resolves.
+			- Game server accepts client connections.
+			- LiveOps Dashboard domain name resolves.
+			- LiveOps Dashboard responds with a success or a redirect to its login.
+
+			All checks run, and each one prints its result. The command fails with exit
+			code 1 if any check fails, including while a deployment is still starting.
 
 			{Arguments}
 
 			Related commands:
-			- 'metaplay deploy server ...' deploys a game server and runs these checks.
+			- 'metaplay deploy server ...' deploys a game server and waits for these checks to pass.
+			- 'metaplay debug logs ...' shows the logs of the game server.
 			- 'metaplay get server-info ...' shows information about the game server deployment.
 		`),
 		Example: renderExample(`
@@ -120,23 +124,51 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	if existingRelease == nil {
-		log.Info().Msg(styles.RenderAttention("No deployment found in environment, skipping tests."))
-		return nil
+		return clierrors.New("No game server is deployed in the environment").
+			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 	}
 
-	taskRunner := tui.NewTaskRunner()
-
-	// Validate the game server status.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, nil)
+	status, err := targetEnv.CheckServerStatus(cmd.Context())
 	if err != nil {
 		return err
 	}
-
-	// Run the tasks.
-	if err = taskRunner.Run(cmd.Context()); err != nil {
-		return err
+	if err := cmd.Context().Err(); err != nil {
+		return clierrors.Wrap(err, "Stopped checking the game server status")
 	}
 
-	log.Info().Msg(styles.RenderSuccess("✅ Game server deployment is ready!"))
-	return nil
+	log.Info().Msg("Game server status:")
+	for _, check := range status.Checks {
+		marker := styles.RenderSuccess("✓")
+		summary := check.Summary
+		switch check.Result {
+		case envapi.CheckFailed:
+			marker = styles.RenderError("✗")
+			summary = styles.RenderError(summary)
+		case envapi.CheckSkipped:
+			marker = styles.RenderMuted("-")
+			summary = styles.RenderMuted(summary)
+		}
+		log.Info().Msgf("  %s %s: %s", marker, check.Name, summary)
+		for _, line := range check.Lines {
+			log.Info().Msgf("      %s", line)
+		}
+	}
+	log.Info().Msg("")
+
+	problems := status.Problems()
+	if len(problems) == 0 {
+		log.Info().Msg(styles.RenderSuccess("Game server is ready"))
+		return nil
+	}
+
+	suggestion := fmt.Sprintf("Run this command again to see whether the game server is still starting, or check the server logs with: metaplay debug logs %s", envConfig.HumanID)
+	if status.FailedPod != "" {
+		suggestion = fmt.Sprintf("Check the logs of the failed pod with: metaplay debug logs %s --pod %s", envConfig.HumanID, status.FailedPod)
+		if !status.FailedPodHasLog {
+			suggestion = fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", status.FailedPod)
+		}
+	}
+	return clierrors.New("Game server is not ready").
+		WithDetails(problems...).
+		WithSuggestion(suggestion)
 }

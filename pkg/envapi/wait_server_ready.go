@@ -258,9 +258,9 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 
 // previousPods returns the pods from before the deploy while the operator may still
 // replace them. It does so only if the deploy changed the GameServer CR, and is given
-// oldPodGracePeriod to start. Without a baseline (no deploy), there are none.
+// oldPodGracePeriod to start.
 func previousPods(baseline *DeployBaseline, crChanged bool, elapsed time.Duration) map[types.UID]bool {
-	if baseline == nil || !crChanged || elapsed >= oldPodGracePeriod {
+	if !crChanged || elapsed >= oldPodGracePeriod {
 		return nil
 	}
 	return baseline.podUIDs
@@ -675,7 +675,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	lastSuccessAt = time.Now()
 	target := gameServer.readinessTarget()
 	crUID, crGeneration := gameServer.crVersion()
-	crChanged := baseline != nil && (baseline.crUID != crUID || baseline.crGeneration != crGeneration)
+	crChanged := baseline.crUID != crUID || baseline.crGeneration != crGeneration
 	log.Debug().Msgf("Waiting for game server: %+v (new CR: %v, CR changed by the deploy: %v)", target, gameServer.GameServerNewCR != nil, crChanged)
 
 	notReadyError := func(problems []string) error {
@@ -947,6 +947,38 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 	return nil
 }
 
+// The port of the game server's client endpoint.
+// \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
+const gameServerClientPort = 9339
+
+// probeHTTPServer makes one GET request to url. A success or a redirect status passes:
+// the LiveOps Dashboard redirects to its login. It returns the status of the response,
+// if there was one, and an error unless it passed.
+func probeHTTPServer(ctx context.Context, url string) (string, error) {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		// Check the status of the response itself, not of where it redirects to.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	// With this header, StackAPI responds with a 302 redirect instead of 403 Forbidden.
+	req.Header.Add("Sec-Fetch-Mode", "navigate")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return resp.Status, fmt.Errorf("received status %s", resp.Status)
+	}
+	return resp.Status, nil
+}
+
 // waitForHTTPServerToRespond pings a target URL until it returns a success status code or a timeout occurs.
 func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
@@ -955,56 +987,16 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 		fmt.Sprintf("Waiting for HTTP server %s to respond (timeout: %s)", url, timeout),
 	})
 
-	client := &http.Client{
-		Timeout: 5 * time.Second, // Per-request timeout
-		// Prevent the client from following redirects automatically.
-		// We want to check the status code of the initial response directly.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
 	for {
-		// Do a request.
-		select {
-		case <-ctx.Done():
+		status, err := probeHTTPServer(ctx, url)
+		if ctx.Err() != nil {
 			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-		default:
-			// Create a new request with headers
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				output.AppendLinef("Error creating request for %s: %v. Retrying...", url, err)
-				break
-			}
-
-			// Add the Sec-Fetch-Mode header so that StackAPI returns a 302 redirect (instead
-			// of 403 forbidden) to the request.
-			req.Header.Add("Sec-Fetch-Mode", "navigate")
-
-			// Execute the request
-			resp, err := client.Do(req)
-			if err != nil {
-				if ctx.Err() != nil {
-					return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-				}
-				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
-			} else {
-				switch {
-				case resp.StatusCode >= 200 && resp.StatusCode < 300:
-					// Accept 2xx (Success) status codes.
-					_ = resp.Body.Close()
-					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
-					return nil
-				case resp.StatusCode >= 300 && resp.StatusCode < 400:
-					// Accept 3xx (Redirection) status codes.
-					_ = resp.Body.Close()
-					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
-					return nil
-				}
-				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
-				_ = resp.Body.Close()
-			}
 		}
+		if err == nil {
+			output.AppendLinef("Successfully connected to %s. Status: %s", url, status)
+			return nil
+		}
+		output.AppendLinef("Request to %s failed: %v. Retrying...", url, err)
 
 		// Wait before retrying.
 		if !pause(ctx, 1*time.Second) {
@@ -1019,10 +1011,10 @@ func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url
 }
 
 // WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
-// and the LiveOps Dashboard. After a deploy, baseline is the state before it, which
-// CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from before
-// the deploy then fails the wait only once the operator has had time to replace it.
-// Without a deploy, baseline is nil, and any failing pod fails the wait.
+// and the LiveOps Dashboard after a deploy. baseline is the state before the deploy,
+// which CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from
+// before the deploy then fails the wait only once the operator has had time to replace
+// it. CheckServerStatus makes the same checks once, without waiting.
 func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {
 	// Fetch environment details.
 	envDetails, err := targetEnv.GetDetails()
@@ -1042,7 +1034,6 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	// CHECK CLIENT-FACING NETWORKING
 
 	serverPrimaryAddress := envDetails.Deployment.ServerHostname
-	serverPrimaryPort := 9339 // \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
 	log.Debug().Msgf("envDetails.Deployment.ServerPorts: %+v", envDetails.Deployment.ServerPorts)
 
 	// Wait for the primary domain name to resolve to an IP address.
@@ -1052,7 +1043,7 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 
 	// Wait for server to respond to client traffic.
 	taskRunner.AddTask("Wait for game server to serve clients", func(output *tui.TaskOutput) error {
-		return waitForGameServerClientEndpointToBeReady(ctx, output, serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
+		return waitForGameServerClientEndpointToBeReady(ctx, output, serverPrimaryAddress, gameServerClientPort, 5*time.Minute)
 	})
 
 	// CHECK ADMIN INTERFACE

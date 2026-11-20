@@ -618,7 +618,6 @@ func TestPreviousPods(t *testing.T) {
 		elapsed   time.Duration
 		want      map[types.UID]bool
 	}{
-		{name: "no deploy", baseline: nil, crChanged: true, elapsed: 0, want: nil},
 		{name: "deploy changed the CR", baseline: baseline, crChanged: true, elapsed: 10 * time.Second, want: baseline.podUIDs},
 		{name: "grace period over", baseline: baseline, crChanged: true, elapsed: oldPodGracePeriod, want: nil},
 		{name: "deploy changed nothing", baseline: baseline, crChanged: false, elapsed: 0, want: nil},

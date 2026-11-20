@@ -37,7 +37,7 @@ Always deploy a unique tag. Never reuse a tag (e.g. `latest`, `latest-local`, or
 
 ## Verification
 
-`deploy server` runs the same health checks as `debug server-status` at the end:
+`deploy server` waits at the end until the health checks of `debug server-status` pass:
 
 - All expected pods are present, healthy, and ready.
 - Client-facing domain resolves and the game server responds.
@@ -47,7 +47,7 @@ If those pass, the deploy is functionally up. For richer detail:
 
 ```bash
 metaplay get server-info <env>           # Helm release, image, replicas, etc.
-metaplay debug server-status <env>       # Re-run the health checks any time.
+metaplay debug server-status <env>       # Check the current health once, any time.
 ```
 
 If verification fails, jump to `metaplay-devops-diagnose-server` (and `metaplay-devops-view-logs` for the actual error).
