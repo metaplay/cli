@@ -5,6 +5,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -16,6 +17,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/internal/interrupt"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 // unreported returns the failures that the runner's error reports besides the command's error.
@@ -124,7 +127,7 @@ func TestTaskRunnerCtrlCCancelsRunningTaskAndSkipsTheRest(t *testing.T) {
 	if got := unreported(err); got != "" {
 		t.Errorf("unreported failures = %q, want none: the failure was caused by the interrupt", got)
 	}
-	if got := strings.Join(d.runner.notStarted, ","); got != "download" {
+	if got := strings.Join(d.runner.progress.notStarted, ","); got != "download" {
 		t.Errorf("not started because of the interrupt = %q, want download", got)
 	}
 }
@@ -379,16 +382,24 @@ func TestTaskRunnerInterruptWithoutDisplay(t *testing.T) {
 // Once the display has closed after an interrupt, a task's output lines are logged, so a task that
 // still runs, such as a Helm install, shows its progress.
 func TestTaskOutputLoggedOnceDisplayClosed(t *testing.T) {
+	logged := captureLog(t)
 	runner := NewTaskRunner()
 	runner.AddTask("install", func(*TaskOutput) error { return nil })
 	output := &runner.tasks[0].output
 
-	if output.logsLines() {
-		t.Error("lines logged while the display is on screen")
+	output.AppendLine("shown by the display")
+	if logged.Len() != 0 {
+		t.Errorf("logged while the display is on screen:\n%s", logged.String())
 	}
-	runner.progress.closeDisplay()
-	if !output.logsLines() {
-		t.Error("lines not logged after the display closed")
+	runner.progress.displayClosing()
+	output.AppendLine("made while closing")
+	if logged.Len() != 0 {
+		t.Errorf("logged before the terminal was restored:\n%s", logged.String())
+	}
+	runner.progress.displayClosed()
+	output.AppendLine("made after closing")
+	if got := logged.String(); !strings.Contains(got, "made while closing") || !strings.Contains(got, "made after closing") || strings.Contains(got, "shown by the display") {
+		t.Errorf("log = %s, want the lines made while and after closing only", got)
 	}
 }
 
@@ -409,8 +420,8 @@ func TestTaskRunnerInterruptAfterFailure(t *testing.T) {
 	if err := runner.Run(ctx); err == nil || err.Error() != "collect failed" {
 		t.Errorf("error = %v, want the collection's", err)
 	}
-	if len(runner.notStarted) != 0 {
-		t.Errorf("not started because of the interrupt = %v, want none", runner.notStarted)
+	if len(runner.progress.notStarted) != 0 {
+		t.Errorf("not started because of the interrupt = %v, want none", runner.progress.notStarted)
 	}
 }
 
@@ -428,5 +439,90 @@ func TestTaskRunnerShowsCLIErrorAsItIs(t *testing.T) {
 	tasksErr, ok := errors.AsType[*TasksError](err)
 	if !ok || len(tasksErr.Unreported) != 1 || tasksErr.Unreported[0] != cleanupErr { //nolint:errorlint // The exact error, not a wrapper
 		t.Errorf("error = %#v, want the CLIError itself as the only unreported failure", err)
+	}
+}
+
+// captureLog returns what is logged during the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(zerolog.SyncWriter(&logged)).Level(zerolog.InfoLevel)
+	t.Cleanup(func() { log.Logger = previous })
+	return &logged
+}
+
+// A command interrupted before its display starts runs no task, with the display on screen.
+func TestTaskRunnerInterruptedBeforeDisplayStarts(t *testing.T) {
+	d := newDisplayTest(t)
+	interrupt.Trigger(d.ctx)
+	d.runner.AddTask("first", func(*TaskOutput) error { return nil })
+	d.runner.AddTask("second", func(*TaskOutput) error { return nil })
+
+	if err := d.run(t); !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	if got := strings.Join(d.runner.progress.notStarted, ","); got != "first,second" {
+		t.Errorf("not started because of the interrupt = %q, want first,second", got)
+	}
+}
+
+// What the tasks report while the display closes after an interrupt is logged once it has closed:
+// the display no longer shows it. That holds also when every task has finished by then.
+func TestTaskRunnerLogsProgressMadeWhileDisplayCloses(t *testing.T) {
+	logged := captureLog(t)
+	d := newDisplayTest(t)
+	d.runner.AddTask("collect", func(output *TaskOutput) error {
+		d.pressCtrlC()
+		output.AppendLine("collect stopped")
+		return d.ctx.Err()
+	})
+	d.runner.AddCleanupTask("remove", func(_ context.Context, output *TaskOutput) error {
+		output.AppendLine("removed the file")
+		return nil
+	})
+
+	if err := d.run(t); !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	for _, want := range []string{"Waiting for 'collect' to finish...", "collect stopped", "remove...", "removed the file", "Done"} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log lacks %q:\n%s", want, logged.String())
+		}
+	}
+}
+
+// Without an interrupt, nothing is logged: the display shows it all.
+func TestTaskRunnerLogsNothingWithDisplay(t *testing.T) {
+	logged := captureLog(t)
+	d := newDisplayTest(t)
+	d.runner.AddTask("collect", func(output *TaskOutput) error {
+		output.AppendLine("collected")
+		return nil
+	})
+
+	if err := d.run(t); err != nil {
+		t.Errorf("error = %v, want none", err)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("logged with the display on screen:\n%s", logged.String())
+	}
+}
+
+// A task that the interrupt stops at once, with nothing to report, is not announced as waited for.
+func TestTaskRunnerDoesNotAnnounceWaitForTaskStoppedAtOnce(t *testing.T) {
+	logged := captureLog(t)
+	d := newDisplayTest(t)
+	d.runner.AddTask("collect", func(*TaskOutput) error {
+		d.pressCtrlC()
+		return d.ctx.Err()
+	})
+	d.runner.AddCleanupTask("remove", func(context.Context, *TaskOutput) error { return nil })
+
+	if err := d.run(t); !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+	if got := logged.String(); strings.Contains(got, "Waiting for") || !strings.Contains(got, "remove...") {
+		t.Errorf("log = %s, want the cleanup task's progress and no \"Waiting for\" line", got)
 	}
 }
