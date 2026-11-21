@@ -199,7 +199,8 @@ func TestIdleContainerCommandStops(t *testing.T) {
 // a quote or regular expression operators: both its shell, whose command line has the path quoted,
 // and its 'dd'.
 func TestRemoveFilesCommandStopsDownload(t *testing.T) {
-	for _, tool := range []string{"sh", "pgrep", "pkill", "mkfifo", "dd", "gzip"} {
+	requireSkipBytesDD(t)
+	for _, tool := range []string{"pgrep", "pkill", "mkfifo"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not found", tool)
 		}

@@ -254,13 +254,23 @@ func TestMD5Calculation(t *testing.T) {
 	}
 }
 
-// The stream command reads a file whose name has a space or a quote, from the offset.
-func TestStreamFileCommandQuotesPath(t *testing.T) {
+// requireSkipBytesDD skips the test unless the local dd takes iflag=skip_bytes, as GNU's and
+// busybox's do in the pods. BSD's dd, as on macOS, does not.
+func requireSkipBytesDD(t *testing.T) {
+	t.Helper()
 	for _, tool := range []string{"sh", "dd", "gzip"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not found", tool)
 		}
 	}
+	if err := exec.Command("dd", "if=/dev/null", "of=/dev/null", "bs=1M", "skip=0", "iflag=skip_bytes").Run(); err != nil {
+		t.Skipf("dd does not take iflag=skip_bytes: %v", err)
+	}
+}
+
+// The stream command reads a file whose name has a space or a quote, from the offset.
+func TestStreamFileCommandQuotesPath(t *testing.T) {
+	requireSkipBytesDD(t)
 	data := []byte("0123456789")
 	for _, name := range []string{"heap dump.gcdump", "it's.gcdump"} {
 		path := filepath.Join(t.TempDir(), name)
