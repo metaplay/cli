@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/metaplay/cli/pkg/kubeutil"
@@ -16,6 +17,10 @@ import (
 // The collector gets the output path as one argument, also when it has spaces or quotes and runs
 // through 'su' and 'bash -c' as the server's user.
 func TestHeapDumpCollectCommandQuotesPath(t *testing.T) {
+	// On Windows, Git's sh can be on PATH, but it takes neither Windows paths nor ':' in PATH.
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a Unix shell")
+	}
 	for _, tool := range []string{"sh", "bash"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s not found", tool)

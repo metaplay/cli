@@ -61,7 +61,13 @@ func TestDownloadPattern(t *testing.T) {
 				t.Errorf("pattern %q does not match %q", pattern, line)
 			}
 		}
-		for _, line := range []string{"dd if=" + path + "x bs=1M", "pgrep -f -- " + ShellQuote(downloadPattern(path))} {
+		longer := path + " dump.gcdump" // A file whose name starts with path
+		otherLines := []string{
+			"sh -c " + streamFileCommand(longer, 0, true),
+			"dd if=" + longer + " bs=1M skip=0 iflag=skip_bytes",
+			"pgrep -f -- " + ShellQuote(downloadPattern(path)),
+		}
+		for _, line := range otherLines {
 			if pattern.MatchString(line) {
 				t.Errorf("pattern %q matches %q", pattern, line)
 			}
