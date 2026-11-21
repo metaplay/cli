@@ -54,11 +54,13 @@ func CreateIdleDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, p
 }
 
 // idleContainerCommand is the main process of an idle debug container: it records its PID in
-// pidFile, so that stopIdleContainerCommand can stop it, and sleeps for lifetime. The process cannot be found by
+// pidFile, so that stopIdleContainerCommand can stop it, and sleeps for lifetime. It sleeps also
+// when the PID file cannot be written, for example on a read-only file system: then only the stop
+// fails, and the container still ends after its lifetime. The process cannot be found by
 // PID 1 or by name: the container shares its process namespace with its target container, so PID
 // 1 is the target's main process, and other debug containers can run a 'sleep' too.
 func idleContainerCommand(pidFile string, lifetime time.Duration) []string {
-	return []string{"/bin/bash", "-c", fmt.Sprintf("echo $$ > %s && exec sleep %d", pidFile, int64(lifetime.Seconds()))}
+	return []string{"/bin/bash", "-c", fmt.Sprintf("echo $$ > %s; exec sleep %d", pidFile, int64(lifetime.Seconds()))}
 }
 
 // stopIdleContainerCommand returns the bash command that stops an idle debug container's main

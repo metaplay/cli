@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -124,6 +125,10 @@ func TestStreamWithContextWrapsCancellation(t *testing.T) {
 // The idle container's main process records its own PID, the 'sleep' it becomes, and the stop
 // command ends it.
 func TestIdleContainerCommandStops(t *testing.T) {
+	// On Windows, Git's bash can be on PATH, but it takes neither Windows paths nor Windows PIDs.
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a Unix shell")
+	}
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found")
 	}

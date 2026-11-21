@@ -7,8 +7,12 @@ package cmd
 import (
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,9 +42,18 @@ func TestFormatTraceDuration(t *testing.T) {
 // --duration. The fake su runs its -c command with sh, as su does with the user's shell.
 func fakeTraceTools(t *testing.T) (dir string) {
 	t.Helper()
+	// On Windows, Git's bash can be on PATH, but it takes neither Windows paths nor Windows PIDs.
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a Unix shell and /proc")
+	}
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not found")
 	}
+	// A SIGINT ignored by the test process would be ignored by the fake dotnet-trace too, which
+	// cannot trap it then. Handling it here gives the fake the default disposition.
+	interrupts := make(chan os.Signal, 1)
+	signal.Notify(interrupts, os.Interrupt)
+	t.Cleanup(func() { signal.Stop(interrupts) })
 	dir = t.TempDir()
 	scripts := map[string]string{
 		"dotnet-trace": "#!/bin/bash\n" +
@@ -119,5 +132,27 @@ func TestTraceCollectCommandStops(t *testing.T) {
 				t.Errorf("dotnet-trace was not stopped with SIGINT")
 			}
 		})
+	}
+}
+
+// Once dotnet-trace has exited, its PID can belong to another process, which the stop command
+// leaves alone.
+func TestStopTraceCommandSparesOtherProcess(t *testing.T) {
+	dir := fakeTraceTools(t)
+	other := exec.Command("sleep", "60")
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Process.Kill() }()
+	pidPath := dir + "/profile.pid"
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(other.Process.Pid)+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := exec.Command("bash", "-c", stopTraceCommand(pidPath)).CombinedOutput(); err != nil {
+		t.Fatalf("stop command failed: %v: %s", err, out)
+	}
+	if err := other.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Errorf("the stop command signalled a process that is not dotnet-trace: %v", err)
 	}
 }

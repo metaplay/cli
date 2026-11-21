@@ -251,7 +251,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		stopped := make(chan struct{})
 		stopOnInterrupt := context.AfterFunc(ctx, func() {
 			defer close(stopped)
-			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 			defer cancel()
 			output.AppendLine("Stopping dotnet-trace")
 			if _, _, err := kubeutil.ExecInDebugContainer(stopCtx, kubeCli, podName, debugContainerName, stopTraceCommand(remotePidPath)); err != nil {
@@ -261,6 +261,10 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, 2*time.Minute, kubeCli, podName, debugContainerName, collectCmd)
 		if !stopOnInterrupt() {
 			<-stopped
+		}
+		if err != nil && ctx.Err() != nil {
+			// Stopped by the interrupt, so its exit code is not a failure of its own
+			return fmt.Errorf("CPU profile stopped: %w", ctx.Err())
 		}
 		if err != nil {
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
@@ -319,10 +323,14 @@ func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.S
 // SIGINT is dotnet-trace's Ctrl-C: it ends the trace session in the server process and finishes
 // the file. If dotnet-trace has not ended after 30 seconds, for example while it converts the
 // profile, it is killed: after an interrupt, the profile is removed anyway. The PID file can be
-// missing for a moment when the interrupt comes as dotnet-trace starts.
+// missing for a while when the interrupt comes as the collect command starts. The PID is signalled
+// only while its command line is still dotnet-trace's: the PID namespace is shared with the game
+// server, so after dotnet-trace has exited, the PID can belong to another process.
 func stopTraceCommand(pidPath string) string {
-	return fmt.Sprintf("for i in $(seq 10); do [ -s %[1]s ] && break; sleep 1; done; "+
-		"pid=$(cat %[1]s) || exit 0; kill -INT $pid; "+
-		"for i in $(seq 30); do kill -0 $pid 2>/dev/null || exit 0; sleep 1; done; "+
+	return fmt.Sprintf("for i in $(seq 60); do [ -s %[1]s ] && break; sleep 1; done; "+
+		"pid=$(cat %[1]s) || exit 0; "+
+		"is_trace() { tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null | grep -qE 'dotnet-trace(\\.dll)? collect '; }; "+
+		"is_trace && kill -INT $pid; "+
+		"for i in $(seq 30); do is_trace || exit 0; sleep 1; done; "+
 		"kill -KILL $pid", pidPath)
 }
