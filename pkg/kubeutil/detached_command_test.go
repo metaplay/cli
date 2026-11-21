@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // localShell runs the scripts of runDetached with the local sh, as the debug container would.
@@ -79,6 +81,44 @@ func TestRunDetachedPipefail(t *testing.T) {
 	}
 	if result.ExitCode == 0 {
 		t.Error("exit code = 0, want the failed command's exit code")
+	}
+}
+
+// A command whose checks stop, as when the CLI that waited for it dies, is stopped by its wrapper
+// once its heartbeat is older than detachedHeartbeatTimeout.
+func TestRunDetachedStopsCommandWithoutHeartbeat(t *testing.T) {
+	fastPolls(t)
+	detachedHeartbeatTimeout = time.Second
+	shell := localShell(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	run := func(ctx context.Context, script string) (string, error) {
+		out, err := shell(ctx, script)
+		if strings.Contains(script, "setsid") {
+			cancel() // The CLI dies after the start: no check touches the heartbeat
+		}
+		return out, err
+	}
+	workDir := t.TempDir()
+	if _, err := runDetached(ctx, run, workDir, "echo $$ >cmdpid; exec sleep 30"); err == nil {
+		t.Fatal("runDetached succeeded after the cancellation")
+	}
+	pid, err := os.ReadFile(filepath.Join(workDir, "cmdpid"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	running := func() bool {
+		_, err := shell(context.Background(), processRunningCheck(strings.TrimSpace(string(pid))))
+		return err == nil
+	}
+	t.Cleanup(func() {
+		if running() {
+			_, _ = shell(context.Background(), "kill "+strings.TrimSpace(string(pid)))
+		}
+	})
+	for deadline := time.Now().Add(5 * time.Second); running(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the command still runs 5 s after its last heartbeat")
+		}
 	}
 }
 
@@ -254,6 +294,20 @@ func TestRunDetachedReadOnlyWorkDir(t *testing.T) {
 	}
 	if _, err := runDetached(context.Background(), run, workDir, "true"); err == nil || !strings.Contains(err.Error(), "did not start") {
 		t.Errorf("err = %v, want the command reported as not started", err)
+	}
+}
+
+// A launch script that exits with an error, eg, on a work directory it cannot create, would fail
+// the same way again, so it is not run again.
+func TestRunDetachedDoesNotRetryFailedLaunchScript(t *testing.T) {
+	fastPolls(t)
+	launches := 0
+	run := func(ctx context.Context, script string) (string, error) {
+		launches++
+		return "", utilexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1}
+	}
+	if _, err := runDetached(context.Background(), run, "/work", "true"); err == nil || launches != 1 {
+		t.Errorf("err = %v after %d launches, want an error after 1", err, launches)
 	}
 }
 

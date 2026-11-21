@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/metaplay/cli/internal/tui"
 )
@@ -275,6 +276,14 @@ type fakeRemoteFile struct {
 
 func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
 
+// fastRemoteChecks makes retryRemoteCheck give up within tens of milliseconds.
+func fastRemoteChecks(t *testing.T) {
+	t.Helper()
+	oldDelay, oldFailing := remoteCheckFirstDelay, remoteCheckMaxFailingTime
+	remoteCheckFirstDelay, remoteCheckMaxFailingTime = time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { remoteCheckFirstDelay, remoteCheckMaxFailingTime = oldDelay, oldFailing })
+}
+
 func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
 	f.md5Calls++
 	if f.md5Err != nil {
@@ -348,6 +357,7 @@ func TestCopyRemoteFileFailsWithoutProgress(t *testing.T) {
 
 // A copy whose checksum cannot be checked is not complete.
 func TestCopyRemoteFileFailsWithoutMD5(t *testing.T) {
+	fastRemoteChecks(t)
 	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: errors.New("md5sum not found")}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
@@ -404,8 +414,10 @@ func TestCopyRemoteFileCountsMismatchOnItsOwn(t *testing.T) {
 	}
 }
 
-// When getting the remote checksum fails, only the check is retried: the file is not copied again.
+// When getting the remote checksum fails for a moment, only the check is retried: the file is
+// kept and not copied again.
 func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
+	fastRemoteChecks(t)
 	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Fails: 2}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
@@ -415,6 +427,33 @@ func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
 	if file.opens != 1 || file.md5Calls != 3 {
 		t.Errorf("opened %d streams and checked the MD5 %d times, want 1 and 3", file.opens, file.md5Calls)
 	}
+}
+
+// A size check that fails for a moment is retried.
+func TestCopyRemoteFileRetriesTheSize(t *testing.T) {
+	fastRemoteChecks(t)
+	file := &flakySizeFile{fakeRemoteFile: fakeRemoteFile{data: testData(100), maxChunk: 100}, sizeFails: 2}
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, filepath.Join(t.TempDir(), "out.bin"), 1); err != nil {
+		t.Errorf("copyRemoteFile: %v", err)
+	}
+	if file.sizeCalls != 3 {
+		t.Errorf("checked the size %d times, want 3", file.sizeCalls)
+	}
+}
+
+// flakySizeFile is a fakeRemoteFile whose first sizeFails size checks fail.
+type flakySizeFile struct {
+	fakeRemoteFile
+	sizeFails int
+	sizeCalls int
+}
+
+func (f *flakySizeFile) Size(ctx context.Context) (int64, error) {
+	f.sizeCalls++
+	if f.sizeCalls <= f.sizeFails {
+		return 0, errors.New("connection lost")
+	}
+	return f.fakeRemoteFile.Size(ctx)
 }
 
 // A stream with more than the file's size means the file changed during the copy. That fails the

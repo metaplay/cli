@@ -316,9 +316,14 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 // checkExecOutput returns the stdout of a command from WithExitTrailer without the trailer, and
 // an error if the stream failed, the stdout was cut short or the command exited with a non-zero
 // code. That code comes as a utilexec.CodeExitError, as client-go returns it for the exit code of
-// the shell itself, which the trailer's printf makes 0.
+// the shell itself, which the trailer's printf makes 0. Only the command's exit code does: an
+// exit code of the shell itself means that the shell was killed, eg, with its container, maybe
+// after the command had done its work, so callers must not take it for the command's.
 func checkExecOutput(rawStdout string, streamErr error) (string, error) {
 	stdout, exitCode, trailerErr := splitExitTrailer(rawStdout)
+	if shellExit, ok := errors.AsType[utilexec.CodeExitError](streamErr); ok {
+		return stdout, fmt.Errorf("the shell that ran the command ended with exit code %d: %s", shellExit.Code, shellExit.Error())
+	}
 	switch {
 	case streamErr != nil:
 		return stdout, streamErr

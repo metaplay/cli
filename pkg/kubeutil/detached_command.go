@@ -15,6 +15,7 @@ import (
 
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // RunDetachedInDebugContainer first checks whether its command ended after detachedFirstPoll, and
@@ -34,6 +35,13 @@ var detachedMaxFailingTime = time.Minute
 // connection that stalls without failing would otherwise block for as long as the connection
 // lasts, and only calls that return count toward detachedMaxFailingTime.
 var detachedExecTimeout = 30 * time.Second
+
+// detachedHeartbeatTimeout is how long a detached command runs on after the last check: each check
+// touches a heartbeat file, and the command's wrapper stops the command once the file is older.
+// Then a command does not go on, eg, reading a database, after the CLI that waited for it died
+// without its cleanup. It is longer than detachedMaxFailingTime plus detachedExecTimeout, after
+// which a CLI gives up waiting anyway.
+var detachedHeartbeatTimeout = 3 * time.Minute
 
 // ErrDetachedCommandLost is the error of a command that ended without writing its exit code. Writing
 // it fails when the disk is full.
@@ -83,9 +91,15 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	// exec call that started it. The wrapper records its PID before it runs the command, and the
 	// exit code once the command has ended. Both are written to a temporary file and renamed, so
 	// they are never seen half-written. A wrapper that cannot record its PID, eg, on a full disk,
-	// does not run the command.
+	// does not run the command. While the command runs, the wrapper stops its process group, the
+	// command and itself, once the heartbeat is older than detachedHeartbeatTimeout.
+	heartbeatSeconds := strconv.Itoa(int(detachedHeartbeatTimeout.Seconds()))
 	wrapper := "echo $$ >" + ctl + "/pid.tmp && mv " + ctl + "/pid.tmp " + ctl + "/pid || exit; " +
-		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr; " +
+		"touch " + ctl + "/heartbeat; " +
+		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr & c=$!; " +
+		"while " + processRunningCheck("$c") + "; do " +
+		"[ $(( $(date +%s) - $(stat -c %Y " + ctl + "/heartbeat) )) -gt " + heartbeatSeconds + " ] && kill -TERM -$$; " +
+		"sleep 0.2; done; wait $c; " +
 		"echo $? >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
 	// The launch prints whether the command started: it waits until the wrapper has recorded its
 	// PID or has ended. Creating the control directory makes the launch start the command at most
@@ -109,7 +123,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
 	// more after the process: the command may end between the checks. A PID that is not a number
 	// counts as a process that does not run: empty, '/proc//stat' would name /proc/stat.
-	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
+	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; touch heartbeat; " +
 		"pid=$(cat pid); case $pid in ''|*[!0-9]*) pid=invalid;; esac; " +
 		"if [ -f status ]; then echo \"done $(cat status)\"; " +
 		"elif " + processRunningCheck("$pid") + "; then echo running; " +
@@ -190,6 +204,10 @@ func startDetached(ctx context.Context, run func(ctx context.Context, script str
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// The script ran and failed, eg, on a work directory it cannot create: it would fail again
+		if _, exited := errors.AsType[utilexec.CodeExitError](err); exited {
+			return fmt.Errorf("failed to start the command: %w", err)
 		}
 		if failingSince.IsZero() {
 			failingSince = time.Now()

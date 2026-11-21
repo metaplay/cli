@@ -170,22 +170,11 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 		log.Info().Msg("")
 	}
 
-	// Create a debug container to run mariadb-dump
-	log.Debug().Msg("Creating debug pod for database export")
-	podName, cleanup, err := kubeutil.CreateDebugPod(
-		cmd.Context(),
-		kubeCli,
-		debugDatabaseImage,
-		false,
-		false,
-		[]string{"sleep", "3600"},
-	)
-	if err != nil {
+	// The archive is written to the output path only at the end. Find a path it cannot be written
+	// to before the export, not after it.
+	if err := checkOutputPath(o.argOutputFile); err != nil {
 		return err
 	}
-	log.Debug().Str("pod_name", podName).Msg("Debug pod created successfully")
-	// Make sure the debug container is cleaned up even if we return early
-	defer cleanup()
 
 	// Download the dumps next to the output file: together they are about as large as the archive.
 	localDir, err := os.MkdirTemp(filepath.Dir(o.argOutputFile), ".metaplay-export-")
@@ -204,6 +193,23 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	// A force-quit skips the deferred calls. Without this, the downloaded dumps and the archive
 	// being written would stay in the hidden directory.
 	defer interrupt.OnForceQuit(removeLocalDir)()
+
+	// Create a debug container to run mariadb-dump
+	log.Debug().Msg("Creating debug pod for database export")
+	podName, cleanup, err := kubeutil.CreateDebugPod(
+		cmd.Context(),
+		kubeCli,
+		debugDatabaseImage,
+		false,
+		false,
+		[]string{"sleep", "3600"},
+	)
+	if err != nil {
+		return err
+	}
+	log.Debug().Str("pod_name", podName).Msg("Debug pod created successfully")
+	// Make sure the debug container is cleaned up even if we return early
+	defer cleanup()
 
 	// Export the database
 	runner := tui.NewTaskRunner()
@@ -298,6 +304,29 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 		}
 		return nil
 	})
+}
+
+// checkOutputPath checks that the archive can be written to path: that it is not a directory, and
+// that an existing file can be opened for writing. Whether a new file can be created in the
+// directory shows when the temporary directory is created there.
+func checkOutputPath(path string) error {
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return nil
+	case err != nil:
+		return clierrors.Wrapf(err, "Cannot use %s as the output file", path).
+			WithSuggestion("Give a path to a file that can be written")
+	case info.IsDir():
+		return clierrors.Newf("The output path %s is a directory", path).
+			WithSuggestion("Give a file name, eg, " + filepath.Join(path, "database.mdb"))
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return clierrors.Wrapf(err, "Cannot write to the output file %s", path).
+			WithSuggestion("Check that the file is writable and not open in another program")
+	}
+	return file.Close()
 }
 
 // mariadbDumpCommand is the mariadb-dump command for the shard's read-only replica with the given

@@ -166,3 +166,36 @@ func TestMariadbDumpCommandQuotesCredentials(t *testing.T) {
 		t.Errorf("mariadbDumpCommand =\n  %s\nwant\n  %s", got, want)
 	}
 }
+
+// An output path the archive cannot be written to is found before the export: a directory or an
+// existing file that cannot be opened for writing. A new or writable file is fine, and an existing
+// one is not changed.
+func TestCheckOutputPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := checkOutputPath(dir); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Errorf("checkOutputPath(directory) = %v, want an error about the directory", err)
+	}
+	if err := checkOutputPath(filepath.Join(dir, "new.mdb")); err != nil {
+		t.Errorf("checkOutputPath(new file) = %v, want no error", err)
+	}
+	existing := filepath.Join(dir, "existing.mdb")
+	if err := os.WriteFile(existing, []byte("earlier archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkOutputPath(existing); err != nil {
+		t.Errorf("checkOutputPath(writable file) = %v, want no error", err)
+	}
+	if got, _ := os.ReadFile(existing); string(got) != "earlier archive" {
+		t.Errorf("existing file changed to %q", got)
+	}
+	if err := os.Chmod(existing, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.OpenFile(existing, os.O_WRONLY, 0); err == nil {
+		_ = f.Close()
+		t.Skip("a read-only file is writable here, eg, as root")
+	}
+	if err := checkOutputPath(existing); err == nil {
+		t.Error("checkOutputPath(read-only file) succeeded, want an error")
+	}
+}

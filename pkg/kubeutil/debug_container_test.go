@@ -239,7 +239,11 @@ func TestCheckExecOutputExitCode(t *testing.T) {
 	for _, c := range []struct {
 		raw       string
 		streamErr error
-	}{{"out", nil}, {"out" + execExitMarker + "3\n", errors.New("stream failed")}} {
+	}{
+		{"out", nil},
+		{"out" + execExitMarker + "3\n", errors.New("stream failed")},
+		{"out", utilexec.CodeExitError{Err: errors.New("command terminated with exit code 137"), Code: 137}}, // The shell was killed
+	} {
 		if _, err := checkExecOutput(c.raw, c.streamErr); err == nil {
 			t.Errorf("checkExecOutput(%q, %v) succeeded", c.raw, c.streamErr)
 		} else if _, ok := errors.AsType[utilexec.CodeExitError](err); ok {
