@@ -153,9 +153,9 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create and manage debug container in the server pod.
-	// Keep the container alive for an hour to avoid leaks.
-	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
+	// Create and manage debug container in the server pod. It is stopped at the end, or after an
+	// hour if the CLI does not get to stop it.
+	debugContainerName, cleanup, err := kubeutil.CreateIdleDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, time.Hour)
 	if err != nil {
 		return err
 	}

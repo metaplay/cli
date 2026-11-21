@@ -168,9 +168,11 @@ func (o *debugCollectCPUProfileOpts) Run(cmd *cobra.Command) error {
 		return err
 	}
 
-	// Create and manage debug container in the server pod.
-	// Keep the container alive for an hour to avoid leaks.
-	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, false, false, []string{"sleep", "3600"})
+	// Create and manage debug container in the server pod. Everything exec'd into it ends with
+	// it, so it must stay up for the whole profile, its conversion and its download. It is stopped
+	// at the end, or after its lifetime if the CLI does not get to stop it.
+	lifetime := time.Duration(o.flagDuration)*time.Second + time.Hour
+	debugContainerName, cleanup, err := kubeutil.CreateIdleDebugContainer(cmd.Context(), kubeCli, pod.Name, metaplayServerContainerName, lifetime)
 	if err != nil {
 		return err
 	}
@@ -221,42 +223,50 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	// path, we pass -o with a ".nettrace" extension so the converted file lands at
 	// "<base>.speedscope.json" or "<base>.chromium.json".
 	remoteDir := "/tmp"
-	remoteNettraceName := fmt.Sprintf("profile-%s.nettrace", time.Now().Format("20060102-150405"))
+	remoteBaseName := "profile-" + time.Now().Format("20060102-150405")
+	remoteNettraceName := remoteBaseName + ".nettrace"
 	remoteNettracePath := remoteDir + "/" + remoteNettraceName
+	remotePidPath := remoteDir + "/" + remoteBaseName + ".pid"
 
 	var remoteDownloadName string
 	switch o.flagFormat {
 	case "NetTrace":
 		remoteDownloadName = remoteNettraceName
 	case "Speedscope":
-		remoteDownloadName = strings.TrimSuffix(remoteNettraceName, ".nettrace") + ".speedscope.json"
+		remoteDownloadName = remoteBaseName + ".speedscope.json"
 	case "Chromium":
-		remoteDownloadName = strings.TrimSuffix(remoteNettraceName, ".nettrace") + ".chromium.json"
+		remoteDownloadName = remoteBaseName + ".chromium.json"
 	default:
 		return fmt.Errorf("unexpected format: %s", o.flagFormat)
 	}
 
 	// Collect CPU profile
 	runner.AddTask("Collect CPU profile", func(output *tui.TaskOutput) error {
-		collectCmd := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o %s",
-			processInfo.Pid, o.flagFormat, formatTraceDuration(o.flagDuration), remoteNettracePath)
-
-		// Add extra arguments if provided
-		if len(o.extrArgs) > 0 {
-			collectCmd += " " + strings.Join(o.extrArgs, " ")
-		}
-		// If server is running as non-root, collect trace as that user
-		if processInfo.Username != "root" {
-			collectCmd = fmt.Sprintf("su %s -c 'sh -c \"%s\"'", processInfo.Username, collectCmd)
-		}
+		collectCmd := o.traceCollectCommand(processInfo, remoteNettracePath, remotePidPath)
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
-		// Not cancelled with the command: dotnet-trace would go on in the pod and write the profile
-		// files after they were removed. It stops after the requested duration, so after an
-		// interrupt, wait at most that long plus 5 minutes for the conversion.
-		grace := time.Duration(o.flagDuration)*time.Second + 5*time.Minute
-		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, grace, kubeCli, podName, debugContainerName, collectCmd)
+		// Cancelling the exec stream does not stop dotnet-trace in the pod: it would go on for the
+		// whole duration and write the profile files after they were removed. So on an interrupt,
+		// stop it the way a Ctrl-C would, and wait for it to end.
+		stopped := make(chan struct{})
+		stopOnInterrupt := context.AfterFunc(ctx, func() {
+			defer close(stopped)
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+			defer cancel()
+			output.AppendLine("Stopping dotnet-trace")
+			if _, _, err := kubeutil.ExecInDebugContainer(stopCtx, kubeCli, podName, debugContainerName, stopTraceCommand(remotePidPath, remoteNettracePath)); err != nil {
+				log.Debug().Msgf("Stop dotnet-trace: %v", err)
+			}
+		})
+		_, _, err := kubeutil.ExecInDebugContainerUntilDone(ctx, 2*time.Minute, kubeCli, podName, debugContainerName, collectCmd)
+		if !stopOnInterrupt() {
+			<-stopped
+		}
 		if err != nil {
+			if ctx.Err() != nil {
+				// Stopped by the interrupt, so its exit code is not a failure of its own
+				return fmt.Errorf("CPU profile stopped: %w", ctx.Err())
+			}
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
 
@@ -276,7 +286,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Remove the nettrace capture and the converted file, if any, also when the download failed
 	runner.AddCleanupTask("Remove CPU profile from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
-		filesToRemove := []string{remoteNettracePath}
+		filesToRemove := []string{remoteNettracePath, remotePidPath}
 		if remoteDownloadName != remoteNettraceName {
 			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
 		}
@@ -291,4 +301,37 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 // 00:60:00.
 func formatTraceDuration(seconds int) string {
 	return fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
+}
+
+// traceCollectCommand returns the bash command that runs dotnet-trace, as the server process's user.
+// dotnet-trace replaces the shell that writes its PID to pidPath, so the PID is dotnet-trace's own,
+// for stopTraceCommand.
+func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.ServerProcessInfo, outputPath, pidPath string) string {
+	trace := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o %s",
+		processInfo.Pid, o.flagFormat, formatTraceDuration(o.flagDuration), outputPath)
+	if len(o.extrArgs) > 0 {
+		trace += " " + strings.Join(o.extrArgs, " ")
+	}
+	if processInfo.Username == "root" {
+		return fmt.Sprintf("echo $$ > %s; exec %s", pidPath, trace)
+	}
+	// The \$\$ reaches the inner sh as $$, the PID of that sh, which exec makes dotnet-trace's.
+	return fmt.Sprintf(`su %s -c 'sh -c "echo \$\$ > %s; exec %s"'`, processInfo.Username, pidPath, trace)
+}
+
+// stopTraceCommand returns the bash command that stops the dotnet-trace whose PID is in pidPath and
+// that writes to outputPath.
+// SIGINT is dotnet-trace's Ctrl-C: it ends the trace session in the server process and finishes
+// the file. If dotnet-trace has not ended after 30 seconds, for example while it converts the
+// profile, it is killed: after an interrupt, the profile is removed anyway. The PID file can be
+// missing for a while when the interrupt comes as the collect command starts. The PID is signalled
+// only while its command line still names outputPath: the PID namespace is shared with the game
+// server, so after dotnet-trace has exited, the PID can belong to another process.
+func stopTraceCommand(pidPath, outputPath string) string {
+	return fmt.Sprintf("for i in $(seq 60); do [ -s %[1]s ] && break; sleep 1; done; "+
+		"pid=$(cat %[1]s) || exit 0; "+
+		"is_trace() { grep -qF -- %[2]s /proc/$pid/cmdline 2>/dev/null; }; "+
+		"is_trace && kill -INT $pid; "+
+		"for i in $(seq 30); do is_trace || exit 0; sleep 1; done; "+
+		"kill -KILL $pid", pidPath, outputPath)
 }
