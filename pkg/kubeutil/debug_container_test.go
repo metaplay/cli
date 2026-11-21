@@ -7,7 +7,10 @@ package kubeutil
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -116,5 +119,49 @@ func TestStreamWithContextWrapsCancellation(t *testing.T) {
 	err = StreamWithContext(ctx, fakeExecutor{context.Canceled}, remotecommand.StreamOptions{})
 	if err == nil || err.Error() != "context canceled" {
 		t.Errorf("error = %v, want the cancellation once", err)
+	}
+}
+
+// The idle container's main process records its own PID, the 'sleep' it becomes, and the stop
+// command ends it.
+func TestIdleContainerCommandStops(t *testing.T) {
+	// On Windows, Git's bash can be on PATH, but it takes neither Windows paths nor Windows PIDs.
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a Unix shell")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not found")
+	}
+	pidFile := t.TempDir() + "/pid"
+	command := idleContainerCommand(pidFile, time.Hour)
+	main := exec.Command("bash", command[1:]...)
+	if err := main.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// The stop command ends it with SIGTERM, which makes Wait return an error.
+	ended := make(chan struct{})
+	go func() { _ = main.Wait(); close(ended) }()
+	defer func() { _ = main.Process.Kill() }()
+
+	// Wait for the PID file.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		data, err := os.ReadFile(pidFile)
+		if err == nil && strings.TrimSpace(string(data)) == strconv.Itoa(main.Process.Pid) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("PID file = %q, %v; want %d", data, err, main.Process.Pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if out, err := exec.Command("bash", "-c", stopIdleContainerCommand(pidFile)).CombinedOutput(); err != nil {
+		t.Fatalf("stop command failed: %v: %s", err, out)
+	}
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the main process did not end after the stop command")
 	}
 }

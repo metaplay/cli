@@ -10,8 +10,10 @@ package interrupt
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 )
@@ -29,9 +31,8 @@ func (interruptedError) Is(target error) bool { return target == context.Cancele
 
 // source is the interrupt state of one context.
 type source struct {
-	cancel      context.CancelCauseFunc
-	stopSignals func() // Called on the interrupt, before the context is cancelled
-	notice      func() // Tells the user about the interrupt
+	cancel context.CancelCauseFunc
+	notice func() // Tells the user about the interrupt
 
 	once     sync.Once
 	mu       sync.Mutex
@@ -54,23 +55,86 @@ func withSource(parent context.Context, notice func()) (context.Context, *source
 	return context.WithValue(ctx, sourceKey{}, s), s
 }
 
-// NotifyContext returns a context that is cancelled on SIGINT, SIGTERM and Trigger. The interrupt
-// also stops watching the signals, so a second Ctrl-C falls through to Go's default handler and
-// terminates the process at once. stop releases the signal handler.
+// ExitCode is the exit code of an interrupted command, 128 + SIGINT. It is used for an interrupt
+// by any signal, and by a Ctrl-C key press.
+const ExitCode = 130
+
+// forceExit ends the process on a second interrupt, sig. Tests replace it.
+var forceExit = exitOnSignal
+
+var (
+	forceQuitMu         sync.Mutex
+	forceQuitSteps      = map[int]func(){}
+	nextForceQuitStepID int
+)
+
+// OnForceQuit registers step to run on a force-quit, before the process ends, such as killing a
+// child process the command started. A step must return at once. remove unregisters it.
+func OnForceQuit(step func()) (remove func()) {
+	forceQuitMu.Lock()
+	defer forceQuitMu.Unlock()
+	id := nextForceQuitStepID
+	nextForceQuitStepID++
+	forceQuitSteps[id] = step
+	return func() {
+		forceQuitMu.Lock()
+		defer forceQuitMu.Unlock()
+		delete(forceQuitSteps, id)
+	}
+}
+
+// forceQuit runs the force-quit steps and ends the process.
+func forceQuit(sig os.Signal) {
+	forceQuitMu.Lock()
+	steps := slices.Collect(maps.Values(forceQuitSteps))
+	forceQuitMu.Unlock()
+	for _, step := range steps {
+		step()
+	}
+	forceExit(sig)
+}
+
+// NotifyContext returns a context that is cancelled on SIGINT, SIGTERM and Trigger. A signal after
+// that interrupt runs the OnForceQuit steps and terminates the process at once, see exitOnSignal.
+// stop releases the signal handler.
 func NotifyContext(parent context.Context, notice func()) (ctx context.Context, stop func()) {
 	ctx, s := withSource(parent, notice)
 	signals := make(chan os.Signal, 1)
+	stopped, release := context.WithCancel(context.Background())
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	s.stopSignals = func() { signal.Stop(signals) }
+	interrupted := func() bool { return context.Cause(ctx) == ErrInterrupted } //nolint:errorlint // The exact cause
 	go func() {
+		// Wait for the first interrupt: a signal, or a Trigger call. When several cases are ready,
+		// select picks one at random, so the signal case checks what else has happened.
 		select {
-		case <-signals:
+		case sig := <-signals:
+			if stopped.Err() != nil {
+				return // The command has finished
+			}
+			if interrupted() {
+				forceQuit(sig) // A Trigger call was the first interrupt
+				return
+			}
 			s.trigger()
 		case <-ctx.Done():
+			if !interrupted() {
+				// Cancelled by stop or by the parent: leave the signals to Go's default handler
+				signal.Stop(signals)
+				return
+			}
+		}
+		// The second interrupt force-quits.
+		select {
+		case sig := <-signals:
+			if stopped.Err() == nil {
+				forceQuit(sig)
+			}
+		case <-stopped.Done():
 		}
 	}()
 	return ctx, func() {
 		signal.Stop(signals)
+		release()
 		s.cancel(nil)
 	}
 }
@@ -93,9 +157,6 @@ func (s *source) trigger() {
 		}
 		s.mu.Unlock()
 
-		if s.stopSignals != nil {
-			s.stopSignals()
-		}
 		s.cancel(ErrInterrupted)
 	})
 }

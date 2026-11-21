@@ -25,19 +25,64 @@ import (
 	watchtools "k8s.io/client-go/tools/watch"
 )
 
-// Helper function to create and start a debug container in the target pod.
-func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, targetContainerName string, interactive bool, tty bool, command []string) (string, func(), error) {
+// idleContainerPidFile is where an idle debug container records the PID of its main process.
+const idleContainerPidFile = "/tmp/.debug-container-pid"
+
+// CreateIdleDebugContainer creates and starts a debug container in the target pod for commands to
+// be exec'd into. The container stays up until the returned cleanup stops it, or at most lifetime,
+// so that it does not stay up forever when the CLI does not get to run the cleanup. Everything
+// exec'd into the container is killed when it ends, so lifetime must cover all of that work.
+func CreateIdleDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, targetContainerName string, lifetime time.Duration) (string, func(), error) {
+	debugContainerName, err := CreateDebugContainer(ctx, kubeCli, podName, targetContainerName, false, false, idleContainerCommand(idleContainerPidFile, lifetime))
+	if err != nil {
+		return "", nil, err
+	}
+
+	// Stop the container by stopping its main process. A fresh context, so that the container is
+	// stopped also after an interrupt has cancelled ctx.
+	cleanup := func() {
+		log.Debug().Msgf("Stop debug container %s", debugContainerName)
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_, _, err := ExecInDebugContainer(stopCtx, kubeCli, podName, debugContainerName, stopIdleContainerCommand(idleContainerPidFile))
+		if err != nil {
+			// Stopping the container can also end this command's stream with an error.
+			log.Debug().Msgf("Stop debug container %s: %v", debugContainerName, err)
+		}
+	}
+	return debugContainerName, cleanup, nil
+}
+
+// idleContainerCommand is the main process of an idle debug container: it records its PID in
+// pidFile, so that stopIdleContainerCommand can stop it, and sleeps for lifetime. It sleeps also
+// when the PID file cannot be written, for example on a read-only file system: then only the stop
+// fails, and the container still ends after its lifetime. The process cannot be found by
+// PID 1 or by name: the container shares its process namespace with its target container, so PID
+// 1 is the target's main process, and other debug containers can run a 'sleep' too.
+func idleContainerCommand(pidFile string, lifetime time.Duration) []string {
+	return []string{"/bin/bash", "-c", fmt.Sprintf("echo $$ > %s; exec sleep %d", pidFile, int64(lifetime.Seconds()))}
+}
+
+// stopIdleContainerCommand returns the bash command that stops an idle debug container's main
+// process, whose PID is in pidFile. That ends the container.
+func stopIdleContainerCommand(pidFile string) string {
+	return "kill $(cat " + pidFile + ")"
+}
+
+// CreateDebugContainer creates a debug container in the target pod that runs command, and waits
+// for it to start. The container ends when command exits.
+func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, targetContainerName string, interactive bool, tty bool, command []string) (string, error) {
 	// Create name for debug container.
 	debugContainerName, err := createDebugContainerName()
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	log.Debug().Msgf("Create debug container %s: interactive=%v, tty=%v, command='%s'", debugContainerName, interactive, tty, strings.Join(command, " "))
 
 	// Resolve target pod.
 	pod, err := kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		return "", nil, fmt.Errorf("failed to get target pod %s: %w", podName, err)
+		return "", fmt.Errorf("failed to get target pod %s: %w", podName, err)
 	}
 
 	// Verify target container exists
@@ -49,7 +94,7 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		}
 	}
 	if !targetContainerExists {
-		return "", nil, fmt.Errorf("target container %s not found in pod %s", targetContainerName, podName)
+		return "", fmt.Errorf("target container %s not found in pod %s", targetContainerName, podName)
 	}
 
 	// Define the ephemeral container
@@ -82,30 +127,16 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	_, err = kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{})
 	if err != nil {
 		log.Error().Msgf("Failed to start ephemeral debug container: %v", err)
-		return "", nil, err
-	}
-
-	// Create cleanup function to terminate the ephemeral container.
-	cleanup := func() {
-		log.Debug().Msgf("Terminating debug container %s...", debugContainerName)
-
-		// Try to terminate the container gracefully by sending exit command
-		_, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, "exit")
-		if err != nil {
-			log.Debug().Msgf("Container may have already terminated: %v", err)
-		} else {
-			log.Debug().Msgf("Successfully terminated debug container %s", debugContainerName)
-		}
+		return "", err
 	}
 
 	// Wait for the debug container to be ready
 	err = waitForContainerReady(ctx, kubeCli, podName, debugContainerName)
 	if err != nil {
-		cleanup() // Clean up the container we created
-		return "", nil, fmt.Errorf("debug container failed to become ready: %w", err)
+		return "", fmt.Errorf("debug container failed to become ready: %w", err)
 	}
 
-	return debugContainerName, cleanup, nil
+	return debugContainerName, nil
 }
 
 // waitForContainerReady waits for the debug container to be ready by watching for pod status changes.
