@@ -22,7 +22,7 @@ import (
 // the provided debug pod. Returns nil when it can't be determined (e.g. the MetaInfo table doesn't
 // exist on a fresh database). Best-effort: it must never fail the calling command.
 func queryDatabaseMasterVersion(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, host, user, password, dbName string) *int {
-	// Pipe the query via stdin (avoids shell quoting). -N skips column names, -B uses batch
+	// Pipe the query via stdin. -N skips column names, -B uses batch
 	// (tab-separated) output, so a successful query prints just the integer value.
 	mariadbCmd := mariadbCommand(host, user, password, "-N", "-B", dbName)
 

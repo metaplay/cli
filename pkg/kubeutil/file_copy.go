@@ -165,7 +165,7 @@ func streamFileCommand(srcPath string, offset int64, useCompression bool) string
 
 // streamFileFromOffset streams file content from a byte offset using dd.
 // This enables resumable transfers by skipping already-transferred bytes.
-// The 'dd if=<path> ' form of the commands is what removeFilesCommand stops.
+// The 'dd if=<quoted path> ' form of the commands is what removeFilesCommand stops.
 func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcPath string, offset int64, useCompression bool) (io.Reader, func() error, error) {
 	command := streamFileCommand(srcPath, offset, useCompression)
 

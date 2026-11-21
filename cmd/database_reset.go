@@ -383,7 +383,6 @@ func (o *databaseResetOpts) getTableNames(ctx context.Context, kubeCli *envapi.K
 
 // Helper function to execute a SQL command on a database shard
 func (o *databaseResetOpts) executeSQLCommand(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig, sqlCmd string) error {
-	// Build mariadb command
 	mariadbCmd := mariadbCommand(shard.ReadWriteHost, shard.UserId, shard.Password, shard.DatabaseName) // Use primary host for writes
 
 	log.Debug().Str("host", shard.ReadWriteHost).Str("database", shard.DatabaseName).Str("sql", sqlCmd).Msg("Executing SQL command")
@@ -421,7 +420,6 @@ func (o *databaseResetOpts) executeSQLCommand(ctx context.Context, kubeCli *enva
 
 // Helper function to execute a SQL command and capture its output
 func (o *databaseResetOpts) executeSQLCommandWithOutput(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig, sqlCmd string) (string, error) {
-	// Build mariadb command
 	mariadbCmd := mariadbCommand(shard.ReadWriteHost, shard.UserId, shard.Password, shard.DatabaseName) // Use primary host for writes
 
 	log.Debug().Str("host", shard.ReadWriteHost).Str("database", shard.DatabaseName).Str("sql", sqlCmd).Msg("Executing SQL command with output capture")
