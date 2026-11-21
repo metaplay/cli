@@ -543,7 +543,6 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 		// Attempt the file copy (will resume from state.bytesTransferred if > 0). A copied file
 		// whose checksum could not be checked is checked again without copying it again.
-		lastErr = nil
 		if !copied {
 			lastErr = attemptResumableFileCopy(ctx, output, file, destPath, state)
 			copied = lastErr == nil
