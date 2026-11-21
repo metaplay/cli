@@ -65,7 +65,7 @@ func idleContainerCommand(pidFile string, lifetime time.Duration) []string {
 	return []string{"/bin/bash", "-c", fmt.Sprintf("echo $$ > %s; exec sleep %d", pidFile, int64(lifetime.Seconds()))}
 }
 
-// stopIdleContainerCommand returns the bash command that stops an idle debug container's main
+// stopIdleContainerCommand returns the shell command that stops an idle debug container's main
 // process, whose PID is in pidFile. That ends the container.
 func stopIdleContainerCommand(pidFile string) string {
 	return "kill $(cat " + pidFile + ")"

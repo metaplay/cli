@@ -195,8 +195,13 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 	defer func() { _ = os.RemoveAll(localDir) }()
 	// A force-quit skips the deferred calls. Without this, the downloaded dumps and the archive
-	// being written would stay in the hidden directory.
-	defer interrupt.OnForceQuit(func() { _ = os.RemoveAll(localDir) })()
+	// being written would stay in the hidden directory. On Windows, a file that a task still has
+	// open cannot be removed, so the user is told where the rest is.
+	defer interrupt.OnForceQuit(func() {
+		if err := os.RemoveAll(localDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not remove the export's temporary files in %s: %v\n", localDir, err)
+		}
+	})()
 
 	// Export the database
 	runner := tui.NewTaskRunner()
@@ -316,7 +321,7 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 	}
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to dump the %s", what).
-			WithSuggestion("Check your network connection and run the command again")
+			WithSuggestion("Check your network connection, and that the export ends within the debug pod's 1-hour lifetime, then run the command again")
 	}
 	stderr := strings.TrimSpace(result.Stderr)
 	if result.ExitCode != 0 {
@@ -343,7 +348,7 @@ func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 	err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, exportRemoteDir, fileName, filepath.Join(localDir, fileName), compress, 3)
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to download %s from the debug pod", fileName).
-			WithSuggestion("Check your network connection and run the command again")
+			WithSuggestion("Check your network connection, and that the export ends within the debug pod's 1-hour lifetime, then run the command again")
 	}
 	// A file that remains uses the pod's disk until the pod is deleted at the end of the export,
 	// which the next dump may need. The export can still go on.
@@ -418,6 +423,11 @@ func writeDatabaseArchiveFile(ctx context.Context, path, localDir string, metada
 	// Closing writes the zip's central directory: without it, the archive cannot be read.
 	if err := zipWriter.Close(); err != nil {
 		return fmt.Errorf("failed to finish the zip file: %w", err)
+	}
+	// Written to disk before the rename, so that a crash cannot leave the output path with an
+	// archive whose data never reached the disk.
+	if err := zipFile.Sync(); err != nil {
+		return fmt.Errorf("failed to write the zip file to disk: %w", err)
 	}
 	if err := zipFile.Close(); err != nil {
 		return fmt.Errorf("failed to close the zip file: %w", err)

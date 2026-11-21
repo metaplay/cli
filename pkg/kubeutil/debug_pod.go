@@ -59,9 +59,20 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 		}
 	}
 	// A force-quit skips the cleanup. Deleting the pod then also ends what still runs in it, such
-	// as a detached database dump, which would otherwise go on reading the database. The request
-	// only starts the deletion, so it returns quickly, as a force-quit step must.
-	removeForceQuitStep := interrupt.OnForceQuit(func() { deletePod(3 * time.Second) })
+	// as a detached database dump, which would otherwise go on reading the database. A force-quit
+	// step must return at once, so it waits for the request at most half a second, eg, when the
+	// network has stalled.
+	removeForceQuitStep := interrupt.OnForceQuit(func() {
+		done := make(chan struct{})
+		go func() {
+			deletePod(3 * time.Second)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(500 * time.Millisecond):
+		}
+	})
 	cleanup := func() {
 		removeForceQuitStep()
 		deletePod(120 * time.Second)

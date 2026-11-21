@@ -33,11 +33,12 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 
 func fastPolls(t *testing.T) {
 	t.Helper()
-	oldFirst, oldInterval, oldFailing, oldTimeout := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout
+	oldFirst, oldInterval, oldFailing, oldTimeout, oldStart := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout, detachedStartWindow
 	detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = time.Millisecond, 10*time.Millisecond, 50*time.Millisecond
-	detachedExecTimeout = 5 * time.Second
+	detachedExecTimeout, detachedStartWindow = 5*time.Second, 50*time.Millisecond
 	t.Cleanup(func() {
-		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout = oldFirst, oldInterval, oldFailing, oldTimeout
+		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = oldFirst, oldInterval, oldFailing
+		detachedExecTimeout, detachedStartWindow = oldTimeout, oldStart
 	})
 }
 
@@ -215,6 +216,26 @@ func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
 	result, err := runDetached(context.Background(), run, t.TempDir(), "exit 4")
 	if err != nil || result.ExitCode != 4 {
 		t.Errorf("result = %+v, err = %v; want exit code 4", result, err)
+	}
+
+	// A command that records its PID only after the launch call has returned, as on a slow node,
+	// is waited for.
+	checks := 0
+	run = func(ctx context.Context, script string) (string, error) {
+		switch {
+		case strings.Contains(script, "setsid"):
+			return "", errOutputCutShort
+		case strings.Contains(script, "tail"):
+			return "", nil
+		}
+		checks++
+		if checks < 3 {
+			return "not-started\n", nil
+		}
+		return "done 0\n", nil
+	}
+	if result, err := runDetached(context.Background(), run, "/work", "true"); err != nil || result.ExitCode != 0 {
+		t.Errorf("result = %+v, err = %v; want the command that started late waited for", result, err)
 	}
 
 	// A command that did not start reports why its start failed.

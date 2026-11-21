@@ -303,7 +303,7 @@ func formatTraceDuration(seconds int) string {
 	return fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
 }
 
-// traceCollectCommand returns the bash command that runs dotnet-trace, as the server process's user.
+// traceCollectCommand returns the shell command that runs dotnet-trace, as the server process's user.
 // dotnet-trace replaces the shell that writes its PID to pidPath, so the PID is dotnet-trace's own,
 // for stopTraceCommand.
 func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.ServerProcessInfo, outputPath, pidPath string) string {
@@ -319,7 +319,7 @@ func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.S
 	return fmt.Sprintf(`su %s -c 'sh -c "echo \$\$ > %s; exec %s"'`, processInfo.Username, pidPath, trace)
 }
 
-// stopTraceCommand returns the bash command that stops the dotnet-trace whose PID is in pidPath and
+// stopTraceCommand returns the shell command that stops the dotnet-trace whose PID is in pidPath and
 // that writes to outputPath.
 // SIGINT is dotnet-trace's Ctrl-C: it ends the trace session in the server process and finishes
 // the file. If dotnet-trace has not ended after 30 seconds, for example while it converts the

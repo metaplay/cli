@@ -268,6 +268,9 @@ type fakeRemoteFile struct {
 	md5Fails int // How many MD5 calls fail before they succeed, when md5Err is nil
 	md5Calls int
 	opens    int
+
+	wrongMD5Calls int // How many MD5 calls report a wrong checksum first
+	emptyAfter    int // Opens after this many return no data, if not 0
 }
 
 func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
@@ -280,6 +283,9 @@ func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
 	if f.md5Calls <= f.md5Fails {
 		return "", errors.New("connection lost")
 	}
+	if f.md5Calls <= f.wrongMD5Calls {
+		return "00000000000000000000000000000000", nil
+	}
 	if f.md5 != "" {
 		return f.md5, nil
 	}
@@ -289,6 +295,9 @@ func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
 
 func (f *fakeRemoteFile) Open(ctx context.Context, offset int64) (io.Reader, func() error, error) {
 	f.opens++
+	if f.emptyAfter > 0 && f.opens > f.emptyAfter {
+		return bytes.NewReader(nil), func() error { return nil }, nil
+	}
 	end := min(int(offset)+f.maxChunk, len(f.data))
 	return bytes.NewReader(f.data[offset:end]), func() error { return nil }, nil
 }
@@ -377,6 +386,21 @@ func TestCopyRemoteFileStopsOnRepeatedMD5MismatchOfResumedCopy(t *testing.T) {
 	}
 	if file.md5Calls != 3 {
 		t.Errorf("checked the MD5 %d times, want 3", file.md5Calls)
+	}
+}
+
+// A mismatch is not also an attempt without progress: after one, the copy still gets numAttempts
+// attempts without progress.
+func TestCopyRemoteFileCountsMismatchOnItsOwn(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, wrongMD5Calls: 1, emptyAfter: 1}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "without progress") {
+		t.Errorf("err = %v, want the copy to fail without progress", err)
+	}
+	if file.opens != 4 {
+		t.Errorf("opened %d streams, want 4: the mismatched copy and 3 attempts without progress", file.opens)
 	}
 }
 

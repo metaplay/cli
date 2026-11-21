@@ -35,6 +35,12 @@ var detachedMaxFailingTime = time.Minute
 // lasts, and only calls that return count toward detachedMaxFailingTime.
 var detachedExecTimeout = 30 * time.Second
 
+// detachedStartWindow is how long after the launch call RunDetachedInDebugContainer keeps checking a
+// command that has not recorded its PID yet. The launch call can fail before the command starts, or
+// give up waiting on a slow node, while the command still starts: a single check would report it
+// as not started and leave it running.
+var detachedStartWindow = 15 * time.Second
+
 // ErrDetachedCommandLost is the error of a command that ended without writing its exit code. Writing
 // it fails when the disk is full.
 var ErrDetachedCommandLost = errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
@@ -100,6 +106,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		// The command may have started although the exec call failed: the checks below tell.
 		log.Debug().Msgf("Starting a detached command failed: %v", launchErr)
 	}
+	launched := time.Now()
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
 	// more after the process: the command may end between the checks. A PID that is not a number
@@ -162,6 +169,9 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 			}
 			return nil, err
 		default: // "not-started"
+			if time.Since(launched) < detachedStartWindow {
+				continue
+			}
 			if launchErr != nil {
 				return nil, fmt.Errorf("failed to start the command: %w", launchErr)
 			}
