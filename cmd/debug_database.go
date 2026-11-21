@@ -27,12 +27,6 @@ import (
 // Image to use for database operations
 const debugDatabaseImage = "joseluisq/alpine-mysql-client:1.8"
 
-// debugDatabasePodCommand keeps a database debug pod running for 24 hours. The commands delete the
-// pod when they end, so this only limits how long a pod lasts when that cleanup does not run, eg,
-// when the CLI is killed. One hour was too short for an export or import of a large database, or a
-// long 'debug database' session.
-var debugDatabasePodCommand = []string{"sleep", "86400"}
-
 // debugDatabaseOpts holds the options for the 'debug database' command
 type debugDatabaseOpts struct {
 	UsePositionalArgs
@@ -195,7 +189,7 @@ func (o *debugDatabaseOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		debugDatabasePodCommand,
+		[]string{"sleep", "3600"},
 	)
 	if err != nil {
 		return err

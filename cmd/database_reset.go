@@ -193,7 +193,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		debugDatabasePodCommand,
+		[]string{"sleep", "3600"},
 	)
 	if err != nil {
 		return err
