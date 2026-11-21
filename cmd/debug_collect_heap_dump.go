@@ -212,6 +212,20 @@ func (o *debugCollectHeapDumpOpts) Run(cmd *cobra.Command) error {
 	return nil
 }
 
+// heapDumpCollectCommand returns the shell command that collects the dump to outputPath, as the
+// server process's user. The path is quoted, so a --output file name with spaces or quotes works.
+func heapDumpCollectCommand(mode string, processInfo *kubeutil.ServerProcessInfo, outputPath string) string {
+	tool := "dotnet-dump"
+	if mode == "gcdump" {
+		tool = "dotnet-gcdump"
+	}
+	collectCmd := fmt.Sprintf("%s collect -p %d -o %s", tool, processInfo.Pid, kubeutil.ShellQuote(outputPath))
+	if processInfo.Username == "root" {
+		return collectCmd
+	}
+	return "su " + kubeutil.ShellQuote(processInfo.Username) + " -c " + kubeutil.ShellQuote("bash -c "+kubeutil.ShellQuote(collectCmd))
+}
+
 // Helper function to collect and retrieve heap dump using task runner
 func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, processInfo *kubeutil.ServerProcessInfo, runner *tui.TaskRunner) {
 	// With mode==gcdump, the dump file gets written to /tmp.
@@ -248,16 +262,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	runner.AddTask(fmt.Sprintf("Collect %s dump", o.flagCollectMode), func(output *tui.TaskOutput) error {
 		startTime := time.Now()
 
-		// Construct the command to collect the heap dump.
-		var collectCmd string
-		if o.flagCollectMode == "gcdump" {
-			collectCmd = fmt.Sprintf("dotnet-gcdump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
-		} else {
-			collectCmd = fmt.Sprintf("dotnet-dump collect -p %d -o /tmp/%s", processInfo.Pid, filepath.Base(o.flagOutputPath))
-		}
-		if processInfo.Username != "root" {
-			collectCmd = fmt.Sprintf("su %s -c 'bash -c \"%s\"'", processInfo.Username, collectCmd)
-		}
+		collectCmd := heapDumpCollectCommand(o.flagCollectMode, processInfo, "/tmp/"+filepath.Base(o.flagOutputPath))
 		log.Debug().Msgf("Execute on remote: %s", collectCmd)
 
 		// Not cancelled with the command: the collector would go on in the pod, keeping the server

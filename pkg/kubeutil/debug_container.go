@@ -300,7 +300,7 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 	return err
 }
 
-// removeFilesCommand returns the bash command that removes the files. It first stops a download of
+// removeFilesCommand returns the shell command that removes the files. It first stops a download of
 // the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
 // container ends.
@@ -308,18 +308,20 @@ func removeFilesCommand(paths []string) string {
 	var command strings.Builder
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = shellQuote(path)
-		// The pattern matches the download's shell and its 'dd'. Its [d] keeps it from matching
-		// this command's own shell. Killing the shell's children stops the 'gzip'.
-		pattern := shellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
+		quoted[i] = ShellQuote(path)
+		// The pattern matches the download's shell, whose command line has the path in quotes, and
+		// its 'dd', whose argument has it without. Its [d] keeps it from matching this command's
+		// own shell. Killing the shell's children stops the 'gzip'. "[']*" works the same in the
+		// basic regular expressions of busybox's pgrep and the extended ones of procps' pgrep.
+		pattern := ShellQuote("[d]d if=[']*" + regexp.QuoteMeta(path) + "[']* ")
 		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
 	}
 	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
 }
 
-// shellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
+// ShellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
 // one built from a user's --output, means only itself.
-func shellQuote(s string) string {
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 

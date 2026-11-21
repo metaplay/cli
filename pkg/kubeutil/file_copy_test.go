@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -250,5 +251,29 @@ func TestMD5Calculation(t *testing.T) {
 
 	if actualMD5 != expectedMD5 {
 		t.Errorf("MD5 mismatch: expected %s, got %s", expectedMD5, actualMD5)
+	}
+}
+
+// The stream command reads a file whose name has a space or a quote, from the offset.
+func TestStreamFileCommandQuotesPath(t *testing.T) {
+	for _, tool := range []string{"sh", "dd", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found", tool)
+		}
+	}
+	data := []byte("0123456789")
+	for _, name := range []string{"heap dump.gcdump", "it's.gcdump"} {
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command("sh", "-c", streamFileCommand(path, 4, false)).Output()
+		if err != nil || !bytes.Equal(out, data[4:]) {
+			t.Errorf("%q: got %q, %v; want %q", name, out, err, data[4:])
+		}
+		out, err = exec.Command("sh", "-c", streamFileCommand(path, 0, true)+" | gzip -dc").Output()
+		if err != nil || !bytes.Equal(out, data) {
+			t.Errorf("%q compressed: got %q, %v; want %q", name, out, err, data)
+		}
 	}
 }

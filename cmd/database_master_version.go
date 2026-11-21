@@ -7,12 +7,12 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"strconv"
 	"strings"
 
 	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/metaplay/cli/pkg/kubeutil"
 	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -25,7 +25,7 @@ import (
 func queryDatabaseMasterVersion(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, host, user, password, dbName string) *int {
 	// Pipe the query via stdin (avoids shell quoting). -N skips column names, -B uses batch
 	// (tab-separated) output, so a successful query prints just the integer value.
-	mariadbCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s -N -B %s", host, user, password, dbName)
+	mariadbCmd := "mariadb " + mariadbConnectionArgs(host, user, password) + " -N -B " + kubeutil.ShellQuote(dbName)
 
 	const query = "SELECT MasterVersion FROM MetaInfo ORDER BY Version DESC LIMIT 1;"
 

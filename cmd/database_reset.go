@@ -193,7 +193,7 @@ func (o *databaseResetOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		[]string{"sleep", "3600"},
+		debugDatabasePodCommand,
 	)
 	if err != nil {
 		return err
@@ -384,11 +384,9 @@ func (o *databaseResetOpts) getTableNames(ctx context.Context, kubeCli *envapi.K
 // Helper function to execute a SQL command on a database shard
 func (o *databaseResetOpts) executeSQLCommand(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig, sqlCmd string) error {
 	// Build mariadb command
-	mariadbCmd := fmt.Sprintf("cat | mariadb -h %s -u %s -p%s %s",
-		shard.ReadWriteHost, // Use primary host for writes
-		shard.UserId,
-		shard.Password,
-		shard.DatabaseName)
+	mariadbCmd := "cat | mariadb " +
+		mariadbConnectionArgs(shard.ReadWriteHost, shard.UserId, shard.Password) + // Use primary host for writes
+		" " + kubeutil.ShellQuote(shard.DatabaseName)
 
 	log.Debug().Str("host", shard.ReadWriteHost).Str("database", shard.DatabaseName).Str("sql", sqlCmd).Msg("Executing SQL command")
 
@@ -426,11 +424,9 @@ func (o *databaseResetOpts) executeSQLCommand(ctx context.Context, kubeCli *enva
 // Helper function to execute a SQL command and capture its output
 func (o *databaseResetOpts) executeSQLCommandWithOutput(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string, shard kubeutil.DatabaseShardConfig, sqlCmd string) (string, error) {
 	// Build mariadb command
-	mariadbCmd := fmt.Sprintf("cat | mariadb -h %s -u %s -p%s %s",
-		shard.ReadWriteHost, // Use primary host for writes
-		shard.UserId,
-		shard.Password,
-		shard.DatabaseName)
+	mariadbCmd := "cat | mariadb " +
+		mariadbConnectionArgs(shard.ReadWriteHost, shard.UserId, shard.Password) + // Use primary host for writes
+		" " + kubeutil.ShellQuote(shard.DatabaseName)
 
 	log.Debug().Str("host", shard.ReadWriteHost).Str("database", shard.DatabaseName).Str("sql", sqlCmd).Msg("Executing SQL command with output capture")
 

@@ -250,7 +250,7 @@ func (o *databaseImportArchiveOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		[]string{"sleep", "3600"},
+		debugDatabasePodCommand,
 	)
 	if err != nil {
 		return err
@@ -414,11 +414,9 @@ func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind s
 	}
 	defer func() { _ = reader.Close() }()
 
-	importCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s %s",
-		targetShard.ReadWriteHost, // Use primary host for writes
-		targetShard.UserId,
-		targetShard.Password,
-		targetShard.DatabaseName)
+	importCmd := "mariadb " +
+		mariadbConnectionArgs(targetShard.ReadWriteHost, targetShard.UserId, targetShard.Password) + // Use primary host for writes
+		" " + kubeutil.ShellQuote(targetShard.DatabaseName)
 
 	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msgf("Executing %s import command", kind)
 

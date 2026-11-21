@@ -171,7 +171,7 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 		debugDatabaseImage,
 		false,
 		false,
-		[]string{"sleep", "3600"},
+		debugDatabasePodCommand,
 	)
 	if err != nil {
 		return err

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -19,7 +20,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
+// ShellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
 // argument even for names with spaces, wildcards or quotes.
 func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	bash, err := exec.LookPath("bash")
@@ -28,12 +29,12 @@ func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	}
 	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf"}
 	for _, name := range names {
-		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+shellQuote(name)).Output()
+		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+ShellQuote(name)).Output()
 		if err != nil {
 			t.Fatalf("bash failed for %q: %v", name, err)
 		}
 		if got := strings.TrimSuffix(string(out), "\n"); got != name {
-			t.Errorf("shellQuote(%q) through bash = %q", name, got)
+			t.Errorf("ShellQuote(%q) through bash = %q", name, got)
 		}
 	}
 }
@@ -42,8 +43,8 @@ func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 // matching its own shell or a file whose name only starts the same.
 func TestRemoveFilesCommand(t *testing.T) {
 	got := removeFilesCommand([]string{"/tmp/a.gcdump", "/tmp/it's"})
-	want := `for pid in $(pgrep -f -- '[d]d if=/tmp/a\.gcdump '); do pkill -P $pid; kill $pid; done; ` +
-		`for pid in $(pgrep -f -- '[d]d if=/tmp/it'\''s '); do pkill -P $pid; kill $pid; done; ` +
+	want := `for pid in $(pgrep -f -- '[d]d if=['\'']*/tmp/a\.gcdump['\'']* '); do pkill -P $pid; kill $pid; done; ` +
+		`for pid in $(pgrep -f -- '[d]d if=['\'']*/tmp/it'\''s['\'']* '); do pkill -P $pid; kill $pid; done; ` +
 		`rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`
 	if got != want {
 		t.Errorf("removeFilesCommand =\n%s\nwant\n%s", got, want)
@@ -163,5 +164,41 @@ func TestIdleContainerCommandStops(t *testing.T) {
 	case <-ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the main process did not end after the stop command")
+	}
+}
+
+// The command stops a download, as streamFileFromOffset runs it, of a file whose name has a space:
+// both its shell, whose command line has the path in quotes, and its 'dd'.
+func TestRemoveFilesCommandStopsDownload(t *testing.T) {
+	for _, tool := range []string{"sh", "pgrep", "pkill", "mkfifo", "dd", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found", tool)
+		}
+	}
+	// A FIFO without a writer keeps 'dd' waiting to open it, so the download runs until stopped.
+	path := filepath.Join(t.TempDir(), "heap dump.gcdump")
+	if err := exec.Command("mkfifo", path).Run(); err != nil {
+		t.Fatal(err)
+	}
+	download := exec.Command("sh", "-c", "dd if="+ShellQuote(path)+" bs=1M skip=0 iflag=skip_bytes 2>/dev/null | gzip -c")
+	if err := download.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- download.Wait() }()
+	time.Sleep(200 * time.Millisecond) // Let the shell start dd
+
+	if out, err := exec.Command("sh", "-c", removeFilesCommand([]string{path})).CombinedOutput(); err != nil {
+		t.Fatalf("remove command failed: %v: %s", err, out)
+	}
+	select {
+	case err := <-done:
+		t.Logf("download ended: %v", err) // Killed, so with an error
+	case <-time.After(5 * time.Second):
+		_ = download.Process.Kill()
+		t.Fatal("the download still runs after the remove command")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("file not removed: %v", err)
 	}
 }
