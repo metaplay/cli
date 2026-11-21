@@ -254,8 +254,8 @@ func TestMD5Calculation(t *testing.T) {
 	}
 }
 
-// requireSkipBytesDD skips the test unless the local dd takes iflag=skip_bytes, as GNU's and
-// busybox's do in the pods. BSD's dd, as on macOS, does not.
+// requireSkipBytesDD skips the test unless sh, gzip and a dd that takes iflag=skip_bytes are
+// there. GNU's and busybox's dd, as in the pods, take it. BSD's dd, as on macOS, does not.
 func requireSkipBytesDD(t *testing.T) {
 	t.Helper()
 	for _, tool := range []string{"sh", "dd", "gzip"} {
