@@ -536,7 +536,8 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 	failedAttemptsWithoutProgress := 0
 	mismatches := 0 // Copies whose MD5 checksum differed: these start over, so they never resume
 	copied := false // The local file has all of the remote file's bytes, but is not verified yet
-	for attempt := 1; failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts; attempt++ {
+	canRetry := func() bool { return failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts }
+	for attempt := 1; canRetry(); attempt++ {
 		// Track progress before this attempt
 		progressBefore := state.bytesTransferred
 
@@ -591,7 +592,7 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 		}
 
 		// On failure, don't delete the partial file - we'll resume from it
-		if failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts {
+		if canRetry() {
 			if state.bytesTransferred > 0 {
 				output.AppendLinef("Attempt %d failed at %s of %s, will resume...",
 					attempt, humanizeFileSize(state.bytesTransferred), humanizeFileSize(fileSize))

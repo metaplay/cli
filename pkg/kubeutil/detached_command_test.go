@@ -7,7 +7,6 @@ package kubeutil
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,14 +27,7 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 	// Like ExecInDebugContainer, fail unless the whole stdout arrived and the script exited with 0.
 	return func(ctx context.Context, script string) (string, error) {
 		out, err := exec.CommandContext(ctx, "sh", "-c", withExitTrailer(script)).Output()
-		if err != nil {
-			return string(out), err
-		}
-		stdout, exitCode, err := splitExitTrailer(string(out))
-		if err == nil && exitCode != 0 {
-			err = fmt.Errorf("exit code %d", exitCode)
-		}
-		return stdout, err
+		return checkExecOutput(string(out), err)
 	}
 }
 

@@ -71,10 +71,11 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		"echo $? >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
 	launch := "mkdir -p " + dir + " && cd " + dir + " && mkdir " + ctl +
 		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >" + ctl + "/pid; }"
+	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
 	_, launchErr := run(ctx, launch)
 	if launchErr != nil {
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("stopped waiting for the command: %w", ctx.Err())
+			return nil, stopped()
 		}
 		// The command may have started although the exec call failed: the checks below tell.
 		log.Debug().Msgf("Starting a detached command failed: %v", launchErr)
@@ -101,7 +102,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("stopped waiting for the command: %w", ctx.Err())
+			return nil, stopped()
 		case <-time.After(delay):
 		}
 		delay = min(2*delay, detachedPollInterval)
@@ -114,7 +115,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		}
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, fmt.Errorf("stopped waiting for the command: %w", ctx.Err())
+				return nil, stopped()
 			}
 			if failingSince.IsZero() {
 				failingSince = time.Now()

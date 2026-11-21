@@ -263,15 +263,16 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 
 	for _, shard := range shards {
 		fileName := shardDumpFileName(shard.ShardIndex)
-		runner.AddTask(fmt.Sprintf("Dump shard #%d", shard.ShardIndex), func(output *tui.TaskOutput) error {
+		label := fmt.Sprintf("shard #%d", shard.ShardIndex)
+		runner.AddTask("Dump "+label, func(output *tui.TaskOutput) error {
 			// Data (DML) only. Note: Using --hex-blob as raw binary causes failures on import.
 			// pipefail makes a failed mariadb-dump fail the command, not only a failed gzip.
 			dumpCmd := "set -o pipefail; " +
 				mariadbDumpCommand(shard, "--no-create-info --no-tablespaces --single-transaction --hex-blob --skip-triggers") +
 				" | gzip -c >" + fileName
-			return dumpInPod(ctx, output, kubeCli, podName, debugContainerName, fmt.Sprintf("shard #%d", shard.ShardIndex), dumpCmd)
+			return dumpInPod(ctx, output, kubeCli, podName, debugContainerName, label, dumpCmd)
 		})
-		runner.AddTask(fmt.Sprintf("Download shard #%d", shard.ShardIndex), func(output *tui.TaskOutput) error {
+		runner.AddTask("Download "+label, func(output *tui.TaskOutput) error {
 			// The dump is gzipped already, so it is not compressed again in transit.
 			return downloadFromPod(ctx, output, kubeCli, podName, debugContainerName, fileName, false, localDir)
 		})
@@ -364,12 +365,11 @@ func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseSh
 // done, it stops writing.
 func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
 	partPath := outputPath + ".part"
+	defer func() { _ = os.Remove(partPath) }() // Does nothing after the rename
 	if err := writeDatabaseArchiveFile(ctx, partPath, localDir, metadata, shards); err != nil {
-		_ = os.Remove(partPath)
 		return err
 	}
 	if err := os.Rename(partPath, outputPath); err != nil {
-		_ = os.Remove(partPath)
 		return fmt.Errorf("failed to move the archive to %s: %w", outputPath, err)
 	}
 	return nil
