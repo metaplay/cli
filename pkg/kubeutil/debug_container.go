@@ -341,9 +341,9 @@ func removeFilesCommand(paths []string) string {
 //	'\''
 //
 // GNU dd's command line has the path as it is, and busybox's does not, see streamFileCommand. The
-// pattern ends with the dd argument after the path, so that it does not match a
-// download of a file whose name only starts with path. The [d] keeps the pattern from matching
-// the shell of the command that has it.
+// pattern ends with the dd argument after the path, so that it does not match a download of a file
+// whose name only starts with path. The [d] keeps the pattern from matching the shell of the
+// command that has it.
 func downloadPattern(path string) string {
 	parts := strings.Split(path, "'")
 	for i, part := range parts {
@@ -352,8 +352,8 @@ func downloadPattern(path string) string {
 	return "[d]d if='?" + strings.Join(parts, `('\\''|')`) + "'? bs=1M skip="
 }
 
-// ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in it, such as
-// one built from a user's --output, means only itself.
+// ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in
+// it, such as one built from a user's --output, means only itself.
 func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
