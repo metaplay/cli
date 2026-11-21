@@ -81,7 +81,8 @@ func escapeContainerCommand(command []string) []string {
 }
 
 // CreateDebugContainer creates a debug container in the target pod that runs command, and waits
-// for it to start. The container ends when command exits.
+// for it to start. The container ends when command exits. The command runs exactly as given:
+// Kubernetes does not expand "$(VAR)" in it.
 func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, targetContainerName string, interactive bool, tty bool, command []string) (string, error) {
 	// Create name for debug container.
 	debugContainerName, err := createDebugContainerName()
@@ -108,10 +109,31 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		return "", fmt.Errorf("target container %s not found in pod %s", targetContainerName, podName)
 	}
 
-	// Define the ephemeral container
-	ephemeralContainer := &corev1.EphemeralContainer{
+	ephemeralContainer := newDebugEphemeralContainer(debugContainerName, targetContainerName, interactive, tty, command)
+
+	// Create ephemeral container using the ephemeral containers subresource
+	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, ephemeralContainer)
+	_, err = kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{})
+	if err != nil {
+		log.Error().Msgf("Failed to start ephemeral debug container: %v", err)
+		return "", err
+	}
+
+	// Wait for the debug container to be ready
+	err = waitForContainerReady(ctx, kubeCli, podName, debugContainerName)
+	if err != nil {
+		return "", fmt.Errorf("debug container failed to become ready: %w", err)
+	}
+
+	return debugContainerName, nil
+}
+
+// newDebugEphemeralContainer returns the spec of a debug container that runs command, exactly as
+// given: Kubernetes does not expand "$(VAR)" in it, see escapeContainerCommand.
+func newDebugEphemeralContainer(name, targetContainerName string, interactive, tty bool, command []string) corev1.EphemeralContainer {
+	return corev1.EphemeralContainer{
 		EphemeralContainerCommon: corev1.EphemeralContainerCommon{
-			Name:            debugContainerName,
+			Name:            name,
 			Image:           "metaplay/diagnostics:latest",
 			ImagePullPolicy: corev1.PullAlways,
 			Stdin:           interactive,
@@ -132,22 +154,6 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		},
 		TargetContainerName: targetContainerName,
 	}
-
-	// Create ephemeral container using the ephemeral containers subresource
-	pod.Spec.EphemeralContainers = append(pod.Spec.EphemeralContainers, *ephemeralContainer)
-	_, err = kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).UpdateEphemeralContainers(ctx, podName, pod, metav1.UpdateOptions{})
-	if err != nil {
-		log.Error().Msgf("Failed to start ephemeral debug container: %v", err)
-		return "", err
-	}
-
-	// Wait for the debug container to be ready
-	err = waitForContainerReady(ctx, kubeCli, podName, debugContainerName)
-	if err != nil {
-		return "", fmt.Errorf("debug container failed to become ready: %w", err)
-	}
-
-	return debugContainerName, nil
 }
 
 // waitForContainerReady waits for the debug container to be ready by watching for pod status changes.

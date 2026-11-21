@@ -21,7 +21,8 @@ import (
 	watchtools "k8s.io/client-go/tools/watch"
 )
 
-// Helper function to create and start a standalone debug pod.
+// CreateDebugPod creates and starts a standalone debug pod that runs command, exactly as given:
+// Kubernetes does not expand "$(VAR)" in it.
 func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image string, interactive bool, tty bool, command []string) (string, func(), error) {
 	// Create name for debug pod.
 	debugPodName, err := createDebugContainerName()
@@ -31,42 +32,7 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 	debugPodName = "debug-pod-" + debugPodName
 	log.Debug().Msgf("Create debug pod %s: image=%s, interactive=%v, tty=%v, command='%s'", debugPodName, image, interactive, tty, strings.Join(command, " "))
 
-	// Define the debug pod
-	debugPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      debugPodName,
-			Namespace: kubeCli.Namespace,
-			Labels: map[string]string{
-				"app":  "metaplay-debug",
-				"type": "debug-pod",
-			},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
-			Containers: []corev1.Container{
-				{
-					Name:            "debug",
-					Image:           image,
-					ImagePullPolicy: corev1.PullAlways,
-					Stdin:           interactive,
-					TTY:             tty,
-					Command:         escapeContainerCommand(command),
-					SecurityContext: &corev1.SecurityContext{
-						Capabilities: &corev1.Capabilities{
-							// Enable ptrace to allow debugging/tracing. Should be equivalent to 'kubectl debug --profile=general'.
-							Add: []corev1.Capability{"SYS_PTRACE"},
-						},
-					},
-					Env: []corev1.EnvVar{
-						{
-							Name:  "TERM",
-							Value: "xterm-256color",
-						},
-					},
-				},
-			},
-		},
-	}
+	debugPod := newDebugPod(debugPodName, kubeCli.Namespace, image, interactive, tty, command)
 
 	// Create the debug pod
 	_, err = kubeCli.Clientset.CoreV1().Pods(kubeCli.Namespace).Create(ctx, debugPod, metav1.CreateOptions{})
@@ -194,4 +160,44 @@ func waitForPodReady(ctx context.Context, kubeCli *envapi.KubeClient, podName st
 	})
 
 	return err
+}
+
+// newDebugPod returns the spec of a debug pod that runs command, exactly as given, see
+// escapeContainerCommand.
+func newDebugPod(name, namespace, image string, interactive, tty bool, command []string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":  "metaplay-debug",
+				"type": "debug-pod",
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:            "debug",
+					Image:           image,
+					ImagePullPolicy: corev1.PullAlways,
+					Stdin:           interactive,
+					TTY:             tty,
+					Command:         escapeContainerCommand(command),
+					SecurityContext: &corev1.SecurityContext{
+						Capabilities: &corev1.Capabilities{
+							// Enable ptrace to allow debugging/tracing. Should be equivalent to 'kubectl debug --profile=general'.
+							Add: []corev1.Capability{"SYS_PTRACE"},
+						},
+					},
+					Env: []corev1.EnvVar{
+						{
+							Name:  "TERM",
+							Value: "xterm-256color",
+						},
+					},
+				},
+			},
+		},
+	}
 }
