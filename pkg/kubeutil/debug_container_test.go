@@ -199,11 +199,11 @@ func expandLikeKubernetes(command []string, env []corev1.EnvVar) []string {
 				out.WriteByte(arg[j])
 				continue
 			}
-			switch {
-			case arg[j+1] == '$':
+			switch arg[j+1] {
+			case '$':
 				out.WriteByte('$')
 				j++
-			case arg[j+1] == '(':
+			case '(':
 				if end := strings.IndexByte(arg[j:], ')'); end > 0 {
 					if value, ok := vars[arg[j+2:j+end]]; ok {
 						out.WriteString(value)
