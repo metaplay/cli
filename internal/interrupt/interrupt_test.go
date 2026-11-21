@@ -112,11 +112,7 @@ func TestNotifyContextCancelsOnSignal(t *testing.T) {
 
 	sendSIGINT(t)
 
-	select {
-	case <-ctx.Done():
-	case <-time.After(10 * time.Second):
-		t.Fatal("context not cancelled by SIGINT")
-	}
+	receive(t, ctx.Done(), "context not cancelled by SIGINT")
 	if cause := context.Cause(ctx); cause != ErrInterrupted { //nolint:errorlint // The exact cause
 		t.Errorf("cause = %v, want ErrInterrupted", cause)
 	}
@@ -162,6 +158,18 @@ func sendSIGINT(t *testing.T) {
 	}
 }
 
+// receive returns the next value from ch, and fails the test with msg if none arrives in 10 s.
+func receive[T any](t *testing.T, ch <-chan T, msg string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(10 * time.Second):
+		t.Fatal(msg)
+		panic("unreachable")
+	}
+}
+
 // A signal after the interrupt force-quits, whether the interrupt was a signal or a Trigger call.
 func TestNotifyContextSecondInterruptForceQuits(t *testing.T) {
 	for _, firstBySignal := range []bool{true, false} {
@@ -175,11 +183,7 @@ func TestNotifyContextSecondInterruptForceQuits(t *testing.T) {
 			} else {
 				Trigger(ctx)
 			}
-			select {
-			case <-ctx.Done():
-			case <-time.After(10 * time.Second):
-				t.Fatal("context not cancelled by the first interrupt")
-			}
+			receive(t, ctx.Done(), "context not cancelled by the first interrupt")
 			select {
 			case <-exits:
 				t.Fatal("the first interrupt force-quit")
@@ -187,13 +191,8 @@ func TestNotifyContextSecondInterruptForceQuits(t *testing.T) {
 			}
 
 			sendSIGINT(t)
-			select {
-			case sig := <-exits:
-				if sig != syscall.SIGINT {
-					t.Errorf("force-quit with %v, want SIGINT", sig)
-				}
-			case <-time.After(10 * time.Second):
-				t.Fatal("the second interrupt did not force-quit")
+			if sig := receive(t, exits, "the second interrupt did not force-quit"); sig != syscall.SIGINT {
+				t.Errorf("force-quit with %v, want SIGINT", sig)
 			}
 		})
 	}
@@ -212,11 +211,7 @@ func TestNotifyContextNoForceQuitAfterStop(t *testing.T) {
 	stop()
 
 	sendSIGINT(t)
-	select {
-	case <-guard:
-	case <-time.After(10 * time.Second):
-		t.Fatal("SIGINT not delivered")
-	}
+	receive(t, guard, "SIGINT not delivered")
 	select {
 	case <-exits:
 		t.Error("a signal after stop force-quit")

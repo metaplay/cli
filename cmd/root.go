@@ -446,10 +446,10 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 
 // wasInterrupted reports whether the error is a side-effect of the user
 // interrupting the CLI (Ctrl+C / SIGTERM). When true, callers should exit
-// silently with interrupt.ExitCode rather than printing
-// the error — a signal-killed child can otherwise surface as a misleading
-// message (e.g. `exec.Command("pnpm", "--version").Run()` failing during
-// interrupt looks identical to "pnpm not installed").
+// silently with interrupt.ExitCode rather than printing the error — a
+// signal-killed child can otherwise surface as a misleading message (e.g.
+// `exec.Command("pnpm", "--version").Run()` failing during interrupt looks
+// identical to "pnpm not installed").
 //
 // We check three signals in order of specificity:
 //  1. the root context was canceled: main cancels it on Ctrl+C, SIGINT and SIGTERM;
@@ -470,8 +470,8 @@ func wasInterrupted(cmd *cobra.Command, err error) bool {
 }
 
 // exitInterrupted prints a clean trailing acknowledgement and exits with
-// interrupt.ExitCode. The trailing line gives the user
-// closure after subprocess output — e.g. docker prints
+// interrupt.ExitCode. The trailing line gives the user closure after
+// subprocess output — e.g. docker prints
 // "ERROR: failed to build: failed to solve: Canceled: context canceled"
 // on its way out and that shouldn't be the last thing the user sees.
 //
