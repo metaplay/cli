@@ -258,7 +258,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	// Construct the tar command to stream the file from the pod (with or without compression).
 	tarFlags := map[bool]string{true: "chfz", false: "chf"}[useCompression]
 	// command := []string{"tar", tarFlags, "-", "-C", srcDir, fileName}
-	command := []string{"sh", "-c", fmt.Sprintf("tar %s - -C %s %s", tarFlags, srcDir, fileName)}
+	command := []string{"sh", "-c", fmt.Sprintf("tar %s - -C %s %s", tarFlags, ShellQuote(srcDir), ShellQuote(fileName))}
 
 	reader, outStream := io.Pipe()
 

@@ -403,8 +403,8 @@ func downloadPattern(path string) string {
 	return "[d]d if=(" + regexp.QuoteMeta(ShellQuote(path)) + "|" + regexp.QuoteMeta(path) + ") bs=1M skip="
 }
 
-// ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in it,
-// such as one built from a user's --output, means only itself.
+// ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in
+// it, such as one built from a user's --output, means only itself.
 func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

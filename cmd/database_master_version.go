@@ -7,7 +7,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"strconv"
 	"strings"
@@ -23,9 +22,9 @@ import (
 // the provided debug pod. Returns nil when it can't be determined (e.g. the MetaInfo table doesn't
 // exist on a fresh database). Best-effort: it must never fail the calling command.
 func queryDatabaseMasterVersion(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName, host, user, password, dbName string) *int {
-	// Pipe the query via stdin (avoids shell quoting). -N skips column names, -B uses batch
+	// Pipe the query via stdin. -N skips column names, -B uses batch
 	// (tab-separated) output, so a successful query prints just the integer value.
-	mariadbCmd := fmt.Sprintf("mariadb -h %s -u %s -p%s -N -B %s", host, user, password, dbName)
+	mariadbCmd := mariadbCommand(host, user, password, "-N", "-B", dbName)
 
 	const query = "SELECT MasterVersion FROM MetaInfo ORDER BY Version DESC LIMIT 1;"
 
@@ -38,7 +37,7 @@ func queryDatabaseMasterVersion(ctx context.Context, kubeCli *envapi.KubeClient,
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/sh", "-c", mariadbCmd},
+			Command:   mariadbCmd,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,

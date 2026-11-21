@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -158,13 +159,22 @@ func TestWriteDatabaseArchiveStopsWhenCancelled(t *testing.T) {
 	}
 }
 
-// The dump command quotes the credentials, so a password with shell characters works.
+// Through sh, the dump command's arguments are the credentials as they are, also for a password
+// with shell characters.
 func TestMariadbDumpCommandQuotesCredentials(t *testing.T) {
-	shard := kubeutil.DatabaseShardConfig{ReadOnlyHost: "db.local", UserId: "user", Password: `p$w'd "x`, DatabaseName: "game_db"}
-	got := mariadbDumpCommand(shard, "--no-data")
-	want := `mariadb-dump --host='db.local' --user='user' --password='p$w'\''d "x' --no-data 'game_db'`
-	if got != want {
-		t.Errorf("mariadbDumpCommand =\n  %s\nwant\n  %s", got, want)
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	password := `p$w'd "x" & $(id) *`
+	shard := kubeutil.DatabaseShardConfig{ReadOnlyHost: "db.local", UserId: "user", Password: password, DatabaseName: "game_db"}
+	out, err := exec.Command(shell, "-c", "printf '%s\\n' "+mariadbDumpCommand(shard, "--no-data --hex-blob")).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "mariadb-dump\n--host=db.local\n--user=user\n--password=" + password + "\n--no-data\n--hex-blob\ngame_db\n"
+	if string(out) != want {
+		t.Errorf("arguments = %q, want %q", out, want)
 	}
 }
 

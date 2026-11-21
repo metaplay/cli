@@ -342,15 +342,17 @@ func checkOutputPath(path string) error {
 	return nil
 }
 
-// mariadbDumpCommand is the mariadb-dump command for the shard's read-only replica with the given
-// flags. Its output goes to stdout.
+// mariadbDumpCommand is the shell command of mariadb-dump for the shard's read-only replica with the
+// given flags, separated by spaces. It takes the connection arguments of mariadbCommand, each
+// quoted, since the dump runs through a shell. Its output goes to stdout.
 func mariadbDumpCommand(shard kubeutil.DatabaseShardConfig, flags string) string {
-	return fmt.Sprintf("mariadb-dump --host=%s --user=%s --password=%s %s %s",
-		kubeutil.ShellQuote(shard.ReadOnlyHost),
-		kubeutil.ShellQuote(shard.UserId),
-		kubeutil.ShellQuote(shard.Password),
-		flags,
-		kubeutil.ShellQuote(shard.DatabaseName))
+	argv := mariadbCommand(shard.ReadOnlyHost, shard.UserId, shard.Password, append(strings.Fields(flags), shard.DatabaseName)...)
+	argv[0] = "mariadb-dump"
+	quoted := make([]string, len(argv))
+	for i, arg := range argv {
+		quoted[i] = kubeutil.ShellQuote(arg)
+	}
+	return strings.Join(quoted, " ")
 }
 
 // dumpInPod runs dumpCmd in exportRemoteDir in the debug pod until it ends, and fails unless its
