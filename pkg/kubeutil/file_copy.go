@@ -529,7 +529,8 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, file 
 // Only works with the ephemeral debug container as this requires shell on the target pod.
 // Use numAttempts > 1 to retry the copy operation in case of failure - retries will resume
 // from where the previous attempt left off rather than starting from scratch.
-// The copy succeeds only if the local file has the remote file's size and MD5 checksum.
+// The copy succeeds only if the local file has the remote file's size and MD5 checksum. If the
+// checksums cannot be compared, the error is ErrCopyUnverified and the local file is kept.
 // compress gzips the file in transit, which is not worth it for a file that is compressed already.
 func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, compress bool, numAttempts int) error {
 	// Use forward slash for remote Linux path (not filepath.Join which uses OS-specific separators)
@@ -581,12 +582,14 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 				return nil
 			}
 			output.AppendLinef("Integrity check failed: %v", lastErr)
-			_ = os.Remove(destPath)
 			if !errors.Is(lastErr, errMD5Mismatch) {
-				// Getting the remote checksum failed
-				return fmt.Errorf("file copy failed: %w", lastErr)
+				// Getting a checksum failed. The copy has the remote file's size and may well be
+				// good, so it is kept for the caller to check: the remote file can be costly to
+				// make again, eg, a heap dump.
+				return fmt.Errorf("%w: %w", ErrCopyUnverified, lastErr)
 			}
 			// The local file is corrupt: start over.
+			_ = os.Remove(destPath)
 			mismatches++
 			state.bytesTransferred = 0
 		}
@@ -637,6 +640,10 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 // errFileChanged is the error of a copy that received more than the remote file's size.
 var errFileChanged = errors.New("the file changed during the copy")
+
+// ErrCopyUnverified is the error of a copy that completed, but whose MD5 checksum could not be
+// compared to the remote file's. The local file is kept.
+var ErrCopyUnverified = errors.New("the copy is complete, but its MD5 checksum could not be verified")
 
 // errMD5Mismatch is the error of a copied file whose MD5 checksum differs from the remote file's.
 var errMD5Mismatch = errors.New("MD5 mismatch")

@@ -249,10 +249,11 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Success", // Undone by reenableHealthChecksCmd
 		)
-		// Only curl's exit code shows that the request did not set the override. A request that
-		// failed otherwise, eg, was cancelled or lost its connection, may have set it first.
-		_, exited := errors.AsType[utilexec.CodeExitError](err)
-		overrideSet = !exited
+		// Only curl's exit codes 6 and 7, the host not resolved or the connection refused, show
+		// that the request was not sent. A request that failed otherwise, eg, was cancelled, timed
+		// out or lost its connection, may have set the override first.
+		exitErr, exited := errors.AsType[utilexec.CodeExitError](err)
+		overrideSet = !exited || (exitErr.ExitStatus() != 6 && exitErr.ExitStatus() != 7)
 		if err != nil {
 			return fmt.Errorf("failed to set healthz probe mode: %w", err)
 		}
@@ -318,8 +319,13 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Copy heap dump to local machine
 	downloaded := false
+	keptInPod := false // The download could not be verified, so the pod's copy is kept
 	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
 		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, true, 3)
+		if errors.Is(err, kubeutil.ErrCopyUnverified) {
+			keptInPod = true
+			return unverifiedDownloadError(err, "heap dump", o.flagOutputPath, podName, remotePath)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to copy heap dump: %w", err)
 		}
@@ -329,8 +335,8 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 
 	// Remove the remote file, also when the download failed
 	runner.AddCleanupTask("Remove heap dump from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
-		if !collectStarted {
-			return nil // No file was written
+		if !collectStarted || keptInPod {
+			return nil // No file was written, or it is kept
 		}
 		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "heap dump", o.flagOutputPath, downloaded, remotePath)
 	})
@@ -350,6 +356,15 @@ func removeFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName, deb
 	return clierrors.Wrap(err, message).
 		WithDetails(remotePaths...).
 		WithSuggestion("The file uses the pod's disk space until it is removed or the pod restarts. Remove it, or restart the pod")
+}
+
+// unverifiedDownloadError is the error of a download of the pod's file remotePath to localPath that
+// completed, but whose checksum could not be compared. The pod's copy is kept, so that the two can
+// be compared by hand.
+func unverifiedDownloadError(err error, what, localPath, podName, remotePath string) error {
+	return clierrors.Wrapf(err, "Downloaded the %s to %s, but could not verify that the download is intact", what, localPath).
+		WithDetails("The pod's copy is kept: " + remotePath).
+		WithSuggestion(fmt.Sprintf("Compare the MD5 checksum of %s to the one 'md5sum %s' prints in pod %s. Then remove the pod's copy: it uses the pod's disk space until it is removed or the pod restarts", localPath, kubeutil.ShellQuote(remotePath), podName))
 }
 
 // formatDuration converts a duration in seconds to a human-readable string

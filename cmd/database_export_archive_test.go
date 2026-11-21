@@ -235,3 +235,34 @@ func TestWriteDatabaseArchiveKeepsPermissions(t *testing.T) {
 		t.Errorf("archive mode = %v, %v; want -rw-------", info.Mode().Perm(), err)
 	}
 }
+
+// In a directory that is not writable, the archive is copied into an existing, writable output
+// file, since it cannot be renamed into place.
+func TestWriteDatabaseArchiveIntoReadOnlyDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permissions")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root can write to any directory")
+	}
+	localDir := t.TempDir()
+	shards := writeTestDumps(t, localDir, [][]byte{gzipped(t, testShardSQL)})
+	outputDir := t.TempDir()
+	outputPath := filepath.Join(outputDir, "archive.mdb")
+	if err := os.WriteFile(outputPath, []byte("earlier archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(outputDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(outputDir, 0o700) })
+
+	if err := writeDatabaseArchive(context.Background(), outputPath, localDir, DatabaseArchiveMetadata{NumShards: 1}, shards); err != nil {
+		t.Fatalf("writeDatabaseArchive: %v", err)
+	}
+	archive, err := zip.OpenReader(outputPath)
+	if err != nil {
+		t.Fatalf("output is not a zip archive: %v", err)
+	}
+	_ = archive.Close()
+}

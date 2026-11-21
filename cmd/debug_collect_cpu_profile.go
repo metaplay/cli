@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -275,8 +276,13 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Copy CPU profile to local machine
 	downloaded := false
+	keptInPod := false // The download could not be verified, so the pod's copy is kept
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
 		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, true, 3)
+		if errors.Is(err, kubeutil.ErrCopyUnverified) {
+			keptInPod = true
+			return unverifiedDownloadError(err, "CPU profile", o.flagOutputPath, podName, remoteDir+"/"+remoteDownloadName)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to copy CPU profile: %w", err)
 		}
@@ -286,8 +292,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Remove the nettrace capture and the converted file, if any, also when the download failed
 	runner.AddCleanupTask("Remove CPU profile from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
-		filesToRemove := []string{remoteNettracePath, remotePidPath}
+		filesToRemove := []string{remotePidPath}
 		if remoteDownloadName != remoteNettraceName {
+			filesToRemove = append(filesToRemove, remoteNettracePath)
+		}
+		if !keptInPod {
 			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
 		}
 		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "CPU profile", o.flagOutputPath, downloaded, filesToRemove...)

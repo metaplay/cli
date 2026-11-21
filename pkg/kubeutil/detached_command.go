@@ -98,17 +98,18 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		"wait $c; s=$?; kill $w 2>/dev/null; " +
 		"echo $s >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
 	// The launch prints whether the command started: it waits until the wrapper has recorded its
-	// PID or has ended. Creating the control directory makes the launch start the command at most
+	// PID or has ended. If it did not start, the launch prints the wrapper's stderr after that,
+	// eg, that 'setsid' was not found. Creating the control directory makes the launch start the command at most
 	// once, so a launch whose exec call failed can run again. A launch that finds the directory
 	// waits for the PID of the launch that created it, for half of the exec call's time limit, and
 	// one that can create no directory reports at once.
 	waitSteps := strconv.Itoa(int(shortExecTimeout / 2 / (10 * time.Millisecond)))
 	launch := "mkdir -p " + dir + " && cd " + dir + " || exit; " +
 		"if mkdir " + ctl + " 2>/dev/null; then " +
-		"{ setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & }; w=$!; " +
+		"{ setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>" + ctl + "/launch-stderr & }; w=$!; " +
 		"while [ ! -f " + ctl + "/pid ] && " + processRunningCheck("$w") + "; do sleep 0.01; done; " +
 		"elif [ -d " + ctl + " ]; then i=0; while [ ! -f " + ctl + "/pid ] && [ $i -lt " + waitSteps + " ]; do sleep 0.01; i=$((i+1)); done; fi; " +
-		"if [ -f " + ctl + "/pid ]; then echo started; else echo not-started; fi"
+		"if [ -f " + ctl + "/pid ]; then echo started; else echo not-started; cat " + ctl + "/launch-stderr 2>/dev/null || :; fi"
 	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
 	if err := startDetached(ctx, run, launch); err != nil {
 		if ctx.Err() != nil {
@@ -202,11 +203,15 @@ func startDetached(ctx context.Context, run func(ctx context.Context, script str
 	if err != nil {
 		return fmt.Errorf("failed to start the command: %w", err)
 	}
-	switch strings.TrimSuffix(stdout, "\n") {
+	state, stderr, _ := strings.Cut(stdout, "\n")
+	switch state {
 	case "started":
 		return nil
 	case "not-started":
-		return errors.New("the command did not start: it could not record its PID, eg, on a full disk")
+		if stderr = strings.TrimSpace(stderr); stderr != "" {
+			return fmt.Errorf("the command did not start: %s", stderr)
+		}
+		return errors.New("the command did not start")
 	}
 	return fmt.Errorf("unexpected output from starting the command: %q", stdout)
 }

@@ -354,18 +354,19 @@ func TestCopyRemoteFileFailsWithoutProgress(t *testing.T) {
 	}
 }
 
-// A copy whose checksum cannot be checked is not complete.
+// A copy whose checksum cannot be checked fails as unverified, and the copy is kept.
 func TestCopyRemoteFileFailsWithoutMD5(t *testing.T) {
 	fastShortExecs(t)
-	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: errors.New("md5sum not found")}
+	md5Err := errors.New("md5sum not found")
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: md5Err}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
 	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 2)
-	if err == nil || !strings.Contains(err.Error(), "md5sum not found") {
-		t.Errorf("err = %v, want the MD5 error", err)
+	if !errors.Is(err, ErrCopyUnverified) || !errors.Is(err, md5Err) {
+		t.Errorf("err = %v, want ErrCopyUnverified with the MD5 error", err)
 	}
-	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
-		t.Errorf("destination file exists after a failed copy: %v", statErr)
+	if got, readErr := os.ReadFile(destPath); readErr != nil || !bytes.Equal(got, file.data) {
+		t.Errorf("destination file = %d bytes, %v; want the complete copy", len(got), readErr)
 	}
 }
 

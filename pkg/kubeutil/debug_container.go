@@ -322,7 +322,9 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 func checkExecOutput(rawStdout string, streamErr error) (string, error) {
 	stdout, exitCode, trailerErr := splitExitTrailer(rawStdout)
 	if shellExit, ok := errors.AsType[utilexec.CodeExitError](streamErr); ok {
-		return stdout, fmt.Errorf("%w: %s", errShellEnded, shellExit.Error())
+		// The shell's exit code is flattened into the text: it must not count as the command's
+		// own CodeExitError, which callers take as the command's result.
+		return stdout, fmt.Errorf("%w: %s", errShellEnded, shellExit.Error()) //nolint:errorlint // Not a CodeExitError on purpose
 	}
 	switch {
 	case streamErr != nil:

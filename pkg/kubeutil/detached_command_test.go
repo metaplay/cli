@@ -299,14 +299,15 @@ func TestRunDetachedDoesNotRetryFailedLaunchScript(t *testing.T) {
 }
 
 // A launch that finds no PID after the command's wrapper ended reports that the command did not
-// start, as when the wrapper cannot record its PID on a full disk.
+// start, with the wrapper's stderr.
 func TestRunDetachedReportsNotStarted(t *testing.T) {
 	fastPolls(t)
 	run := func(ctx context.Context, script string) (string, error) {
-		return "not-started\n", nil
+		return "not-started\nsh: setsid: not found\n", nil
 	}
-	if _, err := runDetached(context.Background(), run, "/work", "true"); err == nil || !strings.Contains(err.Error(), "did not start") {
-		t.Errorf("err = %v, want the command reported as not started", err)
+	_, err := runDetached(context.Background(), run, "/work", "true")
+	if want := "the command did not start: sh: setsid: not found"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %v, want it to contain %q", err, want)
 	}
 }
 
@@ -362,11 +363,15 @@ func TestProcessRunningCheck(t *testing.T) {
 	// ended before, the shell could have reaped it. The sleeping process writes nothing to stdout,
 	// so the run returns while it sleeps: holding stdout open, it would make the run wait until it
 	// had ended and the zombie had been reaped.
-	pidFile := filepath.Join(t.TempDir(), "pid")
-	_, err := run(context.Background(), "sh -c 'sleep 0.2 & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 &")
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "pid")
+	sleepPidFile := filepath.Join(dir, "sleep-pid")
+	_, err := run(context.Background(), "sh -c 'sleep 0.2 & echo $! >"+pidFile+"; echo $$ >"+sleepPidFile+"; exec sleep 5' >/dev/null 2>&1 &")
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Ending the sleep also lets its zombie child be reaped
+	t.Cleanup(func() { _, _ = run(context.Background(), "kill $(cat "+sleepPidFile+") 2>/dev/null") })
 	var zombie string
 	var stat []byte
 	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(string(stat), ") Z"); time.Sleep(10 * time.Millisecond) {

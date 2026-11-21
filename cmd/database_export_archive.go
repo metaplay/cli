@@ -182,7 +182,14 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Download the dumps next to the output file: together they are about as large as the archive.
+	// An existing output file can be writable in a directory that is not: then use the system's
+	// temporary directory, and copy the archive into the file at the end.
 	localDir, err := os.MkdirTemp(filepath.Dir(o.argOutputFile), ".metaplay-export-")
+	if err != nil {
+		if _, statErr := os.Stat(o.argOutputFile); statErr == nil {
+			localDir, err = os.MkdirTemp("", "metaplay-export-")
+		}
+	}
 	if err != nil {
 		return clierrors.Wrap(err, "Failed to create a temporary directory for the database dumps").
 			WithSuggestion("Check that the output file's directory exists and is writable")
@@ -372,7 +379,8 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 		if result.ExitCode > 128 {
 			cliErr = cliErr.WithSuggestion(fmt.Sprintf("The dump was killed by signal %d. Signal 9 may mean that the debug pod ran out of memory or disk space", result.ExitCode-128))
 		} else {
-			cliErr = cliErr.WithSuggestion("Fix the cause in mariadb-dump's error above, eg, the database's connection or credentials, then run the command again")
+			// The exit code is the pipeline's, so it can also be gzip's, eg, on a full disk
+			cliErr = cliErr.WithSuggestion("Fix the cause in the error above, eg, the database's connection or credentials, or a lack of disk space in the debug pod, then run the command again")
 		}
 		return cliErr
 	}
@@ -420,9 +428,9 @@ func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseSh
 
 // writeDatabaseArchive writes the archive to outputPath from the dumps in localDir. It writes to a
 // temporary file first, so outputPath has a complete archive or none from this export. When ctx is
-// done, it stops writing.
+// done, it stops writing. If the temporary file cannot be renamed to outputPath, eg, because
+// localDir is not next to it, it is copied into an existing outputPath, which is not atomic.
 func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
-	// In localDir, which is next to outputPath, so that the rename stays on one file system
 	partPath := filepath.Join(localDir, "archive.part")
 	defer func() { _ = os.Remove(partPath) }() // Does nothing after the rename
 	if err := writeDatabaseArchiveFile(ctx, partPath, localDir, metadata, shards); err != nil {
@@ -432,10 +440,39 @@ func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, meta
 	if info, err := os.Stat(outputPath); err == nil {
 		_ = os.Chmod(partPath, info.Mode().Perm())
 	}
-	if err := os.Rename(partPath, outputPath); err != nil {
-		return fmt.Errorf("failed to move the archive to %s: %w", outputPath, err)
+	renameErr := os.Rename(partPath, outputPath)
+	if renameErr == nil {
+		return nil
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		return fmt.Errorf("failed to move the archive to %s: %w", outputPath, renameErr)
+	}
+	if err := copyFileContents(partPath, outputPath); err != nil {
+		return fmt.Errorf("failed to copy the archive to %s: %w", outputPath, err)
 	}
 	return nil
+}
+
+// copyFileContents replaces the contents of the existing file dst with those of src.
+func copyFileContents(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_TRUNC, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // writeDatabaseArchiveFile writes the archive's zip file: the metadata, the schema with fixups, and
