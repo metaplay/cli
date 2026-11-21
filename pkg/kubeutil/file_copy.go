@@ -131,8 +131,9 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 // getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
 	// From stdin, so that md5sum does not print the file name: for a name with a backslash or a
-	// newline, it would start its output with a backslash, and the checksum would never match.
-	command := fmt.Sprintf("md5sum <%s | cut -d' ' -f1", ShellQuote(filePath))
+	// newline, it would start its output with a backslash, and the checksum would never match. The
+	// command exits with md5sum's status, so that a file it cannot read is an exit code.
+	command := "sum=$(md5sum <" + ShellQuote(filePath) + ") && echo \"${sum%% *}\""
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)

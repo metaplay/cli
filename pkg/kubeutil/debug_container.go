@@ -335,21 +335,13 @@ func removeFilesCommand(paths []string) string {
 }
 
 // downloadPattern is the extended regular expression, as procps' and busybox's pgrep read it, that
-// matches the command lines of a download of path by streamFileCommand. The shell's command line
-// has the path as ShellQuote writes it, with each quote as:
-//
-//	'\''
-//
-// GNU dd's command line has the path as it is, and busybox's does not, see streamFileCommand. The
-// pattern ends with the dd argument after the path, so that it does not match a download of a file
-// whose name only starts with path. The [d] keeps the pattern from matching the shell of the
-// command that has it.
+// matches the command lines of a download of path by streamFileCommand: the shell's, which has the
+// path as ShellQuote writes it, or GNU dd's, which has the path as it is. busybox's dd rewrites its
+// own, see streamFileCommand. The pattern ends with the dd argument after the path, so that it does
+// not match a download of another file whose name starts with path. The [d] keeps the pattern from
+// matching the shell of the command that has it.
 func downloadPattern(path string) string {
-	parts := strings.Split(path, "'")
-	for i, part := range parts {
-		parts[i] = regexp.QuoteMeta(part)
-	}
-	return "[d]d if='?" + strings.Join(parts, `('\\''|')`) + "'? bs=1M skip="
+	return "[d]d if=(" + regexp.QuoteMeta(ShellQuote(path)) + "|" + regexp.QuoteMeta(path) + ") bs=1M skip="
 }
 
 // ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in

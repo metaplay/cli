@@ -64,9 +64,11 @@ func TestDownloadPattern(t *testing.T) {
 			}
 		}
 		longer := path + " dump.gcdump" // A file whose name starts with path
+		quoteAfter := path + "'"        // A path whose plain form looks like path's quoted one
 		otherLines := []string{
 			"sh -c " + streamFileCommand(longer, 0, true),
 			"dd if=" + longer + " bs=1M skip=0 iflag=skip_bytes",
+			"dd if=" + quoteAfter + " bs=1M skip=0 iflag=skip_bytes",
 			"pgrep -f -- " + ShellQuote(downloadPattern(path)),
 		}
 		for _, line := range otherLines {
