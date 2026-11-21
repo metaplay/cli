@@ -6,14 +6,19 @@ package kubeutil
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/metaplay/cli/internal/tui"
 )
 
 // failingReader simulates a reader that fails after reading a specified number of bytes
@@ -250,5 +255,146 @@ func TestMD5Calculation(t *testing.T) {
 
 	if actualMD5 != expectedMD5 {
 		t.Errorf("MD5 mismatch: expected %s, got %s", expectedMD5, actualMD5)
+	}
+}
+
+// fakeRemoteFile is a remoteFile whose streams end after maxChunk bytes without an error, as an
+// exec stream does when its connection closes early.
+type fakeRemoteFile struct {
+	data     []byte
+	maxChunk int
+	md5      string // Reported MD5, or the data's MD5 if empty
+	md5Err   error
+	opens    int
+}
+
+func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
+
+func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
+	if f.md5Err != nil {
+		return "", f.md5Err
+	}
+	if f.md5 != "" {
+		return f.md5, nil
+	}
+	sum := md5.Sum(f.data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (f *fakeRemoteFile) Open(ctx context.Context, offset int64) (io.Reader, func() error, error) {
+	f.opens++
+	end := min(int(offset)+f.maxChunk, len(f.data))
+	return bytes.NewReader(f.data[offset:end]), func() error { return nil }, nil
+}
+
+func (f *fakeRemoteFile) TransferFailed(ctx context.Context) {}
+
+func testData(size int) []byte {
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	return data
+}
+
+// Streams that end early without an error are resumed until the whole file has arrived.
+func TestCopyRemoteFileResumesStreamsThatEndEarly(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(10000), maxChunk: 3000}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 2); err != nil {
+		t.Fatalf("copyRemoteFile: %v", err)
+	}
+	got, err := os.ReadFile(destPath)
+	if err != nil || !bytes.Equal(got, file.data) {
+		t.Fatalf("copied file differs from the remote file (err=%v, %d bytes)", err, len(got))
+	}
+	if file.opens != 4 {
+		t.Errorf("opened %d streams, want 4 for 10000 bytes in chunks of 3000", file.opens)
+	}
+}
+
+// A stream that never makes progress fails the copy, and leaves no file behind.
+func TestCopyRemoteFileFailsWithoutProgress(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 0}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "stream ended at 0 of 100 bytes") {
+		t.Errorf("err = %v, want the stream ending early", err)
+	}
+	if file.opens != 3 {
+		t.Errorf("opened %d streams, want 3", file.opens)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("destination file exists after a failed copy: %v", statErr)
+	}
+}
+
+// A copy whose checksum cannot be checked is not complete.
+func TestCopyRemoteFileFailsWithoutMD5(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: errors.New("md5sum not found")}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 2)
+	if err == nil || !strings.Contains(err.Error(), "md5sum not found") {
+		t.Errorf("err = %v, want the MD5 error", err)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("destination file exists after a failed copy: %v", statErr)
+	}
+}
+
+// A checksum that never matches fails the copy after numAttempts, instead of retrying forever.
+func TestCopyRemoteFileStopsOnRepeatedMD5Mismatch(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5: "00000000000000000000000000000000"}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "MD5 mismatch") {
+		t.Errorf("err = %v, want an MD5 mismatch", err)
+	}
+	if file.opens != 3 {
+		t.Errorf("opened %d streams, want 3", file.opens)
+	}
+}
+
+// A stream with more than the file's size means the file changed during the copy.
+func TestCopyRemoteFileFailsOnLongerStream(t *testing.T) {
+	file := &longerRemoteFile{fakeRemoteFile{data: testData(100), maxChunk: 1000}}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 1)
+	if err == nil || !strings.Contains(err.Error(), "changed during the copy") {
+		t.Errorf("err = %v, want an error about the file changing", err)
+	}
+}
+
+// longerRemoteFile reports a size 10 bytes smaller than what it streams.
+type longerRemoteFile struct{ fakeRemoteFile }
+
+func (f *longerRemoteFile) Size(ctx context.Context) (int64, error) {
+	return int64(len(f.data) - 10), nil
+}
+
+// Output of stat and md5sum is accepted only when complete: a cut stream gives no error.
+func TestParseRemoteFileSizeAndMD5(t *testing.T) {
+	if size, err := parseRemoteFileSize("12345678\n"); err != nil || size != 12345678 {
+		t.Errorf("parseRemoteFileSize = %d, %v", size, err)
+	}
+	for _, input := range []string{"", "1234", "12a\n", "-1\n", "12\n34\n"} {
+		if _, err := parseRemoteFileSize(input); err == nil {
+			t.Errorf("parseRemoteFileSize(%q) succeeded, want an error", input)
+		}
+	}
+
+	const sum = "0123456789abcdef0123456789abcdef"
+	if got, err := parseRemoteFileMD5(sum + "\n"); err != nil || got != sum {
+		t.Errorf("parseRemoteFileMD5 = %q, %v", got, err)
+	}
+	for _, input := range []string{"", sum, sum[:20] + "\n", "md5sum: can't open 'x'\n"} {
+		if _, err := parseRemoteFileMD5(input); err == nil {
+			t.Errorf("parseRemoteFileMD5(%q) succeeded, want an error", input)
+		}
 	}
 }
