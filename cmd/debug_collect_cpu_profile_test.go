@@ -97,7 +97,7 @@ func TestTraceCollectCommandStops(t *testing.T) {
 			dir := fakeTraceTools(t)
 			pidPath := dir + "/profile.pid"
 			processInfo := &kubeutil.ServerProcessInfo{Pid: 7, Username: username}
-			opts := &debugCollectCPUProfileOpts{flagFormat: "Speedscope", flagDuration: 3600, extrArgs: []string{"--providers", "x"}}
+			opts := &debugCollectCPUProfileOpts{flagFormat: "Speedscope", flagDuration: 3600, extrArgs: []string{"--providers", "a b;c's $(x)"}}
 			command := opts.traceCollectCommand(processInfo, "/tmp/profile.nettrace", pidPath)
 
 			// As ExecInDebugContainer runs it in the pod
@@ -113,7 +113,7 @@ func TestTraceCollectCommandStops(t *testing.T) {
 			if got := readWhenWritten(t, pidPath); got != selfPid {
 				t.Errorf("PID file = %s, want dotnet-trace's PID %s", got, selfPid)
 			}
-			wantArgs := "collect -p 7 --format Speedscope --duration 01:00:00 -o /tmp/profile.nettrace --providers x"
+			wantArgs := "collect -p 7 --format Speedscope --duration 01:00:00 -o /tmp/profile.nettrace --providers a b;c's $(x)"
 			if got := readWhenWritten(t, dir+"/args"); got != wantArgs {
 				t.Errorf("dotnet-trace arguments = %q, want %q", got, wantArgs)
 			}

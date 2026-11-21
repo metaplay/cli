@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -314,18 +315,17 @@ func formatTraceDuration(seconds int) string {
 
 // traceCollectCommand returns the shell command that runs dotnet-trace, as the server process's user.
 // dotnet-trace replaces the shell that writes its PID to pidPath, so the PID is dotnet-trace's own,
-// for stopTraceCommand.
+// for stopTraceCommand. Each argument is quoted, so the extra arguments reach dotnet-trace as
+// given, also with spaces or shell syntax.
 func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.ServerProcessInfo, outputPath, pidPath string) string {
-	trace := fmt.Sprintf("dotnet-trace collect -p %d --format %s --duration %s -o %s",
-		processInfo.Pid, o.flagFormat, formatTraceDuration(o.flagDuration), outputPath)
-	if len(o.extrArgs) > 0 {
-		trace += " " + strings.Join(o.extrArgs, " ")
-	}
+	trace := append([]string{"dotnet-trace", "collect", "-p", strconv.Itoa(processInfo.Pid), "--format", o.flagFormat,
+		"--duration", formatTraceDuration(o.flagDuration), "-o", outputPath}, o.extrArgs...)
+	command := "echo $$ > " + kubeutil.ShellQuote(pidPath) + "; exec " + kubeutil.ShellJoin(trace)
 	if processInfo.Username == "root" {
-		return fmt.Sprintf("echo $$ > %s; exec %s", pidPath, trace)
+		return command
 	}
-	// The \$\$ reaches the inner sh as $$, the PID of that sh, which exec makes dotnet-trace's.
-	return fmt.Sprintf(`su %s -c 'sh -c "echo \$\$ > %s; exec %s"'`, processInfo.Username, pidPath, trace)
+	// The $$ reaches the inner sh as it is, the PID of that sh, which exec makes dotnet-trace's.
+	return "su " + kubeutil.ShellQuote(processInfo.Username) + " -c " + kubeutil.ShellQuote("sh -c "+kubeutil.ShellQuote(command))
 }
 
 // stopTraceCommand returns the shell command that stops the dotnet-trace whose PID is in pidPath and
