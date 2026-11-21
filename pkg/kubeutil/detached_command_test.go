@@ -6,6 +6,8 @@ package kubeutil
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,9 +25,17 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 			t.Skipf("%s not found", tool)
 		}
 	}
+	// Like ExecInDebugContainer, fail unless the whole stdout arrived and the script exited with 0.
 	return func(ctx context.Context, script string) (string, error) {
-		out, err := exec.CommandContext(ctx, "sh", "-c", script).Output()
-		return string(out), err
+		out, err := exec.CommandContext(ctx, "sh", "-c", withExitTrailer(script)).Output()
+		if err != nil {
+			return string(out), err
+		}
+		stdout, exitCode, err := splitExitTrailer(string(out))
+		if err == nil && exitCode != 0 {
+			err = fmt.Errorf("exit code %d", exitCode)
+		}
+		return stdout, err
 	}
 }
 
@@ -86,23 +96,52 @@ func TestRunDetachedKilledCommand(t *testing.T) {
 	}
 }
 
-// Output that was cut short is never taken as the command's state.
-func TestRunDetachedRejectsCutOutput(t *testing.T) {
+// Failed checks, such as ones whose output was cut short, are retried, up to a limit.
+func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	fastPolls(t)
 	polls := 0
 	run := func(ctx context.Context, script string) (string, error) {
 		if strings.Contains(script, "setsid") {
-			return "", nil // The output of starting it is cut short, which is not an error
+			return "", nil
 		}
 		polls++
-		return "done 0"[:polls%6], nil // Never the full line
+		return "", errOutputCutShort
 	}
 	_, err := runDetached(context.Background(), run, "/work", "true")
-	if err == nil {
-		t.Fatal("runDetached succeeded on cut output")
+	if !errors.Is(err, errOutputCutShort) {
+		t.Errorf("err = %v, want the failed check's error", err)
 	}
 	if polls != detachedMaxFailedPolls {
 		t.Errorf("polled %d times, want %d", polls, detachedMaxFailedPolls)
+	}
+}
+
+// A command that started although its exec call failed, as when the call's stream ends early, is
+// waited for.
+func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
+	fastPolls(t)
+	shell := localShell(t)
+	run := func(ctx context.Context, script string) (string, error) {
+		out, err := shell(ctx, script)
+		if strings.Contains(script, "setsid") {
+			return "", errOutputCutShort
+		}
+		return out, err
+	}
+	result, err := runDetached(context.Background(), run, t.TempDir(), "exit 4")
+	if err != nil || result.ExitCode != 4 {
+		t.Errorf("result = %+v, err = %v; want exit code 4", result, err)
+	}
+
+	// A command that did not start reports why its start failed.
+	run = func(ctx context.Context, script string) (string, error) {
+		if strings.Contains(script, "setsid") {
+			return "", errors.New("pod not found")
+		}
+		return "not-started\n", nil
+	}
+	if _, err := runDetached(context.Background(), run, "/work", "true"); err == nil || !strings.Contains(err.Error(), "pod not found") {
+		t.Errorf("err = %v, want the start's error", err)
 	}
 }
 
@@ -131,6 +170,7 @@ func TestParseDetachedState(t *testing.T) {
 		"not-started\n": {"not-started", 0},
 		"done 0\n":      {"done", 0},
 		"done 137\n":    {"done", 137},
+		"done 0":        {"done", 0},
 	}
 	for input, want := range valid {
 		state, exitCode, err := parseDetachedState(input)
@@ -138,7 +178,7 @@ func TestParseDetachedState(t *testing.T) {
 			t.Errorf("parseDetachedState(%q) = %q, %d, %v; want %q, %d", input, state, exitCode, err, want.state, want.exitCode)
 		}
 	}
-	for _, input := range []string{"", "done 0", "done \n", "runn", "done 0\ndone 1\n", "running\nextra"} {
+	for _, input := range []string{"", "done \n", "runn", "done x\n", "done 0\ndone 1\n", "running\nextra"} {
 		if _, _, err := parseDetachedState(input); err == nil {
 			t.Errorf("parseDetachedState(%q) succeeded, want an error", input)
 		}

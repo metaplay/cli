@@ -168,3 +168,44 @@ func TestIdleContainerCommandStops(t *testing.T) {
 		t.Fatal("the main process did not end after the stop command")
 	}
 }
+
+// The trailer of withExitTrailer comes back off the output exactly, with the command's exit code,
+// also when the command exits or prints no final newline.
+func TestExitTrailerRoundTripsThroughShell(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	cases := []struct {
+		command  string
+		stdout   string
+		exitCode int
+	}{
+		{"echo hello", "hello\n", 0},
+		{"printf 'no newline'", "no newline", 0},
+		{"printf ''", "", 0},
+		{"echo before; exit 3", "before\n", 3},
+		{"true & echo started", "started\n", 0},
+		{"echo '__metaplay_exit=9'", "__metaplay_exit=9\n", 0},
+	}
+	for _, c := range cases {
+		out, err := exec.Command(shell, "-c", withExitTrailer(c.command)).Output()
+		if err != nil {
+			t.Fatalf("%q: %v", c.command, err)
+		}
+		stdout, exitCode, err := splitExitTrailer(string(out))
+		if err != nil || stdout != c.stdout || exitCode != c.exitCode {
+			t.Errorf("%q: got %q, %d, %v; want %q, %d", c.command, stdout, exitCode, err, c.stdout, c.exitCode)
+		}
+	}
+}
+
+// Output without the whole trailer was cut short.
+func TestSplitExitTrailerRejectsCutOutput(t *testing.T) {
+	full := "12345\n" + execExitMarker + "0\n"
+	for _, cut := range []string{"", "12345\n", "12345\n\n__metaplay_exit=", "12345\n\n__metaplay_exit=0", full[:len(full)-3]} {
+		if _, _, err := splitExitTrailer(cut); !errors.Is(err, errOutputCutShort) {
+			t.Errorf("splitExitTrailer(%q) error = %v, want errOutputCutShort", cut, err)
+		}
+	}
+}

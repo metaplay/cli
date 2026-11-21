@@ -276,7 +276,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 	// Copy CPU profile to local machine
 	downloaded := false
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
-		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, true, 3)
 		if err != nil {
 			return fmt.Errorf("failed to copy CPU profile: %w", err)
 		}

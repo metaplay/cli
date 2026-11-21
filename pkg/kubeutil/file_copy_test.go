@@ -376,25 +376,3 @@ type longerRemoteFile struct{ fakeRemoteFile }
 func (f *longerRemoteFile) Size(ctx context.Context) (int64, error) {
 	return int64(len(f.data) - 10), nil
 }
-
-// Output of stat and md5sum is accepted only when complete: a cut stream gives no error.
-func TestParseRemoteFileSizeAndMD5(t *testing.T) {
-	if size, err := parseRemoteFileSize("12345678\n"); err != nil || size != 12345678 {
-		t.Errorf("parseRemoteFileSize = %d, %v", size, err)
-	}
-	for _, input := range []string{"", "1234", "12a\n", "-1\n", "12\n34\n"} {
-		if _, err := parseRemoteFileSize(input); err == nil {
-			t.Errorf("parseRemoteFileSize(%q) succeeded, want an error", input)
-		}
-	}
-
-	const sum = "0123456789abcdef0123456789abcdef"
-	if got, err := parseRemoteFileMD5(sum + "\n"); err != nil || got != sum {
-		t.Errorf("parseRemoteFileMD5 = %q, %v", got, err)
-	}
-	for _, input := range []string{"", sum, sum[:20] + "\n", "md5sum: can't open 'x'\n"} {
-		if _, err := parseRemoteFileMD5(input); err == nil {
-			t.Errorf("parseRemoteFileMD5(%q) succeeded, want an error", input)
-		}
-	}
-}
