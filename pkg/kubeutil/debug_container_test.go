@@ -46,6 +46,19 @@ func TestShellQuoteRoundTripsThroughShells(t *testing.T) {
 	}
 }
 
+// Through sh, ShellJoin's command line has each argument as it is.
+func TestShellJoin(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	args := []string{"a b", "it's", "$(id)", "*", ""}
+	out, err := exec.Command(shell, "-c", "printf '[%s]' "+ShellJoin(args)).Output()
+	if err != nil || string(out) != "[a b][it's][$(id)][*][]" {
+		t.Errorf("printf through ShellJoin = %q, %v; want each argument as it is", out, err)
+	}
+}
+
 // The command removes each file by its exact name, after stopping the downloads of the files,
 // which TestRemoveFilesCommandStopsDownload tests.
 func TestRemoveFilesCommand(t *testing.T) {
