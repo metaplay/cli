@@ -300,6 +300,12 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 	return err
 }
 
+// UnsupportedFileNameChars are the characters a file name that RemoveFilesInDebugContainer removes
+// must not have. removeFilesCommand escapes them for an extended regular expression, as procps'
+// pgrep reads it, but in the basic one of busybox's pgrep, the escapes are operators, so a
+// cancelled download of the file would not be found and stopped.
+const UnsupportedFileNameChars = "+?(){}|"
+
 // removeFilesCommand returns the shell command that removes the files. It first stops a download of
 // the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the

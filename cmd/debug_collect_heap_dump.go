@@ -122,6 +122,12 @@ func (o *debugCollectHeapDumpOpts) Prepare(cmd *cobra.Command, args []string) er
 					WithSuggestion("Use no extension for dump mode, e.g., 'core_250901_093000'")
 			}
 		}
+
+		// The file has the same name in the pod, where it is removed after the download
+		if fileName := filepath.Base(o.flagOutputPath); strings.ContainsAny(fileName, kubeutil.UnsupportedFileNameChars) {
+			return clierrors.NewUsageErrorf("Unsupported character in the file name '%s'", fileName).
+				WithSuggestion("Use a file name without any of the characters " + kubeutil.UnsupportedFileNameChars)
+		}
 	}
 
 	return nil

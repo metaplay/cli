@@ -233,14 +233,8 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 			WithSuggestion("Use --output together with --query or --query-file")
 	}
 
-	// Build mariadb command with extra args
-	cmdParts := []string{
-		"mariadb",
-		mariadbConnectionArgs(host, shard.UserId, shard.Password),
-		kubeutil.ShellQuote(shard.DatabaseName),
-	}
-	cmdParts = append(cmdParts, o.extraArgs...)
-	sqlcliCmd := strings.Join(cmdParts, " ")
+	// Build mariadb command with extra args, each passed as it is
+	sqlcliCmd := mariadbCommand(host, shard.UserId, shard.Password, append([]string{shard.DatabaseName}, o.extraArgs...)...)
 
 	// Log extra arguments if provided
 	if len(o.extraArgs) > 0 {
@@ -260,7 +254,7 @@ func (o *debugDatabaseOpts) connectToDatabaseShard(ctx context.Context, kubeCli 
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/sh", "-c", sqlcliCmd},
+			Command:   sqlcliCmd,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,

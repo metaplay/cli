@@ -414,9 +414,7 @@ func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind s
 	}
 	defer func() { _ = reader.Close() }()
 
-	importCmd := "mariadb " +
-		mariadbConnectionArgs(targetShard.ReadWriteHost, targetShard.UserId, targetShard.Password) + // Use primary host for writes
-		" " + kubeutil.ShellQuote(targetShard.DatabaseName)
+	importCmd := mariadbCommand(targetShard.ReadWriteHost, targetShard.UserId, targetShard.Password, targetShard.DatabaseName) // Use primary host for writes
 
 	log.Debug().Str("host", targetShard.ReadWriteHost).Str("database", targetShard.DatabaseName).Msgf("Executing %s import command", kind)
 
@@ -429,7 +427,7 @@ func (o *databaseImportArchiveOpts) importSQLFromZip(ctx context.Context, kind s
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: debugContainerName,
-			Command:   []string{"/bin/sh", "-c", importCmd},
+			Command:   importCmd,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
