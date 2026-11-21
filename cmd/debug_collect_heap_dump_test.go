@@ -45,18 +45,3 @@ func TestHeapDumpCollectCommandQuotesPath(t *testing.T) {
 		}
 	}
 }
-
-// An output file name with a character that removing the file in the pod does not support is a
-// usage error. A directory with one is fine: only the file name is used in the pod.
-func TestHeapDumpPrepareRejectsUnsupportedFileName(t *testing.T) {
-	for _, c := range kubeutil.UnsupportedFileNameChars {
-		o := debugCollectHeapDumpOpts{flagCollectMode: "gcdump", flagOutputPath: "dir/heap" + string(c) + ".gcdump"}
-		if err := o.Prepare(nil, nil); err == nil {
-			t.Errorf("Prepare accepted %q", o.flagOutputPath)
-		}
-	}
-	o := debugCollectHeapDumpOpts{flagCollectMode: "gcdump", flagOutputPath: "my (dir)/heap dump.gcdump"}
-	if err := o.Prepare(nil, nil); err != nil {
-		t.Errorf("Prepare(%q) = %v, want no error", o.flagOutputPath, err)
-	}
-}

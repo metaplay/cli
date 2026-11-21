@@ -300,12 +300,6 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 	return err
 }
 
-// UnsupportedFileNameChars are the characters a file name that RemoveFilesInDebugContainer removes
-// must not have. removeFilesCommand escapes them for an extended regular expression, as procps'
-// pgrep reads it, but in the basic one of busybox's pgrep, the escapes are operators, so a
-// cancelled download of the file would not be found and stopped.
-const UnsupportedFileNameChars = "+?(){}|"
-
 // removeFilesCommand returns the shell command that removes the files. It first stops a download of
 // the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
@@ -315,14 +309,23 @@ func removeFilesCommand(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
 		quoted[i] = ShellQuote(path)
-		// The pattern matches the download's shell, whose command line has the path in quotes, and
-		// its 'dd', whose argument has it without. Its [d] keeps it from matching this command's
-		// own shell. Killing the shell's children stops the 'gzip'. "[']*" works the same in the
-		// basic regular expressions of busybox's pgrep and the extended ones of procps' pgrep.
-		pattern := ShellQuote("[d]d if=[']*" + regexp.QuoteMeta(path) + "[']* ")
+		// Killing the shell's children stops the 'gzip'.
+		pattern := ShellQuote(downloadPattern(path))
 		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
 	}
 	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
+}
+
+// downloadPattern is the extended regular expression, as procps' and busybox's pgrep read it, that
+// matches the command lines of a download of path by streamFileCommand: its shell's, which has the
+// path as ShellQuote writes it, with each "'" as "'\”", and its 'dd”s, which has the path as it
+// is. The [d] keeps the pattern from matching the shell of the command that has it.
+func downloadPattern(path string) string {
+	parts := strings.Split(path, "'")
+	for i, part := range parts {
+		parts[i] = regexp.QuoteMeta(part)
+	}
+	return "[d]d if='?" + strings.Join(parts, `('\\''|')`) + "'? "
 }
 
 // ShellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
