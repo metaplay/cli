@@ -21,14 +21,14 @@ import (
 // isCmdShim reports whether path resolves to a Windows .cmd or .bat script.
 // exec.Cmd invokes those via cmd.exe, which shows
 // "Terminate batch job (Y/N)?" on Ctrl+C and blocks until answered —
-// startCmd uses this to opt into a faster Cancel policy (kill the whole
+// startProcessTree uses this to opt into a faster Cancel policy (kill the whole
 // process tree atomically) instead of giving the child a graceful window.
 func isCmdShim(path string) bool {
 	p := strings.ToLower(path)
 	return strings.HasSuffix(p, ".cmd") || strings.HasSuffix(p, ".bat")
 }
 
-// startCmd configures cmd.Cancel/WaitDelay, starts cmd inside a Windows
+// startProcessTree configures cmd.Cancel/WaitDelay, starts cmd inside a Windows
 // Job Object, and returns a cleanup function. Closing the cleanup func
 // (or letting our process die) atomically terminates the child and every
 // descendant via JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
@@ -48,7 +48,7 @@ func isCmdShim(path string) bool {
 // cmd.Cancel and cmd.WaitDelay are configured here (rather than by callers)
 // so the Cancel closure captures the cleanup func directly — no indirection
 // variable, no race window between cmd.Start and a post-hoc setCleanup.
-func startCmd(cmd *exec.Cmd) (func(), error) {
+func startProcessTree(cmd *exec.Cmd) (func(), error) {
 	job, jobErr := prepareJob()
 
 	// cleanup is referenced by cmd.Cancel below, so it must be in scope
