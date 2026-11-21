@@ -377,7 +377,7 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 }
 
 // removeFilesCommand returns the shell command that removes the files. It first stops a download of
-// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
+// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileCommand). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
 // container ends.
 func removeFilesCommand(paths []string) string {
@@ -385,12 +385,22 @@ func removeFilesCommand(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
 		quoted[i] = ShellQuote(path)
-		// The pattern matches the download's shell and its 'dd'. Its [d] keeps it from matching
-		// this command's own shell. Killing the shell's children stops the 'gzip'.
-		pattern := ShellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
+		// Killing the shell's children stops 'gzip', and 'dd' when its own command line does not
+		// match.
+		pattern := ShellQuote(downloadPattern(path))
 		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
 	}
 	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
+}
+
+// downloadPattern is the extended regular expression, as procps' and busybox's pgrep read it, that
+// matches the command lines of a download of path by streamFileCommand: the shell's, which has the
+// path as ShellQuote writes it, or GNU dd's, which has the path as it is. busybox's dd rewrites its
+// own, see streamFileCommand. The pattern ends with the dd argument after the path, so that it does
+// not match a download of another file whose name starts with path. The [d] keeps the pattern from
+// matching the shell of the command that has it.
+func downloadPattern(path string) string {
+	return "[d]d if=(" + regexp.QuoteMeta(ShellQuote(path)) + "|" + regexp.QuoteMeta(path) + ") bs=1M skip="
 }
 
 // ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in it,

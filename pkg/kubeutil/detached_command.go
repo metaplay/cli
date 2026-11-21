@@ -86,7 +86,8 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		"touch " + ctl + "/heartbeat; " +
 		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr & c=$!; " +
 		"{ while sleep " + watchdogSeconds + "; do " +
-		"[ $(( $(date +%s) - $(stat -c %Y " + ctl + "/heartbeat) )) -gt " + strconv.Itoa(heartbeatSeconds) + " ] && kill -TERM -$$; " +
+		"m=$(stat -c %Y " + ctl + "/heartbeat 2>/dev/null) || m=0; " + // A missing heartbeat is stale
+		"[ $(( $(date +%s) - m )) -gt " + strconv.Itoa(heartbeatSeconds) + " ] && kill -TERM -$$; " +
 		"done; } & w=$!; " +
 		"wait $c; s=$?; kill $w 2>/dev/null; " +
 		"echo $s >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"

@@ -103,9 +103,14 @@ func TestRunDetachedStopsCommandWithoutHeartbeat(t *testing.T) {
 	if _, err := runDetached(ctx, run, workDir, "echo $$ >cmdpid; exec sleep 30"); err == nil {
 		t.Fatal("runDetached succeeded after the cancellation")
 	}
-	pid, err := os.ReadFile(filepath.Join(workDir, "cmdpid"))
-	if err != nil {
-		t.Fatal(err)
+	// The launch returns once the wrapper has recorded its own PID, which can be before the
+	// command has written its PID.
+	var pid []byte
+	for deadline := time.Now().Add(5 * time.Second); len(pid) == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the command did not write its PID")
+		}
+		pid, _ = os.ReadFile(filepath.Join(workDir, "cmdpid"))
 	}
 	running := func() bool {
 		_, err := shell(context.Background(), processRunningCheck(strings.TrimSpace(string(pid))))

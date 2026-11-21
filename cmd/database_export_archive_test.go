@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -175,6 +176,11 @@ func TestCheckOutputPath(t *testing.T) {
 	if err := checkOutputPath(dir); err == nil || !strings.Contains(err.Error(), "is a directory") {
 		t.Errorf("checkOutputPath(directory) = %v, want an error about the directory", err)
 	}
+	if _, err := os.Stat("/dev/null"); err == nil {
+		if err := checkOutputPath("/dev/null"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("checkOutputPath(/dev/null) = %v, want an error about a file that is not regular", err)
+		}
+	}
 	if err := checkOutputPath(filepath.Join(dir, "new.mdb")); err != nil {
 		t.Errorf("checkOutputPath(new file) = %v, want no error", err)
 	}
@@ -197,5 +203,25 @@ func TestCheckOutputPath(t *testing.T) {
 	}
 	if err := checkOutputPath(existing); err == nil {
 		t.Error("checkOutputPath(read-only file) succeeded, want an error")
+	}
+}
+
+// An archive that replaces a file keeps the file's permissions.
+func TestWriteDatabaseArchiveKeepsPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no Unix permissions")
+	}
+	localDir := t.TempDir()
+	shards := writeTestDumps(t, localDir, [][]byte{gzipped(t, testShardSQL)})
+	outputPath := filepath.Join(t.TempDir(), "archive.mdb")
+	if err := os.WriteFile(outputPath, []byte("earlier archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDatabaseArchive(context.Background(), outputPath, localDir, DatabaseArchiveMetadata{NumShards: 1}, shards); err != nil {
+		t.Fatalf("writeDatabaseArchive: %v", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Errorf("archive mode = %v, %v; want -rw-------", info.Mode().Perm(), err)
 	}
 }

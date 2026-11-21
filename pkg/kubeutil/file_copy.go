@@ -135,8 +135,9 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 // getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
 	// From stdin, so that md5sum does not print the file name: for a name with a backslash or a
-	// newline, it would start its output with a backslash.
-	command := fmt.Sprintf("md5sum <%s | cut -d' ' -f1", ShellQuote(filePath))
+	// newline, it would start its output with a backslash, and the checksum would never match. The
+	// command exits with md5sum's status, so that a file it cannot read is an exit code.
+	command := "sum=$(md5sum <" + ShellQuote(filePath) + ") && echo \"${sum%% *}\""
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)
@@ -163,17 +164,23 @@ func calculateLocalFileMD5(filePath string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// streamFileCommand returns the shell command that writes the file from offset to stdout, using
+// dd with skip_bytes to start from the offset, then optionally compresses it. downloadPattern
+// matches its command lines, so that removeFilesCommand can stop it. The shell stays dd's parent,
+// also without compression, as the command does not end with dd: busybox's sh would otherwise
+// exec dd, and busybox's dd rewrites its command line, so the download could not be found.
+func streamFileCommand(srcPath string, offset int64, useCompression bool) string {
+	command := fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null", ShellQuote(srcPath), offset)
+	if useCompression {
+		return command + " | gzip -c"
+	}
+	return command + "; exit $?"
+}
+
 // streamFileFromOffset streams file content from a byte offset using dd.
 // This enables resumable transfers by skipping already-transferred bytes.
-// The 'dd if=<path> ' form of the commands is what removeFilesCommand stops.
 func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcPath string, offset int64, useCompression bool) (io.Reader, func() error, error) {
-	// Use dd with skip_bytes to start from the offset, then optionally compress
-	var command string
-	if useCompression {
-		command = fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null | gzip -c", srcPath, offset)
-	} else {
-		command = fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null", srcPath, offset)
-	}
+	command := streamFileCommand(srcPath, offset, useCompression)
 
 	reader, outStream := io.Pipe()
 
@@ -561,7 +568,7 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 			// Verify integrity via MD5 checksum. A copy that cannot be verified is not complete.
 			output.AppendLinef("Verifying file integrity...")
-			lastErr = verifyLocalFileMD5(ctx, file, destPath)
+			lastErr = verifyLocalFileMD5(ctx, file, destPath, fileSize)
 			if lastErr == nil {
 				return nil
 			}
@@ -626,9 +633,16 @@ var errFileChanged = errors.New("the file changed during the copy")
 // errMD5Mismatch is the error of a copied file whose MD5 checksum differs from the remote file's.
 var errMD5Mismatch = errors.New("MD5 mismatch")
 
+// remoteMD5Timeout is the time limit of the remote md5sum of a file of size bytes. md5sum reads the
+// whole file, which takes minutes for a dump of many GB, so the limit grows with the file:
+// shortExecTimeout plus a second per 20 MB, a slow rate for md5sum.
+func remoteMD5Timeout(size int64) time.Duration {
+	return shortExecTimeout + time.Duration(size/(20<<20))*time.Second
+}
+
 // verifyLocalFileMD5 checks that the local file has the remote file's MD5 checksum.
-func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) error {
-	remoteMD5, err := retryShortExec(ctx, file.MD5)
+func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string, size int64) error {
+	remoteMD5, err := retryExec(ctx, remoteMD5Timeout(size), file.MD5)
 	if err != nil {
 		return fmt.Errorf("failed to get the remote file's MD5 checksum: %w", err)
 	}

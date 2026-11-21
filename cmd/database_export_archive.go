@@ -175,6 +175,11 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 	if err := checkOutputPath(o.argOutputFile); err != nil {
 		return err
 	}
+	// The archive is renamed into place, which would replace a symlink instead of writing to the
+	// file it points to. So write to that file, next to it.
+	if target, err := filepath.EvalSymlinks(o.argOutputFile); err == nil {
+		o.argOutputFile = target
+	}
 
 	// Download the dumps next to the output file: together they are about as large as the archive.
 	localDir, err := os.MkdirTemp(filepath.Dir(o.argOutputFile), ".metaplay-export-")
@@ -320,13 +325,21 @@ func checkOutputPath(path string) error {
 	case info.IsDir():
 		return clierrors.Newf("The output path %s is a directory", path).
 			WithSuggestion("Give a file name, eg, " + filepath.Join(path, "database.mdb"))
+	case !info.Mode().IsRegular():
+		// The archive replaces the file by a rename, which would replace, eg, a device
+		return clierrors.Newf("The output path %s is not a regular file", path).
+			WithSuggestion("Give a path to a regular file, or to one that does not exist yet")
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
 		return clierrors.Wrapf(err, "Cannot write to the output file %s", path).
 			WithSuggestion("Check that the file is writable and not open in another program")
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return clierrors.Wrapf(err, "Cannot write to the output file %s", path).
+			WithSuggestion("Check that the file is writable and not open in another program")
+	}
+	return nil
 }
 
 // mariadbDumpCommand is the mariadb-dump command for the shard's read-only replica with the given
@@ -362,6 +375,8 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 		}
 		if result.ExitCode > 128 {
 			cliErr = cliErr.WithSuggestion(fmt.Sprintf("The dump was killed by signal %d. Signal 9 may mean that the debug pod ran out of memory or disk space", result.ExitCode-128))
+		} else {
+			cliErr = cliErr.WithSuggestion("Fix the cause in mariadb-dump's error above, eg, the database's connection or credentials, then run the command again")
 		}
 		return cliErr
 	}
@@ -416,6 +431,10 @@ func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, meta
 	defer func() { _ = os.Remove(partPath) }() // Does nothing after the rename
 	if err := writeDatabaseArchiveFile(ctx, partPath, localDir, metadata, shards); err != nil {
 		return err
+	}
+	// Keep the permissions of a file the archive replaces
+	if info, err := os.Stat(outputPath); err == nil {
+		_ = os.Chmod(partPath, info.Mode().Perm())
 	}
 	if err := os.Rename(partPath, outputPath); err != nil {
 		return fmt.Errorf("failed to move the archive to %s: %w", outputPath, err)

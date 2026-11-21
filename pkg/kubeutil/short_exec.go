@@ -26,22 +26,38 @@ var (
 
 // callShortExec runs call with the time limit shortExecTimeout.
 func callShortExec[T any](ctx context.Context, call func(context.Context) (T, error)) (T, error) {
-	callCtx, cancel := context.WithTimeout(ctx, shortExecTimeout)
+	return callWithTimeout(ctx, shortExecTimeout, call)
+}
+
+func callWithTimeout[T any](ctx context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return call(callCtx)
 }
 
-// retryShortExec runs call, a short exec call that can be run again, with callShortExec until it
-// succeeds or has failed for shortExecMaxFailingTime. An exit code of the command, a
-// utilexec.CodeExitError, ends the retries at once: the command ran and would fail again. It waits
-// shortExecFirstRetryDelay after the first failure, twice as long after each next one, up to 5 s.
+// retryShortExec runs call, a short exec call that can be run again, with the time limit
+// shortExecTimeout, see retryExec.
 func retryShortExec[T any](ctx context.Context, call func(context.Context) (T, error)) (T, error) {
-	start := time.Now()
+	return retryExec(ctx, shortExecTimeout, call)
+}
+
+// retryExec runs call, an exec call that can be run again, each time with the time limit timeout,
+// until it succeeds or the calls have failed for shortExecMaxFailingTime since the first failure.
+// An exit code of the command, a utilexec.CodeExitError, ends the retries at once: the command ran
+// and would fail again. It waits shortExecFirstRetryDelay after the first failure, twice as long
+// after each next one, up to 5 s.
+func retryExec[T any](ctx context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
+	var failingSince time.Time
 	delay := shortExecFirstRetryDelay
 	for {
-		value, err := callShortExec(ctx, call)
+		value, err := callWithTimeout(ctx, timeout, call)
 		_, exited := errors.AsType[utilexec.CodeExitError](err)
-		if err == nil || exited || ctx.Err() != nil || time.Since(start) >= shortExecMaxFailingTime {
+		if err == nil || exited || ctx.Err() != nil {
+			return value, err
+		}
+		if failingSince.IsZero() {
+			failingSince = time.Now()
+		} else if time.Since(failingSince) >= shortExecMaxFailingTime {
 			return value, err
 		}
 		log.Debug().Msgf("Exec call failed, retrying in %v: %v", delay, err)
