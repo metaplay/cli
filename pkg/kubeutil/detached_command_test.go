@@ -101,11 +101,11 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 			return "", nil
 		}
 		polls++
-		return "", ErrOutputCutShort
+		return "", errOutputCutShort
 	}
 	start := time.Now()
 	_, err := runDetached(context.Background(), run, "/work", "true")
-	if !errors.Is(err, ErrOutputCutShort) {
+	if !errors.Is(err, errOutputCutShort) {
 		t.Errorf("err = %v, want the failed check's error", err)
 	}
 	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 2 {
@@ -128,7 +128,7 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 			return "running\n", nil
 		default:
 			time.Sleep(10 * time.Millisecond)
-			return "", ErrOutputCutShort
+			return "", errOutputCutShort
 		}
 	}
 	if result, err := runDetached(context.Background(), run, "/work", "true"); err != nil || result.ExitCode != 0 {
@@ -190,7 +190,7 @@ func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
 	run := func(ctx context.Context, script string) (string, error) {
 		out, err := shell(ctx, script)
 		if strings.Contains(script, "setsid") {
-			return "", ErrOutputCutShort
+			return "", errOutputCutShort
 		}
 		return out, err
 	}
@@ -258,11 +258,12 @@ func TestProcessRunningCheck(t *testing.T) {
 	if _, err := os.Stat("/proc/self/stat"); err != nil {
 		t.Skip("no /proc")
 	}
-	// The child of 'sleep' ends at once, and sleep does not reap it while it sleeps. The sleeping
-	// process writes nothing to stdout, so the run returns while it sleeps: holding stdout open, it
-	// would make the run wait until it had ended and the zombie had been reaped.
+	// The child of 'sleep' ends after the shell has become sleep, which does not reap it. Had it
+	// ended before, the shell could have reaped it. The sleeping process writes nothing to stdout,
+	// so the run returns while it sleeps: holding stdout open, it would make the run wait until it
+	// had ended and the zombie had been reaped.
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	_, err := run(context.Background(), "sh -c 'true & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 & sleep 0.5")
+	_, err := run(context.Background(), "sh -c 'sleep 0.2 & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 & sleep 0.6")
 	if err != nil {
 		t.Fatal(err)
 	}

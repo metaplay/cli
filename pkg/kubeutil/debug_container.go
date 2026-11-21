@@ -320,25 +320,24 @@ const execExitMarker = "\n__metaplay_exit="
 // ends before its command does, client-go reports success with the output so far, and stdout
 // arrives in order, so the trailer is there only if all of stdout is. The command runs in its own
 // 'sh -c', so that an 'exit' in it still prints the trailer, and '$$' and 'exec' behave as in a
-// command run by itself: a '( ... )' subshell would keep the outer shell's PID in '$$', so a command
-// that records '$$' and then execs a process would record the wrong PID.
+// command run by itself.
 func WithExitTrailer(command string) string {
 	return "sh -c " + ShellQuote(command) + "; printf '" + `\n__metaplay_exit=%d\n` + "' \"$?\""
 }
 
-// ErrOutputCutShort is the error of a command whose stdout lacks the trailer of WithExitTrailer.
-var ErrOutputCutShort = errors.New("the output ended before the command did: the stream closed early")
+// errOutputCutShort is the error of a command whose stdout lacks the trailer of WithExitTrailer.
+var errOutputCutShort = errors.New("the output ended before the command did: the stream closed early")
 
 // splitExitTrailer returns the command's stdout without the trailer of WithExitTrailer, and the
 // exit code in the trailer. It fails if the trailer is missing: the stdout was cut short.
 func splitExitTrailer(stdout string) (string, int, error) {
 	index := strings.LastIndex(stdout, execExitMarker)
 	if index < 0 || !strings.HasSuffix(stdout, "\n") {
-		return stdout, 0, ErrOutputCutShort
+		return stdout, 0, errOutputCutShort
 	}
 	exitCode, err := strconv.Atoi(stdout[index+len(execExitMarker) : len(stdout)-1])
 	if err != nil {
-		return stdout, 0, ErrOutputCutShort
+		return stdout, 0, errOutputCutShort
 	}
 	return stdout[:index], exitCode, nil
 }

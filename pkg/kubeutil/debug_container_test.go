@@ -204,15 +204,7 @@ func TestExitTrailerRoundTripsThroughShell(t *testing.T) {
 // '$$' in the command is the PID of the process that 'exec' replaces the shell with, as in a command
 // run by itself. The CPU profile records dotnet-trace's PID so.
 func TestExitTrailerKeepsShellPID(t *testing.T) {
-	shell, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skip("sh not found")
-	}
-	out, err := exec.Command(shell, "-c", WithExitTrailer(`echo $$; exec sh -c 'echo $$'`)).Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	stdout, _, err := splitExitTrailer(string(out))
+	stdout, err := localShell(t)(t.Context(), `echo $$; exec sh -c 'echo $$'`)
 	lines := strings.Fields(stdout)
 	if err != nil || len(lines) != 2 || lines[0] != lines[1] {
 		t.Errorf("PIDs before and after exec = %q, %v; want the same PID twice", stdout, err)
@@ -223,8 +215,8 @@ func TestExitTrailerKeepsShellPID(t *testing.T) {
 func TestSplitExitTrailerRejectsCutOutput(t *testing.T) {
 	full := "12345\n" + execExitMarker + "0\n"
 	for _, cut := range []string{"", "12345\n", "12345\n\n__metaplay_exit=", "12345\n\n__metaplay_exit=0", full[:len(full)-3]} {
-		if _, _, err := splitExitTrailer(cut); !errors.Is(err, ErrOutputCutShort) {
-			t.Errorf("splitExitTrailer(%q) error = %v, want ErrOutputCutShort", cut, err)
+		if _, _, err := splitExitTrailer(cut); !errors.Is(err, errOutputCutShort) {
+			t.Errorf("splitExitTrailer(%q) error = %v, want errOutputCutShort", cut, err)
 		}
 	}
 }

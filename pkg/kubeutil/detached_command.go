@@ -62,11 +62,11 @@ func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 
 // runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests. run
 // must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
-func runDetached(ctx context.Context, runUnlimited func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
-	run := func(ctx context.Context, script string) (string, error) {
+func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
+	runWithTimeout := func(ctx context.Context, script string) (string, error) {
 		callCtx, cancel := context.WithTimeout(ctx, detachedExecTimeout)
 		defer cancel()
-		return runUnlimited(callCtx, script)
+		return run(callCtx, script)
 	}
 
 	// The command's pid, stderr and exit code go to a directory of this call's own, so that the
@@ -83,7 +83,7 @@ func runDetached(ctx context.Context, runUnlimited func(ctx context.Context, scr
 	launch := "mkdir -p " + dir + " && cd " + dir + " && mkdir " + ctl +
 		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >" + ctl + "/pid; }"
 	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
-	_, launchErr := run(ctx, launch)
+	_, launchErr := runWithTimeout(ctx, launch)
 	if launchErr != nil {
 		if ctx.Err() != nil {
 			return nil, stopped()
@@ -101,7 +101,7 @@ func runDetached(ctx context.Context, runUnlimited func(ctx context.Context, scr
 		"else echo lost; fi"
 	// The command's stderr is only informative, so failing to read it is not an error.
 	readStderr := func() string {
-		stderr, err := run(ctx, "tail -c "+strconv.Itoa(detachedStderrTailBytes)+" "+dir+"/"+ctl+"/stderr")
+		stderr, err := runWithTimeout(ctx, "tail -c "+strconv.Itoa(detachedStderrTailBytes)+" "+dir+"/"+ctl+"/stderr")
 		if err != nil {
 			log.Debug().Msgf("Failed to read the detached command's stderr: %v", err)
 		}
@@ -118,7 +118,7 @@ func runDetached(ctx context.Context, runUnlimited func(ctx context.Context, scr
 		}
 		delay = min(2*delay, detachedPollInterval)
 
-		stdout, err := run(ctx, poll)
+		stdout, err := runWithTimeout(ctx, poll)
 		var state string
 		var exitCode int
 		if err == nil {

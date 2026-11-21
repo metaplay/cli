@@ -193,12 +193,9 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Check that the output file's directory exists and is writable")
 	}
 	defer func() { _ = os.RemoveAll(localDir) }()
-	// A force-quit skips the deferred calls. Without this, the downloaded dumps would stay in the
-	// hidden directory, as large as the archive.
-	defer interrupt.OnForceQuit(func() {
-		_ = os.RemoveAll(localDir)
-		_ = os.Remove(o.argOutputFile + ".part")
-	})()
+	// A force-quit skips the deferred calls. Without this, the downloaded dumps and the archive
+	// being written would stay in the hidden directory.
+	defer interrupt.OnForceQuit(func() { _ = os.RemoveAll(localDir) })()
 
 	// Export the database
 	runner := tui.NewTaskRunner()
@@ -372,7 +369,8 @@ func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseSh
 // temporary file first, so outputPath has a complete archive or none from this export. When ctx is
 // done, it stops writing.
 func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
-	partPath := outputPath + ".part"
+	// In localDir, which is next to outputPath, so that the rename stays on one file system
+	partPath := filepath.Join(localDir, "archive.part")
 	defer func() { _ = os.Remove(partPath) }() // Does nothing after the rename
 	if err := writeDatabaseArchiveFile(ctx, partPath, localDir, metadata, shards); err != nil {
 		return err

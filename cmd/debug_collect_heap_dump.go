@@ -235,10 +235,10 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Success", // Undone by reenableHealthChecksCmd
 		)
-		// A request that was cancelled, or whose output was cut short, may have set the override
-		// before it ended. Other errors, such as an exec the API server rejected, or curl's exit
-		// code, mean it was not set.
-		overrideSet = err == nil || errors.Is(err, context.Canceled) || errors.Is(err, kubeutil.ErrOutputCutShort)
+		// Only curl's exit code shows that the request did not set the override. A request that
+		// failed otherwise, eg, was cancelled or lost its connection, may have set it first.
+		_, exited := errors.AsType[utilexec.CodeExitError](err)
+		overrideSet = !exited
 		if err != nil {
 			return fmt.Errorf("failed to set healthz probe mode: %w", err)
 		}
@@ -305,7 +305,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		}
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName, reenableHealthChecksCmd)
 		if err != nil {
-			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s, which report healthy until the override expires 30 minutes after it was set", podName).
+			return clierrors.Wrapf(err, "Failed to re-enable the health checks of pod %s. If disabling them succeeded, they report healthy until the override expires 30 minutes after it was set", podName).
 				WithSuggestion("To re-enable them sooner, run in the pod: " + reenableHealthChecksCmd)
 		}
 		return nil
