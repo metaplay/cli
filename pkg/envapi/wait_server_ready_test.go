@@ -563,10 +563,10 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	}
 }
 
-// A cancellation ends the wait for an HTTP server at once, with the cancellation as the error:
-// both while a request is in flight and during the pause between two requests. The cancelled
-// request is not logged as a connection error that is retried.
-func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
+// A cancellation ends the wait for a check, here of an HTTP server, at once, with the
+// cancellation as the error: both while a request is in flight and during the pause
+// between two requests. The cancelled request is not logged as a failed attempt.
+func TestNetworkCheckWaitStopsOnCancel(t *testing.T) {
 	cases := map[string]http.HandlerFunc{
 		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
 		"pause between requests": func(w http.ResponseWriter, _ *http.Request) {
@@ -591,7 +591,16 @@ func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
 			})
 
 			start := time.Now()
-			err := waitForHTTPServerToRespond(ctx, &tui.TaskOutput{}, server.URL, time.Minute)
+			check := networkCheck{
+				name:       "Dashboard",
+				waitingFor: "the dashboard to respond",
+				timeout:    time.Minute,
+				interval:   time.Second,
+				probe: func(ctx context.Context) ServerCheck {
+					return checkHTTPServer(ctx, server.URL)
+				},
+			}
+			err := check.wait(ctx, &tui.TaskOutput{})
 
 			if !errors.Is(err, context.Canceled) {
 				t.Errorf("error = %v, want context.Canceled", err)

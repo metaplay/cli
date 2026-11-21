@@ -13,6 +13,7 @@ import (
 	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/tui"
 )
 
 // ServerCheck is the result of one check of a game server's status.
@@ -57,19 +58,148 @@ func (s ServerStatus) Err() error {
 		WithSuggestion(s.suggestion)
 }
 
-// How long each check of CheckServerStatus may take.
+// What failed, when the GameServer resource or the game server pods could not be read.
+// Shared by CheckServerStatus and the wait of a deploy, so that both name a failure alike.
+const (
+	readGameServerFailure = "Failed to read the GameServer resource"
+	checkPodsFailure      = "Failed to check the game server pods"
+)
+
+// How long one check of the pods or of a domain may take, and one fetch of the logs of
+// a failed pod: in CheckServerStatus, and in each attempt of a wait.
 const statusCheckTimeout = 10 * time.Second
 
-// How many connections CheckServerStatus makes to the game server's client endpoint.
-// Several, to show an endpoint that serves only some of them, such as one with a
-// broken load balancer target or address.
-const statusClientConnections = 5
+// How long the wait of a deploy waits for a domain to resolve. The domain names of a
+// new environment take a while to propagate.
+const domainTimeout = 15 * time.Minute
+
+// How many connections the check of the game server's client endpoint makes. All are
+// made and counted, to show an endpoint that serves only some of them, such as one with
+// a broken load balancer target or address. The check passes only if all succeed.
+const clientConnections = 10
+
+// How long each connection to the client endpoint may take, on average.
+const clientConnectionTimeout = 2 * time.Second
+
+// networkCheck declares one check of a game server's networking, which CheckServerStatus
+// makes once and WaitForServerToBeReady waits for. See networkChecks.
+type networkCheck struct {
+	name       string                                // What is checked, shown by CheckServerStatus, and by the wait once it passes
+	title      string                                // Title of the wait's task
+	waitingFor string                                // What the wait waits for, such as "domain x to resolve", for its header and errors
+	timeout    time.Duration                         // How long the wait waits for the check to pass
+	interval   time.Duration                         // How long the wait pauses between two attempts
+	probe      func(ctx context.Context) ServerCheck // Makes the check once, in a bounded time. Fills in all but Name.
+}
+
+// domainChecks is the check that a domain resolves, and the check of the service at the
+// domain. The service is checked only once the domain resolves: it would fail only for
+// the same reason.
+type domainChecks struct {
+	domain  networkCheck
+	service networkCheck
+}
+
+// networkChecks declares the checks of a game server's networking, in the order in
+// which WaitForServerToBeReady waits for them, after the pods.
+func networkChecks(envDetails *DeploymentSecret) []domainChecks {
+	serverHostname := envDetails.Deployment.ServerHostname
+	adminHostname := envDetails.Deployment.AdminHostname
+	endpoint := fmt.Sprintf("%s:%d", serverHostname, gameServerClientPort)
+	dashboardURL := "https://" + adminHostname
+	return []domainChecks{
+		{
+			domain: domainCheck("Game server domain", "Wait for game server domain name to propagate", serverHostname),
+			service: networkCheck{
+				name:       "Game server endpoint " + endpoint,
+				title:      "Wait for game server to serve clients",
+				waitingFor: fmt.Sprintf("game server endpoint %s to be ready", endpoint),
+				timeout:    5 * time.Minute,
+				interval:   1 * time.Second,
+				probe: func(ctx context.Context) ServerCheck {
+					return checkClientEndpoint(ctx, serverHostname, gameServerClientPort)
+				},
+			},
+		},
+		{
+			domain: domainCheck("LiveOps Dashboard domain", "Wait for LiveOps Dashboard domain name to propagate", adminHostname),
+			service: networkCheck{
+				name:       "LiveOps Dashboard " + dashboardURL,
+				title:      "Wait for LiveOps Dashboard to serve traffic",
+				waitingFor: fmt.Sprintf("HTTP server %s to respond", dashboardURL),
+				timeout:    5 * time.Minute,
+				interval:   1 * time.Second,
+				probe: func(ctx context.Context) ServerCheck {
+					return checkHTTPServer(ctx, dashboardURL)
+				},
+			},
+		},
+	}
+}
+
+// domainCheck declares the check that hostname resolves. name tells whose domain it is.
+func domainCheck(name, title, hostname string) networkCheck {
+	return networkCheck{
+		name:       name + " " + hostname,
+		title:      title,
+		waitingFor: fmt.Sprintf("domain %s to resolve", hostname),
+		timeout:    domainTimeout,
+		interval:   5 * time.Second, // Propagation takes a while
+		probe: func(ctx context.Context) ServerCheck {
+			return checkDomain(ctx, hostname)
+		},
+	}
+}
+
+// checkOnce makes the check once.
+func (c networkCheck) checkOnce(ctx context.Context) ServerCheck {
+	check := c.probe(ctx)
+	check.Name = c.name
+	return check
+}
+
+// checkOnce checks the domain once, and then the service, unless the domain does not
+// resolve: then the service's check is skipped. It returns both results, in that order.
+func (d domainChecks) checkOnce(ctx context.Context) []ServerCheck {
+	domain := d.domain.checkOnce(ctx)
+	if domain.Failed() {
+		return []ServerCheck{domain, {Name: d.service.name, Summary: "skipped, as the domain does not resolve", Skipped: true}}
+	}
+	return []ServerCheck{domain, d.service.checkOnce(ctx)}
+}
+
+// wait makes the check until it passes, for at most c.timeout. It shows each failed
+// attempt in the task output, and the check's summary once it passes.
+func (c networkCheck) wait(ctx context.Context, output *tui.TaskOutput) error {
+	stopped := func() error {
+		return clierrors.Wrapf(ctx.Err(), "Stopped waiting for %s", c.waitingFor)
+	}
+	timeoutAt := time.Now().Add(c.timeout)
+	output.SetHeaderLines([]string{fmt.Sprintf("Waiting for %s (timeout: %s)", c.waitingFor, c.timeout)})
+	for attemptNdx := 1; ; attemptNdx++ {
+		check := c.checkOnce(ctx)
+		if ctx.Err() != nil {
+			return stopped()
+		}
+		if !check.Failed() {
+			output.AppendLinef("%s: %s", check.Name, check.Summary)
+			return nil
+		}
+		if !time.Now().Before(timeoutAt) {
+			return clierrors.Newf("Timed out after %s waiting for %s", c.timeout, c.waitingFor).WithDetails(check.Problems...)
+		}
+		output.AppendLinef("Attempt %d failed, retrying: %s", attemptNdx, strings.Join(check.Problems, "; "))
+		if !pause(ctx, c.interval) {
+			return stopped()
+		}
+	}
+}
 
 // CheckServerStatus checks once whether the game server serves clients and the LiveOps
-// Dashboard: the kinds of checks of WaitForServerToBeReady, without waiting. The checks
-// run concurrently. The client endpoint check makes statusClientConnections connections,
-// where the deploy's wait requires 10 in a row. It returns an error only if the
-// checks could not be made, such as when no game server is deployed, or were stopped.
+// Dashboard: the checks of WaitForServerToBeReady, without waiting. The checks run
+// concurrently, except that a service is checked only once its domain resolves. It
+// returns an error only if the checks could not be made, such as when no game server is
+// deployed, or were stopped.
 func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (ServerStatus, error) {
 	envDetails, err := targetEnv.GetDetails()
 	if err != nil {
@@ -79,6 +209,7 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	if err != nil {
 		return ServerStatus{}, err
 	}
+	// Unlike the wait, which retries it, fail at once if the GameServer cannot be read.
 	fetchCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
 	gameServer, err := targetEnv.fetchGameServer(fetchCtx, kubeCli)
@@ -86,47 +217,59 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 		if errors.Is(err, ErrNoGameServer) {
 			return ServerStatus{}, err
 		}
-		return ServerStatus{}, clierrors.Wrap(err, "Failed to read the GameServer resource")
+		return ServerStatus{}, clierrors.Wrap(err, readGameServerFailure)
 	}
 
-	serverHostname := envDetails.Deployment.ServerHostname
-	dashboardURL := "https://" + envDetails.Deployment.AdminHostname
-	var pods, serverDomain, endpoint, dashboardDomain, dashboard ServerCheck
 	var readiness gameServerReadiness
 	var podsErr error
 	var notes, failedPodLogs []string
+	network := networkChecks(envDetails)
+	networkResults := make([][]ServerCheck, len(network))
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		pods, readiness, podsErr = checkPods(ctx, kubeCli, gameServer)
+		readiness, podsErr = checkGameServerReadiness(ctx, kubeCli, gameServer, gameServer.readinessTarget())
 		if readiness.failedPod != "" {
-			logsCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
-			defer cancel()
-			notes, failedPodLogs = failedPodLogLines(logsCtx, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+			notes, failedPodLogs = failedPodLogLines(ctx, kubeCli, readiness.failedPod, readiness.failedPodLogs)
 		}
 	})
-	wg.Go(func() {
-		name := fmt.Sprintf("Game server endpoint %s:%d", serverHostname, gameServerClientPort)
-		serverDomain, endpoint = checkDomainThen(ctx, "Game server domain", serverHostname, name, func() ServerCheck {
-			return checkClientEndpoint(ctx, name, serverHostname, gameServerClientPort)
+	for ndx, checks := range network {
+		wg.Go(func() {
+			networkResults[ndx] = checks.checkOnce(ctx)
 		})
-	})
-	wg.Go(func() {
-		name := "LiveOps Dashboard " + dashboardURL
-		dashboardDomain, dashboard = checkDomainThen(ctx, "LiveOps Dashboard domain", envDetails.Deployment.AdminHostname, name, func() ServerCheck {
-			return checkHTTPServer(ctx, name, dashboardURL)
-		})
-	})
+	}
 	wg.Wait()
 
 	if ctx.Err() != nil {
 		return ServerStatus{}, clierrors.Wrap(ctx.Err(), "Stopped checking the game server status")
 	}
-	return ServerStatus{
-		Checks:        []ServerCheck{pods, serverDomain, endpoint, dashboardDomain, dashboard},
+	status := ServerStatus{
+		Checks:        []ServerCheck{podsServerCheck(readiness, podsErr)},
 		FailedPodLogs: failedPodLogs,
 		Notes:         notes,
 		suggestion:    targetEnv.notReadySuggestion(podsErr, readiness, len(failedPodLogs) > 0),
-	}, nil
+	}
+	for _, results := range networkResults {
+		status.Checks = append(status.Checks, results...)
+	}
+	return status, nil
+}
+
+// podsServerCheck is the ServerCheck of one check of the game server pods, given their
+// readiness, or the error that stopped the check.
+func podsServerCheck(readiness gameServerReadiness, err error) ServerCheck {
+	check := ServerCheck{Name: "Game server pods"}
+	if err != nil {
+		check.Summary = "failed to check"
+		check.Problems = []string{fmt.Sprintf("%s: %v", checkPodsFailure, err)}
+		return check
+	}
+	check.Lines = readiness.lines
+	check.Problems = readiness.problems
+	check.Summary = "ready"
+	if !readiness.ready() {
+		check.Summary = "not ready"
+	}
+	return check
 }
 
 // notReadySuggestion tells what to do when the game server is not ready, given the
@@ -141,47 +284,13 @@ func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness 
 	case !readiness.ready():
 		return "If a deploy just started, run this command again in a minute. Otherwise, the pod lines above show what blocks it"
 	default:
-		return "The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to 15 minutes to resolve"
+		return fmt.Sprintf("The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to %d minutes to resolve", int(domainTimeout.Minutes()))
 	}
-}
-
-// checkDomainThen checks that hostname resolves, and then makes check, which connects to
-// it. If the domain does not resolve, check would fail only for the same reason, so it
-// is skipped. name is the name of check.
-func checkDomainThen(ctx context.Context, domainName, hostname, name string, check func() ServerCheck) (ServerCheck, ServerCheck) {
-	domain := checkDomain(ctx, domainName, hostname)
-	if domain.Failed() {
-		return domain, ServerCheck{Name: name, Summary: "skipped, as the domain does not resolve", Skipped: true}
-	}
-	return domain, check()
-}
-
-// checkPods checks once whether the game server's pods run the image of its CR and are
-// ready. A failed Kubernetes API call fails the check, and is returned.
-func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer) (ServerCheck, gameServerReadiness, error) {
-	check := ServerCheck{Name: "Game server pods"}
-	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
-	defer cancel()
-	target := gameServer.readinessTarget()
-	target.now = time.Now()
-	readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
-	if err != nil {
-		check.Summary = "failed to check"
-		check.Problems = []string{fmt.Sprintf("Failed to check the game server pods: %v", err)}
-		return check, readiness, err
-	}
-	check.Lines = readiness.lines
-	check.Problems = readiness.problems
-	check.Summary = "ready"
-	if !readiness.ready() {
-		check.Summary = "not ready"
-	}
-	return check, readiness, nil
 }
 
 // checkDomain checks once that hostname resolves, with lookupDomain.
-func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
-	check := ServerCheck{Name: fmt.Sprintf("%s %s", name, hostname)}
+func checkDomain(ctx context.Context, hostname string) ServerCheck {
+	var check ServerCheck
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
 	addrs, err := lookupDomain(ctx, hostname)
@@ -194,17 +303,16 @@ func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
 	return check
 }
 
-// checkClientEndpoint connects to the game server's client endpoint
-// statusClientConnections times, and checks that each connection succeeds. The
-// connections are made one after another, as each looks up the hostname again, and so
-// may reach another of the load balancer's addresses. Concurrent lookups of one
-// hostname share a single answer.
-func checkClientEndpoint(ctx context.Context, name, hostname string, port int) ServerCheck {
-	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
+// checkClientEndpoint connects to the game server's client endpoint clientConnections
+// times, and checks that each connection succeeds. The connections are made one after
+// another, as each looks up the hostname again, and so may reach another of the load
+// balancer's addresses. Concurrent lookups of one hostname share a single answer.
+func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerCheck {
+	ctx, cancel := context.WithTimeout(ctx, clientConnections*clientConnectionTimeout)
 	defer cancel()
 	numFailed := 0
 	var firstErr error
-	for range statusClientConnections {
+	for range clientConnections {
 		if err := attemptTLSConnection(ctx, hostname, port); err != nil {
 			numFailed++
 			if firstErr == nil {
@@ -212,20 +320,17 @@ func checkClientEndpoint(ctx context.Context, name, hostname string, port int) S
 			}
 		}
 	}
-	check := ServerCheck{
-		Name:    name,
-		Summary: fmt.Sprintf("%d/%d connections succeeded", statusClientConnections-numFailed, statusClientConnections),
-	}
+	check := ServerCheck{Summary: fmt.Sprintf("%d/%d connections succeeded", clientConnections-numFailed, clientConnections)}
 	if numFailed > 0 {
-		check.Problems = []string{fmt.Sprintf("%d of %d connections to %s:%d failed: %v", numFailed, statusClientConnections, hostname, port, firstErr)}
+		check.Problems = []string{fmt.Sprintf("%d of %d connections to %s:%d failed: %v", numFailed, clientConnections, hostname, port, firstErr)}
 	}
 	return check
 }
 
 // checkHTTPServer checks once that url responds with a success or a redirect. The
 // request's own timeout limits how long it takes.
-func checkHTTPServer(ctx context.Context, name, url string) ServerCheck {
-	check := ServerCheck{Name: name, Summary: "does not respond"}
+func checkHTTPServer(ctx context.Context, url string) ServerCheck {
+	check := ServerCheck{Summary: "does not respond"}
 	status, err := probeHTTPServer(ctx, url)
 	if status != "" {
 		check.Summary = "responds with " + status

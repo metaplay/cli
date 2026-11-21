@@ -38,7 +38,7 @@ func init() {
 			for them to pass:
 			- All expected pods are present, run the deployed image, and are ready.
 			- Client-facing domain name resolves.
-			- Game server accepts 5 client connections, made one after another.
+			- Game server accepts 10 client connections, made one after another.
 			- LiveOps Dashboard domain name resolves.
 			- LiveOps Dashboard responds with a success or a redirect to its login.
 

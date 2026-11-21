@@ -5,14 +5,21 @@
 package envapi
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/tui"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,7 +64,7 @@ func TestProbeHTTPServerNoResponse(t *testing.T) {
 	assert.Equal(t, "", status)
 	assert.Error(t, err)
 
-	check := checkHTTPServer(context.Background(), "Dashboard", url)
+	check := checkHTTPServer(context.Background(), url)
 	assert.True(t, check.Failed())
 	assert.Equal(t, "does not respond", check.Summary)
 	assert.Len(t, check.Problems, 1)
@@ -65,33 +72,127 @@ func TestProbeHTTPServerNoResponse(t *testing.T) {
 }
 
 func TestCheckDomain(t *testing.T) {
-	check := checkDomain(context.Background(), "Domain", "localhost")
+	check := checkDomain(context.Background(), "localhost")
 	assert.False(t, check.Failed(), check.Problems)
-	assert.Equal(t, "Domain localhost", check.Name)
 	assert.Empty(t, check.Problems)
 
 	// The .invalid top-level domain never resolves (RFC 2606).
-	check = checkDomain(context.Background(), "Domain", "server.invalid")
+	check = checkDomain(context.Background(), "server.invalid")
 	assert.True(t, check.Failed())
 	assert.Equal(t, "does not resolve", check.Summary)
 	assert.Len(t, check.Problems, 1)
 }
 
-func TestCheckDomainThen(t *testing.T) {
-	endpoint := ServerCheck{Name: "Endpoint", Problems: []string{"refused"}}
+// All connections are made and counted, also after one has failed.
+func TestCheckClientEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close() // Connections to the port are now refused
 
-	domain, check := checkDomainThen(context.Background(), "Domain", "localhost", "Endpoint", func() ServerCheck { return endpoint })
-	assert.False(t, domain.Failed())
-	assert.Equal(t, endpoint, check)
+	check := checkClientEndpoint(t.Context(), "127.0.0.1", port)
+	assert.Equal(t, "0/10 connections succeeded", check.Summary)
+	assert.Len(t, check.Problems, 1)
+	assert.Contains(t, check.Problems[0], "10 of 10 connections")
+}
 
-	domain, check = checkDomainThen(context.Background(), "Domain", "server.invalid", "Endpoint", func() ServerCheck {
-		t.Error("the check ran although the domain does not resolve")
-		return endpoint
-	})
+// The service at a domain is checked after the domain, and skipped if the domain does
+// not resolve.
+func TestDomainChecksCheckOnce(t *testing.T) {
+	passing := func(context.Context) ServerCheck { return ServerCheck{Summary: "ok"} }
+	failing := func(context.Context) ServerCheck {
+		return ServerCheck{Summary: "does not resolve", Problems: []string{"no such host"}}
+	}
+	notRun := func(context.Context) ServerCheck {
+		t.Error("the service was checked although its domain does not resolve")
+		return ServerCheck{}
+	}
+
+	results := domainChecks{
+		domain:  networkCheck{name: "Domain", probe: passing},
+		service: networkCheck{name: "Endpoint", probe: passing},
+	}.checkOnce(t.Context())
+	assert.Equal(t, []ServerCheck{{Name: "Domain", Summary: "ok"}, {Name: "Endpoint", Summary: "ok"}}, results)
+
+	results = domainChecks{
+		domain:  networkCheck{name: "Domain", probe: failing},
+		service: networkCheck{name: "Dashboard", probe: notRun},
+	}.checkOnce(t.Context())
+	assert.Len(t, results, 2)
+	domain, service := results[0], results[1]
 	assert.True(t, domain.Failed())
-	assert.True(t, check.Skipped)
-	assert.Equal(t, "Endpoint", check.Name)
-	assert.False(t, check.Failed(), "a skipped check adds no problem of its own")
+	assert.Equal(t, "Dashboard", service.Name)
+	assert.True(t, service.Skipped)
+	assert.False(t, service.Failed(), "a skipped check adds no problem of its own")
+}
+
+// The wait retries a failed check every interval, and ends on the first pass, on the
+// first failure once its timeout has passed, or at once when the context is done. It
+// shows each failed attempt, and the summary of the check once it passes.
+func TestNetworkCheckWait(t *testing.T) {
+	// With no display, the wait's output lines are logged
+	tui.SetInteractiveMode(false)
+	t.Cleanup(func() { tui.SetInteractiveMode(true) })
+	notReady := ServerCheck{Summary: "does not resolve", Problems: []string{"no such host"}}
+	newCheck := func(timeout time.Duration, probe func(context.Context) ServerCheck) networkCheck {
+		return networkCheck{name: "Domain x", waitingFor: "domain x to resolve", timeout: timeout, interval: time.Second, probe: probe}
+	}
+
+	t.Run("passes after retries", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			var logged bytes.Buffer
+			previous := log.Logger
+			log.Logger = zerolog.New(&logged)
+			t.Cleanup(func() { log.Logger = previous })
+			runs := 0
+			start := time.Now()
+			err := newCheck(time.Minute, func(context.Context) ServerCheck {
+				runs++
+				if runs < 3 {
+					return notReady
+				}
+				return ServerCheck{Summary: "resolves to 10.0.0.1"}
+			}).wait(t.Context(), &tui.TaskOutput{})
+			assert.NoError(t, err)
+			assert.Equal(t, 3, runs)
+			assert.Equal(t, 2*time.Second, time.Since(start))
+			assert.Contains(t, logged.String(), "Attempt 1 failed, retrying: no such host")
+			assert.Contains(t, logged.String(), "Attempt 2 failed, retrying: no such host")
+			assert.Contains(t, logged.String(), "Domain x: resolves to 10.0.0.1")
+		})
+	})
+
+	t.Run("times out", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			runs := 0
+			start := time.Now()
+			err := newCheck(3*time.Second, func(context.Context) ServerCheck {
+				runs++
+				return notReady
+			}).wait(t.Context(), &tui.TaskOutput{})
+			cliErr, ok := clierrors.AsCLIError(err)
+			if assert.True(t, ok, "error: %v", err) {
+				assert.Equal(t, "Timed out after 3s waiting for domain x to resolve", cliErr.Message)
+				assert.Equal(t, notReady.Problems, cliErr.Details)
+			}
+			// Attempts at 0s, 1s, 2s and 3s: the one at the timeout is the last
+			assert.Equal(t, 4, runs)
+			assert.Equal(t, 3*time.Second, time.Since(start))
+		})
+	})
+
+	t.Run("stops on cancel", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			time.AfterFunc(1500*time.Millisecond, cancel)
+			start := time.Now()
+			err := newCheck(time.Minute, func(context.Context) ServerCheck { return notReady }).wait(ctx, &tui.TaskOutput{})
+			assert.ErrorIs(t, err, context.Canceled)
+			assert.Equal(t, 1500*time.Millisecond, time.Since(start))
+		})
+	})
 }
 
 func TestServerStatusErr(t *testing.T) {
