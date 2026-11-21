@@ -10,12 +10,14 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/remotecommand"
 )
 
@@ -133,7 +135,9 @@ func TestIdleContainerCommandStops(t *testing.T) {
 		t.Skip("bash not found")
 	}
 	pidFile := t.TempDir() + "/pid"
-	command := idleContainerCommand(pidFile, time.Hour)
+	// The command as the kubelet runs it from the container's spec
+	spec := newDebugEphemeralContainer("debugger", "server", false, false, idleContainerCommand(pidFile, time.Hour))
+	command := expandLikeKubernetes(spec.Command, spec.Env)
 	main := exec.Command("bash", command[1:]...)
 	if err := main.Start(); err != nil {
 		t.Fatal(err)
@@ -164,4 +168,55 @@ func TestIdleContainerCommandStops(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the main process did not end after the stop command")
 	}
+}
+
+// The commands of the debug container and pod specs reach the container as they were given, after
+// the kubelet's expansion of "$(VAR)" and "$$".
+func TestDebugSpecCommandsRunAsGiven(t *testing.T) {
+	command := []string{"/bin/bash", "-c", "echo $$ > /tmp/pid; echo $(TERM) $HOME $"}
+	container := newDebugEphemeralContainer("debugger", "server", false, false, command)
+	if got := expandLikeKubernetes(container.Command, container.Env); !slices.Equal(got, command) {
+		t.Errorf("debug container runs %q, want %q", got, command)
+	}
+	pod := newDebugPod("debug-pod", "ns", "image", false, false, command).Spec.Containers[0]
+	if got := expandLikeKubernetes(pod.Command, pod.Env); !slices.Equal(got, command) {
+		t.Errorf("debug pod runs %q, want %q", got, command)
+	}
+}
+
+// expandLikeKubernetes expands command as the kubelet expands a container's command: "$$" becomes
+// "$", and "$(NAME)" becomes the value of the container's variable NAME, if it has one.
+func expandLikeKubernetes(command []string, env []corev1.EnvVar) []string {
+	vars := map[string]string{}
+	for _, v := range env {
+		vars[v.Name] = v.Value
+	}
+	expanded := make([]string, len(command))
+	for i, arg := range command {
+		var out strings.Builder
+		for j := 0; j < len(arg); j++ {
+			if arg[j] != '$' || j+1 == len(arg) {
+				out.WriteByte(arg[j])
+				continue
+			}
+			switch arg[j+1] {
+			case '$':
+				out.WriteByte('$')
+				j++
+			case '(':
+				if end := strings.IndexByte(arg[j:], ')'); end > 0 {
+					if value, ok := vars[arg[j+2:j+end]]; ok {
+						out.WriteString(value)
+						j += end
+						continue
+					}
+				}
+				out.WriteByte('$')
+			default:
+				out.WriteByte('$')
+			}
+		}
+		expanded[i] = out.String()
+	}
+	return expanded
 }
