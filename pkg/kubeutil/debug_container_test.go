@@ -214,6 +214,12 @@ func TestRemoveFilesCommandStopsDownload(t *testing.T) {
 		if err := download.Start(); err != nil {
 			t.Fatal(err)
 		}
+		// When the test fails, stop what the remove command did not: dd would wait for a writer
+		// to the FIFO forever.
+		t.Cleanup(func() {
+			_ = exec.Command("pkill", "-KILL", "-P", strconv.Itoa(download.Process.Pid)).Run()
+			_ = download.Process.Kill()
+		})
 		done := make(chan error, 1)
 		go func() { done <- download.Wait() }()
 		// Wait until dd runs, waiting to open the FIFO
