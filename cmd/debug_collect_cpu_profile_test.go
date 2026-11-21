@@ -117,7 +117,7 @@ func TestTraceCollectCommandStops(t *testing.T) {
 				t.Errorf("dotnet-trace arguments = %q, want %q", got, wantArgs)
 			}
 
-			if out, err := exec.Command("bash", "-c", stopTraceCommand(pidPath)).CombinedOutput(); err != nil {
+			if out, err := exec.Command("bash", "-c", stopTraceCommand(pidPath, "/tmp/profile.nettrace")).CombinedOutput(); err != nil {
 				t.Fatalf("stop command failed: %v: %s", err, out)
 			}
 			select {
@@ -149,7 +149,7 @@ func TestStopTraceCommandSparesOtherProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out, err := exec.Command("bash", "-c", stopTraceCommand(pidPath)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("bash", "-c", stopTraceCommand(pidPath, "/tmp/profile.nettrace")).CombinedOutput(); err != nil {
 		t.Fatalf("stop command failed: %v: %s", err, out)
 	}
 	if err := other.Process.Signal(syscall.Signal(0)); err != nil {

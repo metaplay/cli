@@ -254,7 +254,7 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 			defer cancel()
 			output.AppendLine("Stopping dotnet-trace")
-			if _, _, err := kubeutil.ExecInDebugContainer(stopCtx, kubeCli, podName, debugContainerName, stopTraceCommand(remotePidPath)); err != nil {
+			if _, _, err := kubeutil.ExecInDebugContainer(stopCtx, kubeCli, podName, debugContainerName, stopTraceCommand(remotePidPath, remoteNettracePath)); err != nil {
 				log.Debug().Msgf("Stop dotnet-trace: %v", err)
 			}
 		})
@@ -262,11 +262,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 		if !stopOnInterrupt() {
 			<-stopped
 		}
-		if err != nil && ctx.Err() != nil {
-			// Stopped by the interrupt, so its exit code is not a failure of its own
-			return fmt.Errorf("CPU profile stopped: %w", ctx.Err())
-		}
 		if err != nil {
+			if ctx.Err() != nil {
+				// Stopped by the interrupt, so its exit code is not a failure of its own
+				return fmt.Errorf("CPU profile stopped: %w", ctx.Err())
+			}
 			return fmt.Errorf("failed to collect CPU profile: %w", err)
 		}
 
@@ -319,18 +319,19 @@ func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.S
 	return fmt.Sprintf(`su %s -c 'sh -c "echo \$\$ > %s; exec %s"'`, processInfo.Username, pidPath, trace)
 }
 
-// stopTraceCommand returns the bash command that stops the dotnet-trace whose PID is in pidPath.
+// stopTraceCommand returns the bash command that stops the dotnet-trace whose PID is in pidPath and
+// that writes to outputPath.
 // SIGINT is dotnet-trace's Ctrl-C: it ends the trace session in the server process and finishes
 // the file. If dotnet-trace has not ended after 30 seconds, for example while it converts the
 // profile, it is killed: after an interrupt, the profile is removed anyway. The PID file can be
 // missing for a while when the interrupt comes as the collect command starts. The PID is signalled
-// only while its command line is still dotnet-trace's: the PID namespace is shared with the game
+// only while its command line still names outputPath: the PID namespace is shared with the game
 // server, so after dotnet-trace has exited, the PID can belong to another process.
-func stopTraceCommand(pidPath string) string {
+func stopTraceCommand(pidPath, outputPath string) string {
 	return fmt.Sprintf("for i in $(seq 60); do [ -s %[1]s ] && break; sleep 1; done; "+
 		"pid=$(cat %[1]s) || exit 0; "+
-		"is_trace() { tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null | grep -qE 'dotnet-trace(\\.dll)? collect '; }; "+
+		"is_trace() { grep -qF -- %[2]s /proc/$pid/cmdline 2>/dev/null; }; "+
 		"is_trace && kill -INT $pid; "+
 		"for i in $(seq 30); do is_trace || exit 0; sleep 1; done; "+
-		"kill -KILL $pid", pidPath)
+		"kill -KILL $pid", pidPath, outputPath)
 }
