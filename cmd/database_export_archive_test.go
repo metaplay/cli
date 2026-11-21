@@ -99,7 +99,7 @@ func TestWriteDatabaseArchive(t *testing.T) {
 	if entries["shard_0.sql"] != testShardSQL || entries["shard_1.sql"] != "-- shard 1\n" {
 		t.Errorf("shard data differs: %q, %q", entries["shard_0.sql"], entries["shard_1.sql"])
 	}
-	if _, err := os.Stat(outputPath + ".part"); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(localDir, "archive.part")); !os.IsNotExist(err) {
 		t.Errorf("temporary archive file remains: %v", err)
 	}
 }
@@ -131,7 +131,7 @@ func TestWriteDatabaseArchiveRejectsBadDumps(t *testing.T) {
 			if got, _ := os.ReadFile(outputPath); string(got) != "earlier archive" {
 				t.Errorf("output file changed to %d bytes", len(got))
 			}
-			if _, err := os.Stat(outputPath + ".part"); !os.IsNotExist(err) {
+			if _, err := os.Stat(filepath.Join(localDir, "archive.part")); !os.IsNotExist(err) {
 				t.Errorf("temporary archive file remains: %v", err)
 			}
 		})
@@ -150,7 +150,7 @@ func TestWriteDatabaseArchiveStopsWhenCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want a cancellation", err)
 	}
-	for _, path := range []string{outputPath, outputPath + ".part"} {
+	for _, path := range []string{outputPath, filepath.Join(localDir, "archive.part")} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Errorf("%s exists after a cancelled write: %v", path, err)
 		}

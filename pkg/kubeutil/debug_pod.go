@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/metaplay/cli/internal/interrupt"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/rs/zerolog/log"
 	corev1 "k8s.io/api/core/v1"
@@ -78,11 +79,11 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 	// Create cleanup function to delete the debug pod.
 	// IMPORTANT: Use a fresh background context for cleanup to ensure it works even if the
 	// original context was cancelled (e.g., by Ctrl+C). Give it a reasonable timeout.
-	cleanup := func() {
+	deletePod := func(timeout time.Duration) {
 		log.Debug().Msgf("Deleting debug pod %s...", debugPodName)
 
 		// Create a new context with timeout for cleanup operation
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
 		deletePolicy := metav1.DeletePropagationForeground
@@ -94,6 +95,14 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 		} else {
 			log.Debug().Msgf("Successfully deleted debug pod %s", debugPodName)
 		}
+	}
+	// A force-quit skips the cleanup. Deleting the pod then also ends what still runs in it, such
+	// as a detached database dump, which would otherwise go on reading the database. The request
+	// only starts the deletion, so it returns quickly, as a force-quit step must.
+	removeForceQuitStep := interrupt.OnForceQuit(func() { deletePod(3 * time.Second) })
+	cleanup := func() {
+		removeForceQuitStep()
+		deletePod(120 * time.Second)
 	}
 
 	// Wait for the debug pod to be ready

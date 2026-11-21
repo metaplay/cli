@@ -35,6 +35,10 @@ var detachedMaxFailingTime = time.Minute
 // lasts, and only calls that return count toward detachedMaxFailingTime.
 var detachedExecTimeout = 30 * time.Second
 
+// ErrDetachedCommandLost is the error of a command that ended without writing its exit code. Writing
+// it fails when the disk is full.
+var ErrDetachedCommandLost = errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
+
 // DetachedResult is how a command run with RunDetachedInDebugContainer ended.
 type DetachedResult struct {
 	ExitCode int    // Exit code of the command
@@ -93,10 +97,12 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	}
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
-	// more after the process: the command may end between the checks.
+	// more after the process: the command may end between the checks. A PID that is not a number,
+	// as when writing it failed on a full disk, is lost: in '/proc//stat', it would name /proc/stat.
 	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
+		"pid=$(cat pid); case $pid in ''|*[!0-9]*) pid=invalid;; esac; " +
 		"if [ -f status ]; then echo \"done $(cat status)\"; " +
-		"elif " + processRunningCheck("$(cat pid)") + "; then echo running; " +
+		"elif [ \"$pid\" != invalid ] && " + processRunningCheck("$pid") + "; then echo running; " +
 		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
 		"else echo lost; fi"
 	// The command's stderr is only informative, so failing to read it is not an error.
@@ -145,8 +151,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		case "done":
 			return &DetachedResult{ExitCode: exitCode, Stderr: readStderr()}, nil
 		case "lost":
-			// Writing the exit code fails when the disk is full
-			err := errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
+			err := ErrDetachedCommandLost
 			if stderr := strings.TrimSpace(readStderr()); stderr != "" {
 				err = fmt.Errorf("%w; its stderr ends with: %s", err, stderr)
 			}

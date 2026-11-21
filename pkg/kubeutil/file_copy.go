@@ -134,7 +134,9 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 // getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
-	command := fmt.Sprintf("md5sum %s | cut -d' ' -f1", ShellQuote(filePath))
+	// From stdin, so that md5sum does not print the file name: for a name with a backslash or a
+	// newline, it would start its output with a backslash.
+	command := fmt.Sprintf("md5sum <%s | cut -d' ' -f1", ShellQuote(filePath))
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)
@@ -194,12 +196,20 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		return nil, nil, fmt.Errorf("failed to create executor: %w", err)
 	}
 
+	// The closer ends the stream, also when the reader stops reading before the stream's end: the
+	// stream's goroutine would otherwise block on its write, keeping the stream and the remote dd.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	closeStream := func() {
+		cancelStream()
+		_ = reader.Close()
+	}
+
 	go func() {
 		streamStart := time.Now()
 		log.Debug().Msgf("SPDY stream started (offset=%d): pod=%s container=%s path=%s", offset, podName, containerName, srcPath)
 
 		var stderrBuf bytes.Buffer
-		err := StreamWithContext(ctx, exec, remotecommand.StreamOptions{
+		err := StreamWithContext(streamCtx, exec, remotecommand.StreamOptions{
 			Stdout: outStream,
 			Stderr: &stderrBuf,
 			Tty:    false,
@@ -223,11 +233,18 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	if useCompression {
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
+			closeStream()
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
-		return gzReader, func() error { return gzReader.Close() }, nil
+		return gzReader, func() error {
+			closeStream()
+			return gzReader.Close()
+		}, nil
 	}
-	return reader, func() error { return nil }, nil
+	return reader, func() error {
+		closeStream()
+		return nil
+	}, nil
 }
 
 // streamFileFromPod streams a tar file from a pod and returns an io.Reader for the file contents

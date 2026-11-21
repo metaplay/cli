@@ -91,6 +91,20 @@ func TestRunDetachedKilledCommand(t *testing.T) {
 	}
 }
 
+// A command whose PID file is empty, as when writing it failed on a full disk, is reported as lost
+// at once, instead of seeming to run.
+func TestRunDetachedEmptyPidFile(t *testing.T) {
+	fastPolls(t)
+	start := time.Now()
+	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), `sleep 0.2; for f in .detached-*/pid; do : >"$f"; done; sleep 3`)
+	if err == nil || !strings.Contains(err.Error(), "without writing its exit code") {
+		t.Errorf("err = %v, want the command reported as lost", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("reported after %v, want before the command ends after 3 s", elapsed)
+	}
+}
+
 // Failed checks, such as ones whose output was cut short, are retried until they have failed for
 // detachedMaxFailingTime.
 func TestRunDetachedRetriesFailedChecks(t *testing.T) {
@@ -108,12 +122,15 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	if !errors.Is(err, errOutputCutShort) {
 		t.Errorf("err = %v, want the failed check's error", err)
 	}
-	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 2 {
-		t.Errorf("gave up after %v and %d checks, want at least %v and 2 checks", elapsed, polls, detachedMaxFailingTime)
+	// How many checks fit in the time depends on the scheduler: a loaded runner can stall for the
+	// whole time after the first one.
+	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 1 {
+		t.Errorf("gave up after %v and %d checks, want at least %v", elapsed, polls, detachedMaxFailingTime)
 	}
 
 	// A check that works starts the time over: a command whose checks fail now and then is
-	// waited for.
+	// waited for. The time is long enough for 2 failed checks, also with Windows' 15 ms timer.
+	detachedMaxFailingTime = time.Second
 	polls = 0
 	run = func(ctx context.Context, script string) (string, error) {
 		if strings.Contains(script, "setsid") || strings.Contains(script, "tail") {

@@ -9,6 +9,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -309,6 +310,10 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 	output.AppendLinef("Dumping %s in the debug pod...", what)
 	start := time.Now()
 	result, err := kubeutil.RunDetachedInDebugContainer(ctx, kubeCli, podName, debugContainerName, exportRemoteDir, dumpCmd)
+	if errors.Is(err, kubeutil.ErrDetachedCommandLost) {
+		return clierrors.Wrapf(err, "Dumping the %s was killed", what).
+			WithSuggestion("Check that the debug pod's node has free memory and disk space for the compressed dump, then run the command again")
+	}
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to dump the %s", what).
 			WithSuggestion("Check your network connection and run the command again")
@@ -340,9 +345,10 @@ func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 		return clierrors.Wrapf(err, "Failed to download %s from the debug pod", fileName).
 			WithSuggestion("Check your network connection and run the command again")
 	}
-	// The pod is deleted at the end of the export, so a file that remains does no harm.
+	// A file that remains uses the pod's disk until the pod is deleted at the end of the export,
+	// which the next dump may need. The export can still go on.
 	if err := kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, exportRemoteDir+"/"+fileName); err != nil {
-		log.Debug().Msgf("Failed to remove %s from the debug pod: %v", fileName, err)
+		output.AppendLinef("Warning: failed to remove %s from the debug pod, where it uses disk space the next dump may need: %v", fileName, err)
 	}
 	return nil
 }
