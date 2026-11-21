@@ -6,6 +6,7 @@ package envapi
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"strings"
@@ -23,6 +24,7 @@ type ServerCheck struct {
 	Lines    []string // Details to show below Name, or none
 	Problems []string // Why the check failed, one line each, or none when it passed
 	Skipped  bool     // Whether the check was skipped, as one that it needs failed
+	hint     string   // What to do when the check failed although the pods are ready
 }
 
 // Failed tells whether the check failed.
@@ -76,6 +78,11 @@ const serviceTimeout = 5 * time.Minute
 // a broken load balancer target or address. The check passes only if all succeed.
 const clientConnections = 10
 
+// How long one connection of the check of the client endpoint may take: its TLS
+// handshake, sending a HealthCheck and receiving the protocol header. That is 4 round
+// trips, so a client far from the environment has over 1 second for each.
+const connectionTimeout = 5 * time.Second
+
 // networkCheck declares one check of a game server's networking, which CheckServerStatus
 // makes once and WaitForServerToBeReady waits for. See networkChecks.
 type networkCheck struct {
@@ -85,6 +92,7 @@ type networkCheck struct {
 	timeout    time.Duration                         // How long the wait waits for the check to pass
 	interval   time.Duration                         // How long the wait pauses between two attempts
 	maxAttempt time.Duration                         // How long one attempt may take, or zero for attemptTimeout
+	hint       string                                // What to do when the check fails although the pods are ready
 	probe      func(ctx context.Context) ServerCheck // Makes the check once. Fills in all but Name.
 }
 
@@ -112,10 +120,8 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 				waitingFor: fmt.Sprintf("game server endpoint %s to be ready", endpoint),
 				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
-				// 2 seconds for each connection, which is 4 round trips of 500 ms, for a
-				// client far from the environment. attemptTLSConnection also gives each
-				// connection's send and receive 5 seconds.
-				maxAttempt: clientConnections * 2 * time.Second,
+				maxAttempt: clientConnections * connectionTimeout,
+				hint:       "The game server pods are ready, but the load balancer does not route all client connections to them. Right after a deploy, it can take a minute to route connections to new pods, so run this command again shortly",
 				probe: func(ctx context.Context) ServerCheck {
 					return checkClientEndpoint(ctx, serverHostname, gameServerClientPort)
 				},
@@ -126,9 +132,10 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 			service: networkCheck{
 				name:       "LiveOps Dashboard " + dashboardURL,
 				title:      "Wait for LiveOps Dashboard to serve traffic",
-				waitingFor: fmt.Sprintf("HTTP server %s to respond", dashboardURL),
+				waitingFor: fmt.Sprintf("LiveOps Dashboard %s to respond", dashboardURL),
 				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
+				hint:       "The game server pods are ready, but the request to the LiveOps Dashboard failed. Right after a deploy, run this command again in a minute. Otherwise, the error above tells whether its certificate, its ingress or its authentication fails",
 				probe: func(ctx context.Context) ServerCheck {
 					return checkHTTPServer(ctx, dashboardURL)
 				},
@@ -145,13 +152,14 @@ func domainCheck(name, title, hostname string) networkCheck {
 		waitingFor: fmt.Sprintf("domain %s to resolve", hostname),
 		timeout:    domainTimeout,
 		interval:   5 * time.Second, // Propagation takes a while
+		hint:       fmt.Sprintf("The game server pods are ready, but domain %s does not resolve. The domain names of a new environment can take up to %d minutes to resolve, so run this command again later", hostname, int(domainTimeout.Minutes())),
 		probe: func(ctx context.Context) ServerCheck {
 			return checkDomain(ctx, hostname)
 		},
 	}
 }
 
-// checkOnce makes the check once, in at most c.maxAttempt.
+// checkOnce makes the check once, in at most c.maxAttempt. A failed check carries c.hint.
 func (c networkCheck) checkOnce(ctx context.Context) ServerCheck {
 	maxAttempt := c.maxAttempt
 	if maxAttempt == 0 {
@@ -161,6 +169,9 @@ func (c networkCheck) checkOnce(ctx context.Context) ServerCheck {
 	defer cancel()
 	check := c.probe(ctx)
 	check.Name = c.name
+	if check.Failed() {
+		check.hint = c.hint
+	}
 	return check
 }
 
@@ -223,7 +234,8 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 		if errors.Is(err, ErrNoGameServer) {
 			return ServerStatus{}, err
 		}
-		return ServerStatus{}, clierrors.Wrap(err, readGameServerFailure)
+		return ServerStatus{}, clierrors.Wrap(err, readGameServerFailure).
+			WithSuggestion("Run this command again, and if it fails the same way, check that your account can read the environment's GameServer resource")
 	}
 
 	var readiness gameServerReadiness
@@ -248,16 +260,16 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	if ctx.Err() != nil {
 		return ServerStatus{}, clierrors.Wrap(ctx.Err(), "Stopped checking the game server status")
 	}
-	status := ServerStatus{
-		Checks:        []ServerCheck{podsServerCheck(readiness, podsErr)},
+	var networkChecked []ServerCheck
+	for _, results := range networkResults {
+		networkChecked = append(networkChecked, results...)
+	}
+	return ServerStatus{
+		Checks:        append([]ServerCheck{podsServerCheck(readiness, podsErr)}, networkChecked...),
 		FailedPodLogs: failedPodLogs,
 		Notes:         notes,
-		suggestion:    targetEnv.notReadySuggestion(podsErr, readiness, len(failedPodLogs) > 0),
-	}
-	for _, results := range networkResults {
-		status.Checks = append(status.Checks, results...)
-	}
-	return status, nil
+		suggestion:    targetEnv.notReadySuggestion(podsErr, readiness, len(failedPodLogs) > 0, networkChecked),
+	}, nil
 }
 
 // podsServerCheck is the ServerCheck of one check of the game server pods, given their
@@ -279,9 +291,10 @@ func podsServerCheck(readiness gameServerReadiness, err error) ServerCheck {
 }
 
 // notReadySuggestion tells what to do when the game server is not ready, given the
-// error that stopped the check of its pods, their readiness, and whether the logs of a
-// failed pod were fetched.
-func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness gameServerReadiness, hasLogs bool) string {
+// error that stopped the check of its pods, their readiness, whether the logs of a
+// failed pod were fetched, and the network checks. When the pods are ready, it is the
+// hint of the first failed network check.
+func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness gameServerReadiness, hasLogs bool, network []ServerCheck) string {
 	switch {
 	case podsErr != nil:
 		return "The status of the game server pods could not be read from Kubernetes. Run this command again, and if it fails the same way, check that your account can read the environment's pods and stateful sets"
@@ -289,9 +302,13 @@ func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness 
 		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogSource, hasLogs)
 	case !readiness.ready():
 		return "If a deploy just started, run this command again in a minute. Otherwise, the pod lines above show what blocks it"
-	default:
-		return fmt.Sprintf("The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to %d minutes to resolve", int(domainTimeout.Minutes()))
 	}
+	for _, check := range network {
+		if check.hint != "" {
+			return check.hint
+		}
+	}
+	return ""
 }
 
 // checkDomain checks once that hostname resolves, with lookupDomain.
@@ -310,11 +327,16 @@ func checkDomain(ctx context.Context, hostname string) ServerCheck {
 // checkClientEndpoint connects to the game server's client endpoint clientConnections
 // times, and checks that each connection succeeds. The connections are made one after
 // another, as each looks up the hostname again, and so may reach another of the load
-// balancer's addresses. Concurrent lookups of one hostname share a single answer.
+// balancer's addresses. Concurrent lookups of one hostname share a single answer. Once
+// ctx is done, the remaining connections are not made, and do not count as succeeded.
 func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerCheck {
-	numFailed := 0
+	numMade, numFailed := 0, 0
 	var firstErr error
 	for range clientConnections {
+		if ctx.Err() != nil {
+			break
+		}
+		numMade++
 		if err := attemptTLSConnection(ctx, hostname, port); err != nil {
 			numFailed++
 			if firstErr == nil {
@@ -322,10 +344,16 @@ func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerC
 			}
 		}
 	}
-	check := ServerCheck{Summary: fmt.Sprintf("%d/%d connections succeeded", clientConnections-numFailed, clientConnections)}
+	numSucceeded := numMade - numFailed
+	check := ServerCheck{Summary: fmt.Sprintf("%d/%d connections succeeded", numSucceeded, clientConnections)}
+	var problems []string
 	if numFailed > 0 {
-		check.Problems = []string{fmt.Sprintf("%d of %d connections to %s:%d failed: %v", numFailed, clientConnections, hostname, port, firstErr)}
+		problems = append(problems, fmt.Sprintf("%d of %d connections to %s:%d failed: %v", numFailed, clientConnections, hostname, port, firstErr))
 	}
+	if numNotMade := clientConnections - numMade; numNotMade > 0 {
+		problems = append(problems, fmt.Sprintf("%d of %d connections to %s:%d were not made, as the check ran out of time", numNotMade, clientConnections, hostname, port))
+	}
+	check.Problems = problems
 	return check
 }
 
@@ -333,8 +361,12 @@ func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerC
 func checkHTTPServer(ctx context.Context, url string) ServerCheck {
 	check := ServerCheck{Summary: "does not respond"}
 	status, err := probeHTTPServer(ctx, url)
-	if status != "" {
+	var certErr *tls.CertificateVerificationError
+	switch {
+	case status != "":
 		check.Summary = "responds with " + status
+	case errors.As(err, &certErr):
+		check.Summary = "has an invalid certificate"
 	}
 	if err != nil {
 		check.Problems = []string{err.Error()}

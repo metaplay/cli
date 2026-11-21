@@ -443,10 +443,11 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	// running between the restarts. One restart is allowed, as a server may exit once
 	// while what it depends on is starting too. Kubernetes counts the restarts over the
 	// pod's lifetime, so they count only if the server's last run was brief and recent:
-	// otherwise, they may be from the server's past. A server that keeps crashing runs
-	// briefly, and exits at least every 5 minutes, the longest back-off of Kubernetes.
-	// As the count is over the pod's lifetime, a pod with an old restart fails already on
-	// its first brief run that ends.
+	// otherwise, they may be from the server's past. Kubernetes waits at most 5 minutes
+	// before it restarts a server, so the last run of one that keeps crashing within 5
+	// minutes always ended within recentRestartWindow. One whose runs last longer is
+	// missed for part of the time. As the count is over the pod's lifetime, a pod with an
+	// old restart fails already on its first brief run that ends.
 	lastRun := containerStatus.LastTerminationState.Terminated
 	lastRunWasBriefAndRecent := lastRun != nil &&
 		lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) &&
@@ -631,8 +632,9 @@ func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServ
 const loggedStatusInterval = 30 * time.Second
 
 // How long checks of the game server status may keep failing, for example on a
-// transient Kubernetes API error, before the wait gives up.
-const maxFailingChecksDuration = 15 * time.Second
+// transient Kubernetes API error, before the wait gives up. Longer than two attempts of
+// attemptTimeout, so that two slow reads in a row do not end the wait.
+const maxFailingChecksDuration = 30 * time.Second
 
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
 // occurs. See WaitForServerToBeReady for baseline.
@@ -869,29 +871,38 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 }
 
 // lookupDomain resolves hostname. It looks up the fully qualified name, so that the
-// search domains of this machine do not make it resolve.
+// search domains of this machine do not make it resolve. An IP address resolves to
+// itself.
 func lookupDomain(ctx context.Context, hostname string) ([]string, error) {
-	return net.DefaultResolver.LookupHost(ctx, strings.TrimSuffix(hostname, ".")+".")
+	if net.ParseIP(hostname) == nil {
+		hostname = strings.TrimSuffix(hostname, ".") + "."
+	}
+	return net.DefaultResolver.LookupHost(ctx, hostname)
 }
 
 // attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
 // (client-speaks-first pattern to work behind TLS-terminating proxies), then
-// reads and validates the server's protocol header.
+// reads and validates the server's protocol header, in at most connectionTimeout.
 func attemptTLSConnection(ctx context.Context, hostname string, port int) error {
+	deadline := time.Now().Add(connectionTimeout)
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	address := fmt.Sprintf("%s:%d", hostname, port)
 	dialer := &tls.Dialer{Config: &tls.Config{ServerName: hostname}}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	conn, err := dialer.DialContext(dialCtx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() }) // Ends a read or write on cancel
+	// The deadline ends a read or write with a timeout error, and closing the connection
+	// ends one when the caller's ctx is done.
+	_ = conn.SetDeadline(deadline)
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopClosing()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).
 	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	healthCheckPacket := buildHealthCheckPacket()
 	if _, err := conn.Write(healthCheckPacket); err != nil {
 		return fmt.Errorf("failed to send HealthCheck packet: %w", err)
@@ -899,7 +910,6 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 
 	// Read the protocol header from the server.
 	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buffer := make([]byte, protocolHeaderSize)
 	totalRead := 0
 	for totalRead < protocolHeaderSize {

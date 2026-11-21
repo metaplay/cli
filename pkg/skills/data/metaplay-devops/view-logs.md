@@ -34,7 +34,7 @@ metaplay debug logs <env> --pod service-0
 
 ## Pod naming
 
-Pod names follow `<role>-<index>` — e.g. `service-0`, `entity-0`, `all-0`. Discover the running pod set from the prefix of each line of `metaplay debug logs <env>`, or via `metaplay debug server-status <env>`, which lists the pods of a shard set only once it runs the deployed image.
+Pod names follow `<role>-<index>` — e.g. `service-0`, `entity-0`, `all-0`. Discover the running pod set from the prefix of each line of `metaplay debug logs <env>`, or via `metaplay debug server-status <env>`. It lists one line for each pod that a shard set should have, including pods not created yet, which show as `Pending` with "Pod not created yet".
 
 ## Filtering and triage
 

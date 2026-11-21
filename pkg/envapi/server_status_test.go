@@ -71,13 +71,28 @@ func TestProbeHTTPServerNoResponse(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(check.Problems[0], url), "the URL is named once: %s", check.Problems[0])
 }
 
-func TestCheckDomain(t *testing.T) {
-	check := checkDomain(context.Background(), "localhost")
-	assert.False(t, check.Failed(), check.Problems)
-	assert.Empty(t, check.Problems)
+// A server whose certificate does not verify answered, so it is not summarized as one
+// that does not respond.
+func TestCheckHTTPServerInvalidCertificate(t *testing.T) {
+	server := httptest.NewTLSServer(http.NotFoundHandler()) // Self-signed certificate
+	defer server.Close()
 
-	// The .invalid top-level domain never resolves (RFC 2606).
-	check = checkDomain(context.Background(), "server.invalid")
+	check := checkHTTPServer(t.Context(), server.URL)
+	assert.True(t, check.Failed())
+	assert.Equal(t, "has an invalid certificate", check.Summary)
+}
+
+func TestCheckDomain(t *testing.T) {
+	// An IP address resolves to itself, without a lookup.
+	check := checkDomain(t.Context(), "127.0.0.1")
+	assert.Empty(t, check.Problems)
+	assert.Equal(t, "resolves to 127.0.0.1", check.Summary)
+
+	// The .invalid top-level domain never resolves (RFC 2606). Without a DNS server, the
+	// lookup fails once the context is done.
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	check = checkDomain(ctx, "server.invalid")
 	assert.True(t, check.Failed())
 	assert.Equal(t, "does not resolve", check.Summary)
 	assert.Len(t, check.Problems, 1)
@@ -96,6 +111,30 @@ func TestCheckClientEndpoint(t *testing.T) {
 	assert.Equal(t, "0/10 connections succeeded", check.Summary)
 	assert.Len(t, check.Problems, 1)
 	assert.Contains(t, check.Problems[0], "10 of 10 connections")
+}
+
+// Once the check has run out of time, the remaining connections are not made, and are
+// reported as such rather than as failed connections.
+func TestCheckClientEndpointOutOfTime(t *testing.T) {
+	// A server that accepts a connection but never answers its TLS handshake. The
+	// listener's backlog accepts the connection without an Accept.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	// The first connection hangs until the check runs out of time
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	check := checkClientEndpoint(ctx, "127.0.0.1", port)
+	assert.Equal(t, "0/10 connections succeeded", check.Summary)
+	if assert.Len(t, check.Problems, 2) {
+		assert.Contains(t, check.Problems[0], "1 of 10 connections")
+		assert.Contains(t, check.Problems[1], "9 of 10 connections")
+		assert.Contains(t, check.Problems[1], "were not made")
+	}
 }
 
 // The service at a domain is checked after the domain, and skipped if the domain does
@@ -257,23 +296,27 @@ func TestServerStatusErr(t *testing.T) {
 func TestNotReadySuggestion(t *testing.T) {
 	targetEnv := &TargetEnvironment{HumanID: "nimbly"}
 	failed := gameServerReadiness{failedPod: "all-0", failedPodLogSource: previousPodLogs}
+	domainFailed := []ServerCheck{{Name: "Domain", Problems: []string{"no such host"}, hint: "domain hint"}, {Name: "Endpoint", Skipped: true}}
+	serviceFailed := []ServerCheck{{Name: "Domain"}, {Name: "Endpoint", Problems: []string{"1 of 10 failed"}, hint: "service hint"}}
 	tests := []struct {
 		name      string
 		podsErr   error
 		readiness gameServerReadiness
 		hasLogs   bool
+		network   []ServerCheck
 		want      string
 	}{
 		{name: "pods not read", podsErr: errors.New("forbidden"), want: "could not be read from Kubernetes"},
 		{name: "never started", readiness: gameServerReadiness{failedPod: "all-0", failedPodLogSource: noPodLogs}, want: "pod all-0 did not start, so it has no logs"},
 		{name: "failed with logs", readiness: failed, hasLogs: true, want: "Check the pod logs above for details, or run: metaplay debug logs nimbly"},
 		{name: "failed, logs not fetched", readiness: failed, want: "Check the server logs with: metaplay debug logs nimbly"},
-		{name: "starting", readiness: gameServerReadiness{problems: []string{"Pod all-0 (Starting): starting"}}, want: "run this command again in a minute"},
-		{name: "network only", want: "DNS or the load balancer"},
+		{name: "starting", readiness: gameServerReadiness{problems: []string{"Pod all-0 (Starting): starting"}}, network: domainFailed, want: "run this command again in a minute"},
+		{name: "domain fails", network: domainFailed, want: "domain hint"},
+		{name: "service fails", network: serviceFailed, want: "service hint"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Contains(t, targetEnv.notReadySuggestion(tt.podsErr, tt.readiness, tt.hasLogs), tt.want)
+			assert.Contains(t, targetEnv.notReadySuggestion(tt.podsErr, tt.readiness, tt.hasLogs, tt.network), tt.want)
 		})
 	}
 }

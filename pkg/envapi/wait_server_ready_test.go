@@ -216,36 +216,23 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	// one has the same name, image and revision, but another owner UID.
 	previousOwner := testPod("logic", 0, "new", running, true)
 	previousOwner.OwnerReferences[0].UID = "logic-previous-uid"
-	// restartedPod returns a pod created at the given time, whose server is running, not
-	// ready, and was restarted the given number of times. Its last run lasted 30 seconds
-	// from the creation.
-	restartedPod := func(restarts int32, createdAt time.Time) corev1.Pod {
+	// restartedPod returns a pod whose server is running, not ready, and was restarted
+	// the given number of times. Its last run started and ended at the given times.
+	restartedPod := func(restarts int32, lastRunStartedAt, lastRunEndedAt time.Time) corev1.Pod {
 		pod := testPod("all", 0, "new", running, false)
-		pod.CreationTimestamp = metav1.NewTime(createdAt)
 		pod.Status.ContainerStatuses[0].RestartCount = restarts
 		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
 			ExitCode:   137,
 			Reason:     "Error",
-			StartedAt:  metav1.NewTime(createdAt),
-			FinishedAt: metav1.NewTime(createdAt.Add(30 * time.Second)),
+			StartedAt:  metav1.NewTime(lastRunStartedAt),
+			FinishedAt: metav1.NewTime(lastRunEndedAt),
 		}
 		return pod
 	}
-	// A pod created long ago whose server keeps crashing: its last run was brief, and
-	// ended recently.
-	crashLoopingOldPod := restartedPod(6, now.Add(-3*time.Hour))
-	crashLoopingOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-2 * time.Minute))
-	crashLoopingOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-time.Minute))
-	// A pod created long ago whose server ran for long, and exited once recently. Its
-	// earlier restarts are from its past.
-	exitedOnceOldPod := restartedPod(3, now.Add(-48*time.Hour))
-	exitedOnceOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-24 * time.Hour))
-	exitedOnceOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-time.Minute))
 	readyRestarted := testPod("all", 0, "new", running, true)
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
 	exited := testPod("all", 0, "new", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}, false)
-	exited.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
 	exitedAgain := exited
 	exitedAgain.Status.ContainerStatuses = []corev1.ContainerStatus{{
 		Name:         shardServerContainerName,
@@ -394,7 +381,7 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			name:      "restarted twice while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(2, now.Add(-time.Minute))},
+			pods:      []corev1.Pod{restartedPod(2, now.Add(-time.Minute), now.Add(-30*time.Second))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			failedPod: "all-0",
@@ -405,39 +392,28 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			name:      "restarted once while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(1, now.Add(-time.Minute))},
+			pods:      []corev1.Pod{restartedPod(1, now.Add(-time.Minute), now.Add(-30*time.Second))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 1 time, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 1 time, last exit code 137 (Error))"},
 		},
 		{
-			// In a pod created long ago, the restarts may be from the server's past.
-			name:      "restarted in an old pod",
+			// The restarts may be from the server's past, if its last run ended long ago.
+			name:      "last run ended long ago",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour))},
+			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour), now.Add(-48*time.Hour+30*time.Second))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
 		},
 		{
-			// In a pod created long ago, a recent exit after a long run is not a failure.
-			name:      "exited once after a long run in an old pod",
+			// A recent exit after a long run is not a failure to start, and the earlier
+			// restarts are from the server's past.
+			name:      "exited recently after a long run",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{exitedOnceOldPod},
+			pods:      []corev1.Pod{restartedPod(3, now.Add(-24*time.Hour), now.Add(-time.Minute))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
-		},
-		{
-			// In a pod created long ago, restarts count when the server last ran briefly
-			// and exited recently.
-			name:      "keeps restarting in an old pod",
-			target:    readinessTarget{imageTag: "new"},
-			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{crashLoopingOldPod},
-			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 6 times, last exit code 137 (Error))"},
-			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 6 times, last exit code 137 (Error))"},
-			failedPod: "all-0",
-			logs:      previousPodLogs,
 		},
 		{
 			// Kubernetes restarts the server, and one restart is allowed.
