@@ -35,12 +35,6 @@ var detachedMaxFailingTime = time.Minute
 // lasts, and only calls that return count toward detachedMaxFailingTime.
 var detachedExecTimeout = 30 * time.Second
 
-// detachedStartWindow is how long after the launch call RunDetachedInDebugContainer keeps checking a
-// command that has not recorded its PID yet. The launch call can fail before the command starts, or
-// give up waiting on a slow node, while the command still starts: a single check would report it
-// as not started and leave it running.
-var detachedStartWindow = 15 * time.Second
-
 // ErrDetachedCommandLost is the error of a command that ended without writing its exit code. Writing
 // it fails when the disk is full.
 var ErrDetachedCommandLost = errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
@@ -89,24 +83,28 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	// exec call that started it. The wrapper records its PID before it runs the command, and the
 	// exit code once the command has ended. Both are written to a temporary file and renamed, so
 	// they are never seen half-written. A wrapper that cannot record its PID, eg, on a full disk,
-	// does not run the command. The launch waits up to 5 s for the PID, so that a check right after
-	// it does not see a command that is still starting as not started.
+	// does not run the command.
 	wrapper := "echo $$ >" + ctl + "/pid.tmp && mv " + ctl + "/pid.tmp " + ctl + "/pid || exit; " +
 		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr; " +
 		"echo $? >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
-	launch := "mkdir -p " + dir + " && cd " + dir + " && mkdir " + ctl +
-		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & } &&" +
-		" for i in $(seq 100); do [ -f " + ctl + "/pid ] && break; sleep 0.05; done"
+	// The launch prints whether the command started: it waits until the wrapper has recorded its
+	// PID or has ended. Creating the control directory makes the launch start the command at most
+	// once, so a launch whose exec call failed can run again. A launch that finds the directory
+	// waits for the PID of the launch that created it, for half of the exec call's time limit.
+	waitSteps := strconv.Itoa(int(detachedExecTimeout / 2 / (10 * time.Millisecond)))
+	launch := "mkdir -p " + dir + " && cd " + dir + " || exit; " +
+		"if mkdir " + ctl + " 2>/dev/null; then " +
+		"{ setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & }; w=$!; " +
+		"while [ ! -f " + ctl + "/pid ] && " + processRunningCheck("$w") + "; do sleep 0.01; done; " +
+		"else i=0; while [ ! -f " + ctl + "/pid ] && [ $i -lt " + waitSteps + " ]; do sleep 0.01; i=$((i+1)); done; fi; " +
+		"if [ -f " + ctl + "/pid ]; then echo started; else echo not-started; fi"
 	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
-	_, launchErr := runWithTimeout(ctx, launch)
-	if launchErr != nil {
+	if err := startDetached(ctx, runWithTimeout, launch); err != nil {
 		if ctx.Err() != nil {
 			return nil, stopped()
 		}
-		// The command may have started although the exec call failed: the checks below tell.
-		log.Debug().Msgf("Starting a detached command failed: %v", launchErr)
+		return nil, err
 	}
-	launched := time.Now()
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
 	// more after the process: the command may end between the checks. A PID that is not a number
@@ -168,14 +166,42 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 				err = fmt.Errorf("%w; its stderr ends with: %s", err, stderr)
 			}
 			return nil, err
-		default: // "not-started"
-			if time.Since(launched) < detachedStartWindow {
-				continue
+		default: // "not-started": the command's files are gone, eg, removed in the pod
+			return nil, errors.New("the command's PID file is gone")
+		}
+	}
+}
+
+// startDetached runs runDetached's launch script until it reports whether the command started.
+// A launch whose exec call failed is run again, until the calls have failed for
+// detachedMaxFailingTime: the script starts the command at most once.
+func startDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), launch string) error {
+	var failingSince time.Time
+	for {
+		stdout, err := run(ctx, launch)
+		if err == nil {
+			switch strings.TrimSuffix(stdout, "\n") {
+			case "started":
+				return nil
+			case "not-started":
+				return errors.New("the command did not start: it could not record its PID, eg, on a full disk")
 			}
-			if launchErr != nil {
-				return nil, fmt.Errorf("failed to start the command: %w", launchErr)
-			}
-			return nil, errors.New("the command did not start")
+			err = fmt.Errorf("unexpected output from starting the command: %q", stdout)
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if failingSince.IsZero() {
+			failingSince = time.Now()
+		}
+		log.Debug().Msgf("Failed to start a detached command (failing for %v): %v", time.Since(failingSince).Round(time.Second), err)
+		if time.Since(failingSince) >= detachedMaxFailingTime {
+			return fmt.Errorf("failed to start the command: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(detachedFirstPoll):
 		}
 	}
 }

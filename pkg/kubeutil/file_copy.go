@@ -548,9 +548,8 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 	var lastErr error
 	failedAttemptsWithoutProgress := 0
-	mismatches := 0     // Copies whose MD5 checksum differed: these start over, so they never resume
-	copied := false     // The local file has all of the remote file's bytes, but is not verified yet
-	mismatched := false // The last attempt's copy had a different MD5 checksum
+	mismatches := 0 // Copies whose MD5 checksum differed: these start over, so they never resume
+	copied := false // The local file has all of the remote file's bytes, but is not verified yet
 	canRetry := func() bool { return failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts }
 	for attempt := 1; canRetry(); attempt++ {
 		// Track progress before this attempt
@@ -573,13 +572,11 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 			}
 			output.AppendLinef("Integrity check failed: %v", lastErr)
 			if errors.Is(lastErr, errMD5Mismatch) {
-				// The local file is corrupt: start over. Starting over makes progress, so the
-				// mismatches are counted on their own.
+				// The local file is corrupt: start over.
 				mismatches++
 				_ = os.Remove(destPath)
 				state.bytesTransferred = 0
 				copied = false
-				mismatched = true
 			}
 		}
 
@@ -596,14 +593,14 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 			return fmt.Errorf("file copy stopped: %w", ctx.Err())
 		}
 
-		// Check if progress was made - if so, reset failure counter. A mismatch is counted only
-		// among the mismatches.
-		if mismatched {
-			mismatched = false
-		} else if state.bytesTransferred > progressBefore {
+		// Check if progress was made - if so, reset failure counter
+		switch {
+		case errors.Is(lastErr, errMD5Mismatch):
+			// Counted only among the mismatches
+		case state.bytesTransferred > progressBefore:
 			log.Debug().Msgf("Progress made: %d -> %d bytes, resetting failure counter", progressBefore, state.bytesTransferred)
 			failedAttemptsWithoutProgress = 0
-		} else {
+		default:
 			failedAttemptsWithoutProgress++
 			log.Debug().Msgf("No progress made, failed attempts without progress: %d/%d", failedAttemptsWithoutProgress, numAttempts)
 		}

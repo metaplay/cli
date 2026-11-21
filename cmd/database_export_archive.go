@@ -193,15 +193,17 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 		return clierrors.Wrap(err, "Failed to create a temporary directory for the database dumps").
 			WithSuggestion("Check that the output file's directory exists and is writable")
 	}
-	defer func() { _ = os.RemoveAll(localDir) }()
-	// A force-quit skips the deferred calls. Without this, the downloaded dumps and the archive
-	// being written would stay in the hidden directory. On Windows, a file that a task still has
-	// open cannot be removed, so the user is told where the rest is.
-	defer interrupt.OnForceQuit(func() {
+	// The directory is hidden, so the user is told where files are left that cannot be removed,
+	// eg, on Windows while a task or a virus scanner has them open.
+	removeLocalDir := func() {
 		if err := os.RemoveAll(localDir); err != nil {
 			fmt.Fprintf(os.Stderr, "Could not remove the export's temporary files in %s: %v\n", localDir, err)
 		}
-	})()
+	}
+	defer removeLocalDir()
+	// A force-quit skips the deferred calls. Without this, the downloaded dumps and the archive
+	// being written would stay in the hidden directory.
+	defer interrupt.OnForceQuit(removeLocalDir)()
 
 	// Export the database
 	runner := tui.NewTaskRunner()

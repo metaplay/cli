@@ -33,12 +33,11 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 
 func fastPolls(t *testing.T) {
 	t.Helper()
-	oldFirst, oldInterval, oldFailing, oldTimeout, oldStart := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout, detachedStartWindow
+	oldFirst, oldInterval, oldFailing, oldTimeout := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout
 	detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = time.Millisecond, 10*time.Millisecond, 50*time.Millisecond
-	detachedExecTimeout, detachedStartWindow = 5*time.Second, 50*time.Millisecond
+	detachedExecTimeout = 5 * time.Second
 	t.Cleanup(func() {
-		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = oldFirst, oldInterval, oldFailing
-		detachedExecTimeout, detachedStartWindow = oldTimeout, oldStart
+		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout = oldFirst, oldInterval, oldFailing, oldTimeout
 	})
 }
 
@@ -114,7 +113,7 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	polls := 0
 	run := func(ctx context.Context, script string) (string, error) {
 		if strings.Contains(script, "setsid") {
-			return "", nil
+			return "started\n", nil
 		}
 		polls++
 		return "", errOutputCutShort
@@ -135,7 +134,10 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	detachedMaxFailingTime = time.Second
 	polls = 0
 	run = func(ctx context.Context, script string) (string, error) {
-		if strings.Contains(script, "setsid") || strings.Contains(script, "tail") {
+		switch {
+		case strings.Contains(script, "setsid"):
+			return "started\n", nil
+		case strings.Contains(script, "tail"):
 			return "", nil
 		}
 		polls++
@@ -162,7 +164,7 @@ func TestRunDetachedTimesOutHungChecks(t *testing.T) {
 	detachedExecTimeout = 20 * time.Millisecond
 	run := func(ctx context.Context, script string) (string, error) {
 		if strings.Contains(script, "setsid") {
-			return "", nil
+			return "started\n", nil
 		}
 		<-ctx.Done() // Hangs until the call's timeout
 		return "", ctx.Err()
@@ -201,52 +203,69 @@ func TestRunDetachedIgnoresEarlierCommand(t *testing.T) {
 	}
 }
 
-// A command that started although its exec call failed, as when the call's stream ends early, is
-// waited for.
+// A launch whose exec call failed, as when the call's stream ends early, is run again, and the
+// command, which the first launch started, runs once and is waited for.
 func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
 	fastPolls(t)
 	shell := localShell(t)
+	launches := 0
 	run := func(ctx context.Context, script string) (string, error) {
 		out, err := shell(ctx, script)
 		if strings.Contains(script, "setsid") {
-			return "", errOutputCutShort
+			launches++
+			if launches == 1 {
+				return "", errOutputCutShort
+			}
 		}
 		return out, err
 	}
-	result, err := runDetached(context.Background(), run, t.TempDir(), "exit 4")
+	workDir := t.TempDir()
+	result, err := runDetached(context.Background(), run, workDir, "echo ran >>runs; exit 4")
 	if err != nil || result.ExitCode != 4 {
 		t.Errorf("result = %+v, err = %v; want exit code 4", result, err)
 	}
-
-	// A command that records its PID only after the launch call has returned, as on a slow node,
-	// is waited for.
-	checks := 0
-	run = func(ctx context.Context, script string) (string, error) {
-		switch {
-		case strings.Contains(script, "setsid"):
-			return "", errOutputCutShort
-		case strings.Contains(script, "tail"):
-			return "", nil
-		}
-		checks++
-		if checks < 3 {
-			return "not-started\n", nil
-		}
-		return "done 0\n", nil
-	}
-	if result, err := runDetached(context.Background(), run, "/work", "true"); err != nil || result.ExitCode != 0 {
-		t.Errorf("result = %+v, err = %v; want the command that started late waited for", result, err)
+	if runs, err := os.ReadFile(filepath.Join(workDir, "runs")); err != nil || string(runs) != "ran\n" || launches != 2 {
+		t.Errorf("runs = %q, %v after %d launches; want the command run once after 2 launches", runs, err, launches)
 	}
 
-	// A command that did not start reports why its start failed.
+	// A command that cannot be started reports why its start failed.
 	run = func(ctx context.Context, script string) (string, error) {
-		if strings.Contains(script, "setsid") {
-			return "", errors.New("pod not found")
-		}
-		return "not-started\n", nil
+		return "", errors.New("pod not found")
 	}
 	if _, err := runDetached(context.Background(), run, "/work", "true"); err == nil || !strings.Contains(err.Error(), "pod not found") {
 		t.Errorf("err = %v, want the start's error", err)
+	}
+}
+
+// A launch that cannot create the control directory, here in a read-only workDir, waits for a PID
+// from another launch, and reports the command as not started when none comes.
+func TestRunDetachedReadOnlyWorkDir(t *testing.T) {
+	fastPolls(t)
+	detachedExecTimeout = 400 * time.Millisecond // The launch waits for half of it
+	run := localShell(t)
+	workDir := t.TempDir()
+	if err := os.Chmod(workDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(workDir, 0o755) })
+	if f, err := os.Create(filepath.Join(workDir, "probe")); err == nil {
+		_ = f.Close()
+		t.Skip("the directory is writable anyway, eg, as root")
+	}
+	if _, err := runDetached(context.Background(), run, workDir, "true"); err == nil || !strings.Contains(err.Error(), "did not start") {
+		t.Errorf("err = %v, want the command reported as not started", err)
+	}
+}
+
+// A launch that finds no PID after the command's wrapper ended reports that the command did not
+// start, as when the wrapper cannot record its PID on a full disk.
+func TestRunDetachedReportsNotStarted(t *testing.T) {
+	fastPolls(t)
+	run := func(ctx context.Context, script string) (string, error) {
+		return "not-started\n", nil
+	}
+	if _, err := runDetached(context.Background(), run, "/work", "true"); err == nil || !strings.Contains(err.Error(), "did not start") {
+		t.Errorf("err = %v, want the command reported as not started", err)
 	}
 }
 
@@ -254,9 +273,10 @@ func TestRunDetachedStopsWhenCancelled(t *testing.T) {
 	fastPolls(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	run := func(ctx context.Context, script string) (string, error) {
-		if !strings.Contains(script, "setsid") {
-			cancel()
+		if strings.Contains(script, "setsid") {
+			return "started\n", nil
 		}
+		cancel()
 		return "running\n", nil
 	}
 	_, err := runDetached(ctx, run, "/work", "true")
