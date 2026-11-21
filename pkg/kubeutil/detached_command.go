@@ -30,6 +30,11 @@ var (
 // wait for a command that may still run fine.
 var detachedMaxFailingTime = time.Minute
 
+// detachedExecTimeout limits each of RunDetachedInDebugContainer's short exec calls. A call on a
+// connection that stalls without failing would otherwise block for as long as the connection
+// lasts, and only calls that return count toward detachedMaxFailingTime.
+var detachedExecTimeout = 30 * time.Second
+
 // DetachedResult is how a command run with RunDetachedInDebugContainer ended.
 type DetachedResult struct {
 	ExitCode int    // Exit code of the command
@@ -57,7 +62,13 @@ func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 
 // runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests. run
 // must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
-func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
+func runDetached(ctx context.Context, runUnlimited func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
+	run := func(ctx context.Context, script string) (string, error) {
+		callCtx, cancel := context.WithTimeout(ctx, detachedExecTimeout)
+		defer cancel()
+		return runUnlimited(callCtx, script)
+	}
+
 	// The command's pid, stderr and exit code go to a directory of this call's own, so that the
 	// checks below cannot see the files of an earlier command in workDir: after a failed start,
 	// they would report how that command ended.

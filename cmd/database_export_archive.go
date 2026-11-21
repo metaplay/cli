@@ -18,6 +18,7 @@ import (
 	"time"
 
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/interrupt"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
@@ -192,6 +193,12 @@ func (o *databaseExportArchiveOpts) Run(cmd *cobra.Command) error {
 			WithSuggestion("Check that the output file's directory exists and is writable")
 	}
 	defer func() { _ = os.RemoveAll(localDir) }()
+	// A force-quit skips the deferred calls. Without this, the downloaded dumps would stay in the
+	// hidden directory, as large as the archive.
+	defer interrupt.OnForceQuit(func() {
+		_ = os.RemoveAll(localDir)
+		_ = os.Remove(o.argOutputFile + ".part")
+	})()
 
 	// Export the database
 	runner := tui.NewTaskRunner()
@@ -306,7 +313,8 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 	start := time.Now()
 	result, err := kubeutil.RunDetachedInDebugContainer(ctx, kubeCli, podName, debugContainerName, exportRemoteDir, dumpCmd)
 	if err != nil {
-		return clierrors.Wrapf(err, "Failed to dump the %s", what)
+		return clierrors.Wrapf(err, "Failed to dump the %s", what).
+			WithSuggestion("Check your network connection and run the command again")
 	}
 	stderr := strings.TrimSpace(result.Stderr)
 	if result.ExitCode != 0 {

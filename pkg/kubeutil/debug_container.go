@@ -258,7 +258,7 @@ func waitForContainerReady(ctx context.Context, kubeCli *envapi.KubeClient, podN
 
 // ExecInDebugContainer executes a command in the debug container using Kubernetes API (replaces execCommand)
 // The command runs with /bin/sh, which every debug image has: the database debug image has no bash.
-// It fails unless the command's stdout arrived in full, see withExitTrailer.
+// It fails unless the command's stdout arrived in full, see WithExitTrailer.
 func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, command string) (string, string, error) {
 	req := kubeCli.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -266,7 +266,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		Namespace(kubeCli.Namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command:   []string{"/bin/sh", "-c", withExitTrailer(command)},
+			Command:   []string{"/bin/sh", "-c", WithExitTrailer(command)},
 			Container: debugContainerName,
 			Stdin:     false,
 			Stdout:    true,
@@ -296,7 +296,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	return stdout, stdErr.String(), nil
 }
 
-// checkExecOutput returns the stdout of a command from withExitTrailer without the trailer, and
+// checkExecOutput returns the stdout of a command from WithExitTrailer without the trailer, and
 // an error if the stream failed, the stdout was cut short or the command exited with a non-zero
 // code. That code comes as a utilexec.CodeExitError, as client-go returns it for the exit code of
 // the shell itself, which the trailer's printf makes 0.
@@ -313,30 +313,32 @@ func checkExecOutput(rawStdout string, streamErr error) (string, error) {
 	return stdout, nil
 }
 
-// execExitMarker precedes the exit code that a command from withExitTrailer prints last.
+// execExitMarker precedes the exit code that a command from WithExitTrailer prints last.
 const execExitMarker = "\n__metaplay_exit="
 
-// withExitTrailer makes command print its exit code at the end of its stdout. When an exec stream
+// WithExitTrailer makes command print its exit code at the end of its stdout. When an exec stream
 // ends before its command does, client-go reports success with the output so far, and stdout
-// arrives in order, so the trailer is there only if all of stdout is. The command runs in a
-// subshell, so that an 'exit' in it still prints the trailer.
-func withExitTrailer(command string) string {
-	return "(\n" + command + "\n); printf '" + `\n__metaplay_exit=%d\n` + "' \"$?\""
+// arrives in order, so the trailer is there only if all of stdout is. The command runs in its own
+// 'sh -c', so that an 'exit' in it still prints the trailer, and '$$' and 'exec' behave as in a
+// command run by itself: a '( ... )' subshell would keep the outer shell's PID in '$$', so a command
+// that records '$$' and then execs a process would record the wrong PID.
+func WithExitTrailer(command string) string {
+	return "sh -c " + ShellQuote(command) + "; printf '" + `\n__metaplay_exit=%d\n` + "' \"$?\""
 }
 
-// errOutputCutShort is the error of a command whose stdout lacks the trailer of withExitTrailer.
-var errOutputCutShort = errors.New("the output ended before the command did: the stream closed early")
+// ErrOutputCutShort is the error of a command whose stdout lacks the trailer of WithExitTrailer.
+var ErrOutputCutShort = errors.New("the output ended before the command did: the stream closed early")
 
-// splitExitTrailer returns the command's stdout without the trailer of withExitTrailer, and the
+// splitExitTrailer returns the command's stdout without the trailer of WithExitTrailer, and the
 // exit code in the trailer. It fails if the trailer is missing: the stdout was cut short.
 func splitExitTrailer(stdout string) (string, int, error) {
 	index := strings.LastIndex(stdout, execExitMarker)
 	if index < 0 || !strings.HasSuffix(stdout, "\n") {
-		return stdout, 0, errOutputCutShort
+		return stdout, 0, ErrOutputCutShort
 	}
 	exitCode, err := strconv.Atoi(stdout[index+len(execExitMarker) : len(stdout)-1])
 	if err != nil {
-		return stdout, 0, errOutputCutShort
+		return stdout, 0, ErrOutputCutShort
 	}
 	return stdout[:index], exitCode, nil
 }

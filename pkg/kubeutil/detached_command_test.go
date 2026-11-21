@@ -26,17 +26,18 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 	}
 	// Like ExecInDebugContainer, fail unless the whole stdout arrived and the script exited with 0.
 	return func(ctx context.Context, script string) (string, error) {
-		out, err := exec.CommandContext(ctx, "sh", "-c", withExitTrailer(script)).Output()
+		out, err := exec.CommandContext(ctx, "sh", "-c", WithExitTrailer(script)).Output()
 		return checkExecOutput(string(out), err)
 	}
 }
 
 func fastPolls(t *testing.T) {
 	t.Helper()
-	oldFirst, oldInterval, oldFailing := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime
+	oldFirst, oldInterval, oldFailing, oldTimeout := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout
 	detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = time.Millisecond, 10*time.Millisecond, 50*time.Millisecond
+	detachedExecTimeout = 5 * time.Second
 	t.Cleanup(func() {
-		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = oldFirst, oldInterval, oldFailing
+		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout = oldFirst, oldInterval, oldFailing, oldTimeout
 	})
 }
 
@@ -100,11 +101,11 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 			return "", nil
 		}
 		polls++
-		return "", errOutputCutShort
+		return "", ErrOutputCutShort
 	}
 	start := time.Now()
 	_, err := runDetached(context.Background(), run, "/work", "true")
-	if !errors.Is(err, errOutputCutShort) {
+	if !errors.Is(err, ErrOutputCutShort) {
 		t.Errorf("err = %v, want the failed check's error", err)
 	}
 	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 2 {
@@ -127,11 +128,38 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 			return "running\n", nil
 		default:
 			time.Sleep(10 * time.Millisecond)
-			return "", errOutputCutShort
+			return "", ErrOutputCutShort
 		}
 	}
 	if result, err := runDetached(context.Background(), run, "/work", "true"); err != nil || result.ExitCode != 0 {
 		t.Errorf("result = %+v, err = %v; want exit code 0", result, err)
+	}
+}
+
+// A check that hangs, as on a connection that stalls, is given up after detachedExecTimeout and
+// counts as failed, so a stalled connection cannot keep the wait going forever.
+func TestRunDetachedTimesOutHungChecks(t *testing.T) {
+	fastPolls(t)
+	detachedExecTimeout = 20 * time.Millisecond
+	run := func(ctx context.Context, script string) (string, error) {
+		if strings.Contains(script, "setsid") {
+			return "", nil
+		}
+		<-ctx.Done() // Hangs until the call's timeout
+		return "", ctx.Err()
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := runDetached(context.Background(), run, "/work", "true")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("err = %v, want the checks' timeout", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runDetached still waits on hung checks")
 	}
 }
 
@@ -162,7 +190,7 @@ func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
 	run := func(ctx context.Context, script string) (string, error) {
 		out, err := shell(ctx, script)
 		if strings.Contains(script, "setsid") {
-			return "", errOutputCutShort
+			return "", ErrOutputCutShort
 		}
 		return out, err
 	}
@@ -230,18 +258,25 @@ func TestProcessRunningCheck(t *testing.T) {
 	if _, err := os.Stat("/proc/self/stat"); err != nil {
 		t.Skip("no /proc")
 	}
-	// The child of 'sleep' ends at once, and sleep does not reap it while it sleeps.
-	out, err := run(context.Background(), "sh -c 'true & echo $!; exec sleep 2' & sleep 0.5")
+	// The child of 'sleep' ends at once, and sleep does not reap it while it sleeps. The sleeping
+	// process writes nothing to stdout, so the run returns while it sleeps: holding stdout open, it
+	// would make the run wait until it had ended and the zombie had been reaped.
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	_, err := run(context.Background(), "sh -c 'true & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 & sleep 0.5")
 	if err != nil {
 		t.Fatal(err)
 	}
-	zombie := strings.TrimSpace(out)
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zombie := strings.TrimSpace(string(pidBytes))
 	check := func(pid string) bool {
 		_, err := run(context.Background(), processRunningCheck(pid))
 		return err == nil
 	}
 	if stat, _ := os.ReadFile("/proc/" + zombie + "/stat"); !strings.Contains(string(stat), ") Z") {
-		t.Skipf("could not make a zombie: /proc/%s/stat = %q", zombie, stat)
+		t.Fatalf("could not make a zombie: /proc/%s/stat = %q", zombie, stat)
 	}
 	if check(zombie) {
 		t.Errorf("zombie %s counts as running", zombie)

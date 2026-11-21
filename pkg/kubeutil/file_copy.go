@@ -592,7 +592,9 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 		// On failure, don't delete the partial file - we'll resume from it
 		if canRetry() {
-			if state.bytesTransferred > 0 {
+			if copied {
+				output.AppendLinef("Attempt %d failed to check the file's integrity, will check again...", attempt)
+			} else if state.bytesTransferred > 0 {
 				output.AppendLinef("Attempt %d failed at %s of %s, will resume...",
 					attempt, humanizeFileSize(state.bytesTransferred), humanizeFileSize(fileSize))
 			} else {
