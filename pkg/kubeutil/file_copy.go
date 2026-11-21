@@ -199,9 +199,9 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	// The closer ends the stream, also when the reader stops reading before the stream's end: the
 	// stream's goroutine would otherwise block on its write, keeping the stream and the remote dd.
 	streamCtx, cancelStream := context.WithCancel(ctx)
-	closeStream := func() {
+	closeStream := func() error {
 		cancelStream()
-		_ = reader.Close()
+		return reader.Close()
 	}
 
 	go func() {
@@ -233,18 +233,15 @@ func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 	if useCompression {
 		gzReader, err := gzip.NewReader(reader)
 		if err != nil {
-			closeStream()
+			_ = closeStream()
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
 		}
 		return gzReader, func() error {
-			closeStream()
+			_ = closeStream()
 			return gzReader.Close()
 		}, nil
 	}
-	return reader, func() error {
-		closeStream()
-		return nil
-	}, nil
+	return reader, closeStream, nil
 }
 
 // streamFileFromPod streams a tar file from a pod and returns an io.Reader for the file contents

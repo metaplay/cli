@@ -80,12 +80,17 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	dir := ShellQuote(workDir)
 
 	// Start the command in the background, in its own session, so that it does not depend on the
-	// exec call that started it. The exit code goes to 'status' only once the command has ended:
-	// 'status.tmp' is renamed, so 'status' is never seen half-written.
-	wrapper := "sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr; " +
+	// exec call that started it. The wrapper records its PID before it runs the command, and the
+	// exit code once the command has ended. Both are written to a temporary file and renamed, so
+	// they are never seen half-written. A wrapper that cannot record its PID, eg, on a full disk,
+	// does not run the command. The launch waits up to 5 s for the PID, so that a check right after
+	// it does not see a command that is still starting as not started.
+	wrapper := "echo $$ >" + ctl + "/pid.tmp && mv " + ctl + "/pid.tmp " + ctl + "/pid || exit; " +
+		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr; " +
 		"echo $? >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
 	launch := "mkdir -p " + dir + " && cd " + dir + " && mkdir " + ctl +
-		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >" + ctl + "/pid; }"
+		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & } &&" +
+		" for i in $(seq 100); do [ -f " + ctl + "/pid ] && break; sleep 0.05; done"
 	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
 	_, launchErr := runWithTimeout(ctx, launch)
 	if launchErr != nil {
@@ -97,12 +102,12 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	}
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
-	// more after the process: the command may end between the checks. A PID that is not a number,
-	// as when writing it failed on a full disk, is lost: in '/proc//stat', it would name /proc/stat.
+	// more after the process: the command may end between the checks. A PID that is not a number
+	// counts as a process that does not run: empty, '/proc//stat' would name /proc/stat.
 	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
 		"pid=$(cat pid); case $pid in ''|*[!0-9]*) pid=invalid;; esac; " +
 		"if [ -f status ]; then echo \"done $(cat status)\"; " +
-		"elif [ \"$pid\" != invalid ] && " + processRunningCheck("$pid") + "; then echo running; " +
+		"elif " + processRunningCheck("$pid") + "; then echo running; " +
 		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
 		"else echo lost; fi"
 	// The command's stderr is only informative, so failing to read it is not an error.

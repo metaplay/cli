@@ -86,18 +86,19 @@ func TestRunDetachedPipefail(t *testing.T) {
 func TestRunDetachedKilledCommand(t *testing.T) {
 	fastPolls(t)
 	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), "echo dumping >&2; kill -9 $PPID; sleep 1")
-	if err == nil || !strings.Contains(err.Error(), "without writing its exit code") || !strings.Contains(err.Error(), "dumping") {
+	if !errors.Is(err, ErrDetachedCommandLost) || !strings.Contains(err.Error(), "dumping") {
 		t.Errorf("err = %v, want an error about the missing exit code, with the command's stderr", err)
 	}
 }
 
-// A command whose PID file is empty, as when writing it failed on a full disk, is reported as lost
-// at once, instead of seeming to run.
+// A command whose PID file is empty is reported as lost at once, instead of seeming to run: the
+// check does not read an empty PID's '/proc//stat' as /proc/stat. The command runs only after its
+// PID was recorded, so it can empty the file.
 func TestRunDetachedEmptyPidFile(t *testing.T) {
 	fastPolls(t)
 	start := time.Now()
-	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), `sleep 0.2; for f in .detached-*/pid; do : >"$f"; done; sleep 3`)
-	if err == nil || !strings.Contains(err.Error(), "without writing its exit code") {
+	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), `for f in .detached-*/pid; do : >"$f"; done; sleep 3`)
+	if !errors.Is(err, ErrDetachedCommandLost) {
 		t.Errorf("err = %v, want the command reported as lost", err)
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {

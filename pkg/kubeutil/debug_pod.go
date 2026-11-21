@@ -42,13 +42,9 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 		return "", nil, err
 	}
 
-	// Create cleanup function to delete the debug pod.
-	// IMPORTANT: Use a fresh background context for cleanup to ensure it works even if the
-	// original context was cancelled (e.g., by Ctrl+C). Give it a reasonable timeout.
+	// deletePod uses a fresh context, so it works also after ctx is cancelled, eg, by Ctrl+C.
 	deletePod := func(timeout time.Duration) {
 		log.Debug().Msgf("Deleting debug pod %s...", debugPodName)
-
-		// Create a new context with timeout for cleanup operation
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 
