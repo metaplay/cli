@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -216,5 +217,24 @@ func TestNotifyContextNoForceQuitAfterStop(t *testing.T) {
 	case <-exits:
 		t.Error("a signal after stop force-quit")
 	default:
+	}
+}
+
+// A force-quit runs the registered steps before it ends the process, and not the removed ones.
+func TestForceQuitRunsSteps(t *testing.T) {
+	exits := replaceForceExit(t)
+	var ran []string
+	removeKept := OnForceQuit(func() { ran = append(ran, "kept") })
+	defer removeKept()
+	OnForceQuit(func() { ran = append(ran, "removed") })()
+
+	ctx, stop := NotifyContext(context.Background(), nil)
+	defer stop()
+	Trigger(ctx)
+	sendSIGINT(t)
+	receive(t, exits, "the second interrupt did not force-quit")
+
+	if !slices.Equal(ran, []string{"kept"}) {
+		t.Errorf("steps run = %v, want [kept]", ran)
 	}
 }

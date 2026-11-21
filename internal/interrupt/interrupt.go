@@ -10,8 +10,10 @@ package interrupt
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 )
@@ -60,9 +62,41 @@ const ExitCode = 130
 // forceExit ends the process on a second interrupt, sig. Tests replace it.
 var forceExit = exitOnSignal
 
+var (
+	forceQuitMu         sync.Mutex
+	forceQuitSteps      = map[int]func(){}
+	nextForceQuitStepID int
+)
+
+// OnForceQuit registers step to run on a force-quit, before the process ends, such as killing a
+// child process the command started. A step must return at once. remove unregisters it.
+func OnForceQuit(step func()) (remove func()) {
+	forceQuitMu.Lock()
+	defer forceQuitMu.Unlock()
+	id := nextForceQuitStepID
+	nextForceQuitStepID++
+	forceQuitSteps[id] = step
+	return func() {
+		forceQuitMu.Lock()
+		defer forceQuitMu.Unlock()
+		delete(forceQuitSteps, id)
+	}
+}
+
+// forceQuit runs the force-quit steps and ends the process.
+func forceQuit(sig os.Signal) {
+	forceQuitMu.Lock()
+	steps := slices.Collect(maps.Values(forceQuitSteps))
+	forceQuitMu.Unlock()
+	for _, step := range steps {
+		step()
+	}
+	forceExit(sig)
+}
+
 // NotifyContext returns a context that is cancelled on SIGINT, SIGTERM and Trigger. A signal after
-// that interrupt terminates the process at once, see exitOnSignal. stop releases the signal
-// handler.
+// that interrupt runs the OnForceQuit steps and terminates the process at once, see exitOnSignal.
+// stop releases the signal handler.
 func NotifyContext(parent context.Context, notice func()) (ctx context.Context, stop func()) {
 	ctx, s := withSource(parent, notice)
 	signals := make(chan os.Signal, 1)
@@ -78,7 +112,7 @@ func NotifyContext(parent context.Context, notice func()) (ctx context.Context, 
 				return // The command has finished
 			}
 			if interrupted() {
-				forceExit(sig) // A Trigger call was the first interrupt
+				forceQuit(sig) // A Trigger call was the first interrupt
 				return
 			}
 			s.trigger()
@@ -93,7 +127,7 @@ func NotifyContext(parent context.Context, notice func()) (ctx context.Context, 
 		select {
 		case sig := <-signals:
 			if stopped.Err() == nil {
-				forceExit(sig)
+				forceQuit(sig)
 			}
 		case <-stopped.Done():
 		}
