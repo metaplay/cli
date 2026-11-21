@@ -40,15 +40,12 @@ func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	}
 }
 
-// Before removing the files, the command stops cancelled downloads of them, and it removes each
-// file by its exact name.
+// The command removes each file by its exact name, after stopping the downloads of the files,
+// which TestRemoveFilesCommandStopsDownload tests.
 func TestRemoveFilesCommand(t *testing.T) {
 	got := removeFilesCommand([]string{"/tmp/a.gcdump", "/tmp/it's"})
-	want := "for pid in $(pgrep -f -- " + ShellQuote(downloadPattern("/tmp/a.gcdump")) + "); do pkill -P $pid; kill $pid; done; " +
-		"for pid in $(pgrep -f -- " + ShellQuote(downloadPattern("/tmp/it's")) + "); do pkill -P $pid; kill $pid; done; " +
-		`rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`
-	if got != want {
-		t.Errorf("removeFilesCommand =\n%s\nwant\n%s", got, want)
+	if want := `; rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`; !strings.HasSuffix(got, want) {
+		t.Errorf("removeFilesCommand = %s, want it to end with %s", got, want)
 	}
 }
 
@@ -209,7 +206,16 @@ func TestRemoveFilesCommandStopsDownload(t *testing.T) {
 		}
 		done := make(chan error, 1)
 		go func() { done <- download.Wait() }()
-		time.Sleep(200 * time.Millisecond) // Let the shell start dd
+		// Wait until dd runs, waiting to open the FIFO
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if exec.Command("pgrep", "-f", "--", "^dd if="+regexp.QuoteMeta(path)+" ").Run() == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%q: dd did not start", name)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 
 		if out, err := exec.Command("sh", "-c", removeFilesCommand([]string{path})).CombinedOutput(); err != nil {
 			t.Fatalf("%q: remove command failed: %v: %s", name, err, out)
@@ -217,8 +223,9 @@ func TestRemoveFilesCommandStopsDownload(t *testing.T) {
 		select {
 		case err := <-done:
 			// Had only 'dd' been stopped, gzip would end, and the shell would exit with gzip's 0.
-			if exitErr, ok := errors.AsType[*exec.ExitError](err); !ok || exitErr.ExitCode() != -1 {
-				t.Errorf("%q: download ended with %v, want its shell killed by a signal", name, err)
+			// The shell is killed, or exits with the code of its killed gzip.
+			if err == nil {
+				t.Errorf("%q: the download's shell exited with 0, want it stopped", name)
 			}
 		case <-time.After(5 * time.Second):
 			_ = download.Process.Kill()
