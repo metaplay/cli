@@ -35,12 +35,13 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 
 func fastPolls(t *testing.T) {
 	t.Helper()
-	oldFirst, oldInterval, oldFailing, oldTimeout := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout
-	detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = time.Millisecond, 10*time.Millisecond, 50*time.Millisecond
-	detachedExecTimeout = 5 * time.Second
+	oldFirst, oldInterval, oldHeartbeat := detachedFirstPoll, detachedPollInterval, detachedHeartbeatTimeout
+	// A short heartbeat timeout also ends the watchdogs of commands a test leaves behind
+	detachedFirstPoll, detachedPollInterval, detachedHeartbeatTimeout = time.Millisecond, 10*time.Millisecond, 2*time.Second
 	t.Cleanup(func() {
-		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime, detachedExecTimeout = oldFirst, oldInterval, oldFailing, oldTimeout
+		detachedFirstPoll, detachedPollInterval, detachedHeartbeatTimeout = oldFirst, oldInterval, oldHeartbeat
 	})
+	fastShortExecs(t)
 }
 
 func TestRunDetachedReportsExitCodeAndStderr(t *testing.T) {
@@ -147,7 +148,7 @@ func TestRunDetachedEmptyPidFile(t *testing.T) {
 }
 
 // Failed checks, such as ones whose output was cut short, are retried until they have failed for
-// detachedMaxFailingTime.
+// shortExecMaxFailingTime.
 func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	fastPolls(t)
 	polls := 0
@@ -165,13 +166,13 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	}
 	// How many checks fit in the time depends on the scheduler: a loaded runner can stall for the
 	// whole time after the first one.
-	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 1 {
-		t.Errorf("gave up after %v and %d checks, want at least %v", elapsed, polls, detachedMaxFailingTime)
+	if elapsed := time.Since(start); elapsed < shortExecMaxFailingTime || polls < 1 {
+		t.Errorf("gave up after %v and %d checks, want at least %v", elapsed, polls, shortExecMaxFailingTime)
 	}
 
 	// A check that works starts the time over: a command whose checks fail now and then is
 	// waited for. The time is long enough for 2 failed checks, also with Windows' 15 ms timer.
-	detachedMaxFailingTime = time.Second
+	shortExecMaxFailingTime = time.Second
 	polls = 0
 	run = func(ctx context.Context, script string) (string, error) {
 		switch {
@@ -197,11 +198,11 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	}
 }
 
-// A check that hangs, as on a connection that stalls, is given up after detachedExecTimeout and
+// A check that hangs, as on a connection that stalls, is given up after shortExecTimeout and
 // counts as failed, so a stalled connection cannot keep the wait going forever.
 func TestRunDetachedTimesOutHungChecks(t *testing.T) {
 	fastPolls(t)
-	detachedExecTimeout = 20 * time.Millisecond
+	shortExecTimeout = 20 * time.Millisecond
 	run := func(ctx context.Context, script string) (string, error) {
 		if strings.Contains(script, "setsid") {
 			return "started\n", nil
@@ -221,25 +222,6 @@ func TestRunDetachedTimesOutHungChecks(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runDetached still waits on hung checks")
-	}
-}
-
-// After a failed start, the checks do not report how an earlier command in the same workDir ended.
-func TestRunDetachedIgnoresEarlierCommand(t *testing.T) {
-	fastPolls(t)
-	shell := localShell(t)
-	workDir := t.TempDir()
-	if _, err := runDetached(context.Background(), shell, workDir, "true"); err != nil {
-		t.Fatalf("runDetached: %v", err)
-	}
-	run := func(ctx context.Context, script string) (string, error) {
-		if strings.Contains(script, "setsid") {
-			return "", errors.New("pod not found")
-		}
-		return shell(ctx, script)
-	}
-	if result, err := runDetached(context.Background(), run, workDir, "exit 5"); err == nil || !strings.Contains(err.Error(), "pod not found") {
-		t.Errorf("result = %+v, err = %v; want the start's error", result, err)
 	}
 }
 
@@ -281,7 +263,7 @@ func TestRunDetachedWaitsAfterFailedStart(t *testing.T) {
 // from another launch, and reports the command as not started when none comes.
 func TestRunDetachedReadOnlyWorkDir(t *testing.T) {
 	fastPolls(t)
-	detachedExecTimeout = 400 * time.Millisecond // The launch waits for half of it
+	shortExecTimeout = 400 * time.Millisecond // The launch waits for half of it
 	run := localShell(t)
 	workDir := t.TempDir()
 	if err := os.Chmod(workDir, 0o555); err != nil {
@@ -344,12 +326,12 @@ func TestParseDetachedState(t *testing.T) {
 		state    string
 		exitCode int
 	}{
-		"running\n":     {"running", 0},
-		"lost\n":        {"lost", 0},
-		"not-started\n": {"not-started", 0},
-		"done 0\n":      {"done", 0},
-		"done 137\n":    {"done", 137},
-		"done 0":        {"done", 0},
+		"running\n":  {"running", 0},
+		"lost\n":     {"lost", 0},
+		"gone\n":     {"gone", 0},
+		"done 0\n":   {"done", 0},
+		"done 137\n": {"done", 137},
+		"done 0":     {"done", 0},
 	}
 	for input, want := range valid {
 		state, exitCode, err := parseDetachedState(input)

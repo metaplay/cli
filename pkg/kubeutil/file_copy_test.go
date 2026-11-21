@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	utilexec "k8s.io/client-go/util/exec"
+
 	"github.com/metaplay/cli/internal/tui"
 )
 
@@ -276,12 +278,14 @@ type fakeRemoteFile struct {
 
 func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
 
-// fastRemoteChecks makes retryRemoteCheck give up within tens of milliseconds.
-func fastRemoteChecks(t *testing.T) {
+// fastShortExecs makes retryShortExec give up within tens of milliseconds.
+func fastShortExecs(t *testing.T) {
 	t.Helper()
-	oldDelay, oldFailing := remoteCheckFirstDelay, remoteCheckMaxFailingTime
-	remoteCheckFirstDelay, remoteCheckMaxFailingTime = time.Millisecond, 20*time.Millisecond
-	t.Cleanup(func() { remoteCheckFirstDelay, remoteCheckMaxFailingTime = oldDelay, oldFailing })
+	oldTimeout, oldFailing, oldDelay := shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay
+	shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay = 5*time.Second, 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() {
+		shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay = oldTimeout, oldFailing, oldDelay
+	})
 }
 
 func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
@@ -357,7 +361,7 @@ func TestCopyRemoteFileFailsWithoutProgress(t *testing.T) {
 
 // A copy whose checksum cannot be checked is not complete.
 func TestCopyRemoteFileFailsWithoutMD5(t *testing.T) {
-	fastRemoteChecks(t)
+	fastShortExecs(t)
 	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: errors.New("md5sum not found")}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
@@ -417,7 +421,7 @@ func TestCopyRemoteFileCountsMismatchOnItsOwn(t *testing.T) {
 // When getting the remote checksum fails for a moment, only the check is retried: the file is
 // kept and not copied again.
 func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
-	fastRemoteChecks(t)
+	fastShortExecs(t)
 	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Fails: 2}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
@@ -429,9 +433,19 @@ func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
 	}
 }
 
+// A check whose command exits with an error, eg, md5sum on a file that is gone, would fail again,
+// so it is not retried.
+func TestCopyRemoteFileDoesNotRetryFailedCommand(t *testing.T) {
+	fastShortExecs(t)
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: utilexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1}}
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, filepath.Join(t.TempDir(), "out.bin"), 3); err == nil || file.md5Calls != 1 {
+		t.Errorf("err = %v after %d checks, want an error after 1", err, file.md5Calls)
+	}
+}
+
 // A size check that fails for a moment is retried.
 func TestCopyRemoteFileRetriesTheSize(t *testing.T) {
-	fastRemoteChecks(t)
+	fastShortExecs(t)
 	file := &flakySizeFile{fakeRemoteFile: fakeRemoteFile{data: testData(100), maxChunk: 100}, sizeFails: 2}
 	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, filepath.Join(t.TempDir(), "out.bin"), 1); err != nil {
 		t.Errorf("copyRemoteFile: %v", err)

@@ -535,7 +535,7 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 	}
 
 	// Get file size first to enable resumable transfers
-	fileSize, err := retryRemoteCheck(ctx, file.Size)
+	fileSize, err := retryShortExec(ctx, file.Size)
 	if err != nil {
 		return fmt.Errorf("failed to get remote file size: %w", err)
 	}
@@ -566,14 +566,13 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 				return nil
 			}
 			output.AppendLinef("Integrity check failed: %v", lastErr)
+			_ = os.Remove(destPath)
 			if !errors.Is(lastErr, errMD5Mismatch) {
-				// Getting the remote checksum kept failing, see retryRemoteCheck
-				_ = os.Remove(destPath)
+				// Getting the remote checksum kept failing, see retryShortExec
 				return fmt.Errorf("file copy failed: %w", lastErr)
 			}
 			// The local file is corrupt: start over.
 			mismatches++
-			_ = os.Remove(destPath)
 			state.bytesTransferred = 0
 		}
 
@@ -627,38 +626,9 @@ var errFileChanged = errors.New("the file changed during the copy")
 // errMD5Mismatch is the error of a copied file whose MD5 checksum differs from the remote file's.
 var errMD5Mismatch = errors.New("MD5 mismatch")
 
-// remoteCheckFirstDelay and remoteCheckMaxFailingTime pace retryRemoteCheck: it waits
-// remoteCheckFirstDelay after the first failure, twice as long after each next one, up to 5 s, and
-// gives up once the check has failed for remoteCheckMaxFailingTime.
-var (
-	remoteCheckFirstDelay     = 200 * time.Millisecond
-	remoteCheckMaxFailingTime = time.Minute
-)
-
-// retryRemoteCheck runs check, a short exec call such as the file's size or checksum, until it
-// succeeds or has failed for remoteCheckMaxFailingTime. A connection that drops for a moment then
-// does not fail a copy, or throw away a file that has been copied in full.
-func retryRemoteCheck[T any](ctx context.Context, check func(context.Context) (T, error)) (T, error) {
-	start := time.Now()
-	delay := remoteCheckFirstDelay
-	for {
-		value, err := check(ctx)
-		if err == nil || ctx.Err() != nil || time.Since(start) >= remoteCheckMaxFailingTime {
-			return value, err
-		}
-		log.Debug().Msgf("Remote check failed, retrying in %v: %v", delay, err)
-		select {
-		case <-ctx.Done():
-			return value, err
-		case <-time.After(delay):
-		}
-		delay = min(2*delay, 5*time.Second)
-	}
-}
-
 // verifyLocalFileMD5 checks that the local file has the remote file's MD5 checksum.
 func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) error {
-	remoteMD5, err := retryRemoteCheck(ctx, file.MD5)
+	remoteMD5, err := retryShortExec(ctx, file.MD5)
 	if err != nil {
 		return fmt.Errorf("failed to get the remote file's MD5 checksum: %w", err)
 	}

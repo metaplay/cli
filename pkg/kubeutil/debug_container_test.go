@@ -225,6 +225,14 @@ func TestSplitExitTrailerRejectsCutOutput(t *testing.T) {
 	}
 }
 
+// An exit code of the shell itself, as when it is killed, is errShellEnded.
+func TestCheckExecOutputShellExit(t *testing.T) {
+	_, err := checkExecOutput("out", utilexec.CodeExitError{Err: errors.New("command terminated with exit code 137"), Code: 137})
+	if !errors.Is(err, errShellEnded) {
+		t.Errorf("err = %v, want errShellEnded", err)
+	}
+}
+
 // A non-zero exit code is a utilexec.CodeExitError, which callers check for to tell that the
 // command ended, and cut output or a failed stream is not.
 func TestCheckExecOutputExitCode(t *testing.T) {
