@@ -224,6 +224,9 @@ func waitForContainerReady(ctx context.Context, kubeCli *envapi.KubeClient, podN
 }
 
 // ExecInDebugContainer executes a command in the debug container using Kubernetes API (replaces execCommand)
+// The command runs with /bin/sh, which every debug image has: the database debug image has no bash.
+// The output can be cut short without an error, when the stream ends before the command does, so
+// callers that need all of it must check that it is complete.
 func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, command string) (string, string, error) {
 	req := kubeCli.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -231,7 +234,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		Namespace(kubeCli.Namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command:   []string{"/bin/bash", "-c", command},
+			Command:   []string{"/bin/sh", "-c", command},
 			Container: debugContainerName,
 			Stdin:     false,
 			Stdout:    true,
@@ -277,18 +280,18 @@ func removeFilesCommand(paths []string) string {
 	var command strings.Builder
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
-		quoted[i] = shellQuote(path)
+		quoted[i] = ShellQuote(path)
 		// The pattern matches the download's shell and its 'dd'. Its [d] keeps it from matching
 		// this command's own shell. Killing the shell's children stops the 'gzip'.
-		pattern := shellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
+		pattern := ShellQuote("[d]d if=" + regexp.QuoteMeta(path) + " ")
 		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
 	}
 	return command.String() + "rm -f -- " + strings.Join(quoted, " ")
 }
 
-// shellQuote quotes s as a single word for bash, so a path with spaces or wildcards in it, such as
-// one built from a user's --output, means only itself.
-func shellQuote(s string) string {
+// ShellQuote quotes s as a single word for a POSIX shell, so a path with spaces or wildcards in it,
+// such as one built from a user's --output, means only itself.
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 

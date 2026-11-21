@@ -16,21 +16,24 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
+// ShellQuote's output, run through bash or sh, is the original string, so 'rm -f' gets exactly one
 // argument even for names with spaces, wildcards or quotes.
-func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash not found")
-	}
-	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf"}
-	for _, name := range names {
-		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+shellQuote(name)).Output()
+func TestShellQuoteRoundTripsThroughShells(t *testing.T) {
+	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf", `pa$$w'o"rd!`}
+	for _, shellName := range []string{"bash", "sh"} {
+		shell, err := exec.LookPath(shellName)
 		if err != nil {
-			t.Fatalf("bash failed for %q: %v", name, err)
+			t.Logf("%s not found", shellName)
+			continue
 		}
-		if got := strings.TrimSuffix(string(out), "\n"); got != name {
-			t.Errorf("shellQuote(%q) through bash = %q", name, got)
+		for _, name := range names {
+			out, err := exec.Command(shell, "-c", "printf '%s\\n' "+ShellQuote(name)).Output()
+			if err != nil {
+				t.Fatalf("%s failed for %q: %v", shellName, name, err)
+			}
+			if got := strings.TrimSuffix(string(out), "\n"); got != name {
+				t.Errorf("ShellQuote(%q) through %s = %q", name, shellName, got)
+			}
 		}
 	}
 }
