@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -163,5 +164,15 @@ func TestIdleContainerCommandStops(t *testing.T) {
 	case <-ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the main process did not end after the stop command")
+	}
+}
+
+// Each "$" is doubled, which Kubernetes reduces back to one, so "$$" and "$(VAR)" reach the
+// container as they are.
+func TestEscapeContainerCommand(t *testing.T) {
+	got := escapeContainerCommand([]string{"/bin/bash", "-c", "echo $$ > /tmp/pid; echo $(HOME) $HOME"})
+	want := []string{"/bin/bash", "-c", "echo $$$$ > /tmp/pid; echo $$(HOME) $$HOME"}
+	if !slices.Equal(got, want) {
+		t.Errorf("escapeContainerCommand = %q, want %q", got, want)
 	}
 }

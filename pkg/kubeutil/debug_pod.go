@@ -50,7 +50,7 @@ func CreateDebugPod(ctx context.Context, kubeCli *envapi.KubeClient, image strin
 					ImagePullPolicy: corev1.PullAlways,
 					Stdin:           interactive,
 					TTY:             tty,
-					Command:         command,
+					Command:         escapeContainerCommand(command),
 					SecurityContext: &corev1.SecurityContext{
 						Capabilities: &corev1.Capabilities{
 							// Enable ptrace to allow debugging/tracing. Should be equivalent to 'kubectl debug --profile=general'.

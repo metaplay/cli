@@ -69,6 +69,17 @@ func stopIdleContainerCommand(pidFile string) string {
 	return "kill $(cat " + pidFile + ")"
 }
 
+// escapeContainerCommand escapes command for a container spec's command, so that the container
+// runs it as it is. Kubernetes expands "$(VAR)" in a container's command to the container's
+// variable VAR, and reduces "$$" to "$": without this, a shell's "$$" would reach the shell as "$".
+func escapeContainerCommand(command []string) []string {
+	escaped := make([]string, len(command))
+	for i, arg := range command {
+		escaped[i] = strings.ReplaceAll(arg, "$", "$$")
+	}
+	return escaped
+}
+
 // CreateDebugContainer creates a debug container in the target pod that runs command, and waits
 // for it to start. The container ends when command exits.
 func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, targetContainerName string, interactive bool, tty bool, command []string) (string, error) {
@@ -105,7 +116,7 @@ func CreateDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 			ImagePullPolicy: corev1.PullAlways,
 			Stdin:           interactive,
 			TTY:             tty,
-			Command:         command,
+			Command:         escapeContainerCommand(command),
 			SecurityContext: &corev1.SecurityContext{
 				Capabilities: &corev1.Capabilities{
 					// Enable ptrace to allow debugging/tracing. Should be equivalent to 'kubectl debug --profile=general'.
