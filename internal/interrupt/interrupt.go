@@ -53,7 +53,8 @@ func withSource(parent context.Context, notice func()) (context.Context, *source
 	return context.WithValue(ctx, sourceKey{}, s), s
 }
 
-// ExitCode is the exit code of an interrupted command, 128 + SIGINT.
+// ExitCode is the exit code of an interrupted command, 128 + SIGINT. It is used for an interrupt
+// by any signal, and by a Ctrl-C key press.
 const ExitCode = 130
 
 // forceExit ends the process on a second interrupt, sig. Tests replace it.
