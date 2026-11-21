@@ -6,9 +6,10 @@ package kubeutil
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/metaplay/cli/pkg/envapi"
@@ -38,9 +39,10 @@ const detachedStderrTailBytes = 4000
 
 // RunDetachedInDebugContainer runs command with /bin/sh in the debug container, in workDir, and
 // waits until it ends. The command runs detached from any exec stream: it writes its exit code to
-// a file, which is polled with short exec calls. So unlike ExecInDebugContainer, a stream that ends
-// early cannot make a command that failed or was cut short look successful. Anything the command
-// must hand back, it writes to files in workDir. Its stdout is discarded.
+// a file, which is polled with short exec calls. So a long command does not depend on one stream
+// lasting until it ends, and a stream that ends early cannot make a command that failed or was cut
+// short look successful. Anything the command must hand back, it writes to files in workDir. Its
+// stdout is discarded.
 //
 // When ctx is done, the wait ends, but the command goes on until it ends or the pod is deleted.
 func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, workDir, command string) (*DetachedResult, error) {
@@ -51,7 +53,8 @@ func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 	return runDetached(ctx, run, workDir, command)
 }
 
-// runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests.
+// runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests. run
+// must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
 func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
 	// Start the command in the background, in its own session, so that it does not depend on the
 	// exec call that started it. The exit code goes to 'status' only once the command has ended:
@@ -59,21 +62,20 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	wrapper := "sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>stderr; echo $? >status.tmp && mv status.tmp status"
 	dir := ShellQuote(workDir)
 	launch := "mkdir -p " + dir + " && cd " + dir + " && rm -f status status.tmp stderr pid" +
-		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >pid; } && echo started"
-	stdout, err := run(ctx, launch)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start the command: %w", err)
-	}
-	if stdout != "started\n" {
-		// The output may be cut short even though the command started: the checks below tell.
-		log.Debug().Msgf("Unexpected output from starting a detached command: %q", stdout)
+		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >pid; }"
+	_, launchErr := run(ctx, launch)
+	if launchErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("stopped waiting for the command: %w", ctx.Err())
+		}
+		// The command may have started although the exec call failed: the checks below tell.
+		log.Debug().Msgf("Starting a detached command failed: %v", launchErr)
 	}
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
 	// more after the process: the command may end between the checks.
-	poll := "cd " + dir + " 2>/dev/null || { echo no-dir; exit 0; }; " +
+	poll := "cd " + dir + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
 		"if [ -f status ]; then echo \"done $(cat status)\"; " +
-		"elif [ ! -f pid ]; then echo not-started; " +
 		"elif " + processRunningCheck("$(cat pid)") + "; then echo running; " +
 		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
 		"else echo lost; fi"
@@ -88,9 +90,10 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		delay = min(2*delay, detachedPollInterval)
 
 		stdout, err := run(ctx, poll)
-		state, exitCode, parseErr := parseDetachedState(stdout)
+		var state string
+		var exitCode int
 		if err == nil {
-			err = parseErr
+			state, exitCode, err = parseDetachedState(stdout)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -116,9 +119,12 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 			}
 			return &DetachedResult{ExitCode: exitCode, Stderr: stderr}, nil
 		case "lost":
-			return nil, fmt.Errorf("the command ended without an exit code: it was killed, eg, for using too much memory")
-		default: // "not-started" or "no-dir"
-			return nil, fmt.Errorf("the command did not start (%s)", state)
+			return nil, errors.New("the command ended without an exit code: it was killed, eg, for using too much memory")
+		default: // "not-started"
+			if launchErr != nil {
+				return nil, fmt.Errorf("failed to start the command: %w", launchErr)
+			}
+			return nil, errors.New("the command did not start")
 		}
 	}
 }
@@ -132,23 +138,18 @@ func processRunningCheck(pid string) string {
 	return "{ state=$(sed 's/.*) //' /proc/\"" + pid + "\"/stat 2>/dev/null | cut -c1); [ -n \"$state\" ] && [ \"$state\" != Z ]; }"
 }
 
-// detachedStatePattern matches the complete output of runDetached's check. The output of an exec
-// call can be cut short without an error, so anything else is a failed check.
-var detachedStatePattern = regexp.MustCompile(`^(?:(running|lost|not-started|no-dir)|done ([0-9]+))\n$`)
-
 // parseDetachedState parses the output of runDetached's check, returning the state and, when the
 // state is "done", the command's exit code.
 func parseDetachedState(stdout string) (string, int, error) {
-	match := detachedStatePattern.FindStringSubmatch(stdout)
-	if match == nil {
-		return "", 0, fmt.Errorf("unexpected output from checking the command: %q", stdout)
+	state := strings.TrimSuffix(stdout, "\n")
+	switch state {
+	case "running", "lost", "not-started":
+		return state, 0, nil
 	}
-	if match[1] != "" {
-		return match[1], 0, nil
+	if code, ok := strings.CutPrefix(state, "done "); ok {
+		if exitCode, err := strconv.Atoi(code); err == nil {
+			return "done", exitCode, nil
+		}
 	}
-	exitCode, err := strconv.Atoi(match[2])
-	if err != nil {
-		return "", 0, fmt.Errorf("invalid exit code in %q: %w", stdout, err)
-	}
-	return "done", exitCode, nil
+	return "", 0, fmt.Errorf("unexpected output from checking the command: %q", stdout)
 }

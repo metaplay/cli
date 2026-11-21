@@ -213,9 +213,14 @@ const exportRemoteDir = "/tmp/metaplay-export"
 // exportSchemaFileName is the name of the schema dump, in the pod, locally and in the archive.
 const exportSchemaFileName = "schema.sql"
 
+// shardEntryName is the name of a shard's data dump in the archive.
+func shardEntryName(shardIndex int) string {
+	return fmt.Sprintf("shard_%d.sql", shardIndex)
+}
+
 // shardDumpFileName is the name of a shard's compressed data dump, in the pod and locally.
 func shardDumpFileName(shardIndex int) string {
-	return fmt.Sprintf("shard_%d.sql.gz", shardIndex)
+	return shardEntryName(shardIndex) + ".gz"
 }
 
 // DatabaseArchiveMetadata contains information about the database export
@@ -252,7 +257,7 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 		if err := dumpInPod(ctx, output, kubeCli, podName, debugContainerName, "database schema", dumpCmd); err != nil {
 			return err
 		}
-		return downloadFromPod(ctx, output, kubeCli, podName, debugContainerName, exportSchemaFileName, localDir)
+		return downloadFromPod(ctx, output, kubeCli, podName, debugContainerName, exportSchemaFileName, true, localDir)
 	})
 
 	for _, shard := range shards {
@@ -266,7 +271,8 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 			return dumpInPod(ctx, output, kubeCli, podName, debugContainerName, fmt.Sprintf("shard #%d", shard.ShardIndex), dumpCmd)
 		})
 		runner.AddTask(fmt.Sprintf("Download shard #%d", shard.ShardIndex), func(output *tui.TaskOutput) error {
-			return downloadFromPod(ctx, output, kubeCli, podName, debugContainerName, fileName, localDir)
+			// The dump is gzipped already, so it is not compressed again in transit.
+			return downloadFromPod(ctx, output, kubeCli, podName, debugContainerName, fileName, false, localDir)
 		})
 	}
 
@@ -318,9 +324,10 @@ func dumpInPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.Kube
 }
 
 // downloadFromPod downloads a file from exportRemoteDir in the debug pod into localDir, checking
-// its size and checksum, and then removes it from the pod to free the pod's disk space.
-func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, debugContainerName, fileName, localDir string) error {
-	err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, exportRemoteDir, fileName, filepath.Join(localDir, fileName), 3)
+// its size and checksum, and then removes it from the pod to free the pod's disk space. compress
+// gzips the file in transit.
+func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, debugContainerName, fileName string, compress bool, localDir string) error {
+	err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, exportRemoteDir, fileName, filepath.Join(localDir, fileName), compress, 3)
 	if err != nil {
 		return clierrors.Wrapf(err, "Failed to download %s from the debug pod", fileName).
 			WithSuggestion("Check your network connection and run the command again")
@@ -388,7 +395,7 @@ func writeDatabaseArchiveFile(path, localDir string, metadata DatabaseArchiveMet
 	}
 
 	for _, shard := range shards {
-		if err := writeShardToZip(zipWriter, filepath.Join(localDir, shardDumpFileName(shard.ShardIndex)), fmt.Sprintf("shard_%d.sql", shard.ShardIndex)); err != nil {
+		if err := writeShardToZip(zipWriter, filepath.Join(localDir, shardDumpFileName(shard.ShardIndex)), shardEntryName(shard.ShardIndex)); err != nil {
 			return fmt.Errorf("failed to write shard %d data to zip: %w", shard.ShardIndex, err)
 		}
 	}
@@ -416,15 +423,9 @@ func writeShardToZip(zipWriter *zip.Writer, dumpPath, entryName string) error {
 	}
 	defer func() { _ = gzReader.Close() }()
 
-	header := &zip.FileHeader{
-		Name:     entryName,
-		Method:   zip.Deflate,
-		Modified: time.Now(),
-	}
-	header.SetMode(0644)
-	entryWriter, err := zipWriter.CreateHeader(header)
+	entryWriter, err := createZipEntry(zipWriter, entryName, zip.Deflate)
 	if err != nil {
-		return fmt.Errorf("failed to create zip writer: %w", err)
+		return err
 	}
 	// Reading to the end checks the gzip checksum and length.
 	if _, err := io.Copy(entryWriter, gzReader); err != nil {
@@ -441,19 +442,10 @@ func writeMetadataToZip(zipWriter *zip.Writer, metadata DatabaseArchiveMetadata)
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	// Write metadata file to zip
-	metadataFileName := "metadata.json"
-	metadataHeader := &zip.FileHeader{
-		Name:     metadataFileName,
-		Method:   zip.Store, // No compression for small metadata file
-		Modified: time.Now(),
-	}
-	metadataHeader.SetMode(0644)
-
-	// Write metadata file to zip
-	metadataWriter, err := zipWriter.CreateHeader(metadataHeader)
+	// No compression for the small metadata file
+	metadataWriter, err := createZipEntry(zipWriter, "metadata.json", zip.Store)
 	if err != nil {
-		return fmt.Errorf("failed to create metadata writer: %w", err)
+		return err
 	}
 	if _, err := metadataWriter.Write(metadataBytes); err != nil {
 		return fmt.Errorf("failed to write metadata content: %w", err)
@@ -501,26 +493,29 @@ func enforceUtf8mb4BinCollation(schemaContent string) string {
 
 // Helper function to write schema content to zip file
 func writeSchemaToZip(zipWriter *zip.Writer, schemaContent string) error {
-	// Prepare zip header for schema file
-	schemaHeader := &zip.FileHeader{
-		Name:     exportSchemaFileName,
-		Method:   zip.Deflate, // Use compression since we're not pre-compressing
-		Modified: time.Now(),
-	}
-	schemaHeader.SetMode(0644)
-
-	// Create zip writer for schema file
-	schemaWriter, err := zipWriter.CreateHeader(schemaHeader)
+	schemaWriter, err := createZipEntry(zipWriter, exportSchemaFileName, zip.Deflate)
 	if err != nil {
-		return fmt.Errorf("failed to create schema writer: %w", err)
+		return err
 	}
-
-	// Write schema content to zip
-	_, err = schemaWriter.Write([]byte(schemaContent))
-	if err != nil {
+	if _, err := io.WriteString(schemaWriter, schemaContent); err != nil {
 		return fmt.Errorf("failed to write schema content: %w", err)
 	}
 
 	log.Debug().Msg("Schema written to schema.sql in zip archive")
 	return nil
+}
+
+// createZipEntry starts the archive's entry with the given name and compression method.
+func createZipEntry(zipWriter *zip.Writer, name string, method uint16) (io.Writer, error) {
+	header := &zip.FileHeader{
+		Name:     name,
+		Method:   method,
+		Modified: time.Now(),
+	}
+	header.SetMode(0644)
+	entryWriter, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create zip entry %s: %w", name, err)
+	}
+	return entryWriter, nil
 }
