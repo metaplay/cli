@@ -20,6 +20,7 @@ import (
 	"github.com/mattn/go-isatty"
 	"github.com/metaplay/cli/internal/envutil"
 	clierrors "github.com/metaplay/cli/internal/errors"
+	"github.com/metaplay/cli/internal/interrupt"
 	"github.com/metaplay/cli/internal/tui"
 	"github.com/metaplay/cli/internal/version"
 	"github.com/metaplay/cli/pkg/auth"
@@ -445,7 +446,7 @@ func runCommand(opts CommandOptions) func(cmd *cobra.Command, args []string) {
 
 // wasInterrupted reports whether the error is a side-effect of the user
 // interrupting the CLI (Ctrl+C / SIGTERM). When true, callers should exit
-// silently with the POSIX SIGINT convention (128 + 2) rather than printing
+// silently with interrupt.ExitCode rather than printing
 // the error — a signal-killed child can otherwise surface as a misleading
 // message (e.g. `exec.Command("pnpm", "--version").Run()` failing during
 // interrupt looks identical to "pnpm not installed").
@@ -469,7 +470,7 @@ func wasInterrupted(cmd *cobra.Command, err error) bool {
 }
 
 // exitInterrupted prints a clean trailing acknowledgement and exits with
-// the POSIX SIGINT convention (128 + 2). The trailing line gives the user
+// interrupt.ExitCode. The trailing line gives the user
 // closure after subprocess output — e.g. docker prints
 // "ERROR: failed to build: failed to solve: Canceled: context canceled"
 // on its way out and that shouldn't be the last thing the user sees.
@@ -480,7 +481,7 @@ func wasInterrupted(cmd *cobra.Command, err error) bool {
 func exitInterrupted() {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, styles.RenderMuted("Canceled."))
-	os.Exit(130)
+	os.Exit(interrupt.ExitCode)
 }
 
 // displayUnreportedTaskFailures shows the task failures that the command's error does not cover:
