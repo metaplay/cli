@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 	"sync"
 	"time"
@@ -84,7 +83,7 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	defer cancel()
 	gameServer, err := targetEnv.fetchGameServer(fetchCtx, kubeCli)
 	if err != nil {
-		if errors.Is(err, errNoGameServer) {
+		if errors.Is(err, ErrNoGameServer) {
 			return ServerStatus{}, err
 		}
 		return ServerStatus{}, clierrors.Wrap(err, "Failed to read the GameServer resource")
@@ -126,20 +125,20 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 		Checks:        []ServerCheck{pods, serverDomain, endpoint, dashboardDomain, dashboard},
 		FailedPodLogs: failedPodLogs,
 		Notes:         notes,
-		suggestion:    targetEnv.notReadySuggestion(pods.Failed(), podsErr, readiness, len(failedPodLogs) > 0),
+		suggestion:    targetEnv.notReadySuggestion(podsErr, readiness, len(failedPodLogs) > 0),
 	}, nil
 }
 
-// notReadySuggestion tells what to do when the game server is not ready, given whether
-// the check of its pods failed, the error that stopped it, their readiness, and whether
-// the logs of a failed pod were fetched.
-func (targetEnv *TargetEnvironment) notReadySuggestion(podsFailed bool, podsErr error, readiness gameServerReadiness, hasLogs bool) string {
+// notReadySuggestion tells what to do when the game server is not ready, given the
+// error that stopped the check of its pods, their readiness, and whether the logs of a
+// failed pod were fetched.
+func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness gameServerReadiness, hasLogs bool) string {
 	switch {
 	case podsErr != nil:
 		return "The status of the game server pods could not be read from Kubernetes. Run this command again, and if it fails the same way, check that your account can read the environment's pods and stateful sets"
 	case readiness.failedPod != "":
 		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs, hasLogs)
-	case podsFailed:
+	case !readiness.ready():
 		return "If a deploy just started, run this command again in a minute. Otherwise, the pod lines above show what blocks it"
 	default:
 		return "The game server pods are ready, so the failing checks are in DNS or the load balancer. The domain names of a new environment can take up to 15 minutes to resolve"
@@ -180,13 +179,12 @@ func checkPods(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameS
 	return check, readiness, nil
 }
 
-// checkDomain checks once that hostname resolves. It looks up the fully qualified name,
-// so that the search domains of this machine do not make it resolve.
+// checkDomain checks once that hostname resolves, with lookupDomain.
 func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
 	check := ServerCheck{Name: fmt.Sprintf("%s %s", name, hostname)}
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
-	addrs, err := net.DefaultResolver.LookupHost(ctx, strings.TrimSuffix(hostname, ".")+".")
+	addrs, err := lookupDomain(ctx, hostname)
 	if err != nil {
 		check.Summary = "does not resolve"
 		check.Problems = []string{fmt.Sprintf("Domain %s does not resolve: %v", hostname, err)}
@@ -204,15 +202,10 @@ func checkDomain(ctx context.Context, name, hostname string) ServerCheck {
 func checkClientEndpoint(ctx context.Context, name, hostname string, port int) ServerCheck {
 	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
 	defer cancel()
-	errs := make([]error, statusClientConnections)
-	for ndx := range errs {
-		errs[ndx] = attemptTLSConnection(ctx, hostname, port)
-	}
-
 	numFailed := 0
 	var firstErr error
-	for _, err := range errs {
-		if err != nil {
+	for range statusClientConnections {
+		if err := attemptTLSConnection(ctx, hostname, port); err != nil {
 			numFailed++
 			if firstErr == nil {
 				firstErr = err

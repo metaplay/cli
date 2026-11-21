@@ -624,21 +624,20 @@ func TestReadinessTarget(t *testing.T) {
 }
 
 func TestPreviousPods(t *testing.T) {
-	baseline := &DeployBaseline{podUIDs: map[types.UID]bool{"old-pod": true}}
+	podUIDs := map[types.UID]bool{"old-pod": true}
 	tests := []struct {
 		name      string
-		baseline  *DeployBaseline
 		crChanged bool
 		elapsed   time.Duration
 		want      map[types.UID]bool
 	}{
-		{name: "deploy changed the CR", baseline: baseline, crChanged: true, elapsed: 10 * time.Second, want: baseline.podUIDs},
-		{name: "grace period over", baseline: baseline, crChanged: true, elapsed: oldPodGracePeriod, want: nil},
-		{name: "deploy changed nothing", baseline: baseline, crChanged: false, elapsed: 0, want: nil},
+		{name: "deploy changed the CR", crChanged: true, elapsed: 10 * time.Second, want: podUIDs},
+		{name: "grace period over", crChanged: true, elapsed: oldPodGracePeriod, want: nil},
+		{name: "deploy changed nothing", crChanged: false, elapsed: 0, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, previousPods(tt.baseline, tt.crChanged, tt.elapsed))
+			assert.Equal(t, tt.want, previousPods(podUIDs, tt.crChanged, tt.elapsed))
 		})
 	}
 }

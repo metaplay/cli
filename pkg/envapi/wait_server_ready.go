@@ -242,7 +242,7 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 	// Bypass the cache of GetGameServer, as the CR changes during the deploy. There is
 	// none before the first deploy.
 	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
-	if err != nil && !errors.Is(err, errNoGameServer) {
+	if err != nil && !errors.Is(err, ErrNoGameServer) {
 		return err
 	}
 	baseline.podUIDs = map[types.UID]bool{}
@@ -259,11 +259,11 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 // previousPods returns the pods from before the deploy while the operator may still
 // replace them. It does so only if the deploy changed the GameServer CR, and is given
 // oldPodGracePeriod to start.
-func previousPods(baseline *DeployBaseline, crChanged bool, elapsed time.Duration) map[types.UID]bool {
+func previousPods(podUIDs map[types.UID]bool, crChanged bool, elapsed time.Duration) map[types.UID]bool {
 	if !crChanged || elapsed >= oldPodGracePeriod {
 		return nil
 	}
-	return baseline.podUIDs
+	return podUIDs
 }
 
 // evaluateGameServerReadiness checks that the shard sets run the image the GameServer
@@ -652,7 +652,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		if ctx.Err() != nil {
 			return stopped()
 		}
-		if errors.Is(err, errNoGameServer) {
+		if errors.Is(err, ErrNoGameServer) {
 			return err
 		}
 		isPermanent := apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
@@ -696,7 +696,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	var lastProblems []string // Of the last successful check
 	for {
 		target.now = time.Now()
-		target.previousPods = previousPods(baseline, crChanged, time.Since(startTime))
+		target.previousPods = previousPods(baseline.podUIDs, crChanged, time.Since(startTime))
 		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
 		elapsed := time.Since(startTime)
 		if err != nil {
@@ -831,6 +831,12 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	return builder.String(), nil
 }
 
+// lookupDomain resolves hostname. It looks up the fully qualified name, so that the
+// search domains of this machine do not make it resolve.
+func lookupDomain(ctx context.Context, hostname string) ([]string, error) {
+	return net.DefaultResolver.LookupHost(ctx, strings.TrimSuffix(hostname, ".")+".")
+}
+
 // waitForDomainResolution waits for a domain to resolve within a 15-minute timeout.
 func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostname string, timeout time.Duration) error {
 	timeoutAt := time.Now().Add(timeout)
@@ -842,7 +848,7 @@ func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostna
 	attemptNdx := 0
 	for {
 		// Do a DNS lookup.
-		_, err := net.DefaultResolver.LookupHost(ctx, hostname)
+		_, err := lookupDomain(ctx, hostname)
 		if err == nil {
 			output.AppendLinef("Successfully resolved domain %s", hostname)
 			return nil

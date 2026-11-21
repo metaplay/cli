@@ -126,8 +126,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	if existingRelease == nil {
-		return clierrors.New("No game server is deployed in the environment").
-			WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
+		return envapi.ErrNoGameServer
 	}
 
 	log.Info().Msg(styles.RenderMuted("Checking the game server status..."))
