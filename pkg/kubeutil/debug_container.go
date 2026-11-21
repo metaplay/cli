@@ -318,7 +318,7 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 }
 
 // removeFilesCommand returns the shell command that removes the files. It first stops a download of
-// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
+// the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileCommand). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
 // container ends.
 func removeFilesCommand(paths []string) string {
@@ -326,7 +326,8 @@ func removeFilesCommand(paths []string) string {
 	quoted := make([]string, len(paths))
 	for i, path := range paths {
 		quoted[i] = ShellQuote(path)
-		// Killing the shell's children stops the 'gzip'.
+		// Killing the shell's children stops 'gzip', and 'dd' when its own command line does not
+		// match.
 		pattern := ShellQuote(downloadPattern(path))
 		command.WriteString("for pid in $(pgrep -f -- " + pattern + "); do pkill -P $pid; kill $pid; done; ")
 	}
@@ -339,8 +340,8 @@ func removeFilesCommand(paths []string) string {
 //
 //	'\''
 //
-// GNU dd's command line has the path as it is. busybox's dd rewrites its own, so only its shell
-// matches. The pattern ends with the dd argument after the path, so that it does not match a
+// GNU dd's command line has the path as it is, and busybox's does not, see streamFileCommand. The
+// pattern ends with the dd argument after the path, so that it does not match a
 // download of a file whose name only starts with path. The [d] keeps the pattern from matching
 // the shell of the command that has it.
 func downloadPattern(path string) string {
