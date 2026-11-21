@@ -250,12 +250,12 @@ func (target *TargetEnvironment) GetGameServer(ctx context.Context) (*TargetGame
 	return gameServer, nil
 }
 
-// errNoGameServer is returned when the environment has no GameServer CR.
-var errNoGameServer = clierrors.New("No game server is deployed in the environment").
+// ErrNoGameServer is returned when the environment has no game server deployed.
+var ErrNoGameServer = clierrors.New("No game server is deployed in the environment").
 	WithSuggestion("Deploy a game server first with 'metaplay deploy server'")
 
 // fetchGameServer reads the gameserver from its CR, the new operator's or the old one's,
-// without the cache of GetGameServer. It returns errNoGameServer if there is neither.
+// without the cache of GetGameServer. It returns ErrNoGameServer if there is neither.
 func (target *TargetEnvironment) fetchGameServer(ctx context.Context, kubeCli *KubeClient) (*TargetGameServer, error) {
 	// A cluster has the resource type of only one of the operators: listing the other
 	// one's fails with NotFound.
@@ -271,7 +271,7 @@ func (target *TargetEnvironment) fetchGameServer(ctx context.Context, kubeCli *K
 		return nil, err
 	}
 	if gameServer == nil {
-		return nil, errNoGameServer
+		return nil, ErrNoGameServer
 	}
 	return gameServer, nil
 }

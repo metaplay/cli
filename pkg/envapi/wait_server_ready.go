@@ -169,11 +169,11 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 
 // gameServerReadiness is the result of one check of whether a game server is up.
 type gameServerReadiness struct {
-	lines         []string     // Status of each shard set and its pods, for display
-	problems      []string     // What is not ready yet, one line each, or none when ready
-	failedPod     string       // Name of a pod whose server failed to start, or empty
-	failure       string       // Why failedPod failed
-	failedPodLogs podLogSource // Which logs of failedPod show the failure
+	lines              []string     // Status of each shard set and its pods, for display
+	problems           []string     // What is not ready yet, one line each, or none when ready
+	failedPod          string       // Name of a pod whose server failed to start, or empty
+	failure            string       // Why failedPod failed
+	failedPodLogSource podLogSource // Which logs of failedPod show the failure
 }
 
 // podLogSource tells which logs of a pod's server container show its failure.
@@ -215,8 +215,9 @@ type readinessTarget struct {
 // tag: otherwise, the image check holds back the old pods until they are replaced.
 const oldPodGracePeriod = 30 * time.Second
 
-// How recently a pod must have been created for its server's restarts to count as a
-// failure to start, rather than as ones in its past.
+// How briefly and how recently a server's last run must have ended for its restarts to
+// count as a failure to start, rather than as ones in its past. Kubernetes resets the
+// back-off of a container that has run for as long.
 const recentRestartWindow = 10 * time.Minute
 
 // DeployBaseline is the game server's state just before a deploy changes it. The
@@ -242,7 +243,7 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 	// Bypass the cache of GetGameServer, as the CR changes during the deploy. There is
 	// none before the first deploy.
 	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
-	if err != nil && !errors.Is(err, errNoGameServer) {
+	if err != nil && !errors.Is(err, ErrNoGameServer) {
 		return err
 	}
 	baseline.podUIDs = map[types.UID]bool{}
@@ -258,12 +259,12 @@ func (targetEnv *TargetEnvironment) CaptureDeployBaseline(ctx context.Context, b
 
 // previousPods returns the pods from before the deploy while the operator may still
 // replace them. It does so only if the deploy changed the GameServer CR, and is given
-// oldPodGracePeriod to start. Without a baseline (no deploy), there are none.
-func previousPods(baseline *DeployBaseline, crChanged bool, elapsed time.Duration) map[types.UID]bool {
-	if baseline == nil || !crChanged || elapsed >= oldPodGracePeriod {
+// oldPodGracePeriod to start.
+func previousPods(podUIDs map[types.UID]bool, crChanged bool, elapsed time.Duration) map[types.UID]bool {
+	if !crChanged || elapsed >= oldPodGracePeriod {
 		return nil
 	}
-	return baseline.podUIDs
+	return podUIDs
 }
 
 // evaluateGameServerReadiness checks that the shard sets run the image the GameServer
@@ -355,7 +356,7 @@ func evaluateGameServerReadiness(target readinessTarget, shardSets []appsv1.Stat
 			if status.Phase == PhaseFailed && r.failedPod == "" && pod != nil {
 				r.failedPod = podNames[ndx]
 				r.failure = status.Message
-				r.failedPodLogs = status.logs
+				r.failedPodLogSource = status.logs
 			}
 		}
 
@@ -441,10 +442,17 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	// exit by itself: a server that hangs is killed by its liveness probe, and shows as
 	// running between the restarts. One restart is allowed, as a server may exit once
 	// while what it depends on is starting too. Kubernetes counts the restarts over the
-	// pod's lifetime, so they count only for a recently created pod: in an older one,
-	// they may be from the server's past.
-	isNewPod := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
-	keepsRestarting := containerStatus.RestartCount >= 2 && isNewPod
+	// pod's lifetime, so they count only if the server's last run was brief and recent:
+	// otherwise, they may be from the server's past. Kubernetes waits at most 5 minutes
+	// before it restarts a server, so the last run of one that keeps crashing within 5
+	// minutes always ended within recentRestartWindow. One whose runs last longer is
+	// missed for part of the time. As the count is over the pod's lifetime, a pod with an
+	// old restart fails already on its first brief run that ends.
+	lastRun := containerStatus.LastTerminationState.Terminated
+	lastRunWasBriefAndRecent := lastRun != nil &&
+		lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) &&
+		lastRun.FinishedAt.Sub(lastRun.StartedAt.Time) < recentRestartWindow
+	keepsRestarting := containerStatus.RestartCount >= 2 && lastRunWasBriefAndRecent
 
 	state := containerStatus.State
 	switch {
@@ -599,9 +607,13 @@ func (gs *TargetGameServer) crVersion() (types.UID, int64) {
 }
 
 // checkGameServerReadiness fetches the game server's StatefulSets and pods and evaluates
-// whether they are ready.
+// whether they are ready now, within attemptTimeout. It is the check of the pods of
+// both CheckServerStatus and the wait of a deploy, which sets target.previousPods.
 // \todo Handle edge clusters of multi-region game servers.
 func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, target readinessTarget) (gameServerReadiness, error) {
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
+	defer cancel()
+	target.now = time.Now()
 	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer.GameServerOldCR)
 	if err != nil {
 		return gameServerReadiness{}, err
@@ -620,8 +632,9 @@ func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServ
 const loggedStatusInterval = 30 * time.Second
 
 // How long checks of the game server status may keep failing, for example on a
-// transient Kubernetes API error, before the wait gives up.
-const maxFailingChecksDuration = 15 * time.Second
+// transient Kubernetes API error, before the wait gives up. Longer than two attempts of
+// attemptTimeout, so that two slow reads in a row do not end the wait.
+const maxFailingChecksDuration = 30 * time.Second
 
 // waitForGameServerReady waits until the gameserver in a namespace is ready or a timeout
 // occurs. See WaitForServerToBeReady for baseline.
@@ -648,7 +661,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 		if ctx.Err() != nil {
 			return stopped()
 		}
-		if errors.Is(err, errNoGameServer) {
+		if errors.Is(err, ErrNoGameServer) {
 			return err
 		}
 		isPermanent := apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
@@ -667,7 +680,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	}
 	gameServer, err := targetEnv.fetchGameServer(ctx, kubeCli)
 	for err != nil {
-		if err := retryFailedCheck(err, "Failed to read the GameServer resource"); err != nil {
+		if err := retryFailedCheck(err, readGameServerFailure); err != nil {
 			return err
 		}
 		gameServer, err = targetEnv.fetchGameServer(ctx, kubeCli)
@@ -675,7 +688,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	lastSuccessAt = time.Now()
 	target := gameServer.readinessTarget()
 	crUID, crGeneration := gameServer.crVersion()
-	crChanged := baseline != nil && (baseline.crUID != crUID || baseline.crGeneration != crGeneration)
+	crChanged := baseline.crUID != crUID || baseline.crGeneration != crGeneration
 	log.Debug().Msgf("Waiting for game server: %+v (new CR: %v, CR changed by the deploy: %v)", target, gameServer.GameServerNewCR != nil, crChanged)
 
 	notReadyError := func(problems []string) error {
@@ -691,8 +704,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 	var lastShownAt time.Time
 	var lastProblems []string // Of the last successful check
 	for {
-		target.now = time.Now()
-		target.previousPods = previousPods(baseline, crChanged, time.Since(startTime))
+		target.previousPods = previousPods(baseline.podUIDs, crChanged, time.Since(startTime))
 		readiness, err := checkGameServerReadiness(ctx, kubeCli, gameServer, target)
 		elapsed := time.Since(startTime)
 		if err != nil {
@@ -700,7 +712,7 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 			if elapsed >= timeout && lastProblems != nil && ctx.Err() == nil {
 				return notReadyError(lastProblems)
 			}
-			if err := retryFailedCheck(err, "Failed to check the game server status"); err != nil {
+			if err := retryFailedCheck(err, checkPodsFailure); err != nil {
 				return err
 			}
 			continue
@@ -723,14 +735,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
-			showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
-			suggestion := fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", targetEnv.HumanID)
-			if readiness.failedPodLogs == noPodLogs {
-				suggestion = "The server container did not start, so it has no logs. Fix the cause above, and deploy again"
-			}
+			hasLogs := showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogSource)
 			return clierrors.New("Game server failed to start").
 				WithDetails(fmt.Sprintf("Pod %s: %s", readiness.failedPod, readiness.failure)).
-				WithSuggestion(suggestion)
+				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogSource, hasLogs))
 		}
 
 		if readiness.ready() {
@@ -748,29 +756,90 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 }
 
 // showPodLogs shows the last logs of a game server pod's server container that show its
-// failure in the task output, or why they could not be fetched.
-func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) {
-	if source == noPodLogs {
-		return
+// failure in the task output, or why they could not be fetched. It tells whether it
+// showed any logs.
+func showPodLogs(ctx context.Context, output *tui.TaskOutput, kubeCli *KubeClient, podName string, source podLogSource) bool {
+	notes, logLines := failedPodLogLines(ctx, kubeCli, podName, source)
+	for _, note := range notes {
+		output.AppendLine(note)
 	}
+	// Route pod logs through TaskOutput footer to avoid writing directly to stdout while
+	// Bubble Tea is managing the terminal. Footer lines are not subject to the log line cap.
+	if len(logLines) > 0 {
+		output.SetFooterLines(logLines)
+	}
+	return len(logLines) > 0
+}
+
+// WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
+// and the LiveOps Dashboard after a deploy: one for the pods, and then one per check of
+// networkChecks, in order. baseline, which must not be nil, is the state before the
+// deploy, which CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod
+// from before the deploy then fails the wait only once the operator has had time to
+// replace it. CheckServerStatus makes the same checks once, without waiting.
+func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {
+	envDetails, err := targetEnv.GetDetails()
+	if err != nil {
+		return err
+	}
+
+	// Only wait for a few minutes, as pods generally become healthy fairly soon, to show
+	// the logs of a failure early. This can take a long time when larger changes are
+	// being applied (eg, enabling the new operator).
+	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
+		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute, baseline)
+	})
+	for _, checks := range networkChecks(envDetails) {
+		for _, check := range []networkCheck{checks.domain, checks.service} {
+			taskRunner.AddTask(check.title, func(output *tui.TaskOutput) error {
+				return check.wait(ctx, output)
+			})
+		}
+	}
+	return nil
+}
+
+// failedPodSuggestion tells what to do about a pod whose server failed to start, after
+// showPodLogs or failedPodLogLines. hasLogs tells whether they gave any logs to show.
+func failedPodSuggestion(humanID, podName string, source podLogSource, hasLogs bool) string {
+	switch {
+	case source == noPodLogs:
+		return fmt.Sprintf("The server container of pod %s did not start, so it has no logs. Fix the cause above, and deploy again", podName)
+	case !hasLogs:
+		return fmt.Sprintf("Check the server logs with: metaplay debug logs %s", humanID)
+	default:
+		return fmt.Sprintf("Check the pod logs above for details, or run: metaplay debug logs %s", humanID)
+	}
+}
+
+// failedPodLogLines returns the last logs of a game server pod's server container that
+// show its failure, with a heading, and notes on why logs could not be fetched. It
+// takes at most attemptTimeout.
+func failedPodLogLines(ctx context.Context, kubeCli *KubeClient, podName string, source podLogSource) (notes []string, logLines []string) {
+	if source == noPodLogs {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
+	defer cancel()
 	podLogs, err := fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, source == previousPodLogs)
 	// The previous container's logs are gone if Kubernetes has cleaned the container up.
 	// The current container's logs may show the same failure in progress.
 	if err != nil && source == previousPodLogs {
-		output.AppendLinef("Failed to get the logs of the previous run of pod %s, showing the current run: %v", podName, err)
+		notes = append(notes, fmt.Sprintf("Failed to get the logs of the previous run of pod %s, showing the current run: %v", podName, err))
 		podLogs, err = fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, false)
 	}
 	if err != nil {
-		output.AppendLinef("Failed to get logs from pod %s: %v", podName, err)
-		return
+		return append(notes, fmt.Sprintf("Failed to get logs from pod %s: %v", podName, err)), nil
 	}
-	// Route pod logs through TaskOutput footer to avoid writing directly to stdout while
-	// Bubble Tea is managing the terminal. Footer lines are not subject to the log line cap.
-	logLines := []string{fmt.Sprintf("Logs from pod %s:", podName)}
+	podLogs = strings.TrimRight(podLogs, "\n")
+	if podLogs == "" {
+		return append(notes, fmt.Sprintf("The server of pod %s wrote no logs", podName)), nil
+	}
+	logLines = []string{fmt.Sprintf("Logs from pod %s:", podName)}
 	for line := range strings.SplitSeq(podLogs, "\n") {
 		logLines = append(logLines, fmt.Sprintf("[%s] %s", podName, line))
 	}
-	output.SetFooterLines(logLines)
+	return notes, logLines
 }
 
 // fetchPodLogs fetches logs for a specific pod and container. With previous, it fetches
@@ -801,113 +870,39 @@ func fetchPodLogs(ctx context.Context, kubeCli *KubeClient, podName, containerNa
 	return builder.String(), nil
 }
 
-// waitForDomainResolution waits for a domain to resolve within a 15-minute timeout.
-func waitForDomainResolution(ctx context.Context, output *tui.TaskOutput, hostname string, timeout time.Duration) error {
-	timeoutAt := time.Now().Add(timeout)
-
-	output.SetHeaderLines([]string{
-		fmt.Sprintf("Waiting for domain %s to resolve (timeout: %s)", hostname, timeout),
-	})
-
-	attemptNdx := 0
-	for {
-		// Do a DNS lookup.
-		_, err := net.DefaultResolver.LookupHost(ctx, hostname)
-		if err == nil {
-			output.AppendLinef("Successfully resolved domain %s", hostname)
-			return nil
-		}
-		if ctx.Err() != nil {
-			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
-		}
-
-		// Check for timeout.
-		if time.Now().After(timeoutAt) {
-			return fmt.Errorf("could not resolve domain %s before timeout", hostname)
-		}
-
-		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
-			output.AppendLinef("Attempt %d failed: %v", attemptNdx+1, dnsErr)
-		} else {
-			output.AppendLinef("Failed to resolve %s: %v. Retrying...", hostname, err)
-		}
-
-		attemptNdx += 1
-
-		// Delay before trying again -- these can take a while so avoid spamming the log
-		if !pause(ctx, 5*time.Second) {
-			return fmt.Errorf("stopped waiting for domain %s to resolve: %w", hostname, ctx.Err())
-		}
+// lookupDomain resolves hostname. It looks up the fully qualified name, so that the
+// search domains of this machine do not make it resolve. An IP address resolves to
+// itself.
+func lookupDomain(ctx context.Context, hostname string) ([]string, error) {
+	if net.ParseIP(hostname) == nil {
+		hostname = strings.TrimSuffix(hostname, ".") + "."
 	}
-}
-
-// waitForGameServerClientEndpointToBeReady waits until a game server client endpoint is ready by performing a TLS handshake.
-func waitForGameServerClientEndpointToBeReady(ctx context.Context, output *tui.TaskOutput, hostname string, port int, timeout time.Duration) error {
-	timeoutAt := time.Now().Add(timeout)
-
-	output.SetHeaderLines([]string{
-		fmt.Sprintf("Waiting for game server endpoint %s:%d to be ready (timeout: %s)", hostname, port, timeout),
-	})
-
-	for {
-		// Do a request.
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
-		default:
-			// Require 10 subsequent successful connections to treat the endpoint as healthy.
-			const numAttempts = 10
-			allSuccess := true
-			for iter := range numAttempts {
-				// Attempt a connection & bail out on errors.
-				err := attemptTLSConnection(ctx, hostname, port)
-				if ctx.Err() != nil {
-					return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
-				}
-				if err != nil {
-					output.AppendLinef("Connection attempt %d of %d failed: %v", iter+1, numAttempts, err)
-					allSuccess = false
-					break
-				}
-			}
-
-			// If all attempt succeeded, we're done.
-			if allSuccess {
-				output.AppendLinef("Successfully connected to the target environment %s:%d", hostname, port)
-				return nil
-			}
-
-			// Wait before retrying
-			if !pause(ctx, 1*time.Second) {
-				return fmt.Errorf("stopped waiting to establish connection to %s:%d: %w", hostname, port, ctx.Err())
-			}
-		}
-
-		// Check for timeout.
-		if time.Now().After(timeoutAt) {
-			return fmt.Errorf("timeout while waiting for response from %s:%d", hostname, port)
-		}
-	}
+	return net.DefaultResolver.LookupHost(ctx, hostname)
 }
 
 // attemptTLSConnection performs a TLS handshake, sends a HealthCheck packet
 // (client-speaks-first pattern to work behind TLS-terminating proxies), then
-// reads and validates the server's protocol header.
+// reads and validates the server's protocol header, in at most connectionTimeout.
 func attemptTLSConnection(ctx context.Context, hostname string, port int) error {
+	deadline := time.Now().Add(connectionTimeout)
+	dialCtx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
 	address := fmt.Sprintf("%s:%d", hostname, port)
 	dialer := &tls.Dialer{Config: &tls.Config{ServerName: hostname}}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	conn, err := dialer.DialContext(dialCtx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("TLS connection failed: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
-	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() }) // Ends a read or write on cancel
+	// The deadline ends a read or write with a timeout error, and closing the connection
+	// ends one when the caller's ctx is done.
+	_ = conn.SetDeadline(deadline)
+	stopClosing := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopClosing()
 
 	// Send HealthCheck packet to trigger the upstream connection in TLS-terminating
 	// proxies that use lazy upstream connections (client-speaks-first pattern).
 	log.Debug().Msgf("TLS handshake completed, sending HealthCheck packet...")
-	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	healthCheckPacket := buildHealthCheckPacket()
 	if _, err := conn.Write(healthCheckPacket); err != nil {
 		return fmt.Errorf("failed to send HealthCheck packet: %w", err)
@@ -915,7 +910,6 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 
 	// Read the protocol header from the server.
 	log.Debug().Msgf("HealthCheck sent, waiting to receive protocol header from server...")
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buffer := make([]byte, protocolHeaderSize)
 	totalRead := 0
 	for totalRead < protocolHeaderSize {
@@ -947,126 +941,37 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 	return nil
 }
 
-// waitForHTTPServerToRespond pings a target URL until it returns a success status code or a timeout occurs.
-func waitForHTTPServerToRespond(ctx context.Context, output *tui.TaskOutput, url string, timeout time.Duration) error {
-	timeoutAt := time.Now().Add(timeout)
+// The port of the game server's client endpoint.
+// \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
+const gameServerClientPort = 9339
 
-	output.SetHeaderLines([]string{
-		fmt.Sprintf("Waiting for HTTP server %s to respond (timeout: %s)", url, timeout),
-	})
-
-	client := &http.Client{
-		Timeout: 5 * time.Second, // Per-request timeout
-		// Prevent the client from following redirects automatically.
-		// We want to check the status code of the initial response directly.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	for {
-		// Do a request.
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-		default:
-			// Create a new request with headers
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-			if err != nil {
-				output.AppendLinef("Error creating request for %s: %v. Retrying...", url, err)
-				break
-			}
-
-			// Add the Sec-Fetch-Mode header so that StackAPI returns a 302 redirect (instead
-			// of 403 forbidden) to the request.
-			req.Header.Add("Sec-Fetch-Mode", "navigate")
-
-			// Execute the request
-			resp, err := client.Do(req)
-			if err != nil {
-				if ctx.Err() != nil {
-					return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-				}
-				output.AppendLinef("Error connecting to %s: %v. Retrying...", url, err)
-			} else {
-				switch {
-				case resp.StatusCode >= 200 && resp.StatusCode < 300:
-					// Accept 2xx (Success) status codes.
-					_ = resp.Body.Close()
-					output.AppendLinef("Successfully connected to %s. Status: %s", url, resp.Status)
-					return nil
-				case resp.StatusCode >= 300 && resp.StatusCode < 400:
-					// Accept 3xx (Redirection) status codes.
-					_ = resp.Body.Close()
-					output.AppendLinef("Successfully received login redirect from %s. Status: %s", url, resp.Status)
-					return nil
-				}
-				output.AppendLinef("Received status code %d from %s. Retrying...", resp.StatusCode, url)
-				_ = resp.Body.Close()
-			}
-		}
-
-		// Wait before retrying.
-		if !pause(ctx, 1*time.Second) {
-			return fmt.Errorf("stopped waiting for %s to respond: %w", url, ctx.Err())
-		}
-
-		// Check for timeout.
-		if time.Now().After(timeoutAt) {
-			return fmt.Errorf("timeout while waiting for response from %s", url)
-		}
-	}
+// The HTTP client of probeHTTPServer. The context of a request limits how long it takes.
+var probeHTTPClient = &http.Client{
+	// Check the status of the response itself, not of where it redirects to.
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
 }
 
-// WaitForServerToBeReady adds the tasks that wait for the game server to serve clients
-// and the LiveOps Dashboard. After a deploy, baseline is the state before it, which
-// CaptureDeployBaseline fills in when the deploy's tasks run. A failing pod from before
-// the deploy then fails the wait only once the operator has had time to replace it.
-// Without a deploy, baseline is nil, and any failing pod fails the wait.
-func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, taskRunner *tui.TaskRunner, baseline *DeployBaseline) error {
-	// Fetch environment details.
-	envDetails, err := targetEnv.GetDetails()
+// probeHTTPServer makes one GET request to url. A success or a redirect status passes:
+// the LiveOps Dashboard redirects to its login. It returns the status of the response,
+// if there was one, and an error unless it passed.
+func probeHTTPServer(ctx context.Context, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	// Wait for the gameserver Kubernetes resources to be ready.
-	// Only wait for a few minutes as pods generally become healthy fairly
-	// soon as we want to display the logs from errors early.
-	// This can take a long time when larger changes are being applied (eg,
-	// enabling the new operator).
-	taskRunner.AddTask("Wait for game server pods to be ready", func(output *tui.TaskOutput) error {
-		return targetEnv.waitForGameServerReady(ctx, output, 10*time.Minute, baseline)
-	})
-
-	// CHECK CLIENT-FACING NETWORKING
-
-	serverPrimaryAddress := envDetails.Deployment.ServerHostname
-	serverPrimaryPort := 9339 // \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
-	log.Debug().Msgf("envDetails.Deployment.ServerPorts: %+v", envDetails.Deployment.ServerPorts)
-
-	// Wait for the primary domain name to resolve to an IP address.
-	taskRunner.AddTask("Wait for game server domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(ctx, output, serverPrimaryAddress, 15*time.Minute)
-	})
-
-	// Wait for server to respond to client traffic.
-	taskRunner.AddTask("Wait for game server to serve clients", func(output *tui.TaskOutput) error {
-		return waitForGameServerClientEndpointToBeReady(ctx, output, serverPrimaryAddress, serverPrimaryPort, 5*time.Minute)
-	})
-
-	// CHECK ADMIN INTERFACE
-
-	// Wait for the admin domain name to resolve to an IP address.
-	taskRunner.AddTask("Wait for LiveOps Dashboard domain name to propagate", func(output *tui.TaskOutput) error {
-		return waitForDomainResolution(ctx, output, envDetails.Deployment.AdminHostname, 15*time.Minute)
-	})
-
-	// Wait for admin API to successfully respond to an HTTP request.
-	taskRunner.AddTask("Wait for LiveOps Dashboard to serve traffic", func(output *tui.TaskOutput) error {
-		return waitForHTTPServerToRespond(ctx, output, "https://"+envDetails.Deployment.AdminHostname, 5*time.Minute)
-	})
-
-	// Success
-	return nil
+	// With this header, StackAPI responds with a 302 redirect instead of 403 Forbidden.
+	req.Header.Add("Sec-Fetch-Mode", "navigate")
+	resp, err := probeHTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	// Read the body, so that the connection can be reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return resp.Status, fmt.Errorf("%s: received status %s", url, resp.Status)
+	}
+	return resp.Status, nil
 }

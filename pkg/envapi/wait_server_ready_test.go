@@ -5,21 +5,14 @@
 package envapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
-	"github.com/metaplay/cli/internal/tui"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -223,26 +216,34 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	// one has the same name, image and revision, but another owner UID.
 	previousOwner := testPod("logic", 0, "new", running, true)
 	previousOwner.OwnerReferences[0].UID = "logic-previous-uid"
-	// restartedPod returns a pod created at the given time, whose server is running, not
-	// ready, and was restarted the given number of times.
-	restartedPod := func(restarts int32, createdAt time.Time) corev1.Pod {
+	// restartedPod returns a pod whose server is running, not ready, and was restarted
+	// the given number of times. Its last run started and ended at the given times.
+	restartedPod := func(restarts int32, lastRunStartedAt, lastRunEndedAt time.Time) corev1.Pod {
 		pod := testPod("all", 0, "new", running, false)
-		pod.CreationTimestamp = metav1.NewTime(createdAt)
 		pod.Status.ContainerStatuses[0].RestartCount = restarts
-		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
+		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+			ExitCode:   137,
+			Reason:     "Error",
+			StartedAt:  metav1.NewTime(lastRunStartedAt),
+			FinishedAt: metav1.NewTime(lastRunEndedAt),
+		}
 		return pod
 	}
 	readyRestarted := testPod("all", 0, "new", running, true)
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
 	exited := testPod("all", 0, "new", corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}, false)
-	exited.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
 	exitedAgain := exited
 	exitedAgain.Status.ContainerStatuses = []corev1.ContainerStatus{{
-		Name:                 shardServerContainerName,
-		State:                exited.Status.ContainerStatuses[0].State,
-		RestartCount:         2,
-		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}},
+		Name:         shardServerContainerName,
+		State:        exited.Status.ContainerStatuses[0].State,
+		RestartCount: 2,
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			ExitCode:   1,
+			Reason:     "Error",
+			StartedAt:  metav1.NewTime(now.Add(-50 * time.Second)),
+			FinishedAt: metav1.NewTime(now.Add(-40 * time.Second)),
+		}},
 	}}
 	imagePullBackOff := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}, false)
 	invalidImage := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "InvalidImageName", Message: "couldn't parse image name"}}, false)
@@ -380,7 +381,7 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			name:      "restarted twice while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(2, now.Add(-time.Minute))},
+			pods:      []corev1.Pod{restartedPod(2, now.Add(-time.Minute), now.Add(-30*time.Second))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Failed   Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Failed): Server failed to start (restarted 2 times, last exit code 137 (Error))"},
 			failedPod: "all-0",
@@ -391,16 +392,26 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			name:      "restarted once while starting",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(1, now.Add(-time.Minute))},
+			pods:      []corev1.Pod{restartedPod(1, now.Add(-time.Minute), now.Add(-30*time.Second))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 1 time, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 1 time, last exit code 137 (Error))"},
 		},
 		{
-			// In a pod created long ago, the restarts may be from the server's past.
-			name:      "restarted in an old pod",
+			// The restarts may be from the server's past, if its last run ended long ago.
+			name:      "last run ended long ago",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
-			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour))},
+			pods:      []corev1.Pod{restartedPod(3, now.Add(-48*time.Hour), now.Add(-48*time.Hour+30*time.Second))},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
+		},
+		{
+			// A recent exit after a long run is not a failure to start, and the earlier
+			// restarts are from the server's past.
+			name:      "exited recently after a long run",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{restartedPod(3, now.Add(-24*time.Hour), now.Add(-time.Minute))},
 			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
 		},
@@ -544,51 +555,7 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			assert.Equal(t, tt.lines, got.lines)
 			assert.Equal(t, tt.problems, got.problems)
 			assert.Equal(t, tt.failedPod, got.failedPod)
-			assert.Equal(t, tt.logs, got.failedPodLogs)
-		})
-	}
-}
-
-// A cancellation ends the wait for an HTTP server at once, with the cancellation as the error:
-// both while a request is in flight and during the pause between two requests. The cancelled
-// request is not logged as a connection error that is retried.
-func TestWaitForHTTPServerToRespondStopsOnCancel(t *testing.T) {
-	cases := map[string]http.HandlerFunc{
-		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
-		"pause between requests": func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		},
-	}
-	for name, handler := range cases {
-		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(handler)
-			defer server.Close()
-			ctx, cancel := context.WithCancel(t.Context())
-			time.AfterFunc(100*time.Millisecond, cancel)
-
-			// With no display, the wait's output lines are logged
-			tui.SetInteractiveMode(false)
-			var logged bytes.Buffer
-			previous := log.Logger
-			log.Logger = zerolog.New(&logged)
-			t.Cleanup(func() {
-				log.Logger = previous
-				tui.SetInteractiveMode(true)
-			})
-
-			start := time.Now()
-			err := waitForHTTPServerToRespond(ctx, &tui.TaskOutput{}, server.URL, time.Minute)
-
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("error = %v, want context.Canceled", err)
-			}
-			// The pause between requests is 1 second, which a cancelled wait must not sit out
-			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
-				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
-			}
-			if strings.Contains(logged.String(), "Error connecting") {
-				t.Errorf("the cancelled request was logged as a connection error:\n%s", logged.String())
-			}
+			assert.Equal(t, tt.logs, got.failedPodLogSource)
 		})
 	}
 }
@@ -610,22 +577,20 @@ func TestReadinessTarget(t *testing.T) {
 }
 
 func TestPreviousPods(t *testing.T) {
-	baseline := &DeployBaseline{podUIDs: map[types.UID]bool{"old-pod": true}}
+	podUIDs := map[types.UID]bool{"old-pod": true}
 	tests := []struct {
 		name      string
-		baseline  *DeployBaseline
 		crChanged bool
 		elapsed   time.Duration
 		want      map[types.UID]bool
 	}{
-		{name: "no deploy", baseline: nil, crChanged: true, elapsed: 0, want: nil},
-		{name: "deploy changed the CR", baseline: baseline, crChanged: true, elapsed: 10 * time.Second, want: baseline.podUIDs},
-		{name: "grace period over", baseline: baseline, crChanged: true, elapsed: oldPodGracePeriod, want: nil},
-		{name: "deploy changed nothing", baseline: baseline, crChanged: false, elapsed: 0, want: nil},
+		{name: "deploy changed the CR", crChanged: true, elapsed: 10 * time.Second, want: podUIDs},
+		{name: "grace period over", crChanged: true, elapsed: oldPodGracePeriod, want: nil},
+		{name: "deploy changed nothing", crChanged: false, elapsed: 0, want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, previousPods(tt.baseline, tt.crChanged, tt.elapsed))
+			assert.Equal(t, tt.want, previousPods(podUIDs, tt.crChanged, tt.elapsed))
 		})
 	}
 }

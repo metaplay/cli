@@ -5,9 +5,7 @@
 package cmd
 
 import (
-	"fmt"
-
-	"github.com/metaplay/cli/internal/tui"
+	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/envapi"
 	"github.com/metaplay/cli/pkg/helmutil"
 	"github.com/metaplay/cli/pkg/styles"
@@ -15,7 +13,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Deploy a game server to the target environment with specified docker image version.
+// Check the current status of a game server deployment, without waiting.
 type debugCheckServerStatus struct {
 	UsePositionalArgs
 
@@ -34,19 +32,26 @@ func init() {
 		Short:   "Check the status of a game server deployment",
 		Run:     runCommand(&o),
 		Long: renderLong(&o, `
-			Check the status of a game server deployment.
+			Check the current status of a game server deployment.
 
-			Runs the same checks as 'deploy server' but without deploying anything:
-			- All expected pods are present, healthy, and ready.
-			- Client-facing domain name resolves correctly.
-			- Game server responds to client traffic.
-			- Admin domain name resolves correctly.
-			- Admin endpoint responds with a success code.
+			Runs the kinds of checks that 'deploy server' waits for, once, without waiting
+			for them to pass:
+			- All expected pods are present, run the deployed image, and are ready.
+			- Client-facing domain name resolves.
+			- Game server accepts 10 client connections, made one after another.
+			- LiveOps Dashboard domain name resolves.
+			- LiveOps Dashboard responds with a success or a redirect to its login.
+
+			Each check prints its result. A check of an endpoint is skipped when its domain
+			name does not resolve. If a pod's server failed to start, its last logs are
+			shown. The command fails with exit code 1 if any check fails, including while
+			a deployment is still starting.
 
 			{Arguments}
 
 			Related commands:
-			- 'metaplay deploy server ...' deploys a game server and runs these checks.
+			- 'metaplay deploy server ...' deploys a game server and waits for these checks to pass.
+			- 'metaplay debug logs ...' shows the logs of the game server.
 			- 'metaplay get server-info ...' shows information about the game server deployment.
 		`),
 		Example: renderExample(`
@@ -89,7 +94,7 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	// Configure Helm.
 	actionConfig, err := helmutil.NewActionConfig(kubeCli.KubeConfig, envConfig.GetKubernetesNamespace())
 	if err != nil {
-		return fmt.Errorf("failed to initialize Helm config: %w", err)
+		return clierrors.Wrap(err, "Failed to initialize Helm config")
 	}
 
 	// Determine if there's an existing release deployed.
@@ -111,7 +116,8 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 		log.Info().Msgf("  Helm release name: %s", styles.RenderTechnical(existingRelease.Name))
 		log.Info().Msgf("  Chart version:     %s", styles.RenderTechnical(existingRelease.Chart.Metadata.Version))
 		// Print image name/tag from chart values
-		if imageTag, ok := existingRelease.Config["image"].(map[string]any)["tag"].(string); ok {
+		imageConfig, _ := existingRelease.Config["image"].(map[string]any)
+		if imageTag, ok := imageConfig["tag"].(string); ok {
 			log.Info().Msgf("  Image tag:         %s", styles.RenderTechnical(imageTag))
 		} else {
 			log.Info().Msg("  Image tag:         <not available>")
@@ -120,23 +126,48 @@ func (o *debugCheckServerStatus) Run(cmd *cobra.Command) error {
 	log.Info().Msg("")
 
 	if existingRelease == nil {
-		log.Info().Msg(styles.RenderAttention("No deployment found in environment, skipping tests."))
-		return nil
+		return envapi.ErrNoGameServer
 	}
 
-	taskRunner := tui.NewTaskRunner()
-
-	// Validate the game server status.
-	err = targetEnv.WaitForServerToBeReady(cmd.Context(), taskRunner, nil)
+	log.Info().Msg(styles.RenderMuted("Checking the game server status..."))
+	status, err := targetEnv.CheckServerStatus(cmd.Context())
 	if err != nil {
 		return err
 	}
+	log.Info().Msg("")
 
-	// Run the tasks.
-	if err = taskRunner.Run(cmd.Context()); err != nil {
-		return err
+	log.Info().Msg("Game server status:")
+	for _, check := range status.Checks {
+		marker := styles.RenderSuccess("✓")
+		summary := check.Summary
+		switch {
+		case check.Failed():
+			marker = styles.RenderError("✗")
+			summary = styles.RenderError(summary)
+		case check.Skipped:
+			marker = styles.RenderMuted("-")
+			summary = styles.RenderMuted(summary)
+		}
+		log.Info().Msgf("  %s %s: %s", marker, check.Name, summary)
+		for _, line := range check.Lines {
+			log.Info().Msgf("      %s", line)
+		}
+	}
+	log.Info().Msg("")
+
+	for _, note := range status.Notes {
+		log.Info().Msg(styles.RenderAttention(note))
+	}
+	if len(status.FailedPodLogs) > 0 {
+		for _, line := range status.FailedPodLogs {
+			log.Info().Msg(line)
+		}
+		log.Info().Msg("")
 	}
 
-	log.Info().Msg(styles.RenderSuccess("✅ Game server deployment is ready!"))
+	if err := status.Err(); err != nil {
+		return err
+	}
+	log.Info().Msg(styles.RenderSuccess("Game server is ready"))
 	return nil
 }

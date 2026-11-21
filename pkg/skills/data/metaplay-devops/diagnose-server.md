@@ -11,7 +11,7 @@ Whole-server triage. For a single player's incident report from the dashboard, u
 
 | Symptom | First call |
 |---|---|
-| Deploy reported health-check failures | `metaplay debug server-status <env>` to re-run and read the failure detail; then `metaplay debug logs <env>` for the actual error. |
+| Deploy reported health-check failures | `metaplay debug server-status <env>` to see which checks fail now; then `metaplay debug logs <env>` for the actual error. |
 | Site is down or unreachable | `metaplay debug server-status <env>` — tells you which check failed (pod readiness vs DNS vs admin endpoint vs client endpoint). |
 | Server up but throwing errors | `metaplay debug logs <env> --since=15m` then filter for `ERR`/`Exception`. See `metaplay-devops-view-logs`. |
 | Latency spike, server slow | `metaplay debug collect-cpu-profile <env>` — see `metaplay-devops-cpu-profiling`. |
@@ -22,15 +22,17 @@ Whole-server triage. For a single player's incident report from the dashboard, u
 
 ## Health checks (what `server-status` actually checks)
 
-`metaplay debug server-status <env>` runs the same checks as `metaplay deploy server`:
+`metaplay debug server-status <env>` runs the kinds of checks that `metaplay deploy server` waits for, once, without waiting, and prints the result of each. It usually takes a few seconds, shows the last logs of a pod whose server failed to start, and exits with code 1 if any check fails, including while a deploy is still rolling out:
 
-1. All expected pods are present, healthy, and ready.
-2. Client-facing domain resolves correctly.
-3. Game server responds to client traffic.
-4. Admin-facing domain resolves correctly.
-5. Admin endpoint returns success.
+1. All expected pods are present, run the deployed image, and are ready.
+2. Client-facing domain resolves.
+3. Game server accepts client connections.
+4. Admin-facing domain resolves.
+5. Admin endpoint returns success or a login redirect.
 
-Failure in (1) is a Kubernetes / image / config issue. Failures in (2)/(4) are DNS or load-balancer issues, not game-server bugs. Failures in (3)/(5) usually mean the pod is up but the process itself is broken — go to logs.
+A check of an endpoint is skipped when its domain does not resolve.
+
+Failure in (1) is a Kubernetes / image / config issue. Failures in (2)/(4) are DNS or load-balancer issues, not game-server bugs. Failures in (3)/(5) while (1) passes are usually in DNS, the load balancer or the ingress, as the pods are ready. The admin endpoint (5) is answered by the ingress and its authentication, not by the game server. When (1) fails too, start from the pod lines and the logs.
 
 ## Pods and the shard layout
 
