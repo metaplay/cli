@@ -214,6 +214,65 @@ func TestIdleContainerCommandStops(t *testing.T) {
 	}
 }
 
+// The command stops a download, as streamFileFromOffset runs it, of a file whose name has a space,
+// a quote or regular expression operators: both its shell, whose command line has the path quoted,
+// and its 'dd'.
+func TestRemoveFilesCommandStopsDownload(t *testing.T) {
+	requireSkipBytesDD(t)
+	for _, tool := range []string{"pgrep", "pkill", "mkfifo"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found", tool)
+		}
+	}
+	for _, name := range []string{"heap dump.gcdump", "it's.gcdump", "heap+1 (a|b){2}?.gcdump"} {
+		// A FIFO without a writer keeps 'dd' waiting to open it, so the download runs until stopped.
+		path := filepath.Join(t.TempDir(), name)
+		if err := exec.Command("mkfifo", path).Run(); err != nil {
+			t.Fatal(err)
+		}
+		download := exec.Command("sh", "-c", streamFileCommand(path, 0, true))
+		if err := download.Start(); err != nil {
+			t.Fatal(err)
+		}
+		// When the test fails, stop what the remove command did not: dd would wait for a writer
+		// to the FIFO forever.
+		t.Cleanup(func() {
+			_ = exec.Command("pkill", "-KILL", "-P", strconv.Itoa(download.Process.Pid)).Run()
+			_ = download.Process.Kill()
+		})
+		done := make(chan error, 1)
+		go func() { done <- download.Wait() }()
+		// Wait until dd runs, waiting to open the FIFO
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if exec.Command("pgrep", "-f", "--", "^dd if="+regexp.QuoteMeta(path)+" ").Run() == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%q: dd did not start", name)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		if out, err := exec.Command("sh", "-c", removeFilesCommand([]string{path})).CombinedOutput(); err != nil {
+			t.Fatalf("%q: remove command failed: %v: %s", name, err, out)
+		}
+		select {
+		case err := <-done:
+			// Had only 'dd' been stopped, gzip would end, and the shell would exit with gzip's 0.
+			// The shell is killed, or exits with the code of its killed gzip.
+			if err == nil {
+				t.Errorf("%q: the download's shell exited with 0, want it stopped", name)
+			}
+		case <-time.After(5 * time.Second):
+			_ = download.Process.Kill()
+			t.Fatalf("%q: the download still runs after the remove command", name)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%q: file not removed: %v", name, err)
+		}
+	}
+}
+
 // The trailer of WithExitTrailer comes back off the output exactly, with the command's exit code,
 // also when the command exits or prints no final newline.
 func TestExitTrailerRoundTripsThroughShell(t *testing.T) {
@@ -349,63 +408,4 @@ func expandLikeKubernetes(command []string, env []corev1.EnvVar) []string {
 		expanded[i] = out.String()
 	}
 	return expanded
-}
-
-// The command stops a download, as streamFileFromOffset runs it, of a file whose name has a space,
-// a quote or regular expression operators: both its shell, whose command line has the path quoted,
-// and its 'dd'.
-func TestRemoveFilesCommandStopsDownload(t *testing.T) {
-	requireSkipBytesDD(t)
-	for _, tool := range []string{"pgrep", "pkill", "mkfifo"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s not found", tool)
-		}
-	}
-	for _, name := range []string{"heap dump.gcdump", "it's.gcdump", "heap+1 (a|b){2}?.gcdump"} {
-		// A FIFO without a writer keeps 'dd' waiting to open it, so the download runs until stopped.
-		path := filepath.Join(t.TempDir(), name)
-		if err := exec.Command("mkfifo", path).Run(); err != nil {
-			t.Fatal(err)
-		}
-		download := exec.Command("sh", "-c", streamFileCommand(path, 0, true))
-		if err := download.Start(); err != nil {
-			t.Fatal(err)
-		}
-		// When the test fails, stop what the remove command did not: dd would wait for a writer
-		// to the FIFO forever.
-		t.Cleanup(func() {
-			_ = exec.Command("pkill", "-KILL", "-P", strconv.Itoa(download.Process.Pid)).Run()
-			_ = download.Process.Kill()
-		})
-		done := make(chan error, 1)
-		go func() { done <- download.Wait() }()
-		// Wait until dd runs, waiting to open the FIFO
-		for deadline := time.Now().Add(5 * time.Second); ; {
-			if exec.Command("pgrep", "-f", "--", "^dd if="+regexp.QuoteMeta(path)+" ").Run() == nil {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("%q: dd did not start", name)
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-
-		if out, err := exec.Command("sh", "-c", removeFilesCommand([]string{path})).CombinedOutput(); err != nil {
-			t.Fatalf("%q: remove command failed: %v: %s", name, err, out)
-		}
-		select {
-		case err := <-done:
-			// Had only 'dd' been stopped, gzip would end, and the shell would exit with gzip's 0.
-			// The shell is killed, or exits with the code of its killed gzip.
-			if err == nil {
-				t.Errorf("%q: the download's shell exited with 0, want it stopped", name)
-			}
-		case <-time.After(5 * time.Second):
-			_ = download.Process.Kill()
-			t.Fatalf("%q: the download still runs after the remove command", name)
-		}
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("%q: file not removed: %v", name, err)
-		}
-	}
 }

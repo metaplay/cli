@@ -39,18 +39,24 @@ var ErrDetachedCommandLost = errors.New("the command ended without writing its e
 // DetachedResult is how a command run with RunDetachedInDebugContainer ended.
 type DetachedResult struct {
 	ExitCode int    // Exit code of the command
+	Stdout   string // The end of the command's stdout
 	Stderr   string // The end of the command's stderr
 }
 
-// detachedStderrTailBytes is how much of the end of the command's stderr DetachedResult has.
-const detachedStderrTailBytes = 4000
+// detachedOutputTailBytes is how much of the end of the command's stdout and stderr DetachedResult
+// has.
+const detachedOutputTailBytes = 4000
+
+// detachedStderrMarker separates the stdout and the stderr in the output of the script that reads
+// both.
+const detachedStderrMarker = "\n__metaplay_stderr__\n"
 
 // RunDetachedInDebugContainer runs command with /bin/sh in the debug container, in workDir, and
 // waits until it ends. The command runs detached from any exec stream: it writes its exit code to
 // a file, which is polled with short exec calls. So a long command does not depend on one stream
 // lasting until it ends, and a stream that ends early cannot make a command that failed or was cut
-// short look successful. Anything the command must hand back, it writes to files in workDir. Its
-// stdout is discarded.
+// short look successful. The end of the command's stdout and stderr come back in DetachedResult;
+// anything longer the command must hand back, it writes to files in workDir.
 //
 // When ctx is done, the wait ends, but the command goes on until it ends or the pod is deleted.
 func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, workDir, command string) (*DetachedResult, error) {
@@ -65,7 +71,7 @@ func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 // must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
 func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
 	runWithTimeout := func(ctx context.Context, script string) (string, error) {
-		return callShortExec(ctx, func(ctx context.Context) (string, error) { return run(ctx, script) })
+		return callWithTimeout(ctx, shortExecTimeout, func(ctx context.Context) (string, error) { return run(ctx, script) })
 	}
 
 	// The command's pid, stderr and exit code go to a directory of this call's own. Creating it is
@@ -84,7 +90,7 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 	watchdogSeconds := strconv.Itoa(max(1, heartbeatSeconds/10))
 	wrapper := "echo $$ >" + ctl + "/pid.tmp && mv " + ctl + "/pid.tmp " + ctl + "/pid || exit; " +
 		"touch " + ctl + "/heartbeat; " +
-		"sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr & c=$!; " +
+		"sh -c " + ShellQuote(command) + " </dev/null >" + ctl + "/stdout 2>" + ctl + "/stderr & c=$!; " +
 		"{ while sleep " + watchdogSeconds + "; do " +
 		"m=$(stat -c %Y " + ctl + "/heartbeat 2>/dev/null) || m=0; " + // A missing heartbeat is stale
 		"[ $(( $(date +%s) - m )) -gt " + strconv.Itoa(heartbeatSeconds) + " ] && kill -TERM -$$; " +
@@ -120,13 +126,20 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		"elif " + processRunningCheck("$pid") + "; then echo running; " +
 		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
 		"else echo lost; fi"
-	// The command's stderr is only informative, so failing to read it is not an error.
-	readStderr := func() string {
-		stderr, err := runWithTimeout(ctx, "tail -c "+strconv.Itoa(detachedStderrTailBytes)+" "+dir+"/"+ctl+"/stderr")
+	// The ends of the command's stdout and stderr, in one exec call
+	tail := "tail -c " + strconv.Itoa(detachedOutputTailBytes)
+	readOutput := func() (string, string, error) {
+		out, err := retryShortExec(ctx, func(ctx context.Context) (string, error) {
+			return run(ctx, "cd "+dir+"/"+ctl+" && "+tail+" stdout && printf '%s' "+ShellQuote(detachedStderrMarker)+" && "+tail+" stderr")
+		})
 		if err != nil {
-			log.Debug().Msgf("Failed to read the detached command's stderr: %v", err)
+			return "", "", fmt.Errorf("failed to read the command's output: %w", err)
 		}
-		return stderr
+		stdout, stderr, ok := strings.Cut(out, detachedStderrMarker)
+		if !ok {
+			return "", "", fmt.Errorf("unexpected output from reading the command's output: %q", out)
+		}
+		return stdout, stderr, nil
 	}
 
 	var failingSince time.Time // When the checks started failing, or zero if the last one worked
@@ -164,11 +177,16 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 		case "running":
 			continue
 		case "done":
-			return &DetachedResult{ExitCode: exitCode, Stderr: readStderr()}, nil
+			stdout, stderr, err := readOutput()
+			if err != nil {
+				return nil, err
+			}
+			return &DetachedResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderr}, nil
 		case "lost":
 			err := ErrDetachedCommandLost
-			if stderr := strings.TrimSpace(readStderr()); stderr != "" {
-				err = fmt.Errorf("%w; its stderr ends with: %s", err, stderr)
+			// The command's stderr is only informative here, so failing to read it is not an error
+			if _, stderr, _ := readOutput(); strings.TrimSpace(stderr) != "" {
+				err = fmt.Errorf("%w; its stderr ends with: %s", err, strings.TrimSpace(stderr))
 			}
 			return nil, err
 		default: // "gone"
@@ -182,9 +200,6 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 func startDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), launch string) error {
 	stdout, err := retryShortExec(ctx, func(ctx context.Context) (string, error) { return run(ctx, launch) })
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
 		return fmt.Errorf("failed to start the command: %w", err)
 	}
 	switch strings.TrimSuffix(stdout, "\n") {

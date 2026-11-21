@@ -49,12 +49,12 @@ func TestRunDetachedReportsExitCodeAndStderr(t *testing.T) {
 	run := localShell(t)
 	workDir := filepath.Join(t.TempDir(), "work dir")
 
-	result, err := runDetached(context.Background(), run, workDir, "sleep 0.1; echo data >out.txt; echo warning >&2")
+	result, err := runDetached(context.Background(), run, workDir, "sleep 0.1; echo data >out.txt; echo result; echo warning >&2")
 	if err != nil {
 		t.Fatalf("runDetached: %v", err)
 	}
-	if result.ExitCode != 0 || result.Stderr != "warning\n" {
-		t.Errorf("result = %+v, want exit code 0 and stderr \"warning\\n\"", result)
+	if result.ExitCode != 0 || result.Stdout != "result\n" || result.Stderr != "warning\n" {
+		t.Errorf("result = %+v, want exit code 0, stdout \"result\\n\" and stderr \"warning\\n\"", result)
 	}
 	if out, err := os.ReadFile(filepath.Join(workDir, "out.txt")); err != nil || string(out) != "data\n" {
 		t.Errorf("out.txt = %q, %v: the command must run in workDir", out, err)
@@ -89,7 +89,7 @@ func TestRunDetachedPipefail(t *testing.T) {
 // once its heartbeat is older than detachedHeartbeatTimeout.
 func TestRunDetachedStopsCommandWithoutHeartbeat(t *testing.T) {
 	fastPolls(t)
-	detachedHeartbeatTimeout = time.Second
+	detachedHeartbeatTimeout = 0 // Stale after the first whole second
 	shell := localShell(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	run := func(ctx context.Context, script string) (string, error) {
@@ -184,7 +184,7 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 		case strings.Contains(script, "setsid"):
 			return "started\n", nil
 		case strings.Contains(script, "tail"):
-			return "", nil
+			return detachedStderrMarker, nil // Empty stdout and stderr
 		}
 		polls++
 		switch {
@@ -363,21 +363,24 @@ func TestProcessRunningCheck(t *testing.T) {
 	// so the run returns while it sleeps: holding stdout open, it would make the run wait until it
 	// had ended and the zombie had been reaped.
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	_, err := run(context.Background(), "sh -c 'sleep 0.2 & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 & sleep 0.6")
+	_, err := run(context.Background(), "sh -c 'sleep 0.2 & echo $! >"+pidFile+"; exec sleep 5' >/dev/null 2>&1 &")
 	if err != nil {
 		t.Fatal(err)
 	}
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
+	var zombie string
+	var stat []byte
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(string(stat), ") Z"); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("could not make a zombie: /proc/%s/stat = %q", zombie, stat)
+		}
+		if pid, err := os.ReadFile(pidFile); err == nil {
+			zombie = strings.TrimSpace(string(pid))
+			stat, _ = os.ReadFile("/proc/" + zombie + "/stat")
+		}
 	}
-	zombie := strings.TrimSpace(string(pidBytes))
 	check := func(pid string) bool {
 		_, err := run(context.Background(), processRunningCheck(pid))
 		return err == nil
-	}
-	if stat, _ := os.ReadFile("/proc/" + zombie + "/stat"); !strings.Contains(string(stat), ") Z") {
-		t.Fatalf("could not make a zombie: /proc/%s/stat = %q", zombie, stat)
 	}
 	if check(zombie) {
 		t.Errorf("zombie %s counts as running", zombie)

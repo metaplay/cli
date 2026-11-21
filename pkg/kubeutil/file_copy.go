@@ -132,22 +132,30 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	return size, nil
 }
 
-// getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
+// getRemoteFileMD5 calculates the MD5 checksum of a file on the pod. md5sum reads the whole file,
+// which takes minutes for a dump of many GB, so it runs detached: it needs no time limit, and a
+// dropped exec stream does not restart it.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
 	// From stdin, so that md5sum does not print the file name: for a name with a backslash or a
 	// newline, it would start its output with a backslash, and the checksum would never match. The
 	// command exits with md5sum's status, so that a file it cannot read is an exit code.
 	command := "sum=$(md5sum <" + ShellQuote(filePath) + ") && echo \"${sum%% *}\""
-	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
+	result, err := RunDetachedInDebugContainer(ctx, kubeCli, podName, containerName, remoteMD5WorkDir, command)
 	if err != nil {
-		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)
+		return "", fmt.Errorf("failed to get file MD5: %w", err)
 	}
-	sum := strings.TrimSpace(stdout)
+	if result.ExitCode != 0 {
+		return "", fmt.Errorf("md5sum failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	sum := strings.TrimSpace(result.Stdout)
 	if !remoteFileMD5Pattern.MatchString(sum) {
-		return "", fmt.Errorf("unexpected output from md5sum: %q (stderr: %s)", stdout, stderr)
+		return "", fmt.Errorf("unexpected output from md5sum: %q (stderr: %s)", result.Stdout, result.Stderr)
 	}
 	return sum, nil
 }
+
+// remoteMD5WorkDir is where getRemoteFileMD5's detached commands keep their control files.
+const remoteMD5WorkDir = "/tmp/metaplay-md5"
 
 // calculateLocalFileMD5 calculates the MD5 checksum of a local file.
 func calculateLocalFileMD5(filePath string) (string, error) {
@@ -568,14 +576,14 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 			// Verify integrity via MD5 checksum. A copy that cannot be verified is not complete.
 			output.AppendLinef("Verifying file integrity...")
-			lastErr = verifyLocalFileMD5(ctx, file, destPath, fileSize)
+			lastErr = verifyLocalFileMD5(ctx, file, destPath)
 			if lastErr == nil {
 				return nil
 			}
 			output.AppendLinef("Integrity check failed: %v", lastErr)
 			_ = os.Remove(destPath)
 			if !errors.Is(lastErr, errMD5Mismatch) {
-				// Getting the remote checksum kept failing, see retryShortExec
+				// Getting the remote checksum failed
 				return fmt.Errorf("file copy failed: %w", lastErr)
 			}
 			// The local file is corrupt: start over.
@@ -633,16 +641,9 @@ var errFileChanged = errors.New("the file changed during the copy")
 // errMD5Mismatch is the error of a copied file whose MD5 checksum differs from the remote file's.
 var errMD5Mismatch = errors.New("MD5 mismatch")
 
-// remoteMD5Timeout is the time limit of the remote md5sum of a file of size bytes. md5sum reads the
-// whole file, which takes minutes for a dump of many GB, so the limit grows with the file:
-// shortExecTimeout plus a second per 20 MB, a slow rate for md5sum.
-func remoteMD5Timeout(size int64) time.Duration {
-	return shortExecTimeout + time.Duration(size/(20<<20))*time.Second
-}
-
 // verifyLocalFileMD5 checks that the local file has the remote file's MD5 checksum.
-func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string, size int64) error {
-	remoteMD5, err := retryExec(ctx, remoteMD5Timeout(size), file.MD5)
+func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) error {
+	remoteMD5, err := file.MD5(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get the remote file's MD5 checksum: %w", err)
 	}

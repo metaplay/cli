@@ -276,7 +276,7 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 		}
 
 		// Schema (DDL) only, from shard #0
-		dumpCmd := mariadbDumpCommand(shards[0], "--no-create-db --no-tablespaces --no-data --routines --triggers") +
+		dumpCmd := mariadbDumpCommand(shards[0], "--no-create-db", "--no-tablespaces", "--no-data", "--routines", "--triggers") +
 			" >" + exportSchemaFileName
 		if err := dumpInPod(ctx, output, kubeCli, podName, debugContainerName, "database schema", dumpCmd); err != nil {
 			return err
@@ -291,7 +291,7 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 			// Data (DML) only. Note: Using --hex-blob as raw binary causes failures on import.
 			// pipefail makes a failed mariadb-dump fail the command, not only a failed gzip.
 			dumpCmd := "set -o pipefail; " +
-				mariadbDumpCommand(shard, "--no-create-info --no-tablespaces --single-transaction --hex-blob --skip-triggers") +
+				mariadbDumpCommand(shard, "--no-create-info", "--no-tablespaces", "--single-transaction", "--hex-blob", "--skip-triggers") +
 				" | gzip -c >" + fileName
 			return dumpInPod(ctx, output, kubeCli, podName, debugContainerName, label, dumpCmd)
 		})
@@ -331,11 +331,10 @@ func checkOutputPath(path string) error {
 			WithSuggestion("Give a path to a regular file, or to one that does not exist yet")
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY, 0)
-	if err != nil {
-		return clierrors.Wrapf(err, "Cannot write to the output file %s", path).
-			WithSuggestion("Check that the file is writable and not open in another program")
+	if err == nil {
+		err = file.Close()
 	}
-	if err := file.Close(); err != nil {
+	if err != nil {
 		return clierrors.Wrapf(err, "Cannot write to the output file %s", path).
 			WithSuggestion("Check that the file is writable and not open in another program")
 	}
@@ -343,16 +342,11 @@ func checkOutputPath(path string) error {
 }
 
 // mariadbDumpCommand is the shell command of mariadb-dump for the shard's read-only replica with the
-// given flags, separated by spaces. It takes the connection arguments of mariadbCommand, each
-// quoted, since the dump runs through a shell. Its output goes to stdout.
-func mariadbDumpCommand(shard kubeutil.DatabaseShardConfig, flags string) string {
-	argv := mariadbCommand(shard.ReadOnlyHost, shard.UserId, shard.Password, append(strings.Fields(flags), shard.DatabaseName)...)
-	argv[0] = "mariadb-dump"
-	quoted := make([]string, len(argv))
-	for i, arg := range argv {
-		quoted[i] = kubeutil.ShellQuote(arg)
-	}
-	return strings.Join(quoted, " ")
+// given flags, each argument quoted, since the dump runs through a shell. Its output goes to stdout.
+func mariadbDumpCommand(shard kubeutil.DatabaseShardConfig, flags ...string) string {
+	argv := append([]string{"mariadb-dump"}, mariadbConnectionArgs(shard.ReadOnlyHost, shard.UserId, shard.Password)...)
+	argv = append(append(argv, flags...), shard.DatabaseName)
+	return kubeutil.ShellJoin(argv)
 }
 
 // dumpInPod runs dumpCmd in exportRemoteDir in the debug pod until it ends, and fails unless its
@@ -454,7 +448,12 @@ func writeDatabaseArchiveFile(ctx context.Context, path, localDir string, metada
 	defer func() { _ = zipFile.Close() }()
 	zipWriter := zip.NewWriter(zipFile)
 
-	if err := writeMetadataToZip(zipWriter, metadata); err != nil {
+	metadataBytes, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+	// No compression for the small metadata file
+	if err := writeZipEntry(zipWriter, "metadata.json", zip.Store, metadataBytes); err != nil {
 		return fmt.Errorf("failed to write metadata: %w", err)
 	}
 
@@ -462,7 +461,7 @@ func writeDatabaseArchiveFile(ctx context.Context, path, localDir string, metada
 	if err != nil {
 		return fmt.Errorf("failed to read the schema dump: %w", err)
 	}
-	if err := writeSchemaToZip(zipWriter, applySchemaFixups(string(schemaBytes))); err != nil {
+	if err := writeZipEntry(zipWriter, exportSchemaFileName, zip.Deflate, []byte(applySchemaFixups(string(schemaBytes)))); err != nil {
 		return fmt.Errorf("failed to write schema to zip: %w", err)
 	}
 
@@ -524,26 +523,6 @@ func (r contextReader) Read(p []byte) (int, error) {
 	return r.reader.Read(p)
 }
 
-// Helper function to write metadata to zip file
-func writeMetadataToZip(zipWriter *zip.Writer, metadata DatabaseArchiveMetadata) error {
-	// Create metadata JSON in memory
-	metadataBytes, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	// No compression for the small metadata file
-	metadataWriter, err := createZipEntry(zipWriter, "metadata.json", zip.Store)
-	if err != nil {
-		return err
-	}
-	if _, err := metadataWriter.Write(metadataBytes); err != nil {
-		return fmt.Errorf("failed to write metadata content: %w", err)
-	}
-
-	return nil
-}
-
 // Helper function to apply schema modifications and fixups
 func applySchemaFixups(schemaContent string) string {
 	log.Debug().Msgf("Original schema from mariadb-dump:\n%s", schemaContent)
@@ -581,18 +560,14 @@ func enforceUtf8mb4BinCollation(schemaContent string) string {
 	return result
 }
 
-// Helper function to write schema content to zip file
-func writeSchemaToZip(zipWriter *zip.Writer, schemaContent string) error {
-	schemaWriter, err := createZipEntry(zipWriter, exportSchemaFileName, zip.Deflate)
+// writeZipEntry writes data to a new zip entry named name.
+func writeZipEntry(zipWriter *zip.Writer, name string, method uint16, data []byte) error {
+	writer, err := createZipEntry(zipWriter, name, method)
 	if err != nil {
 		return err
 	}
-	if _, err := io.WriteString(schemaWriter, schemaContent); err != nil {
-		return fmt.Errorf("failed to write schema content: %w", err)
-	}
-
-	log.Debug().Msg("Schema written to schema.sql in zip archive")
-	return nil
+	_, err = writer.Write(data)
+	return err
 }
 
 // createZipEntry starts the archive's entry with the given name and compression method.

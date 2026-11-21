@@ -168,7 +168,7 @@ func TestMariadbDumpCommandQuotesCredentials(t *testing.T) {
 	}
 	password := `p$w'd "x" & $(id) *`
 	shard := kubeutil.DatabaseShardConfig{ReadOnlyHost: "db.local", UserId: "user", Password: password, DatabaseName: "game_db"}
-	out, err := exec.Command(shell, "-c", "printf '%s\\n' "+mariadbDumpCommand(shard, "--no-data --hex-blob")).Output()
+	out, err := exec.Command(shell, "-c", "printf '%s\\n' "+mariadbDumpCommand(shard, "--no-data", "--hex-blob")).Output()
 	if err != nil {
 		t.Fatal(err)
 	}

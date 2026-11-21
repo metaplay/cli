@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	utilexec "k8s.io/client-go/util/exec"
-
 	"github.com/metaplay/cli/internal/tui"
 )
 
@@ -269,7 +267,6 @@ type fakeRemoteFile struct {
 	maxChunk int
 	md5      string // Reported MD5, or the data's MD5 if empty
 	md5Err   error
-	md5Fails int // How many MD5 calls fail before they succeed, when md5Err is nil
 	md5Calls int
 	opens    int
 
@@ -293,9 +290,6 @@ func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
 	f.md5Calls++
 	if f.md5Err != nil {
 		return "", f.md5Err
-	}
-	if f.md5Calls <= f.md5Fails {
-		return "", errors.New("connection lost")
 	}
 	if f.md5Calls <= f.wrongMD5Calls {
 		return "00000000000000000000000000000000", nil
@@ -419,31 +413,6 @@ func TestCopyRemoteFileCountsMismatchOnItsOwn(t *testing.T) {
 	}
 }
 
-// When getting the remote checksum fails for a moment, only the check is retried: the file is
-// kept and not copied again.
-func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
-	fastShortExecs(t)
-	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Fails: 2}
-	destPath := filepath.Join(t.TempDir(), "out.bin")
-
-	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3); err != nil {
-		t.Fatalf("copyRemoteFile: %v", err)
-	}
-	if file.opens != 1 || file.md5Calls != 3 {
-		t.Errorf("opened %d streams and checked the MD5 %d times, want 1 and 3", file.opens, file.md5Calls)
-	}
-}
-
-// A check whose command exits with an error, eg, md5sum on a file that is gone, would fail again,
-// so it is not retried.
-func TestCopyRemoteFileDoesNotRetryFailedCommand(t *testing.T) {
-	fastShortExecs(t)
-	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: utilexec.CodeExitError{Err: errors.New("command terminated with exit code 1"), Code: 1}}
-	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, filepath.Join(t.TempDir(), "out.bin"), 3); err == nil || file.md5Calls != 1 {
-		t.Errorf("err = %v after %d checks, want an error after 1", err, file.md5Calls)
-	}
-}
-
 // A size check that fails for a moment is retried.
 func TestCopyRemoteFileRetriesTheSize(t *testing.T) {
 	fastShortExecs(t)
@@ -527,17 +496,5 @@ func TestStreamFileCommandQuotesPath(t *testing.T) {
 		if err != nil || !bytes.Equal(out, data) {
 			t.Errorf("%q compressed: got %q, %v; want %q", name, out, err, data)
 		}
-	}
-}
-
-// The remote checksum of a large file gets the time md5sum needs to read it, not the 30 s of a
-// short exec call.
-func TestRemoteMD5Timeout(t *testing.T) {
-	if got := remoteMD5Timeout(100); got != shortExecTimeout {
-		t.Errorf("remoteMD5Timeout(100 B) = %v, want %v", got, shortExecTimeout)
-	}
-	// 24 GB, eg, a full heap dump, at 20 MB/s takes about 20 minutes
-	if got := remoteMD5Timeout(24 << 30); got < 20*time.Minute {
-		t.Errorf("remoteMD5Timeout(24 GB) = %v, want at least 20 minutes", got)
 	}
 }
