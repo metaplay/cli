@@ -113,11 +113,11 @@ func (o *debugShellOpts) Run(cmd *cobra.Command) error {
 	}
 
 	// Create and attach to debug container
-	debugContainerName, cleanup, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, o.ContainerName, true, true, o.Command)
+	// The container ends when its command, the shell, exits.
+	debugContainerName, err := kubeutil.CreateDebugContainer(cmd.Context(), kubeCli, pod.Name, o.ContainerName, true, true, o.Command)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
 
 	// Setup IO streams using mobyterm.StdStreams() for proper terminal handling.
 	// On Windows, this handles Virtual Terminal Input mode detection and falls back
