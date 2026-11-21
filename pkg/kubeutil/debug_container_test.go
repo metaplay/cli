@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/tools/remotecommand"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // ShellQuote's output, run through bash or sh, is the original string, so 'rm -f' gets exactly one
@@ -206,6 +207,29 @@ func TestSplitExitTrailerRejectsCutOutput(t *testing.T) {
 	for _, cut := range []string{"", "12345\n", "12345\n\n__metaplay_exit=", "12345\n\n__metaplay_exit=0", full[:len(full)-3]} {
 		if _, _, err := splitExitTrailer(cut); !errors.Is(err, errOutputCutShort) {
 			t.Errorf("splitExitTrailer(%q) error = %v, want errOutputCutShort", cut, err)
+		}
+	}
+}
+
+// A non-zero exit code is a utilexec.CodeExitError, which callers check for to tell that the
+// command ended, and cut output or a failed stream is not.
+func TestCheckExecOutputExitCode(t *testing.T) {
+	stdout, err := checkExecOutput("out"+execExitMarker+"3\n", nil)
+	exitErr, ok := errors.AsType[utilexec.CodeExitError](err)
+	if !ok || exitErr.Code != 3 || stdout != "out" {
+		t.Errorf("checkExecOutput = %q, %v; want \"out\" and a CodeExitError with code 3", stdout, err)
+	}
+	if stdout, err := checkExecOutput("out"+execExitMarker+"0\n", nil); err != nil || stdout != "out" {
+		t.Errorf("checkExecOutput = %q, %v; want \"out\" and no error", stdout, err)
+	}
+	for _, c := range []struct {
+		raw       string
+		streamErr error
+	}{{"out", nil}, {"out" + execExitMarker + "3\n", errors.New("stream failed")}} {
+		if _, err := checkExecOutput(c.raw, c.streamErr); err == nil {
+			t.Errorf("checkExecOutput(%q, %v) succeeded", c.raw, c.streamErr)
+		} else if _, ok := errors.AsType[utilexec.CodeExitError](err); ok {
+			t.Errorf("checkExecOutput(%q, %v) = %v, want no CodeExitError", c.raw, c.streamErr, err)
 		}
 	}
 }

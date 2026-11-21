@@ -235,8 +235,10 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 		_, _, err := kubeutil.ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
 			"curl localhost:8585/setOverride/healthz?mode=Success", // Undone by reenableHealthChecksCmd
 		)
-		// A cancelled request may have set the override before it was cancelled
-		overrideSet = err == nil || errors.Is(err, context.Canceled)
+		// Only an exit code of curl shows that the request did not set the override. A request
+		// that was cancelled, or whose output was cut short, may have set it.
+		_, exited := errors.AsType[utilexec.CodeExitError](err)
+		overrideSet = !exited
 		if err != nil {
 			return fmt.Errorf("failed to set healthz probe mode: %w", err)
 		}

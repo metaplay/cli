@@ -265,14 +265,20 @@ type fakeRemoteFile struct {
 	maxChunk int
 	md5      string // Reported MD5, or the data's MD5 if empty
 	md5Err   error
+	md5Fails int // How many MD5 calls fail before they succeed, when md5Err is nil
+	md5Calls int
 	opens    int
 }
 
 func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
 
 func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
+	f.md5Calls++
 	if f.md5Err != nil {
 		return "", f.md5Err
+	}
+	if f.md5Calls <= f.md5Fails {
+		return "", errors.New("connection lost")
 	}
 	if f.md5 != "" {
 		return f.md5, nil
@@ -359,14 +365,49 @@ func TestCopyRemoteFileStopsOnRepeatedMD5Mismatch(t *testing.T) {
 	}
 }
 
-// A stream with more than the file's size means the file changed during the copy.
+// A checksum that never matches also fails a file that takes several streams to copy: starting
+// over makes progress, but does not let the copy retry forever.
+func TestCopyRemoteFileStopsOnRepeatedMD5MismatchOfResumedCopy(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 30, md5: "00000000000000000000000000000000"}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "MD5 mismatch") {
+		t.Errorf("err = %v, want an MD5 mismatch", err)
+	}
+	if file.md5Calls != 3 {
+		t.Errorf("checked the MD5 %d times, want 3", file.md5Calls)
+	}
+}
+
+// When getting the remote checksum fails, only the check is retried: the file is not copied again.
+func TestCopyRemoteFileRetriesOnlyTheFailedChecksum(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Fails: 2}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3); err != nil {
+		t.Fatalf("copyRemoteFile: %v", err)
+	}
+	if file.opens != 1 || file.md5Calls != 3 {
+		t.Errorf("opened %d streams and checked the MD5 %d times, want 1 and 3", file.opens, file.md5Calls)
+	}
+}
+
+// A stream with more than the file's size means the file changed during the copy. That fails the
+// copy at once: every retry would fail the same way.
 func TestCopyRemoteFileFailsOnLongerStream(t *testing.T) {
 	file := &longerRemoteFile{fakeRemoteFile{data: testData(100), maxChunk: 1000}}
 	destPath := filepath.Join(t.TempDir(), "out.bin")
 
-	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 1)
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
 	if err == nil || !strings.Contains(err.Error(), "changed during the copy") {
 		t.Errorf("err = %v, want an error about the file changing", err)
+	}
+	if file.opens != 1 {
+		t.Errorf("opened %d streams, want 1", file.opens)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("destination file exists after a failed copy: %v", statErr)
 	}
 }
 

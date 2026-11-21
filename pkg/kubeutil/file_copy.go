@@ -460,7 +460,7 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, file 
 		case state.bytesTransferred > fileSize:
 			// Not resumable: the file changed during the copy.
 			state.bytesTransferred = 0
-			return fmt.Errorf("received more than the file's %d bytes: the file changed during the copy", fileSize)
+			return fmt.Errorf("received more than the file's %d bytes: %w", fileSize, errFileChanged)
 		}
 	}
 
@@ -534,13 +534,20 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 	var lastErr error
 	failedAttemptsWithoutProgress := 0
-	for attempt := 1; failedAttemptsWithoutProgress < numAttempts; attempt++ {
+	mismatches := 0 // Copies whose MD5 checksum differed: these start over, so they never resume
+	copied := false // The local file has all of the remote file's bytes, but is not verified yet
+	for attempt := 1; failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts; attempt++ {
 		// Track progress before this attempt
 		progressBefore := state.bytesTransferred
 
-		// Attempt the file copy (will resume from state.bytesTransferred if > 0)
-		lastErr = attemptResumableFileCopy(ctx, output, file, destPath, state)
-		if lastErr == nil {
+		// Attempt the file copy (will resume from state.bytesTransferred if > 0). A copied file
+		// whose checksum could not be checked is checked again without copying it again.
+		lastErr = nil
+		if !copied {
+			lastErr = attemptResumableFileCopy(ctx, output, file, destPath, state)
+			copied = lastErr == nil
+		}
+		if copied {
 			log.Debug().Msgf("File copy completed on attempt %d", attempt)
 
 			// Verify integrity via MD5 checksum. A copy that cannot be verified is not complete.
@@ -549,10 +556,22 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 			if lastErr == nil {
 				return nil
 			}
-			// The local file is corrupt or unverified: start over
 			output.AppendLinef("Integrity check failed: %v", lastErr)
+			if errors.Is(lastErr, errMD5Mismatch) {
+				// The local file is corrupt: start over. Starting over makes progress, so the
+				// mismatches are counted on their own.
+				mismatches++
+				_ = os.Remove(destPath)
+				state.bytesTransferred = 0
+				copied = false
+				progressBefore = 0
+			}
+		}
+
+		// A file that changes would fail every attempt, which all expect the size it had at first.
+		if errors.Is(lastErr, errFileChanged) {
 			_ = os.Remove(destPath)
-			state.bytesTransferred = 0
+			return fmt.Errorf("file copy failed: %w", lastErr)
 		}
 
 		// After the command is cancelled no attempt can succeed, so stop. The partial file is
@@ -572,7 +591,7 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 		}
 
 		// On failure, don't delete the partial file - we'll resume from it
-		if failedAttemptsWithoutProgress < numAttempts {
+		if failedAttemptsWithoutProgress < numAttempts && mismatches < numAttempts {
 			if state.bytesTransferred > 0 {
 				output.AppendLinef("Attempt %d failed at %s of %s, will resume...",
 					attempt, humanizeFileSize(state.bytesTransferred), humanizeFileSize(fileSize))
@@ -584,8 +603,17 @@ func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile
 
 	// All attempts failed, clean up partial file
 	_ = os.Remove(destPath)
+	if mismatches >= numAttempts {
+		return fmt.Errorf("file copy failed: the copy's MD5 checksum differed %d times: %w", mismatches, lastErr)
+	}
 	return fmt.Errorf("file copy failed after %d attempts without progress: %w", numAttempts, lastErr)
 }
+
+// errFileChanged is the error of a copy that received more than the remote file's size.
+var errFileChanged = errors.New("the file changed during the copy")
+
+// errMD5Mismatch is the error of a copied file whose MD5 checksum differs from the remote file's.
+var errMD5Mismatch = errors.New("MD5 mismatch")
 
 // verifyLocalFileMD5 checks that the local file has the remote file's MD5 checksum.
 func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) error {
@@ -598,7 +626,7 @@ func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) e
 		return fmt.Errorf("failed to calculate the local file's MD5 checksum: %w", err)
 	}
 	if remoteMD5 != localMD5 {
-		return fmt.Errorf("MD5 mismatch: remote=%s, local=%s", remoteMD5, localMD5)
+		return fmt.Errorf("%w: remote=%s, local=%s", errMD5Mismatch, remoteMD5, localMD5)
 	}
 	log.Debug().Msgf("Integrity verified: MD5 %s", remoteMD5)
 	return nil

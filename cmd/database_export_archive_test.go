@@ -8,7 +8,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,7 +81,7 @@ func TestWriteDatabaseArchive(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "archive.mdb")
 	metadata := DatabaseArchiveMetadata{Version: 1, Environment: "test", DatabaseName: "test_db", NumShards: 2}
 
-	if err := writeDatabaseArchive(outputPath, localDir, metadata, shards); err != nil {
+	if err := writeDatabaseArchive(context.Background(), outputPath, localDir, metadata, shards); err != nil {
 		t.Fatalf("writeDatabaseArchive: %v", err)
 	}
 
@@ -122,7 +124,7 @@ func TestWriteDatabaseArchiveRejectsBadDumps(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err := writeDatabaseArchive(outputPath, localDir, DatabaseArchiveMetadata{NumShards: 1}, shards)
+			err := writeDatabaseArchive(context.Background(), outputPath, localDir, DatabaseArchiveMetadata{NumShards: 1}, shards)
 			if err == nil {
 				t.Fatal("writeDatabaseArchive succeeded with a bad shard dump")
 			}
@@ -133,6 +135,25 @@ func TestWriteDatabaseArchiveRejectsBadDumps(t *testing.T) {
 				t.Errorf("temporary archive file remains: %v", err)
 			}
 		})
+	}
+}
+
+// A cancelled export stops writing the archive, and leaves no archive or temporary file.
+func TestWriteDatabaseArchiveStopsWhenCancelled(t *testing.T) {
+	localDir := t.TempDir()
+	shards := writeTestDumps(t, localDir, [][]byte{gzipped(t, testShardSQL)})
+	outputPath := filepath.Join(t.TempDir(), "archive.mdb")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := writeDatabaseArchive(ctx, outputPath, localDir, DatabaseArchiveMetadata{NumShards: 1}, shards)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want a cancellation", err)
+	}
+	for _, path := range []string{outputPath, outputPath + ".part"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%s exists after a cancelled write: %v", path, err)
+		}
 	}
 }
 

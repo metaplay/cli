@@ -242,6 +242,7 @@ type DatabaseArchiveMetadata struct {
 // dump tool, even when an exec stream ends early, which client-go reports as success.
 func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *tui.TaskRunner, kubeCli *envapi.KubeClient, podName, debugContainerName string, shards []kubeutil.DatabaseShardConfig, localDir string) {
 	var masterVersion *int
+	exportedAt := time.Now().UTC() // The dumps are of the database as it was from about now
 
 	runner.AddTask("Dump database schema", func(output *tui.TaskOutput) error {
 		// Capture the database master version (best-effort) so 'import-archive' can show it to the user.
@@ -277,9 +278,10 @@ func (o *databaseExportArchiveOpts) addExportTasks(ctx context.Context, runner *
 	}
 
 	runner.AddTask("Write archive", func(output *tui.TaskOutput) error {
-		metadata := o.archiveMetadata(shards, masterVersion)
-		if err := writeDatabaseArchive(o.argOutputFile, localDir, metadata, shards); err != nil {
-			return clierrors.Wrap(err, "Failed to write the database archive")
+		metadata := o.archiveMetadata(shards, masterVersion, exportedAt)
+		if err := writeDatabaseArchive(ctx, o.argOutputFile, localDir, metadata, shards); err != nil {
+			return clierrors.Wrap(err, "Failed to write the database archive").
+				WithSuggestion("Check that the output directory has free space for the archive, then run the export again")
 		}
 		return nil
 	})
@@ -340,7 +342,7 @@ func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 }
 
 // archiveMetadata returns the metadata of the archive of the shards.
-func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseShardConfig, masterVersion *int) DatabaseArchiveMetadata {
+func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseShardConfig, masterVersion *int, exportedAt time.Time) DatabaseArchiveMetadata {
 	// Use first shard for database name (all shards should have same database name)
 	databaseName := ""
 	if len(shards) > 0 {
@@ -353,15 +355,16 @@ func (o *databaseExportArchiveOpts) archiveMetadata(shards []kubeutil.DatabaseSh
 		DatabaseName:  databaseName,
 		NumShards:     len(shards),
 		MasterVersion: masterVersion,
-		ExportedAt:    time.Now().UTC(),
+		ExportedAt:    exportedAt,
 	}
 }
 
 // writeDatabaseArchive writes the archive to outputPath from the dumps in localDir. It writes to a
-// temporary file first, so outputPath has a complete archive or none from this export.
-func writeDatabaseArchive(outputPath, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
+// temporary file first, so outputPath has a complete archive or none from this export. When ctx is
+// done, it stops writing.
+func writeDatabaseArchive(ctx context.Context, outputPath, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
 	partPath := outputPath + ".part"
-	if err := writeDatabaseArchiveFile(partPath, localDir, metadata, shards); err != nil {
+	if err := writeDatabaseArchiveFile(ctx, partPath, localDir, metadata, shards); err != nil {
 		_ = os.Remove(partPath)
 		return err
 	}
@@ -374,7 +377,7 @@ func writeDatabaseArchive(outputPath, localDir string, metadata DatabaseArchiveM
 
 // writeDatabaseArchiveFile writes the archive's zip file: the metadata, the schema with fixups, and
 // each shard's data, decompressed. Decompressing checks each dump's gzip checksum.
-func writeDatabaseArchiveFile(path, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
+func writeDatabaseArchiveFile(ctx context.Context, path, localDir string, metadata DatabaseArchiveMetadata, shards []kubeutil.DatabaseShardConfig) error {
 	zipFile, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("failed to create zip file: %w", err)
@@ -395,7 +398,7 @@ func writeDatabaseArchiveFile(path, localDir string, metadata DatabaseArchiveMet
 	}
 
 	for _, shard := range shards {
-		if err := writeShardToZip(zipWriter, filepath.Join(localDir, shardDumpFileName(shard.ShardIndex)), shardEntryName(shard.ShardIndex)); err != nil {
+		if err := writeShardToZip(ctx, zipWriter, filepath.Join(localDir, shardDumpFileName(shard.ShardIndex)), shardEntryName(shard.ShardIndex)); err != nil {
 			return fmt.Errorf("failed to write shard %d data to zip: %w", shard.ShardIndex, err)
 		}
 	}
@@ -411,7 +414,7 @@ func writeDatabaseArchiveFile(path, localDir string, metadata DatabaseArchiveMet
 }
 
 // writeShardToZip decompresses the gzipped dump into the zip entry named entryName.
-func writeShardToZip(zipWriter *zip.Writer, dumpPath, entryName string) error {
+func writeShardToZip(ctx context.Context, zipWriter *zip.Writer, dumpPath, entryName string) error {
 	dumpFile, err := os.Open(dumpPath)
 	if err != nil {
 		return fmt.Errorf("failed to open the shard dump: %w", err)
@@ -428,10 +431,23 @@ func writeShardToZip(zipWriter *zip.Writer, dumpPath, entryName string) error {
 		return err
 	}
 	// Reading to the end checks the gzip checksum and length.
-	if _, err := io.Copy(entryWriter, gzReader); err != nil {
+	if _, err := io.Copy(entryWriter, contextReader{ctx, gzReader}); err != nil {
 		return fmt.Errorf("failed to decompress the shard dump: %w", err)
 	}
 	return nil
+}
+
+// contextReader is a reader that fails once ctx is done, so that a long copy from it can be stopped.
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.reader.Read(p)
 }
 
 // Helper function to write metadata to zip file

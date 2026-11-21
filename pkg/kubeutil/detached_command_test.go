@@ -41,9 +41,11 @@ func localShell(t *testing.T) func(ctx context.Context, script string) (string, 
 
 func fastPolls(t *testing.T) {
 	t.Helper()
-	oldFirst, oldInterval := detachedFirstPoll, detachedPollInterval
-	detachedFirstPoll, detachedPollInterval = time.Millisecond, 10*time.Millisecond
-	t.Cleanup(func() { detachedFirstPoll, detachedPollInterval = oldFirst, oldInterval })
+	oldFirst, oldInterval, oldFailing := detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime
+	detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = time.Millisecond, 10*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() {
+		detachedFirstPoll, detachedPollInterval, detachedMaxFailingTime = oldFirst, oldInterval, oldFailing
+	})
 }
 
 func TestRunDetachedReportsExitCodeAndStderr(t *testing.T) {
@@ -90,13 +92,14 @@ func TestRunDetachedPipefail(t *testing.T) {
 // A command whose wrapper is killed, as by the out-of-memory killer, never writes its exit code.
 func TestRunDetachedKilledCommand(t *testing.T) {
 	fastPolls(t)
-	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), "kill -9 $PPID; sleep 1")
-	if err == nil || !strings.Contains(err.Error(), "without an exit code") {
-		t.Errorf("err = %v, want an error about the missing exit code", err)
+	_, err := runDetached(context.Background(), localShell(t), t.TempDir(), "echo dumping >&2; kill -9 $PPID; sleep 1")
+	if err == nil || !strings.Contains(err.Error(), "without writing its exit code") || !strings.Contains(err.Error(), "dumping") {
+		t.Errorf("err = %v, want an error about the missing exit code, with the command's stderr", err)
 	}
 }
 
-// Failed checks, such as ones whose output was cut short, are retried, up to a limit.
+// Failed checks, such as ones whose output was cut short, are retried until they have failed for
+// detachedMaxFailingTime.
 func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 	fastPolls(t)
 	polls := 0
@@ -107,12 +110,55 @@ func TestRunDetachedRetriesFailedChecks(t *testing.T) {
 		polls++
 		return "", errOutputCutShort
 	}
+	start := time.Now()
 	_, err := runDetached(context.Background(), run, "/work", "true")
 	if !errors.Is(err, errOutputCutShort) {
 		t.Errorf("err = %v, want the failed check's error", err)
 	}
-	if polls != detachedMaxFailedPolls {
-		t.Errorf("polled %d times, want %d", polls, detachedMaxFailedPolls)
+	if elapsed := time.Since(start); elapsed < detachedMaxFailingTime || polls < 2 {
+		t.Errorf("gave up after %v and %d checks, want at least %v and 2 checks", elapsed, polls, detachedMaxFailingTime)
+	}
+
+	// A check that works starts the time over: a command whose checks fail now and then is
+	// waited for.
+	polls = 0
+	run = func(ctx context.Context, script string) (string, error) {
+		if strings.Contains(script, "setsid") || strings.Contains(script, "tail") {
+			return "", nil
+		}
+		polls++
+		switch {
+		case polls >= 40:
+			return "done 0\n", nil
+		case polls%3 == 0:
+			time.Sleep(10 * time.Millisecond)
+			return "running\n", nil
+		default:
+			time.Sleep(10 * time.Millisecond)
+			return "", errOutputCutShort
+		}
+	}
+	if result, err := runDetached(context.Background(), run, "/work", "true"); err != nil || result.ExitCode != 0 {
+		t.Errorf("result = %+v, err = %v; want exit code 0", result, err)
+	}
+}
+
+// After a failed start, the checks do not report how an earlier command in the same workDir ended.
+func TestRunDetachedIgnoresEarlierCommand(t *testing.T) {
+	fastPolls(t)
+	shell := localShell(t)
+	workDir := t.TempDir()
+	if _, err := runDetached(context.Background(), shell, workDir, "true"); err != nil {
+		t.Fatalf("runDetached: %v", err)
+	}
+	run := func(ctx context.Context, script string) (string, error) {
+		if strings.Contains(script, "setsid") {
+			return "", errors.New("pod not found")
+		}
+		return shell(ctx, script)
+	}
+	if result, err := runDetached(context.Background(), run, workDir, "exit 5"); err == nil || !strings.Contains(err.Error(), "pod not found") {
+		t.Errorf("result = %+v, err = %v; want the start's error", result, err)
 	}
 }
 

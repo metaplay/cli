@@ -6,6 +6,7 @@ package kubeutil
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strconv"
@@ -24,9 +25,10 @@ var (
 	detachedPollInterval = time.Second
 )
 
-// detachedMaxFailedPolls is how many checks in a row may fail, eg, on a network error, before
-// RunDetachedInDebugContainer gives up waiting.
-const detachedMaxFailedPolls = 5
+// detachedMaxFailingTime is how long checks may keep failing, eg, on a network error, before
+// RunDetachedInDebugContainer gives up waiting. A connection that drops for a while does not end the
+// wait for a command that may still run fine.
+var detachedMaxFailingTime = time.Minute
 
 // DetachedResult is how a command run with RunDetachedInDebugContainer ended.
 type DetachedResult struct {
@@ -56,13 +58,19 @@ func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 // runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests. run
 // must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
 func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
+	// The command's pid, stderr and exit code go to a directory of this call's own, so that the
+	// checks below cannot see the files of an earlier command in workDir: after a failed start,
+	// they would report how that command ended.
+	ctl := ".detached-" + rand.Text()
+	dir := ShellQuote(workDir)
+
 	// Start the command in the background, in its own session, so that it does not depend on the
 	// exec call that started it. The exit code goes to 'status' only once the command has ended:
 	// 'status.tmp' is renamed, so 'status' is never seen half-written.
-	wrapper := "sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>stderr; echo $? >status.tmp && mv status.tmp status"
-	dir := ShellQuote(workDir)
-	launch := "mkdir -p " + dir + " && cd " + dir + " && rm -f status status.tmp stderr pid" +
-		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >pid; }"
+	wrapper := "sh -c " + ShellQuote(command) + " </dev/null >/dev/null 2>" + ctl + "/stderr; " +
+		"echo $? >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
+	launch := "mkdir -p " + dir + " && cd " + dir + " && mkdir " + ctl +
+		" && { setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>&1 & echo $! >" + ctl + "/pid; }"
 	_, launchErr := run(ctx, launch)
 	if launchErr != nil {
 		if ctx.Err() != nil {
@@ -74,12 +82,21 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 
 	// Check until the command has ended. The process is checked after 'status', and 'status' once
 	// more after the process: the command may end between the checks.
-	poll := "cd " + dir + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
+	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo not-started; exit 0; }; " +
 		"if [ -f status ]; then echo \"done $(cat status)\"; " +
 		"elif " + processRunningCheck("$(cat pid)") + "; then echo running; " +
 		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
 		"else echo lost; fi"
-	failedPolls := 0
+	// The command's stderr is only informative, so failing to read it is not an error.
+	readStderr := func() string {
+		stderr, err := run(ctx, "tail -c "+strconv.Itoa(detachedStderrTailBytes)+" "+dir+"/"+ctl+"/stderr")
+		if err != nil {
+			log.Debug().Msgf("Failed to read the detached command's stderr: %v", err)
+		}
+		return stderr
+	}
+
+	var failingSince time.Time // When the checks started failing, or zero if the last one worked
 	delay := detachedFirstPoll
 	for {
 		select {
@@ -99,27 +116,29 @@ func runDetached(ctx context.Context, run func(ctx context.Context, script strin
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("stopped waiting for the command: %w", ctx.Err())
 			}
-			failedPolls++
-			log.Debug().Msgf("Failed to check the detached command (%d/%d): %v", failedPolls, detachedMaxFailedPolls, err)
-			if failedPolls >= detachedMaxFailedPolls {
-				return nil, fmt.Errorf("failed to check whether the command has ended: %w", err)
+			if failingSince.IsZero() {
+				failingSince = time.Now()
+			}
+			log.Debug().Msgf("Failed to check the detached command (failing for %v): %v", time.Since(failingSince).Round(time.Second), err)
+			if time.Since(failingSince) >= detachedMaxFailingTime {
+				return nil, fmt.Errorf("failed to check whether the command has ended for %v: %w", detachedMaxFailingTime, err)
 			}
 			continue
 		}
-		failedPolls = 0
+		failingSince = time.Time{}
 
 		switch state {
 		case "running":
 			continue
 		case "done":
-			// The command's stderr is only informative, so failing to read it is not an error.
-			stderr, err := run(ctx, "tail -c "+strconv.Itoa(detachedStderrTailBytes)+" "+dir+"/stderr")
-			if err != nil {
-				log.Debug().Msgf("Failed to read the detached command's stderr: %v", err)
-			}
-			return &DetachedResult{ExitCode: exitCode, Stderr: stderr}, nil
+			return &DetachedResult{ExitCode: exitCode, Stderr: readStderr()}, nil
 		case "lost":
-			return nil, errors.New("the command ended without an exit code: it was killed, eg, for using too much memory")
+			// Writing the exit code fails when the disk is full
+			err := errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
+			if stderr := strings.TrimSpace(readStderr()); stderr != "" {
+				err = fmt.Errorf("%w; its stderr ends with: %s", err, stderr)
+			}
+			return nil, err
 		default: // "not-started"
 			if launchErr != nil {
 				return nil, fmt.Errorf("failed to start the command: %w", launchErr)

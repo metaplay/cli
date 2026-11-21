@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/remotecommand"
 	watchtools "k8s.io/client-go/tools/watch"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // idleContainerPidFile is where an idle debug container records the PID of its main process.
@@ -287,18 +288,29 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		Tty:    false,
 	})
 
-	stdout, exitCode, trailerErr := splitExitTrailer(stdOut.String())
-	if err == nil && trailerErr == nil && exitCode != 0 {
-		err = fmt.Errorf("command exited with code %d", exitCode)
-	}
-	if err == nil {
-		err = trailerErr
-	}
+	stdout, err := checkExecOutput(stdOut.String(), err)
 	if err != nil {
 		return stdout, stdErr.String(), fmt.Errorf("error streaming command: %w, stdout: %s, stderr: %s", err, stdout, stdErr.String())
 	}
 
 	return stdout, stdErr.String(), nil
+}
+
+// checkExecOutput returns the stdout of a command from withExitTrailer without the trailer, and
+// an error if the stream failed, the stdout was cut short or the command exited with a non-zero
+// code. That code comes as a utilexec.CodeExitError, as client-go returns it for the exit code of
+// the shell itself, which the trailer's printf makes 0.
+func checkExecOutput(rawStdout string, streamErr error) (string, error) {
+	stdout, exitCode, trailerErr := splitExitTrailer(rawStdout)
+	switch {
+	case streamErr != nil:
+		return stdout, streamErr
+	case trailerErr != nil:
+		return stdout, trailerErr
+	case exitCode != 0:
+		return stdout, utilexec.CodeExitError{Err: fmt.Errorf("command terminated with exit code %d", exitCode), Code: exitCode}
+	}
+	return stdout, nil
 }
 
 // execExitMarker precedes the exit code that a command from withExitTrailer prints last.
@@ -338,7 +350,7 @@ func RemoveFilesInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient
 	return err
 }
 
-// removeFilesCommand returns the bash command that removes the files. It first stops a download of
+// removeFilesCommand returns the shell command that removes the files. It first stops a download of
 // the file that was cancelled: its shell, 'dd' and 'gzip' (see streamFileFromOffset). Cancelling
 // the exec stream does not stop them, and 'dd' would hold the removed file's disk space until the
 // container ends.
