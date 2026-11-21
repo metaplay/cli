@@ -312,7 +312,7 @@ func (o *debugCollectHeapDumpOpts) collectAndRetrieveHeapDump(ctx context.Contex
 	// Copy heap dump to local machine
 	downloaded := false
 	runner.AddTask("Download heap dump", func(output *tui.TaskOutput) error {
-		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, 3)
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDumpDir, filepath.Base(o.flagOutputPath), o.flagOutputPath, true, 3)
 		if err != nil {
 			return fmt.Errorf("failed to copy heap dump: %w", err)
 		}

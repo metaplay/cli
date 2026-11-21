@@ -17,6 +17,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -114,9 +115,12 @@ func (r *debugFailingReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// remoteFileMD5Pattern matches an MD5 checksum as md5sum prints it.
+var remoteFileMD5Pattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
 // getRemoteFileSize retrieves the size of a file on the pod using stat.
 func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (int64, error) {
-	command := fmt.Sprintf("stat -c '%%s' %s", filePath)
+	command := fmt.Sprintf("stat -c '%%s' %s", ShellQuote(filePath))
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w (stderr: %s)", err, stderr)
@@ -130,12 +134,16 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 // getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
-	command := fmt.Sprintf("md5sum %s | cut -d' ' -f1", filePath)
+	command := fmt.Sprintf("md5sum %s | cut -d' ' -f1", ShellQuote(filePath))
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)
 	}
-	return strings.TrimSpace(stdout), nil
+	sum := strings.TrimSpace(stdout)
+	if !remoteFileMD5Pattern.MatchString(sum) {
+		return "", fmt.Errorf("unexpected output from md5sum: %q (stderr: %s)", stdout, stderr)
+	}
+	return sum, nil
 }
 
 // calculateLocalFileMD5 calculates the MD5 checksum of a local file.
@@ -329,10 +337,49 @@ type resumeState struct {
 	bytesTransferred int64
 }
 
+// remoteFile is the file in a pod that CopyFileFromDebugPod downloads. Tests replace it.
+type remoteFile interface {
+	// Size returns the file's size in bytes.
+	Size(ctx context.Context) (int64, error)
+	// MD5 returns the file's MD5 checksum as lowercase hex.
+	MD5(ctx context.Context) (string, error)
+	// Open returns a reader of the file's bytes from offset on, and a function that closes it. The
+	// reader may end early without an error.
+	Open(ctx context.Context, offset int64) (io.Reader, func() error, error)
+	// TransferFailed is called after a transfer attempt failed, to log what may have caused it.
+	TransferFailed(ctx context.Context)
+}
+
+// debugContainerFile is a file in a debug container, read with a shell, dd and, if compress is set,
+// gzip.
+type debugContainerFile struct {
+	kubeCli       *envapi.KubeClient
+	podName       string
+	containerName string
+	path          string
+	compress      bool
+}
+
+func (f *debugContainerFile) Size(ctx context.Context) (int64, error) {
+	return getRemoteFileSize(ctx, f.kubeCli, f.podName, f.containerName, f.path)
+}
+
+func (f *debugContainerFile) MD5(ctx context.Context) (string, error) {
+	return getRemoteFileMD5(ctx, f.kubeCli, f.podName, f.containerName, f.path)
+}
+
+func (f *debugContainerFile) Open(ctx context.Context, offset int64) (io.Reader, func() error, error) {
+	return streamFileFromOffset(ctx, f.kubeCli, f.podName, f.containerName, f.path, offset, f.compress)
+}
+
+func (f *debugContainerFile) TransferFailed(ctx context.Context) {
+	checkContainerTermination(ctx, f.kubeCli, f.podName, f.containerName)
+}
+
 // attemptResumableFileCopy performs a single file copy attempt with resume support.
-// If state is provided and has bytesTransferred > 0, it will resume from that offset.
-// Returns the number of new bytes transferred in this attempt.
-func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcPath, destPath string, state *resumeState) (int64, error) {
+// If state has bytesTransferred > 0, it resumes from that offset. It fails unless the file
+// was received up to its full size. state.bytesTransferred is updated with the progress made.
+func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, file remoteFile, destPath string, state *resumeState) error {
 	offset := state.bytesTransferred
 	fileSize := state.fileSize
 
@@ -352,14 +399,14 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 		destFile, err = os.Create(destPath)
 	}
 	if err != nil {
-		return 0, fmt.Errorf("failed to create destination file: %w", err)
+		return fmt.Errorf("failed to create destination file: %w", err)
 	}
 	defer func() { _ = destFile.Close() }()
 
-	// Stream from offset using dd
-	reader, closer, err := streamFileFromOffset(ctx, kubeCli, podName, containerName, srcPath, offset, true)
+	// Stream from offset
+	reader, closer, err := file.Open(ctx, offset)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer func() { _ = closer() }()
 
@@ -396,12 +443,26 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 		lastUpdateTime:    time.Now(),
 	}
 
-	// Copy the file & track progress.
+	// Copy the file & track progress. Reading more than the rest of the file is not wanted: a
+	// longer file than expected fails below.
 	copyStart := time.Now()
-	bytesThisAttempt, copyErr := io.Copy(progressTracker, reader)
+	bytesThisAttempt, copyErr := io.Copy(progressTracker, io.LimitReader(reader, remainingBytes+1))
 
 	// Update state with new progress
 	state.bytesTransferred = offset + bytesThisAttempt
+
+	// The stream can end early without an error: when its connection closes before the command in
+	// the pod has finished, client-go reports success.
+	if copyErr == nil {
+		switch {
+		case state.bytesTransferred < fileSize:
+			copyErr = fmt.Errorf("stream ended at %d of %d bytes", state.bytesTransferred, fileSize)
+		case state.bytesTransferred > fileSize:
+			// Not resumable: the file changed during the copy.
+			state.bytesTransferred = 0
+			return fmt.Errorf("received more than the file's %d bytes: the file changed during the copy", fileSize)
+		}
+	}
 
 	if copyErr != nil {
 		elapsed := time.Since(copyStart)
@@ -422,9 +483,9 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 		}
 
 		// Check if container was terminated
-		checkContainerTermination(ctx, kubeCli, podName, containerName)
+		file.TransferFailed(ctx)
 
-		return bytesThisAttempt, fmt.Errorf("transfer interrupted: %w", copyErr)
+		return fmt.Errorf("transfer interrupted: %w", copyErr)
 	}
 
 	// Log successful transfer statistics
@@ -432,15 +493,23 @@ func attemptResumableFileCopy(ctx context.Context, output *tui.TaskOutput, kubeC
 	throughputMBps := float64(bytesThisAttempt) / elapsed.Seconds() / (1 << 20)
 	log.Debug().Msgf("Transfer completed: %d bytes in %v (%.1f MB/s)", bytesThisAttempt, elapsed, throughputMBps)
 
-	return bytesThisAttempt, nil
+	return nil
 }
 
 // CopyFileFromDebugPod copies a file from a pod with resumable transfer support.
 // Only works with the ephemeral debug container as this requires shell on the target pod.
 // Use numAttempts > 1 to retry the copy operation in case of failure - retries will resume
 // from where the previous attempt left off rather than starting from scratch.
-// File integrity is verified via MD5 checksum after transfer completes.
-func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, numAttempts int) error {
+// The copy succeeds only if the local file has the remote file's size and MD5 checksum.
+// compress gzips the file in transit, which is not worth it for a file that is compressed already.
+func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envapi.KubeClient, podName, containerName, srcDir, fileName, destPath string, compress bool, numAttempts int) error {
+	// Use forward slash for remote Linux path (not filepath.Join which uses OS-specific separators)
+	file := &debugContainerFile{kubeCli: kubeCli, podName: podName, containerName: containerName, path: srcDir + "/" + fileName, compress: compress}
+	return copyRemoteFile(ctx, output, file, destPath, numAttempts)
+}
+
+// copyRemoteFile is CopyFileFromDebugPod for any remoteFile.
+func copyRemoteFile(ctx context.Context, output *tui.TaskOutput, file remoteFile, destPath string, numAttempts int) error {
 	if numAttempts < 1 {
 		return fmt.Errorf("numAttempts must be at least 1")
 	}
@@ -451,11 +520,8 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	// Use forward slash for remote Linux path (not filepath.Join which uses OS-specific separators)
-	srcPath := srcDir + "/" + fileName
-
 	// Get file size first to enable resumable transfers
-	fileSize, err := getRemoteFileSize(ctx, kubeCli, podName, containerName, srcPath)
+	fileSize, err := file.Size(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get remote file size: %w", err)
 	}
@@ -473,32 +539,20 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 		progressBefore := state.bytesTransferred
 
 		// Attempt the file copy (will resume from state.bytesTransferred if > 0)
-		_, lastErr = attemptResumableFileCopy(ctx, output, kubeCli, podName, containerName, srcPath, destPath, state)
+		lastErr = attemptResumableFileCopy(ctx, output, file, destPath, state)
 		if lastErr == nil {
-			log.Debug().Msgf("File copy completed successfully on attempt %d", attempt)
+			log.Debug().Msgf("File copy completed on attempt %d", attempt)
 
-			// Verify integrity via MD5 checksum
+			// Verify integrity via MD5 checksum. A copy that cannot be verified is not complete.
 			output.AppendLinef("Verifying file integrity...")
-			remoteMD5, err := getRemoteFileMD5(ctx, kubeCli, podName, containerName, srcPath)
-			if err != nil {
-				// Don't fail the transfer, just warn
-				log.Warn().Msgf("Failed to get remote MD5 for verification: %v", err)
-			} else {
-				localMD5, err := calculateLocalFileMD5(destPath)
-				if err != nil {
-					log.Warn().Msgf("Failed to calculate local MD5 for verification: %v", err)
-				} else if remoteMD5 != localMD5 {
-					// MD5 mismatch - file is corrupted, start fresh
-					output.AppendLinef("Integrity check failed (MD5 mismatch), retrying from scratch...")
-					_ = os.Remove(destPath)
-					state.bytesTransferred = 0
-					lastErr = fmt.Errorf("integrity check failed: remote=%s, local=%s", remoteMD5, localMD5)
-					continue
-				} else {
-					output.AppendLinef("Integrity verified: %s", remoteMD5[:12]+"...")
-				}
+			lastErr = verifyLocalFileMD5(ctx, file, destPath)
+			if lastErr == nil {
+				return nil
 			}
-			return nil
+			// The local file is corrupt or unverified: start over
+			output.AppendLinef("Integrity check failed: %v", lastErr)
+			_ = os.Remove(destPath)
+			state.bytesTransferred = 0
 		}
 
 		// After the command is cancelled no attempt can succeed, so stop. The partial file is
@@ -531,6 +585,23 @@ func CopyFileFromDebugPod(ctx context.Context, output *tui.TaskOutput, kubeCli *
 	// All attempts failed, clean up partial file
 	_ = os.Remove(destPath)
 	return fmt.Errorf("file copy failed after %d attempts without progress: %w", numAttempts, lastErr)
+}
+
+// verifyLocalFileMD5 checks that the local file has the remote file's MD5 checksum.
+func verifyLocalFileMD5(ctx context.Context, file remoteFile, destPath string) error {
+	remoteMD5, err := file.MD5(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get the remote file's MD5 checksum: %w", err)
+	}
+	localMD5, err := calculateLocalFileMD5(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to calculate the local file's MD5 checksum: %w", err)
+	}
+	if remoteMD5 != localMD5 {
+		return fmt.Errorf("MD5 mismatch: remote=%s, local=%s", remoteMD5, localMD5)
+	}
+	log.Debug().Msgf("Integrity verified: MD5 %s", remoteMD5)
+	return nil
 }
 
 // ReadFileFromPod fetches a file from a pod without using compression.

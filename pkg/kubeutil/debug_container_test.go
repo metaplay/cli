@@ -16,21 +16,24 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
+// ShellQuote's output, run through bash or sh, is the original string, so 'rm -f' gets exactly one
 // argument even for names with spaces, wildcards or quotes.
-func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash not found")
-	}
-	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf"}
-	for _, name := range names {
-		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+shellQuote(name)).Output()
+func TestShellQuoteRoundTripsThroughShells(t *testing.T) {
+	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf", `pa$$w'o"rd!`}
+	for _, shellName := range []string{"bash", "sh"} {
+		shell, err := exec.LookPath(shellName)
 		if err != nil {
-			t.Fatalf("bash failed for %q: %v", name, err)
+			t.Logf("%s not found", shellName)
+			continue
 		}
-		if got := strings.TrimSuffix(string(out), "\n"); got != name {
-			t.Errorf("shellQuote(%q) through bash = %q", name, got)
+		for _, name := range names {
+			out, err := exec.Command(shell, "-c", "printf '%s\\n' "+ShellQuote(name)).Output()
+			if err != nil {
+				t.Fatalf("%s failed for %q: %v", shellName, name, err)
+			}
+			if got := strings.TrimSuffix(string(out), "\n"); got != name {
+				t.Errorf("ShellQuote(%q) through %s = %q", name, shellName, got)
+			}
 		}
 	}
 }
@@ -116,5 +119,46 @@ func TestStreamWithContextWrapsCancellation(t *testing.T) {
 	err = StreamWithContext(ctx, fakeExecutor{context.Canceled}, remotecommand.StreamOptions{})
 	if err == nil || err.Error() != "context canceled" {
 		t.Errorf("error = %v, want the cancellation once", err)
+	}
+}
+
+// The trailer of withExitTrailer comes back off the output exactly, with the command's exit code,
+// also when the command exits or prints no final newline.
+func TestExitTrailerRoundTripsThroughShell(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	cases := []struct {
+		command  string
+		stdout   string
+		exitCode int
+	}{
+		{"echo hello", "hello\n", 0},
+		{"printf 'no newline'", "no newline", 0},
+		{"printf ''", "", 0},
+		{"echo before; exit 3", "before\n", 3},
+		{"true & echo started", "started\n", 0},
+		{"echo '__metaplay_exit=9'", "__metaplay_exit=9\n", 0},
+	}
+	for _, c := range cases {
+		out, err := exec.Command(shell, "-c", withExitTrailer(c.command)).Output()
+		if err != nil {
+			t.Fatalf("%q: %v", c.command, err)
+		}
+		stdout, exitCode, err := splitExitTrailer(string(out))
+		if err != nil || stdout != c.stdout || exitCode != c.exitCode {
+			t.Errorf("%q: got %q, %d, %v; want %q, %d", c.command, stdout, exitCode, err, c.stdout, c.exitCode)
+		}
+	}
+}
+
+// Output without the whole trailer was cut short.
+func TestSplitExitTrailerRejectsCutOutput(t *testing.T) {
+	full := "12345\n" + execExitMarker + "0\n"
+	for _, cut := range []string{"", "12345\n", "12345\n\n__metaplay_exit=", "12345\n\n__metaplay_exit=0", full[:len(full)-3]} {
+		if _, _, err := splitExitTrailer(cut); !errors.Is(err, errOutputCutShort) {
+			t.Errorf("splitExitTrailer(%q) error = %v, want errOutputCutShort", cut, err)
+		}
 	}
 }
