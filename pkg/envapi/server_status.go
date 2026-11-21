@@ -38,18 +38,13 @@ type ServerStatus struct {
 	suggestion    string   // What to do when the game server is not ready
 }
 
-// Problems returns the problems of all checks, or none when the game server is ready.
-func (s ServerStatus) Problems() []string {
+// Err returns an error that lists the problems of all checks, or nil when the game
+// server is ready.
+func (s ServerStatus) Err() error {
 	var problems []string
 	for _, check := range s.Checks {
 		problems = append(problems, check.Problems...)
 	}
-	return problems
-}
-
-// Err returns an error that lists the problems, or nil when the game server is ready.
-func (s ServerStatus) Err() error {
-	problems := s.Problems()
 	if len(problems) == 0 {
 		return nil
 	}
@@ -65,21 +60,27 @@ const (
 	checkPodsFailure      = "Failed to check the game server pods"
 )
 
-// How long one check of the pods or of a domain may take, and one fetch of the logs of
-// a failed pod: in CheckServerStatus, and in each attempt of a wait.
-const statusCheckTimeout = 10 * time.Second
+// How long one attempt of a check may take, in CheckServerStatus and in each attempt of
+// a wait: of the pods, of a domain, of the LiveOps Dashboard, and one fetch of the logs
+// of a failed pod.
+const attemptTimeout = 10 * time.Second
 
 // How long the wait of a deploy waits for a domain to resolve. The domain names of a
 // new environment take a while to propagate.
 const domainTimeout = 15 * time.Minute
+
+// How long the wait of a deploy waits for the client endpoint and the LiveOps Dashboard
+// to respond, once their domains resolve.
+const serviceTimeout = 5 * time.Minute
 
 // How many connections the check of the game server's client endpoint makes. All are
 // made and counted, to show an endpoint that serves only some of them, such as one with
 // a broken load balancer target or address. The check passes only if all succeed.
 const clientConnections = 10
 
-// How long each connection to the client endpoint may take, on average.
-const clientConnectionTimeout = 2 * time.Second
+// How long one attempt of the check of the client endpoint may take: 2 seconds for each
+// connection, which is 4 round trips of 500 ms, for a client far from the environment.
+const clientEndpointTimeout = clientConnections * 2 * time.Second
 
 // networkCheck declares one check of a game server's networking, which CheckServerStatus
 // makes once and WaitForServerToBeReady waits for. See networkChecks.
@@ -89,7 +90,8 @@ type networkCheck struct {
 	waitingFor string                                // What the wait waits for, such as "domain x to resolve", for its header and errors
 	timeout    time.Duration                         // How long the wait waits for the check to pass
 	interval   time.Duration                         // How long the wait pauses between two attempts
-	probe      func(ctx context.Context) ServerCheck // Makes the check once, in a bounded time. Fills in all but Name.
+	maxAttempt time.Duration                         // How long one attempt may take
+	probe      func(ctx context.Context) ServerCheck // Makes the check once. Fills in all but Name.
 }
 
 // domainChecks is the check that a domain resolves, and the check of the service at the
@@ -114,8 +116,9 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 				name:       "Game server endpoint " + endpoint,
 				title:      "Wait for game server to serve clients",
 				waitingFor: fmt.Sprintf("game server endpoint %s to be ready", endpoint),
-				timeout:    5 * time.Minute,
+				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
+				maxAttempt: clientEndpointTimeout,
 				probe: func(ctx context.Context) ServerCheck {
 					return checkClientEndpoint(ctx, serverHostname, gameServerClientPort)
 				},
@@ -127,8 +130,9 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 				name:       "LiveOps Dashboard " + dashboardURL,
 				title:      "Wait for LiveOps Dashboard to serve traffic",
 				waitingFor: fmt.Sprintf("HTTP server %s to respond", dashboardURL),
-				timeout:    5 * time.Minute,
+				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
+				maxAttempt: attemptTimeout,
 				probe: func(ctx context.Context) ServerCheck {
 					return checkHTTPServer(ctx, dashboardURL)
 				},
@@ -145,14 +149,17 @@ func domainCheck(name, title, hostname string) networkCheck {
 		waitingFor: fmt.Sprintf("domain %s to resolve", hostname),
 		timeout:    domainTimeout,
 		interval:   5 * time.Second, // Propagation takes a while
+		maxAttempt: attemptTimeout,
 		probe: func(ctx context.Context) ServerCheck {
 			return checkDomain(ctx, hostname)
 		},
 	}
 }
 
-// checkOnce makes the check once.
+// checkOnce makes the check once, in at most c.maxAttempt.
 func (c networkCheck) checkOnce(ctx context.Context) ServerCheck {
+	ctx, cancel := context.WithTimeout(ctx, c.maxAttempt)
+	defer cancel()
 	check := c.probe(ctx)
 	check.Name = c.name
 	return check
@@ -210,7 +217,7 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 		return ServerStatus{}, err
 	}
 	// Unlike the wait, which retries it, fail at once if the GameServer cannot be read.
-	fetchCtx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
+	fetchCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	gameServer, err := targetEnv.fetchGameServer(fetchCtx, kubeCli)
 	if err != nil {
@@ -229,7 +236,7 @@ func (targetEnv *TargetEnvironment) CheckServerStatus(ctx context.Context) (Serv
 	wg.Go(func() {
 		readiness, podsErr = checkGameServerReadiness(ctx, kubeCli, gameServer, gameServer.readinessTarget())
 		if readiness.failedPod != "" {
-			notes, failedPodLogs = failedPodLogLines(ctx, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+			notes, failedPodLogs = failedPodLogLines(ctx, kubeCli, readiness.failedPod, readiness.failedPodLogSource)
 		}
 	})
 	for ndx, checks := range network {
@@ -280,7 +287,7 @@ func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness 
 	case podsErr != nil:
 		return "The status of the game server pods could not be read from Kubernetes. Run this command again, and if it fails the same way, check that your account can read the environment's pods and stateful sets"
 	case readiness.failedPod != "":
-		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs, hasLogs)
+		return failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogSource, hasLogs)
 	case !readiness.ready():
 		return "If a deploy just started, run this command again in a minute. Otherwise, the pod lines above show what blocks it"
 	default:
@@ -291,8 +298,6 @@ func (targetEnv *TargetEnvironment) notReadySuggestion(podsErr error, readiness 
 // checkDomain checks once that hostname resolves, with lookupDomain.
 func checkDomain(ctx context.Context, hostname string) ServerCheck {
 	var check ServerCheck
-	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
-	defer cancel()
 	addrs, err := lookupDomain(ctx, hostname)
 	if err != nil {
 		check.Summary = "does not resolve"
@@ -308,8 +313,6 @@ func checkDomain(ctx context.Context, hostname string) ServerCheck {
 // another, as each looks up the hostname again, and so may reach another of the load
 // balancer's addresses. Concurrent lookups of one hostname share a single answer.
 func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerCheck {
-	ctx, cancel := context.WithTimeout(ctx, clientConnections*clientConnectionTimeout)
-	defer cancel()
 	numFailed := 0
 	var firstErr error
 	for range clientConnections {
@@ -327,8 +330,7 @@ func checkClientEndpoint(ctx context.Context, hostname string, port int) ServerC
 	return check
 }
 
-// checkHTTPServer checks once that url responds with a success or a redirect. The
-// request's own timeout limits how long it takes.
+// checkHTTPServer checks once that url responds with a success or a redirect.
 func checkHTTPServer(ctx context.Context, url string) ServerCheck {
 	check := ServerCheck{Summary: "does not respond"}
 	status, err := probeHTTPServer(ctx, url)
@@ -336,9 +338,6 @@ func checkHTTPServer(ctx context.Context, url string) ServerCheck {
 		check.Summary = "responds with " + status
 	}
 	if err != nil {
-		if status != "" {
-			err = fmt.Errorf("%s: %w", url, err)
-		}
 		check.Problems = []string{err.Error()}
 	}
 	return check

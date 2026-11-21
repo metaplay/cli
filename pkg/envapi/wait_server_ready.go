@@ -169,11 +169,11 @@ func FetchGameServerPods(ctx context.Context, kubeCli *KubeClient) ([]corev1.Pod
 
 // gameServerReadiness is the result of one check of whether a game server is up.
 type gameServerReadiness struct {
-	lines         []string     // Status of each shard set and its pods, for display
-	problems      []string     // What is not ready yet, one line each, or none when ready
-	failedPod     string       // Name of a pod whose server failed to start, or empty
-	failure       string       // Why failedPod failed
-	failedPodLogs podLogSource // Which logs of failedPod show the failure
+	lines              []string     // Status of each shard set and its pods, for display
+	problems           []string     // What is not ready yet, one line each, or none when ready
+	failedPod          string       // Name of a pod whose server failed to start, or empty
+	failure            string       // Why failedPod failed
+	failedPodLogSource podLogSource // Which logs of failedPod show the failure
 }
 
 // podLogSource tells which logs of a pod's server container show its failure.
@@ -215,8 +215,9 @@ type readinessTarget struct {
 // tag: otherwise, the image check holds back the old pods until they are replaced.
 const oldPodGracePeriod = 30 * time.Second
 
-// How recently a pod must have been created, or its server last exited, for the
-// server's restarts to count as a failure to start, rather than as ones in its past.
+// How recently a pod must have been created, or its server have last run briefly and
+// exited, for the server's restarts to count as a failure to start, rather than as ones
+// in its past.
 const recentRestartWindow = 10 * time.Minute
 
 // DeployBaseline is the game server's state just before a deploy changes it. The
@@ -355,7 +356,7 @@ func evaluateGameServerReadiness(target readinessTarget, shardSets []appsv1.Stat
 			if status.Phase == PhaseFailed && r.failedPod == "" && pod != nil {
 				r.failedPod = podNames[ndx]
 				r.failure = status.Message
-				r.failedPodLogs = status.logs
+				r.failedPodLogSource = status.logs
 			}
 		}
 
@@ -442,10 +443,14 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	// running between the restarts. One restart is allowed, as a server may exit once
 	// while what it depends on is starting too. Kubernetes counts the restarts over the
 	// pod's lifetime, so they count only for a recently created pod, or one whose server
-	// exited recently: otherwise, they may be from the server's past. A server that keeps
-	// crashing exits at least every 5 minutes, the longest back-off of Kubernetes.
+	// last ran briefly and recently: otherwise, they may be from the server's past. A
+	// server that keeps crashing runs briefly, and exits at least every 5 minutes, the
+	// longest back-off of Kubernetes. One that ran for long and exited once has not
+	// failed to start.
 	recentlyStarted := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
-	if lastRun := containerStatus.LastTerminationState.Terminated; lastRun != nil && lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) {
+	if lastRun := containerStatus.LastTerminationState.Terminated; lastRun != nil &&
+		lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) &&
+		lastRun.FinishedAt.Sub(lastRun.StartedAt.Time) < recentRestartWindow {
 		recentlyStarted = true
 	}
 	keepsRestarting := containerStatus.RestartCount >= 2 && recentlyStarted
@@ -603,11 +608,11 @@ func (gs *TargetGameServer) crVersion() (types.UID, int64) {
 }
 
 // checkGameServerReadiness fetches the game server's StatefulSets and pods and evaluates
-// whether they are ready now, within statusCheckTimeout. It is the check of the pods of
+// whether they are ready now, within attemptTimeout. It is the check of the pods of
 // both CheckServerStatus and the wait of a deploy, which sets target.previousPods.
 // \todo Handle edge clusters of multi-region game servers.
 func checkGameServerReadiness(ctx context.Context, kubeCli *KubeClient, gameServer *TargetGameServer, target readinessTarget) (gameServerReadiness, error) {
-	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	target.now = time.Now()
 	shardSets, err := fetchGameServerShardSets(ctx, kubeCli, gameServer.GameServerOldCR)
@@ -730,10 +735,10 @@ func (targetEnv *TargetEnvironment) waitForGameServerReady(ctx context.Context, 
 
 		// If a pod failed, bail out with the logs from the pod.
 		if readiness.failedPod != "" {
-			hasLogs := showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogs)
+			hasLogs := showPodLogs(ctx, output, kubeCli, readiness.failedPod, readiness.failedPodLogSource)
 			return clierrors.New("Game server failed to start").
 				WithDetails(fmt.Sprintf("Pod %s: %s", readiness.failedPod, readiness.failure)).
-				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogs, hasLogs))
+				WithSuggestion(failedPodSuggestion(targetEnv.HumanID, readiness.failedPod, readiness.failedPodLogSource, hasLogs))
 		}
 
 		if readiness.ready() {
@@ -777,7 +782,6 @@ func (targetEnv *TargetEnvironment) WaitForServerToBeReady(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	log.Debug().Msgf("envDetails.Deployment.ServerPorts: %+v", envDetails.Deployment.ServerPorts)
 
 	// Only wait for a few minutes, as pods generally become healthy fairly soon, to show
 	// the logs of a failure early. This can take a long time when larger changes are
@@ -810,12 +814,12 @@ func failedPodSuggestion(humanID, podName string, source podLogSource, hasLogs b
 
 // failedPodLogLines returns the last logs of a game server pod's server container that
 // show its failure, with a heading, and notes on why logs could not be fetched. It
-// takes at most statusCheckTimeout.
+// takes at most attemptTimeout.
 func failedPodLogLines(ctx context.Context, kubeCli *KubeClient, podName string, source podLogSource) (notes []string, logLines []string) {
 	if source == noPodLogs {
 		return nil, nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, statusCheckTimeout)
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 	podLogs, err := fetchPodLogs(ctx, kubeCli, podName, shardServerContainerName, source == previousPodLogs)
 	// The previous container's logs are gone if Kubernetes has cleaned the container up.
@@ -960,7 +964,7 @@ func probeHTTPServer(ctx context.Context, url string) (string, error) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 	_ = resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return resp.Status, fmt.Errorf("received status %s", resp.Status)
+		return resp.Status, fmt.Errorf("%s: received status %s", url, resp.Status)
 	}
 	return resp.Status, nil
 }

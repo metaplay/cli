@@ -5,21 +5,14 @@
 package envapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
-	"github.com/metaplay/cli/internal/tui"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -232,9 +225,16 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
 		return pod
 	}
-	// A pod created long ago whose server keeps crashing: its last run ended recently.
+	// A pod created long ago whose server keeps crashing: its last run was brief, and
+	// ended recently.
 	crashLoopingOldPod := restartedPod(6, now.Add(-3*time.Hour))
+	crashLoopingOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-2 * time.Minute))
 	crashLoopingOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-time.Minute))
+	// A pod created long ago whose server ran for long, and exited once recently. Its
+	// earlier restarts are from its past.
+	exitedOnceOldPod := restartedPod(3, now.Add(-48*time.Hour))
+	exitedOnceOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.StartedAt = metav1.NewTime(now.Add(-24 * time.Hour))
+	exitedOnceOldPod.Status.ContainerStatuses[0].LastTerminationState.Terminated.FinishedAt = metav1.NewTime(now.Add(-time.Minute))
 	readyRestarted := testPod("all", 0, "new", running, true)
 	readyRestarted.Status.ContainerStatuses[0].RestartCount = 1
 	readyRestarted.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled"}
@@ -408,7 +408,17 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
 		},
 		{
-			// In a pod created long ago, restarts count when the server exited recently.
+			// In a pod created long ago, a recent exit after a long run is not a failure.
+			name:      "exited once after a long run in an old pod",
+			target:    readinessTarget{imageTag: "new"},
+			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
+			pods:      []corev1.Pod{exitedOnceOldPod},
+			lines:     []string{"Shard set 'all': 0/1 pods ready", "  all-0  Running  Server is starting (restarted 3 times, last exit code 137 (Error))"},
+			problems:  []string{"Pod all-0 (Running): Server is starting (restarted 3 times, last exit code 137 (Error))"},
+		},
+		{
+			// In a pod created long ago, restarts count when the server last ran briefly
+			// and exited recently.
 			name:      "keeps restarting in an old pod",
 			target:    readinessTarget{imageTag: "new"},
 			shardSets: []appsv1.StatefulSet{testShardSet("all", 1, "new")},
@@ -558,60 +568,7 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 			assert.Equal(t, tt.lines, got.lines)
 			assert.Equal(t, tt.problems, got.problems)
 			assert.Equal(t, tt.failedPod, got.failedPod)
-			assert.Equal(t, tt.logs, got.failedPodLogs)
-		})
-	}
-}
-
-// A cancellation ends the wait for a check, here of an HTTP server, at once, with the
-// cancellation as the error: both while a request is in flight and during the pause
-// between two requests. The cancelled request is not logged as a failed attempt.
-func TestNetworkCheckWaitStopsOnCancel(t *testing.T) {
-	cases := map[string]http.HandlerFunc{
-		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
-		"pause between requests": func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusServiceUnavailable)
-		},
-	}
-	for name, handler := range cases {
-		t.Run(name, func(t *testing.T) {
-			server := httptest.NewServer(handler)
-			defer server.Close()
-			ctx, cancel := context.WithCancel(t.Context())
-			time.AfterFunc(100*time.Millisecond, cancel)
-
-			// With no display, the wait's output lines are logged
-			tui.SetInteractiveMode(false)
-			var logged bytes.Buffer
-			previous := log.Logger
-			log.Logger = zerolog.New(&logged)
-			t.Cleanup(func() {
-				log.Logger = previous
-				tui.SetInteractiveMode(true)
-			})
-
-			start := time.Now()
-			check := networkCheck{
-				name:       "Dashboard",
-				waitingFor: "the dashboard to respond",
-				timeout:    time.Minute,
-				interval:   time.Second,
-				probe: func(ctx context.Context) ServerCheck {
-					return checkHTTPServer(ctx, server.URL)
-				},
-			}
-			err := check.wait(ctx, &tui.TaskOutput{})
-
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("error = %v, want context.Canceled", err)
-			}
-			// The pause between requests is 1 second, which a cancelled wait must not sit out
-			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
-				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
-			}
-			if strings.Contains(logged.String(), "context canceled") {
-				t.Errorf("the cancelled request was logged as a connection error:\n%s", logged.String())
-			}
+			assert.Equal(t, tt.logs, got.failedPodLogSource)
 		})
 	}
 }

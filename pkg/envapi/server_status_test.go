@@ -111,14 +111,14 @@ func TestDomainChecksCheckOnce(t *testing.T) {
 	}
 
 	results := domainChecks{
-		domain:  networkCheck{name: "Domain", probe: passing},
-		service: networkCheck{name: "Endpoint", probe: passing},
+		domain:  networkCheck{name: "Domain", probe: passing, maxAttempt: time.Second},
+		service: networkCheck{name: "Endpoint", probe: passing, maxAttempt: time.Second},
 	}.checkOnce(t.Context())
 	assert.Equal(t, []ServerCheck{{Name: "Domain", Summary: "ok"}, {Name: "Endpoint", Summary: "ok"}}, results)
 
 	results = domainChecks{
-		domain:  networkCheck{name: "Domain", probe: failing},
-		service: networkCheck{name: "Dashboard", probe: notRun},
+		domain:  networkCheck{name: "Domain", probe: failing, maxAttempt: time.Second},
+		service: networkCheck{name: "Dashboard", probe: notRun, maxAttempt: time.Second},
 	}.checkOnce(t.Context())
 	assert.Len(t, results, 2)
 	domain, service := results[0], results[1]
@@ -128,16 +128,17 @@ func TestDomainChecksCheckOnce(t *testing.T) {
 	assert.False(t, service.Failed(), "a skipped check adds no problem of its own")
 }
 
-// The wait retries a failed check every interval, and ends on the first pass, on the
-// first failure once its timeout has passed, or at once when the context is done. It
-// shows each failed attempt, and the summary of the check once it passes.
+// The wait retries a failed check every interval, and ends on the first pass, or on the
+// first failure once its timeout has passed. It shows each failed attempt, and the
+// summary of the check once it passes. See TestNetworkCheckWaitStopsOnCancel for a
+// cancellation.
 func TestNetworkCheckWait(t *testing.T) {
 	// With no display, the wait's output lines are logged
 	tui.SetInteractiveMode(false)
 	t.Cleanup(func() { tui.SetInteractiveMode(true) })
 	notReady := ServerCheck{Summary: "does not resolve", Problems: []string{"no such host"}}
 	newCheck := func(timeout time.Duration, probe func(context.Context) ServerCheck) networkCheck {
-		return networkCheck{name: "Domain x", waitingFor: "domain x to resolve", timeout: timeout, interval: time.Second, probe: probe}
+		return networkCheck{name: "Domain x", waitingFor: "domain x to resolve", timeout: timeout, interval: time.Second, maxAttempt: time.Second, probe: probe}
 	}
 
 	t.Run("passes after retries", func(t *testing.T) {
@@ -182,17 +183,60 @@ func TestNetworkCheckWait(t *testing.T) {
 			assert.Equal(t, 3*time.Second, time.Since(start))
 		})
 	})
+}
 
-	t.Run("stops on cancel", func(t *testing.T) {
-		synctest.Test(t, func(t *testing.T) {
+// A cancellation ends the wait for a check, here of an HTTP server, at once, with the
+// cancellation as the error: both while a request is in flight and during the pause
+// between two requests. The cancelled request is not logged as a failed attempt.
+func TestNetworkCheckWaitStopsOnCancel(t *testing.T) {
+	cases := map[string]http.HandlerFunc{
+		"request in flight": func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() },
+		"pause between requests": func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		},
+	}
+	for name, handler := range cases {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(handler)
+			defer server.Close()
 			ctx, cancel := context.WithCancel(t.Context())
-			time.AfterFunc(1500*time.Millisecond, cancel)
+			time.AfterFunc(100*time.Millisecond, cancel)
+
+			// With no display, the wait's output lines are logged
+			tui.SetInteractiveMode(false)
+			var logged bytes.Buffer
+			previous := log.Logger
+			log.Logger = zerolog.New(&logged)
+			t.Cleanup(func() {
+				log.Logger = previous
+				tui.SetInteractiveMode(true)
+			})
+
 			start := time.Now()
-			err := newCheck(time.Minute, func(context.Context) ServerCheck { return notReady }).wait(ctx, &tui.TaskOutput{})
-			assert.ErrorIs(t, err, context.Canceled)
-			assert.Equal(t, 1500*time.Millisecond, time.Since(start))
+			check := networkCheck{
+				name:       "Dashboard",
+				waitingFor: "the dashboard to respond",
+				timeout:    time.Minute,
+				interval:   time.Second,
+				maxAttempt: time.Minute,
+				probe: func(ctx context.Context) ServerCheck {
+					return checkHTTPServer(ctx, server.URL)
+				},
+			}
+			err := check.wait(ctx, &tui.TaskOutput{})
+
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("error = %v, want context.Canceled", err)
+			}
+			// The pause between requests is 1 second, which a cancelled wait must not sit out
+			if elapsed := time.Since(start); elapsed > 700*time.Millisecond {
+				t.Errorf("returned %s after the start, want soon after the cancellation at 100ms", elapsed)
+			}
+			if strings.Contains(logged.String(), "context canceled") {
+				t.Errorf("the cancelled request was logged as a connection error:\n%s", logged.String())
+			}
 		})
-	})
+	}
 }
 
 func TestServerStatusErr(t *testing.T) {
@@ -205,11 +249,10 @@ func TestServerStatusErr(t *testing.T) {
 		},
 		suggestion: "Run this command again",
 	}
-	assert.Equal(t, []string{"Pod all-0 (Starting): starting", "does not resolve"}, status.Problems())
 	err, ok := clierrors.AsCLIError(status.Err())
 	assert.True(t, ok)
 	assert.Equal(t, "Game server is not ready", err.Message)
-	assert.Equal(t, status.Problems(), err.Details)
+	assert.Equal(t, []string{"Pod all-0 (Starting): starting", "does not resolve"}, err.Details)
 	assert.Equal(t, "Run this command again", err.Suggestion)
 
 	assert.NoError(t, ServerStatus{Checks: []ServerCheck{{Name: "Pods"}}}.Err())
@@ -217,7 +260,7 @@ func TestServerStatusErr(t *testing.T) {
 
 func TestNotReadySuggestion(t *testing.T) {
 	targetEnv := &TargetEnvironment{HumanID: "nimbly"}
-	failed := gameServerReadiness{failedPod: "all-0", failedPodLogs: previousPodLogs}
+	failed := gameServerReadiness{failedPod: "all-0", failedPodLogSource: previousPodLogs}
 	tests := []struct {
 		name      string
 		podsErr   error
@@ -226,7 +269,7 @@ func TestNotReadySuggestion(t *testing.T) {
 		want      string
 	}{
 		{name: "pods not read", podsErr: errors.New("forbidden"), want: "could not be read from Kubernetes"},
-		{name: "never started", readiness: gameServerReadiness{failedPod: "all-0", failedPodLogs: noPodLogs}, want: "pod all-0 did not start, so it has no logs"},
+		{name: "never started", readiness: gameServerReadiness{failedPod: "all-0", failedPodLogSource: noPodLogs}, want: "pod all-0 did not start, so it has no logs"},
 		{name: "failed with logs", readiness: failed, hasLogs: true, want: "Check the pod logs above for details, or run: metaplay debug logs nimbly"},
 		{name: "failed, logs not fetched", readiness: failed, want: "Check the server logs with: metaplay debug logs nimbly"},
 		{name: "starting", readiness: gameServerReadiness{problems: []string{"Pod all-0 (Starting): starting"}}, want: "run this command again in a minute"},
