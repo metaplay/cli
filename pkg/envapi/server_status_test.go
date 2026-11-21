@@ -111,14 +111,14 @@ func TestDomainChecksCheckOnce(t *testing.T) {
 	}
 
 	results := domainChecks{
-		domain:  networkCheck{name: "Domain", probe: passing, maxAttempt: time.Second},
-		service: networkCheck{name: "Endpoint", probe: passing, maxAttempt: time.Second},
+		domain:  networkCheck{name: "Domain", probe: passing},
+		service: networkCheck{name: "Endpoint", probe: passing},
 	}.checkOnce(t.Context())
 	assert.Equal(t, []ServerCheck{{Name: "Domain", Summary: "ok"}, {Name: "Endpoint", Summary: "ok"}}, results)
 
 	results = domainChecks{
-		domain:  networkCheck{name: "Domain", probe: failing, maxAttempt: time.Second},
-		service: networkCheck{name: "Dashboard", probe: notRun, maxAttempt: time.Second},
+		domain:  networkCheck{name: "Domain", probe: failing},
+		service: networkCheck{name: "Dashboard", probe: notRun},
 	}.checkOnce(t.Context())
 	assert.Len(t, results, 2)
 	domain, service := results[0], results[1]
@@ -128,28 +128,40 @@ func TestDomainChecksCheckOnce(t *testing.T) {
 	assert.False(t, service.Failed(), "a skipped check adds no problem of its own")
 }
 
+// captureLog sets non-interactive mode, in which a task's output lines are logged, and
+// returns what is logged until the test ends.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logged bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&logged)
+	tui.SetInteractiveMode(false)
+	t.Cleanup(func() {
+		log.Logger = previous
+		tui.SetInteractiveMode(true)
+	})
+	return &logged
+}
+
+// newTestCheck returns a check named "Domain x" that waits up to timeout for probe to
+// pass, with attempts a second apart.
+func newTestCheck(timeout time.Duration, probe func(context.Context) ServerCheck) networkCheck {
+	return networkCheck{name: "Domain x", waitingFor: "domain x to resolve", timeout: timeout, interval: time.Second, probe: probe}
+}
+
 // The wait retries a failed check every interval, and ends on the first pass, or on the
 // first failure once its timeout has passed. It shows each failed attempt, and the
 // summary of the check once it passes. See TestNetworkCheckWaitStopsOnCancel for a
 // cancellation.
 func TestNetworkCheckWait(t *testing.T) {
-	// With no display, the wait's output lines are logged
-	tui.SetInteractiveMode(false)
-	t.Cleanup(func() { tui.SetInteractiveMode(true) })
 	notReady := ServerCheck{Summary: "does not resolve", Problems: []string{"no such host"}}
-	newCheck := func(timeout time.Duration, probe func(context.Context) ServerCheck) networkCheck {
-		return networkCheck{name: "Domain x", waitingFor: "domain x to resolve", timeout: timeout, interval: time.Second, maxAttempt: time.Second, probe: probe}
-	}
 
 	t.Run("passes after retries", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			var logged bytes.Buffer
-			previous := log.Logger
-			log.Logger = zerolog.New(&logged)
-			t.Cleanup(func() { log.Logger = previous })
+			logged := captureLog(t)
 			runs := 0
 			start := time.Now()
-			err := newCheck(time.Minute, func(context.Context) ServerCheck {
+			err := newTestCheck(time.Minute, func(context.Context) ServerCheck {
 				runs++
 				if runs < 3 {
 					return notReady
@@ -167,9 +179,10 @@ func TestNetworkCheckWait(t *testing.T) {
 
 	t.Run("times out", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
+			captureLog(t)
 			runs := 0
 			start := time.Now()
-			err := newCheck(3*time.Second, func(context.Context) ServerCheck {
+			err := newTestCheck(3*time.Second, func(context.Context) ServerCheck {
 				runs++
 				return notReady
 			}).wait(t.Context(), &tui.TaskOutput{})
@@ -202,28 +215,11 @@ func TestNetworkCheckWaitStopsOnCancel(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			time.AfterFunc(100*time.Millisecond, cancel)
 
-			// With no display, the wait's output lines are logged
-			tui.SetInteractiveMode(false)
-			var logged bytes.Buffer
-			previous := log.Logger
-			log.Logger = zerolog.New(&logged)
-			t.Cleanup(func() {
-				log.Logger = previous
-				tui.SetInteractiveMode(true)
-			})
-
+			logged := captureLog(t)
 			start := time.Now()
-			check := networkCheck{
-				name:       "Dashboard",
-				waitingFor: "the dashboard to respond",
-				timeout:    time.Minute,
-				interval:   time.Second,
-				maxAttempt: time.Minute,
-				probe: func(ctx context.Context) ServerCheck {
-					return checkHTTPServer(ctx, server.URL)
-				},
-			}
-			err := check.wait(ctx, &tui.TaskOutput{})
+			err := newTestCheck(time.Minute, func(ctx context.Context) ServerCheck {
+				return checkHTTPServer(ctx, server.URL)
+			}).wait(ctx, &tui.TaskOutput{})
 
 			if !errors.Is(err, context.Canceled) {
 				t.Errorf("error = %v, want context.Canceled", err)

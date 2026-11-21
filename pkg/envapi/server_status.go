@@ -60,9 +60,7 @@ const (
 	checkPodsFailure      = "Failed to check the game server pods"
 )
 
-// How long one attempt of a check may take, in CheckServerStatus and in each attempt of
-// a wait: of the pods, of a domain, of the LiveOps Dashboard, and one fetch of the logs
-// of a failed pod.
+// How long one attempt of a check may take, unless the check sets its own limit.
 const attemptTimeout = 10 * time.Second
 
 // How long the wait of a deploy waits for a domain to resolve. The domain names of a
@@ -78,10 +76,6 @@ const serviceTimeout = 5 * time.Minute
 // a broken load balancer target or address. The check passes only if all succeed.
 const clientConnections = 10
 
-// How long one attempt of the check of the client endpoint may take: 2 seconds for each
-// connection, which is 4 round trips of 500 ms, for a client far from the environment.
-const clientEndpointTimeout = clientConnections * 2 * time.Second
-
 // networkCheck declares one check of a game server's networking, which CheckServerStatus
 // makes once and WaitForServerToBeReady waits for. See networkChecks.
 type networkCheck struct {
@@ -90,7 +84,7 @@ type networkCheck struct {
 	waitingFor string                                // What the wait waits for, such as "domain x to resolve", for its header and errors
 	timeout    time.Duration                         // How long the wait waits for the check to pass
 	interval   time.Duration                         // How long the wait pauses between two attempts
-	maxAttempt time.Duration                         // How long one attempt may take
+	maxAttempt time.Duration                         // How long one attempt may take, or zero for attemptTimeout
 	probe      func(ctx context.Context) ServerCheck // Makes the check once. Fills in all but Name.
 }
 
@@ -118,7 +112,10 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 				waitingFor: fmt.Sprintf("game server endpoint %s to be ready", endpoint),
 				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
-				maxAttempt: clientEndpointTimeout,
+				// 2 seconds for each connection, which is 4 round trips of 500 ms, for a
+				// client far from the environment. attemptTLSConnection also gives each
+				// connection's send and receive 5 seconds.
+				maxAttempt: clientConnections * 2 * time.Second,
 				probe: func(ctx context.Context) ServerCheck {
 					return checkClientEndpoint(ctx, serverHostname, gameServerClientPort)
 				},
@@ -132,7 +129,6 @@ func networkChecks(envDetails *DeploymentSecret) []domainChecks {
 				waitingFor: fmt.Sprintf("HTTP server %s to respond", dashboardURL),
 				timeout:    serviceTimeout,
 				interval:   1 * time.Second,
-				maxAttempt: attemptTimeout,
 				probe: func(ctx context.Context) ServerCheck {
 					return checkHTTPServer(ctx, dashboardURL)
 				},
@@ -149,7 +145,6 @@ func domainCheck(name, title, hostname string) networkCheck {
 		waitingFor: fmt.Sprintf("domain %s to resolve", hostname),
 		timeout:    domainTimeout,
 		interval:   5 * time.Second, // Propagation takes a while
-		maxAttempt: attemptTimeout,
 		probe: func(ctx context.Context) ServerCheck {
 			return checkDomain(ctx, hostname)
 		},
@@ -158,7 +153,11 @@ func domainCheck(name, title, hostname string) networkCheck {
 
 // checkOnce makes the check once, in at most c.maxAttempt.
 func (c networkCheck) checkOnce(ctx context.Context) ServerCheck {
-	ctx, cancel := context.WithTimeout(ctx, c.maxAttempt)
+	maxAttempt := c.maxAttempt
+	if maxAttempt == 0 {
+		maxAttempt = attemptTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, maxAttempt)
 	defer cancel()
 	check := c.probe(ctx)
 	check.Name = c.name

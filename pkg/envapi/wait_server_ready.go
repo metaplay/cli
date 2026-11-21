@@ -215,9 +215,9 @@ type readinessTarget struct {
 // tag: otherwise, the image check holds back the old pods until they are replaced.
 const oldPodGracePeriod = 30 * time.Second
 
-// How recently a pod must have been created, or its server have last run briefly and
-// exited, for the server's restarts to count as a failure to start, rather than as ones
-// in its past.
+// How briefly and how recently a server's last run must have ended for its restarts to
+// count as a failure to start, rather than as ones in its past. Kubernetes resets the
+// back-off of a container that has run for as long.
 const recentRestartWindow = 10 * time.Minute
 
 // DeployBaseline is the game server's state just before a deploy changes it. The
@@ -442,18 +442,16 @@ func resolvePodStatus(pod corev1.Pod, now time.Time) GameServerPodStatus {
 	// exit by itself: a server that hangs is killed by its liveness probe, and shows as
 	// running between the restarts. One restart is allowed, as a server may exit once
 	// while what it depends on is starting too. Kubernetes counts the restarts over the
-	// pod's lifetime, so they count only for a recently created pod, or one whose server
-	// last ran briefly and recently: otherwise, they may be from the server's past. A
-	// server that keeps crashing runs briefly, and exits at least every 5 minutes, the
-	// longest back-off of Kubernetes. One that ran for long and exited once has not
-	// failed to start.
-	recentlyStarted := pod.CreationTimestamp.After(now.Add(-recentRestartWindow))
-	if lastRun := containerStatus.LastTerminationState.Terminated; lastRun != nil &&
+	// pod's lifetime, so they count only if the server's last run was brief and recent:
+	// otherwise, they may be from the server's past. A server that keeps crashing runs
+	// briefly, and exits at least every 5 minutes, the longest back-off of Kubernetes.
+	// As the count is over the pod's lifetime, a pod with an old restart fails already on
+	// its first brief run that ends.
+	lastRun := containerStatus.LastTerminationState.Terminated
+	lastRunWasBriefAndRecent := lastRun != nil &&
 		lastRun.FinishedAt.After(now.Add(-recentRestartWindow)) &&
-		lastRun.FinishedAt.Sub(lastRun.StartedAt.Time) < recentRestartWindow {
-		recentlyStarted = true
-	}
-	keepsRestarting := containerStatus.RestartCount >= 2 && recentlyStarted
+		lastRun.FinishedAt.Sub(lastRun.StartedAt.Time) < recentRestartWindow
+	keepsRestarting := containerStatus.RestartCount >= 2 && lastRunWasBriefAndRecent
 
 	state := containerStatus.State
 	switch {
@@ -937,9 +935,8 @@ func attemptTLSConnection(ctx context.Context, hostname string, port int) error 
 // \todo should use envDetails.Deployment.ServerPorts but its occasionally empty
 const gameServerClientPort = 9339
 
-// The HTTP client of probeHTTPServer.
+// The HTTP client of probeHTTPServer. The context of a request limits how long it takes.
 var probeHTTPClient = &http.Client{
-	Timeout: 5 * time.Second,
 	// Check the status of the response itself, not of where it redirects to.
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		return http.ErrUseLastResponse

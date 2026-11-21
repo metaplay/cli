@@ -217,12 +217,18 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	previousOwner := testPod("logic", 0, "new", running, true)
 	previousOwner.OwnerReferences[0].UID = "logic-previous-uid"
 	// restartedPod returns a pod created at the given time, whose server is running, not
-	// ready, and was restarted the given number of times.
+	// ready, and was restarted the given number of times. Its last run lasted 30 seconds
+	// from the creation.
 	restartedPod := func(restarts int32, createdAt time.Time) corev1.Pod {
 		pod := testPod("all", 0, "new", running, false)
 		pod.CreationTimestamp = metav1.NewTime(createdAt)
 		pod.Status.ContainerStatuses[0].RestartCount = restarts
-		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "Error"}
+		pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{
+			ExitCode:   137,
+			Reason:     "Error",
+			StartedAt:  metav1.NewTime(createdAt),
+			FinishedAt: metav1.NewTime(createdAt.Add(30 * time.Second)),
+		}
 		return pod
 	}
 	// A pod created long ago whose server keeps crashing: its last run was brief, and
@@ -242,10 +248,15 @@ func TestEvaluateGameServerReadiness(t *testing.T) {
 	exited.CreationTimestamp = metav1.NewTime(now.Add(-time.Minute))
 	exitedAgain := exited
 	exitedAgain.Status.ContainerStatuses = []corev1.ContainerStatus{{
-		Name:                 shardServerContainerName,
-		State:                exited.Status.ContainerStatuses[0].State,
-		RestartCount:         2,
-		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}},
+		Name:         shardServerContainerName,
+		State:        exited.Status.ContainerStatuses[0].State,
+		RestartCount: 2,
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			ExitCode:   1,
+			Reason:     "Error",
+			StartedAt:  metav1.NewTime(now.Add(-50 * time.Second)),
+			FinishedAt: metav1.NewTime(now.Add(-40 * time.Second)),
+		}},
 	}}
 	imagePullBackOff := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}, false)
 	invalidImage := testPod("all", 0, "new", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "InvalidImageName", Message: "couldn't parse image name"}}, false)
