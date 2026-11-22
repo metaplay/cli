@@ -1,0 +1,242 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package kubeutil
+
+import (
+	"context"
+	"crypto/rand"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/metaplay/cli/pkg/envapi"
+	"github.com/rs/zerolog/log"
+)
+
+// RunDetachedInDebugContainer first checks whether its command ended after detachedFirstPoll, and
+// then twice as long after each check, up to detachedPollInterval. A short command does not wait
+// for a full interval, and a long one is not checked more than once per interval.
+var (
+	detachedFirstPoll    = 200 * time.Millisecond
+	detachedPollInterval = time.Second
+)
+
+// detachedHeartbeatTimeout is how long a detached command runs on after the last check: each check
+// touches a heartbeat file, and the command's wrapper stops the command once the file is older.
+// Then a command does not go on, eg, reading a database, after the CLI that waited for it died
+// without its cleanup. It is longer than shortExecMaxFailingTime plus shortExecTimeout, after which
+// a CLI gives up waiting anyway.
+var detachedHeartbeatTimeout = 3 * time.Minute
+
+// ErrDetachedCommandLost is the error of a command that ended without writing its exit code. Writing
+// it fails when the disk is full.
+var ErrDetachedCommandLost = errors.New("the command ended without writing its exit code: it was killed, eg, for using too much memory, or the disk is full")
+
+// DetachedResult is how a command run with RunDetachedInDebugContainer ended.
+type DetachedResult struct {
+	ExitCode int    // Exit code of the command
+	Stdout   string // The end of the command's stdout
+	Stderr   string // The end of the command's stderr
+}
+
+// detachedOutputTailBytes is how much of the end of the command's stdout and stderr DetachedResult
+// has.
+const detachedOutputTailBytes = 4000
+
+// detachedStderrMarker separates the stdout and the stderr in the output of the script that reads
+// both.
+const detachedStderrMarker = "\n__metaplay_stderr__\n"
+
+// RunDetachedInDebugContainer runs command with /bin/sh in the debug container, in workDir, and
+// waits until it ends. The command runs detached from any exec stream: it writes its exit code to
+// a file, which is polled with short exec calls. So a long command does not depend on one stream
+// lasting until it ends, and a stream that ends early cannot make a command that failed or was cut
+// short look successful. The end of the command's stdout and stderr come back in DetachedResult;
+// anything longer the command must hand back, it writes to files in workDir.
+//
+// When ctx is done, the wait ends, but the command goes on until it ends or the pod is deleted.
+func RunDetachedInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, workDir, command string) (*DetachedResult, error) {
+	run := func(ctx context.Context, script string) (string, error) {
+		stdout, _, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, script)
+		return stdout, err
+	}
+	return runDetached(ctx, run, workDir, command)
+}
+
+// runDetached is RunDetachedInDebugContainer with the exec call replaced by run, for tests. run
+// must fail unless the script's whole stdout arrived, as ExecInDebugContainer does.
+func runDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), workDir, command string) (*DetachedResult, error) {
+	runWithTimeout := func(ctx context.Context, script string) (string, error) {
+		return callWithTimeout(ctx, shortExecTimeout, func(ctx context.Context) (string, error) { return run(ctx, script) })
+	}
+
+	// The command's pid, stderr and exit code go to a directory of this call's own. Creating it is
+	// what makes a launch start the command at most once, see below.
+	ctl := ".detached-" + rand.Text()
+	dir := ShellQuote(workDir)
+
+	// Start the command in the background, in its own session, so that it does not depend on the
+	// exec call that started it. The wrapper records its PID before it runs the command, and the
+	// exit code once the command has ended. Both are written to a temporary file and renamed, so
+	// they are never seen half-written. A wrapper that cannot record its PID, eg, on a full disk,
+	// does not run the command. While the command runs, a watchdog checks the heartbeat 10 times
+	// per detachedHeartbeatTimeout, and stops the wrapper's process group, the command and the
+	// wrapper, once the heartbeat is older. '$$' in the watchdog's subshell is the wrapper's PID.
+	heartbeatSeconds := int(detachedHeartbeatTimeout.Seconds())
+	watchdogSeconds := strconv.Itoa(max(1, heartbeatSeconds/10))
+	wrapper := "echo $$ >" + ctl + "/pid.tmp && mv " + ctl + "/pid.tmp " + ctl + "/pid || exit; " +
+		"touch " + ctl + "/heartbeat; " +
+		"sh -c " + ShellQuote(command) + " </dev/null >" + ctl + "/stdout 2>" + ctl + "/stderr & c=$!; " +
+		"{ while sleep " + watchdogSeconds + "; do " +
+		"m=$(stat -c %Y " + ctl + "/heartbeat 2>/dev/null) || m=0; " + // A missing heartbeat is stale
+		"[ $(( $(date +%s) - m )) -gt " + strconv.Itoa(heartbeatSeconds) + " ] && kill -TERM -$$; " +
+		"done; } & w=$!; " +
+		"wait $c; s=$?; kill $w 2>/dev/null; " +
+		"echo $s >" + ctl + "/status.tmp && mv " + ctl + "/status.tmp " + ctl + "/status"
+	// The launch prints whether the command started: it waits until the wrapper has recorded its
+	// PID or has ended. If it did not start, the launch prints the wrapper's stderr after that,
+	// eg, that 'setsid' was not found. Creating the control directory makes the launch start the command at most
+	// once, so a launch whose exec call failed can run again. A launch that finds the directory
+	// waits for the PID of the launch that created it, for half of the exec call's time limit, and
+	// one that can create no directory reports at once.
+	waitSteps := strconv.Itoa(int(shortExecTimeout / 2 / (10 * time.Millisecond)))
+	launch := "mkdir -p " + dir + " && cd " + dir + " || exit; " +
+		"if mkdir " + ctl + " 2>/dev/null; then " +
+		"{ setsid sh -c " + ShellQuote(wrapper) + " </dev/null >/dev/null 2>" + ctl + "/launch-stderr & }; w=$!; " +
+		"while [ ! -f " + ctl + "/pid ] && " + processRunningCheck("$w") + "; do sleep 0.01; done; " +
+		"elif [ -d " + ctl + " ]; then i=0; while [ ! -f " + ctl + "/pid ] && [ $i -lt " + waitSteps + " ]; do sleep 0.01; i=$((i+1)); done; fi; " +
+		"if [ -f " + ctl + "/pid ]; then echo started; else echo not-started; cat " + ctl + "/launch-stderr 2>/dev/null || :; fi"
+	stopped := func() error { return fmt.Errorf("stopped waiting for the command: %w", ctx.Err()) }
+	if err := startDetached(ctx, run, launch); err != nil {
+		if ctx.Err() != nil {
+			return nil, stopped()
+		}
+		return nil, err
+	}
+
+	// Check until the command has ended. The process is checked after 'status', and 'status' once
+	// more after the process: the command may end between the checks. A PID that is not a number
+	// counts as a process that does not run: empty, '/proc//stat' would name /proc/stat.
+	poll := "cd " + dir + "/" + ctl + " 2>/dev/null && [ -f pid ] || { echo gone; exit 0; }; touch heartbeat; " +
+		"pid=$(cat pid); case $pid in ''|*[!0-9]*) pid=invalid;; esac; " +
+		"if [ -f status ]; then echo \"done $(cat status)\"; " +
+		"elif " + processRunningCheck("$pid") + "; then echo running; " +
+		"elif [ -f status ]; then echo \"done $(cat status)\"; " +
+		"else echo lost; fi"
+	// The ends of the command's stdout and stderr, in one exec call
+	tail := "tail -c " + strconv.Itoa(detachedOutputTailBytes)
+	readOutput := func() (string, string, error) {
+		out, err := retryShortExec(ctx, func(ctx context.Context) (string, error) {
+			return run(ctx, "cd "+dir+"/"+ctl+" && "+tail+" stdout && printf '%s' "+ShellQuote(detachedStderrMarker)+" && "+tail+" stderr")
+		})
+		if err != nil {
+			return "", "", fmt.Errorf("failed to read the command's output: %w", err)
+		}
+		stdout, stderr, ok := strings.Cut(out, detachedStderrMarker)
+		if !ok {
+			return "", "", fmt.Errorf("unexpected output from reading the command's output: %q", out)
+		}
+		return stdout, stderr, nil
+	}
+
+	var failingSince time.Time // When the checks started failing, or zero if the last one worked
+	delay := detachedFirstPoll
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, stopped()
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, detachedPollInterval)
+
+		stdout, err := runWithTimeout(ctx, poll)
+		var state string
+		var exitCode int
+		if err == nil {
+			state, exitCode, err = parseDetachedState(stdout)
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, stopped()
+			}
+			if failingSince.IsZero() {
+				failingSince = time.Now()
+			}
+			log.Debug().Msgf("Failed to check the detached command (failing for %v): %v", time.Since(failingSince).Round(time.Second), err)
+			if time.Since(failingSince) >= shortExecMaxFailingTime {
+				return nil, fmt.Errorf("failed to check whether the command has ended for %v: %w", shortExecMaxFailingTime, err)
+			}
+			continue
+		}
+		failingSince = time.Time{}
+
+		switch state {
+		case "running":
+			continue
+		case "done":
+			stdout, stderr, err := readOutput()
+			if err != nil {
+				return nil, err
+			}
+			return &DetachedResult{ExitCode: exitCode, Stdout: stdout, Stderr: stderr}, nil
+		case "lost":
+			err := ErrDetachedCommandLost
+			// The command's stderr is only informative here, so failing to read it is not an error
+			if _, stderr, _ := readOutput(); strings.TrimSpace(stderr) != "" {
+				err = fmt.Errorf("%w; its stderr ends with: %s", err, strings.TrimSpace(stderr))
+			}
+			return nil, err
+		default: // "gone"
+			return nil, errors.New("the command's files in the pod are gone")
+		}
+	}
+}
+
+// startDetached runs runDetached's launch script with retryShortExec until it reports whether the
+// command started. The script starts the command at most once, so it can be run again.
+func startDetached(ctx context.Context, run func(ctx context.Context, script string) (string, error), launch string) error {
+	stdout, err := retryShortExec(ctx, func(ctx context.Context) (string, error) { return run(ctx, launch) })
+	if err != nil {
+		return fmt.Errorf("failed to start the command: %w", err)
+	}
+	state, stderr, _ := strings.Cut(stdout, "\n")
+	switch state {
+	case "started":
+		return nil
+	case "not-started":
+		if stderr = strings.TrimSpace(stderr); stderr != "" {
+			return fmt.Errorf("the command did not start: %s", stderr)
+		}
+		return errors.New("the command did not start")
+	}
+	return fmt.Errorf("unexpected output from starting the command: %q", stdout)
+}
+
+// processRunningCheck is a shell condition that is true while the process with the given PID runs.
+// A process that has ended but was not reaped, a zombie, does not run. 'kill -0' succeeds for a
+// zombie, and a debug pod's PID 1, such as 'sleep', does not reap the orphaned processes that are
+// left to it, so a killed command would stay a zombie and seem to run until the pod is deleted.
+// The state is the field after the parenthesized command name in /proc/<pid>/stat.
+func processRunningCheck(pid string) string {
+	return "{ state=$(sed 's/.*) //' /proc/\"" + pid + "\"/stat 2>/dev/null | cut -c1); [ -n \"$state\" ] && [ \"$state\" != Z ]; }"
+}
+
+// parseDetachedState parses the output of runDetached's check, returning the state and, when the
+// state is "done", the command's exit code.
+func parseDetachedState(stdout string) (string, int, error) {
+	state := strings.TrimSuffix(stdout, "\n")
+	switch state {
+	case "running", "lost", "gone":
+		return state, 0, nil
+	}
+	if code, ok := strings.CutPrefix(state, "done "); ok {
+		if exitCode, err := strconv.Atoi(code); err == nil {
+			return "done", exitCode, nil
+		}
+	}
+	return "", 0, fmt.Errorf("unexpected output from checking the command: %q", stdout)
+}

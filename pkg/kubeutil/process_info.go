@@ -26,8 +26,10 @@ type ServerProcessInfo struct {
 func GetServerProcessInformation(ctx context.Context, kubeCli *envapi.KubeClient, podName, debugContainerName string) (*ServerProcessInfo, error) {
 	// Get PID using kubectl exec in the debug container
 	log.Debug().Msgf("Get game server process information...")
+	// The pattern '[S]erver' does not match itself, so the shell that runs pgrep, whose command
+	// line contains the pattern, is not found too.
 	stdout, _, err := ExecInDebugContainer(ctx, kubeCli, podName, debugContainerName,
-		`pgrep -f Server`,
+		`pgrep -f '[S]erver'`,
 	)
 	if err != nil {
 		log.Error().Msgf("Failed to get game server process information: %v", err) // Removed stderr from log, it's already piped

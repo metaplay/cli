@@ -100,7 +100,8 @@ func TestTraceCollectCommandStops(t *testing.T) {
 			opts := &debugCollectCPUProfileOpts{flagFormat: "Speedscope", flagDuration: 3600, extrArgs: []string{"--providers", "a b;c's $(x)"}}
 			command := opts.traceCollectCommand(processInfo, "/tmp/profile.nettrace", pidPath)
 
-			collect := exec.Command("bash", "-c", command)
+			// As ExecInDebugContainer runs it in the pod
+			collect := exec.Command("sh", "-c", kubeutil.WithExitTrailer(command))
 			if err := collect.Start(); err != nil {
 				t.Fatal(err)
 			}

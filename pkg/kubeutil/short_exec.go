@@ -1,0 +1,61 @@
+/*
+ * Copyright Metaplay. Licensed under the Apache-2.0 license.
+ */
+
+package kubeutil
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/rs/zerolog/log"
+	utilexec "k8s.io/client-go/util/exec"
+)
+
+// Short exec calls, such as a file's size or a detached command's check, are each limited to
+// shortExecTimeout. A call on a connection that stalls without failing would otherwise block for as
+// long as the connection lasts. Calls that keep failing, eg, on a dropped connection, are given up
+// once they have failed for shortExecMaxFailingTime, so a connection that drops for a while does
+// not fail an operation that may still go on fine.
+var (
+	shortExecTimeout         = 30 * time.Second
+	shortExecMaxFailingTime  = time.Minute
+	shortExecFirstRetryDelay = 200 * time.Millisecond
+)
+
+// callWithTimeout runs call with the time limit timeout.
+func callWithTimeout[T any](ctx context.Context, timeout time.Duration, call func(context.Context) (T, error)) (T, error) {
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return call(callCtx)
+}
+
+// retryShortExec runs call, a short exec call that can be run again, each time with the time limit
+// shortExecTimeout, until it succeeds or the calls have failed for shortExecMaxFailingTime since
+// the first failure. An exit code of the command, a utilexec.CodeExitError, ends the retries at
+// once: the command ran and would fail again. It waits shortExecFirstRetryDelay after the first
+// failure, twice as long after each next one, up to 5 s.
+func retryShortExec[T any](ctx context.Context, call func(context.Context) (T, error)) (T, error) {
+	var failingSince time.Time
+	delay := shortExecFirstRetryDelay
+	for {
+		value, err := callWithTimeout(ctx, shortExecTimeout, call)
+		_, exited := errors.AsType[utilexec.CodeExitError](err)
+		if err == nil || exited || ctx.Err() != nil {
+			return value, err
+		}
+		if failingSince.IsZero() {
+			failingSince = time.Now()
+		} else if time.Since(failingSince) >= shortExecMaxFailingTime {
+			return value, err
+		}
+		log.Debug().Msgf("Exec call failed, retrying in %v: %v", delay, err)
+		select {
+		case <-ctx.Done():
+			return value, err
+		case <-time.After(delay):
+		}
+		delay = min(2*delay, 5*time.Second)
+	}
+}

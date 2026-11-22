@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/remotecommand"
 	watchtools "k8s.io/client-go/tools/watch"
+	utilexec "k8s.io/client-go/util/exec"
 )
 
 // idleContainerPidFile is where an idle debug container records the PID of its main process.
@@ -63,7 +65,7 @@ func idleContainerCommand(pidFile string, lifetime time.Duration) []string {
 	return []string{"/bin/bash", "-c", fmt.Sprintf("echo $$ > %s; exec sleep %d", pidFile, int64(lifetime.Seconds()))}
 }
 
-// stopIdleContainerCommand returns the bash command that stops an idle debug container's main
+// stopIdleContainerCommand returns the shell command that stops an idle debug container's main
 // process, whose PID is in pidFile. That ends the container.
 func stopIdleContainerCommand(pidFile string) string {
 	return "kill $(cat " + pidFile + ")"
@@ -272,6 +274,8 @@ func waitForContainerReady(ctx context.Context, kubeCli *envapi.KubeClient, podN
 }
 
 // ExecInDebugContainer executes a command in the debug container using Kubernetes API (replaces execCommand)
+// The command runs with /bin/sh, which every debug image has: the database debug image has no bash.
+// It fails unless the command's stdout arrived in full, see WithExitTrailer.
 func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podName string, debugContainerName string, command string) (string, string, error) {
 	req := kubeCli.Clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -279,7 +283,7 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		Namespace(kubeCli.Namespace).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command:   []string{"/bin/bash", "-c", command},
+			Command:   []string{"/bin/sh", "-c", WithExitTrailer(command)},
 			Container: debugContainerName,
 			Stdin:     false,
 			Stdout:    true,
@@ -301,11 +305,68 @@ func ExecInDebugContainer(ctx context.Context, kubeCli *envapi.KubeClient, podNa
 		Tty:    false,
 	})
 
+	stdout, err := checkExecOutput(stdOut.String(), err)
 	if err != nil {
-		return stdOut.String(), stdErr.String(), fmt.Errorf("error streaming command: %w, stdout: %s, stderr: %s", err, stdOut.String(), stdErr.String())
+		return stdout, stdErr.String(), fmt.Errorf("error streaming command: %w, stdout: %s, stderr: %s", err, stdout, stdErr.String())
 	}
 
-	return stdOut.String(), stdErr.String(), nil
+	return stdout, stdErr.String(), nil
+}
+
+// checkExecOutput returns the stdout of a command from WithExitTrailer without the trailer, and
+// an error if the stream failed, the stdout was cut short or the command exited with a non-zero
+// code. That code comes as a utilexec.CodeExitError, as client-go returns it for the exit code of
+// the shell itself, which the trailer's printf makes 0. Only the command's own exit code is a
+// CodeExitError. An exit code of the shell means the shell was killed, eg, with its container,
+// maybe after the command had done its work: it is errShellEnded.
+func checkExecOutput(rawStdout string, streamErr error) (string, error) {
+	stdout, exitCode, trailerErr := splitExitTrailer(rawStdout)
+	if shellExit, ok := errors.AsType[utilexec.CodeExitError](streamErr); ok {
+		// The shell's exit code is flattened into the text: it must not count as the command's
+		// own CodeExitError, which callers take as the command's result.
+		return stdout, fmt.Errorf("%w: %s", errShellEnded, shellExit.Error()) //nolint:errorlint // Not a CodeExitError on purpose
+	}
+	switch {
+	case streamErr != nil:
+		return stdout, streamErr
+	case trailerErr != nil:
+		return stdout, trailerErr
+	case exitCode != 0:
+		return stdout, utilexec.CodeExitError{Err: fmt.Errorf("command terminated with exit code %d", exitCode), Code: exitCode}
+	}
+	return stdout, nil
+}
+
+// errShellEnded is the error of an exec whose shell, not the command, ended with an exit code.
+var errShellEnded = errors.New("the shell that ran the command ended")
+
+// execExitMarker precedes the exit code that a command from WithExitTrailer prints last.
+const execExitMarker = "\n__metaplay_exit="
+
+// WithExitTrailer makes command print its exit code at the end of its stdout. When an exec stream
+// ends before its command does, client-go reports success with the output so far, and stdout
+// arrives in order, so the trailer is there only if all of stdout is. The command runs in its own
+// 'sh -c', so that an 'exit' in it still prints the trailer, and '$$' and 'exec' behave as in a
+// command run by itself.
+func WithExitTrailer(command string) string {
+	return "sh -c " + ShellQuote(command) + "; printf '" + `\n__metaplay_exit=%d\n` + "' \"$?\""
+}
+
+// errOutputCutShort is the error of a command whose stdout lacks the trailer of WithExitTrailer.
+var errOutputCutShort = errors.New("the output ended before the command did: the stream closed early")
+
+// splitExitTrailer returns the command's stdout without the trailer of WithExitTrailer, and the
+// exit code in the trailer. It fails if the trailer is missing: the stdout was cut short.
+func splitExitTrailer(stdout string) (string, int, error) {
+	index := strings.LastIndex(stdout, execExitMarker)
+	if index < 0 || !strings.HasSuffix(stdout, "\n") {
+		return stdout, 0, errOutputCutShort
+	}
+	exitCode, err := strconv.Atoi(stdout[index+len(execExitMarker) : len(stdout)-1])
+	if err != nil {
+		return stdout, 0, errOutputCutShort
+	}
+	return stdout[:index], exitCode, nil
 }
 
 // RemoveFilesInDebugContainer removes files in the debug container with a single exec. Files that

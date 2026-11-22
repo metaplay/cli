@@ -6,6 +6,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -276,8 +277,13 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Copy CPU profile to local machine
 	downloaded := false
+	keptInPod := false // The download could not be verified, so the pod's copy is kept
 	runner.AddTask("Download CPU profile", func(output *tui.TaskOutput) error {
-		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, 3)
+		err := kubeutil.CopyFileFromDebugPod(ctx, output, kubeCli, podName, debugContainerName, remoteDir, remoteDownloadName, o.flagOutputPath, true, 3)
+		if errors.Is(err, kubeutil.ErrCopyUnverified) {
+			keptInPod = true
+			return unverifiedDownloadError(err, "CPU profile", o.flagOutputPath, podName, remoteDir+"/"+remoteDownloadName)
+		}
 		if err != nil {
 			return fmt.Errorf("failed to copy CPU profile: %w", err)
 		}
@@ -287,8 +293,11 @@ func (o *debugCollectCPUProfileOpts) collectAndRetrieveCPUProfile(ctx context.Co
 
 	// Remove the nettrace capture and the converted file, if any, also when the download failed
 	runner.AddCleanupTask("Remove CPU profile from the pod", func(ctx context.Context, output *tui.TaskOutput) error {
-		filesToRemove := []string{remoteNettracePath, remotePidPath}
+		filesToRemove := []string{remotePidPath}
 		if remoteDownloadName != remoteNettraceName {
+			filesToRemove = append(filesToRemove, remoteNettracePath)
+		}
+		if !keptInPod {
 			filesToRemove = append(filesToRemove, remoteDir+"/"+remoteDownloadName)
 		}
 		return removeFromPod(ctx, kubeCli, podName, debugContainerName, "CPU profile", o.flagOutputPath, downloaded, filesToRemove...)
@@ -304,7 +313,7 @@ func formatTraceDuration(seconds int) string {
 	return fmt.Sprintf("%02d:%02d:%02d", seconds/3600, seconds/60%60, seconds%60)
 }
 
-// traceCollectCommand returns the bash command that runs dotnet-trace, as the server process's user.
+// traceCollectCommand returns the shell command that runs dotnet-trace, as the server process's user.
 // dotnet-trace replaces the shell that writes its PID to pidPath, so the PID is dotnet-trace's own,
 // for stopTraceCommand. Each argument is quoted, so the extra arguments reach dotnet-trace as
 // given, also with spaces or shell syntax.
@@ -319,7 +328,7 @@ func (o *debugCollectCPUProfileOpts) traceCollectCommand(processInfo *kubeutil.S
 	return "su " + kubeutil.ShellQuote(processInfo.Username) + " -c " + kubeutil.ShellQuote("sh -c "+kubeutil.ShellQuote(command))
 }
 
-// stopTraceCommand returns the bash command that stops the dotnet-trace whose PID is in pidPath and
+// stopTraceCommand returns the shell command that stops the dotnet-trace whose PID is in pidPath and
 // that writes to outputPath.
 // SIGINT is dotnet-trace's Ctrl-C: it ends the trace session in the server process and finishes
 // the file. If dotnet-trace has not ended after 30 seconds, for example while it converts the

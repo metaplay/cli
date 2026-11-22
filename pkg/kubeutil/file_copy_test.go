@@ -6,15 +6,21 @@ package kubeutil
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/metaplay/cli/internal/tui"
 )
 
 // failingReader simulates a reader that fails after reading a specified number of bytes
@@ -252,6 +258,212 @@ func TestMD5Calculation(t *testing.T) {
 	if actualMD5 != expectedMD5 {
 		t.Errorf("MD5 mismatch: expected %s, got %s", expectedMD5, actualMD5)
 	}
+}
+
+// fakeRemoteFile is a remoteFile whose streams end after maxChunk bytes without an error, as an
+// exec stream does when its connection closes early.
+type fakeRemoteFile struct {
+	data     []byte
+	maxChunk int
+	md5      string // Reported MD5, or the data's MD5 if empty
+	md5Err   error
+	md5Calls int
+	opens    int
+
+	wrongMD5Calls int // How many MD5 calls report a wrong checksum first
+	emptyAfter    int // Opens after this many return no data, if not 0
+}
+
+func (f *fakeRemoteFile) Size(ctx context.Context) (int64, error) { return int64(len(f.data)), nil }
+
+// fastShortExecs makes retryShortExec give up within tens of milliseconds.
+func fastShortExecs(t *testing.T) {
+	t.Helper()
+	oldTimeout, oldFailing, oldDelay := shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay
+	shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay = 5*time.Second, 50*time.Millisecond, time.Millisecond
+	t.Cleanup(func() {
+		shortExecTimeout, shortExecMaxFailingTime, shortExecFirstRetryDelay = oldTimeout, oldFailing, oldDelay
+	})
+}
+
+func (f *fakeRemoteFile) MD5(ctx context.Context) (string, error) {
+	f.md5Calls++
+	if f.md5Err != nil {
+		return "", f.md5Err
+	}
+	if f.md5Calls <= f.wrongMD5Calls {
+		return "00000000000000000000000000000000", nil
+	}
+	if f.md5 != "" {
+		return f.md5, nil
+	}
+	sum := md5.Sum(f.data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (f *fakeRemoteFile) Open(ctx context.Context, offset int64) (io.Reader, func() error, error) {
+	f.opens++
+	if f.emptyAfter > 0 && f.opens > f.emptyAfter {
+		return bytes.NewReader(nil), func() error { return nil }, nil
+	}
+	end := min(int(offset)+f.maxChunk, len(f.data))
+	return bytes.NewReader(f.data[offset:end]), func() error { return nil }, nil
+}
+
+func (f *fakeRemoteFile) TransferFailed(ctx context.Context) {}
+
+func testData(size int) []byte {
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	return data
+}
+
+// Streams that end early without an error are resumed until the whole file has arrived.
+func TestCopyRemoteFileResumesStreamsThatEndEarly(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(10000), maxChunk: 3000}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 2); err != nil {
+		t.Fatalf("copyRemoteFile: %v", err)
+	}
+	got, err := os.ReadFile(destPath)
+	if err != nil || !bytes.Equal(got, file.data) {
+		t.Fatalf("copied file differs from the remote file (err=%v, %d bytes)", err, len(got))
+	}
+	if file.opens != 4 {
+		t.Errorf("opened %d streams, want 4 for 10000 bytes in chunks of 3000", file.opens)
+	}
+}
+
+// A stream that never makes progress fails the copy, and leaves no file behind.
+func TestCopyRemoteFileFailsWithoutProgress(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 0}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "stream ended at 0 of 100 bytes") {
+		t.Errorf("err = %v, want the stream ending early", err)
+	}
+	if file.opens != 3 {
+		t.Errorf("opened %d streams, want 3", file.opens)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("destination file exists after a failed copy: %v", statErr)
+	}
+}
+
+// A copy whose checksum cannot be checked fails as unverified, and the copy is kept.
+func TestCopyRemoteFileFailsWithoutMD5(t *testing.T) {
+	fastShortExecs(t)
+	md5Err := errors.New("md5sum not found")
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5Err: md5Err}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 2)
+	if !errors.Is(err, ErrCopyUnverified) || !errors.Is(err, md5Err) {
+		t.Errorf("err = %v, want ErrCopyUnverified with the MD5 error", err)
+	}
+	if got, readErr := os.ReadFile(destPath); readErr != nil || !bytes.Equal(got, file.data) {
+		t.Errorf("destination file = %d bytes, %v; want the complete copy", len(got), readErr)
+	}
+}
+
+// A checksum that never matches fails the copy after numAttempts, instead of retrying forever.
+func TestCopyRemoteFileStopsOnRepeatedMD5Mismatch(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, md5: "00000000000000000000000000000000"}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "MD5 mismatch") {
+		t.Errorf("err = %v, want an MD5 mismatch", err)
+	}
+	if file.opens != 3 {
+		t.Errorf("opened %d streams, want 3", file.opens)
+	}
+}
+
+// A checksum that never matches also fails a file that takes several streams to copy: starting
+// over makes progress, but does not let the copy retry forever.
+func TestCopyRemoteFileStopsOnRepeatedMD5MismatchOfResumedCopy(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 30, md5: "00000000000000000000000000000000"}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "MD5 mismatch") {
+		t.Errorf("err = %v, want an MD5 mismatch", err)
+	}
+	if file.md5Calls != 3 {
+		t.Errorf("checked the MD5 %d times, want 3", file.md5Calls)
+	}
+}
+
+// A mismatch is not also an attempt without progress: after one, the copy still gets numAttempts
+// attempts without progress.
+func TestCopyRemoteFileCountsMismatchOnItsOwn(t *testing.T) {
+	file := &fakeRemoteFile{data: testData(100), maxChunk: 100, wrongMD5Calls: 1, emptyAfter: 1}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "without progress") {
+		t.Errorf("err = %v, want the copy to fail without progress", err)
+	}
+	if file.opens != 4 {
+		t.Errorf("opened %d streams, want 4: the mismatched copy and 3 attempts without progress", file.opens)
+	}
+}
+
+// A size check that fails for a moment is retried.
+func TestCopyRemoteFileRetriesTheSize(t *testing.T) {
+	fastShortExecs(t)
+	file := &flakySizeFile{fakeRemoteFile: fakeRemoteFile{data: testData(100), maxChunk: 100}, sizeFails: 2}
+	if err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, filepath.Join(t.TempDir(), "out.bin"), 1); err != nil {
+		t.Errorf("copyRemoteFile: %v", err)
+	}
+	if file.sizeCalls != 3 {
+		t.Errorf("checked the size %d times, want 3", file.sizeCalls)
+	}
+}
+
+// flakySizeFile is a fakeRemoteFile whose first sizeFails size checks fail.
+type flakySizeFile struct {
+	fakeRemoteFile
+	sizeFails int
+	sizeCalls int
+}
+
+func (f *flakySizeFile) Size(ctx context.Context) (int64, error) {
+	f.sizeCalls++
+	if f.sizeCalls <= f.sizeFails {
+		return 0, errors.New("connection lost")
+	}
+	return f.fakeRemoteFile.Size(ctx)
+}
+
+// A stream with more than the file's size means the file changed during the copy. That fails the
+// copy at once: every retry would fail the same way.
+func TestCopyRemoteFileFailsOnLongerStream(t *testing.T) {
+	file := &longerRemoteFile{fakeRemoteFile{data: testData(100), maxChunk: 1000}}
+	destPath := filepath.Join(t.TempDir(), "out.bin")
+
+	err := copyRemoteFile(context.Background(), &tui.TaskOutput{}, file, destPath, 3)
+	if err == nil || !strings.Contains(err.Error(), "changed during the copy") {
+		t.Errorf("err = %v, want an error about the file changing", err)
+	}
+	if file.opens != 1 {
+		t.Errorf("opened %d streams, want 1", file.opens)
+	}
+	if _, statErr := os.Stat(destPath); !os.IsNotExist(statErr) {
+		t.Errorf("destination file exists after a failed copy: %v", statErr)
+	}
+}
+
+// longerRemoteFile reports a size 10 bytes smaller than what it streams.
+type longerRemoteFile struct{ fakeRemoteFile }
+
+func (f *longerRemoteFile) Size(ctx context.Context) (int64, error) {
+	return int64(len(f.data) - 10), nil
 }
 
 // requireSkipBytesDD skips the test unless sh, gzip and a dd that takes iflag=skip_bytes are
