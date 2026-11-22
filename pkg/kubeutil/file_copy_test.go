@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -250,5 +251,39 @@ func TestMD5Calculation(t *testing.T) {
 
 	if actualMD5 != expectedMD5 {
 		t.Errorf("MD5 mismatch: expected %s, got %s", expectedMD5, actualMD5)
+	}
+}
+
+// requireSkipBytesDD skips the test unless sh, gzip and a dd that takes iflag=skip_bytes are
+// there. GNU's and busybox's dd, as in the pods, take it. BSD's dd, as on macOS, does not.
+func requireSkipBytesDD(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"sh", "dd", "gzip"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found", tool)
+		}
+	}
+	if err := exec.Command("dd", "if=/dev/null", "of=/dev/null", "bs=1M", "skip=0", "iflag=skip_bytes").Run(); err != nil {
+		t.Skipf("dd does not take iflag=skip_bytes: %v", err)
+	}
+}
+
+// The stream command reads a file whose name has a space or a quote, from the offset.
+func TestStreamFileCommandQuotesPath(t *testing.T) {
+	requireSkipBytesDD(t)
+	data := []byte("0123456789")
+	for _, name := range []string{"heap dump.gcdump", "it's.gcdump"} {
+		path := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(path, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command("sh", "-c", streamFileCommand(path, 4, false)).Output()
+		if err != nil || !bytes.Equal(out, data[4:]) {
+			t.Errorf("%q: got %q, %v; want %q", name, out, err, data[4:])
+		}
+		out, err = exec.Command("sh", "-c", streamFileCommand(path, 0, true)+" | gzip -dc").Output()
+		if err != nil || !bytes.Equal(out, data) {
+			t.Errorf("%q compressed: got %q, %v; want %q", name, out, err, data)
+		}
 	}
 }

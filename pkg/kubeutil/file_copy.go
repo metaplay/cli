@@ -116,7 +116,7 @@ func (r *debugFailingReader) Read(p []byte) (int, error) {
 
 // getRemoteFileSize retrieves the size of a file on the pod using stat.
 func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (int64, error) {
-	command := fmt.Sprintf("stat -c '%%s' %s", filePath)
+	command := fmt.Sprintf("stat -c '%%s' %s", ShellQuote(filePath))
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w (stderr: %s)", err, stderr)
@@ -130,7 +130,10 @@ func getRemoteFileSize(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 
 // getRemoteFileMD5 calculates the MD5 checksum of a file on the pod.
 func getRemoteFileMD5(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, filePath string) (string, error) {
-	command := fmt.Sprintf("md5sum %s | cut -d' ' -f1", filePath)
+	// From stdin, so that md5sum does not print the file name: for a name with a backslash or a
+	// newline, it would start its output with a backslash, and the checksum would never match. The
+	// command exits with md5sum's status, so that a file it cannot read is an exit code.
+	command := "sum=$(md5sum <" + ShellQuote(filePath) + ") && echo \"${sum%% *}\""
 	stdout, stderr, err := ExecInDebugContainer(ctx, kubeCli, podName, containerName, command)
 	if err != nil {
 		return "", fmt.Errorf("failed to get file MD5: %w (stderr: %s)", err, stderr)
@@ -153,17 +156,23 @@ func calculateLocalFileMD5(filePath string) (string, error) {
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// streamFileCommand returns the shell command that writes the file from offset to stdout, using
+// dd with skip_bytes to start from the offset, then optionally compresses it. downloadPattern
+// matches its command lines, so that removeFilesCommand can stop it. The shell stays dd's parent,
+// also without compression, as the command does not end with dd: busybox's sh would otherwise
+// exec dd, and busybox's dd rewrites its command line, so the download could not be found.
+func streamFileCommand(srcPath string, offset int64, useCompression bool) string {
+	command := fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null", ShellQuote(srcPath), offset)
+	if useCompression {
+		return command + " | gzip -c"
+	}
+	return command + "; exit $?"
+}
+
 // streamFileFromOffset streams file content from a byte offset using dd.
 // This enables resumable transfers by skipping already-transferred bytes.
-// The 'dd if=<path> ' form of the commands is what removeFilesCommand stops.
 func streamFileFromOffset(ctx context.Context, kubeCli *envapi.KubeClient, podName, containerName, srcPath string, offset int64, useCompression bool) (io.Reader, func() error, error) {
-	// Use dd with skip_bytes to start from the offset, then optionally compress
-	var command string
-	if useCompression {
-		command = fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null | gzip -c", srcPath, offset)
-	} else {
-		command = fmt.Sprintf("dd if=%s bs=1M skip=%d iflag=skip_bytes 2>/dev/null", srcPath, offset)
-	}
+	command := streamFileCommand(srcPath, offset, useCompression)
 
 	reader, outStream := io.Pipe()
 
@@ -229,7 +238,7 @@ func streamFileFromPod(ctx context.Context, kubeCli *envapi.KubeClient, podName,
 	// Construct the tar command to stream the file from the pod (with or without compression).
 	tarFlags := map[bool]string{true: "chfz", false: "chf"}[useCompression]
 	// command := []string{"tar", tarFlags, "-", "-C", srcDir, fileName}
-	command := []string{"sh", "-c", fmt.Sprintf("tar %s - -C %s %s", tarFlags, srcDir, fileName)}
+	command := []string{"sh", "-c", fmt.Sprintf("tar %s - -C %s %s", tarFlags, ShellQuote(srcDir), ShellQuote(fileName))}
 
 	reader, outStream := io.Pipe()
 

@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -21,7 +23,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 )
 
-// shellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
+// ShellQuote's output, run through bash, is the original string, so 'rm -f' gets exactly one
 // argument even for names with spaces, wildcards or quotes.
 func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	bash, err := exec.LookPath("bash")
@@ -30,25 +32,63 @@ func TestShellQuoteRoundTripsThroughBash(t *testing.T) {
 	}
 	names := []string{"/tmp/dump.gcdump", "/tmp/*", "/tmp/heap dump.gcdump", "/tmp/it's", "/tmp/$(id)", "-rf"}
 	for _, name := range names {
-		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+shellQuote(name)).Output()
+		out, err := exec.Command(bash, "-c", "printf '%s\\n' "+ShellQuote(name)).Output()
 		if err != nil {
 			t.Fatalf("bash failed for %q: %v", name, err)
 		}
 		if got := strings.TrimSuffix(string(out), "\n"); got != name {
-			t.Errorf("shellQuote(%q) through bash = %q", name, got)
+			t.Errorf("ShellQuote(%q) through bash = %q", name, got)
 		}
 	}
 }
 
-// Before removing a file, the command stops a cancelled download that still reads it, without
-// matching its own shell or a file whose name only starts the same.
+// Through sh, ShellJoin's command line has each argument as it is.
+func TestShellJoin(t *testing.T) {
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not found")
+	}
+	args := []string{"a b", "it's", "$(id)", "*", ""}
+	out, err := exec.Command(shell, "-c", "printf '[%s]' "+ShellJoin(args)).Output()
+	if err != nil || string(out) != "[a b][it's][$(id)][*][]" {
+		t.Errorf("printf through ShellJoin = %q, %v; want each argument as it is", out, err)
+	}
+}
+
+// The command removes each file by its exact name, after stopping the downloads of the files,
+// which TestRemoveFilesCommandStopsDownload tests.
 func TestRemoveFilesCommand(t *testing.T) {
 	got := removeFilesCommand([]string{"/tmp/a.gcdump", "/tmp/it's"})
-	want := `for pid in $(pgrep -f -- '[d]d if=/tmp/a\.gcdump '); do pkill -P $pid; kill $pid; done; ` +
-		`for pid in $(pgrep -f -- '[d]d if=/tmp/it'\''s '); do pkill -P $pid; kill $pid; done; ` +
-		`rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`
-	if got != want {
-		t.Errorf("removeFilesCommand =\n%s\nwant\n%s", got, want)
+	if want := `; rm -f -- '/tmp/a.gcdump' '/tmp/it'\''s'`; !strings.HasSuffix(got, want) {
+		t.Errorf("removeFilesCommand = %s, want it to end with %s", got, want)
+	}
+}
+
+// The download pattern matches the command lines of a download's shell and 'dd', and not those of
+// another file whose name only starts the same, or of the shell that runs the pattern.
+func TestDownloadPattern(t *testing.T) {
+	for _, path := range []string{"/tmp/a.gcdump", "/tmp/it's", "/tmp/heap dump+1 (a|b){2}?.gcdump", "/tmp/a''b"} {
+		pattern := regexp.MustCompile(downloadPattern(path))
+		shellLine := "sh -c " + streamFileCommand(path, 0, true)
+		ddLine := "dd if=" + path + " bs=1M skip=0 iflag=skip_bytes"
+		for _, line := range []string{shellLine, ddLine} {
+			if !pattern.MatchString(line) {
+				t.Errorf("pattern %q does not match %q", pattern, line)
+			}
+		}
+		longer := path + " dump.gcdump" // A file whose name starts with path
+		quoteAfter := path + "'"        // A path whose plain form looks like path's quoted one
+		otherLines := []string{
+			"sh -c " + streamFileCommand(longer, 0, true),
+			"dd if=" + longer + " bs=1M skip=0 iflag=skip_bytes",
+			"dd if=" + quoteAfter + " bs=1M skip=0 iflag=skip_bytes",
+			"pgrep -f -- " + ShellQuote(downloadPattern(path)),
+		}
+		for _, line := range otherLines {
+			if pattern.MatchString(line) {
+				t.Errorf("pattern %q matches %q", pattern, line)
+			}
+		}
 	}
 }
 
@@ -167,6 +207,65 @@ func TestIdleContainerCommandStops(t *testing.T) {
 	case <-ended:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the main process did not end after the stop command")
+	}
+}
+
+// The command stops a download, as streamFileFromOffset runs it, of a file whose name has a space,
+// a quote or regular expression operators: both its shell, whose command line has the path quoted,
+// and its 'dd'.
+func TestRemoveFilesCommandStopsDownload(t *testing.T) {
+	requireSkipBytesDD(t)
+	for _, tool := range []string{"pgrep", "pkill", "mkfifo"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not found", tool)
+		}
+	}
+	for _, name := range []string{"heap dump.gcdump", "it's.gcdump", "heap+1 (a|b){2}?.gcdump"} {
+		// A FIFO without a writer keeps 'dd' waiting to open it, so the download runs until stopped.
+		path := filepath.Join(t.TempDir(), name)
+		if err := exec.Command("mkfifo", path).Run(); err != nil {
+			t.Fatal(err)
+		}
+		download := exec.Command("sh", "-c", streamFileCommand(path, 0, true))
+		if err := download.Start(); err != nil {
+			t.Fatal(err)
+		}
+		// When the test fails, stop what the remove command did not: dd would wait for a writer
+		// to the FIFO forever.
+		t.Cleanup(func() {
+			_ = exec.Command("pkill", "-KILL", "-P", strconv.Itoa(download.Process.Pid)).Run()
+			_ = download.Process.Kill()
+		})
+		done := make(chan error, 1)
+		go func() { done <- download.Wait() }()
+		// Wait until dd runs, waiting to open the FIFO
+		for deadline := time.Now().Add(5 * time.Second); ; {
+			if exec.Command("pgrep", "-f", "--", "^dd if="+regexp.QuoteMeta(path)+" ").Run() == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%q: dd did not start", name)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		if out, err := exec.Command("sh", "-c", removeFilesCommand([]string{path})).CombinedOutput(); err != nil {
+			t.Fatalf("%q: remove command failed: %v: %s", name, err, out)
+		}
+		select {
+		case err := <-done:
+			// Had only 'dd' been stopped, gzip would end, and the shell would exit with gzip's 0.
+			// The shell is killed, or exits with the code of its killed gzip.
+			if err == nil {
+				t.Errorf("%q: the download's shell exited with 0, want it stopped", name)
+			}
+		case <-time.After(5 * time.Second):
+			_ = download.Process.Kill()
+			t.Fatalf("%q: the download still runs after the remove command", name)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("%q: file not removed: %v", name, err)
+		}
 	}
 }
 
