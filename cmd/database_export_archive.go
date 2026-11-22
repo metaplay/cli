@@ -401,9 +401,15 @@ func downloadFromPod(ctx context.Context, output *tui.TaskOutput, kubeCli *envap
 			WithSuggestion("Check your network connection, and that the export ends within the debug pod's 1-hour lifetime, then run the command again")
 	}
 	// A file that remains uses the pod's disk until the pod is deleted at the end of the export,
-	// which the next dump may need. The export can still go on.
+	// which the next dump may need. The export can still go on. When the export was interrupted,
+	// the removal fails because ctx is cancelled, but no dump follows and the pod is deleted, so
+	// there is nothing to warn about.
 	if err := kubeutil.RemoveFilesInDebugContainer(ctx, kubeCli, podName, debugContainerName, exportRemoteDir+"/"+fileName); err != nil {
-		output.AppendLinef("Warning: failed to remove %s from the debug pod, where it uses disk space the next dump may need: %v", fileName, err)
+		if ctx.Err() != nil {
+			log.Debug().Msgf("Did not remove %s from the debug pod after the interrupt: %v", fileName, err)
+		} else {
+			output.AppendLinef("Warning: failed to remove %s from the debug pod, where it uses disk space the next dump may need: %v", fileName, err)
+		}
 	}
 	return nil
 }
