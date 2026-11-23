@@ -19,7 +19,7 @@ The skill itself is a dispatcher: pick the matching sub-skill below for the task
 
 {{subskills}}
 
-`game-logic` and `code-review` are the everyday pair: load `game-logic` when implementing or modifying actions / game configs / entity models, then `code-review` to verify the change against the full rule checklist. The other sub-skills are workflow playbooks for narrower tasks. Load whichever fits.
+`game-logic` and `code-review` are the everyday pair: load `game-logic` when implementing or modifying actions / game configs / entity models, then `code-review` to verify the change against the full rule checklist. Load `server-logic` for code under `Backend/Server`: player actor handlers, custom entities, database tables and queries, scan jobs, dashboard and public HTTP endpoints, runtime options. A feature that spans both loads both. The other sub-skills are workflow playbooks for narrower tasks. Load whichever fits.
 
 For deploy/logs/profiling/secrets work against a *cloud* environment (not local), use the sibling `metaplay-devops` skill instead.
 
