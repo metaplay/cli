@@ -164,7 +164,8 @@ Verify completeness: count `[GameConfigEntry]` attribute usages and compare agai
 - **V1. Build-time validation.** Check that config types are properly validated during the config build. Validation may be per-class or centralized; both are valid. Look for:
   - `IGameConfigPostLoad` interface with `PostLoad()` on individual config classes.
   - `[MetaOnDeserialized]` methods that validate data.
-  - Centralized validation in `SharedGameConfig`, `ServerGameConfig`, or a dedicated validation helper.
+  - A `BuildTimeValidate(GameConfigValidationResult validationResult)` override on `SharedGameConfig` or `ServerGameConfig` that calls the base and reports through `validationResult.Error` / `Warning` with the sheet, key and column. Prefer this for sheets designers edit: the build report then points at the bad row.
+  - Centralized validation in a dedicated validation helper.
   - Custom validation in the build pipeline.
   - Only flag missing validation if a complex config type has no validation anywhere (neither per-class nor centralized).
 
@@ -240,3 +241,5 @@ Verify completeness: grep for `[MetaMember]` and `[MetaSerializable]` across the
 - **MI2. Correct [ServerOnly] and [NoChecksum] usage.** Fields marked `[ServerOnly]` are not sent to the client and must not be read in client-executed code paths. Fields marked `[NoChecksum]` are excluded from checksum validation. Only use this for fields that are intentionally allowed to differ between client and server.
 
 - **MI3. Model state must only be modified in Actions and GameTick.** Model members, including all transitive state in sub-models, must only be modified from within Action `Execute` methods (inside `if (commit)`) or GameTick. Any other code path that mutates model state (actor event handlers, API endpoints, session logic) will cause desyncs or bypass the action system's guarantees.
+
+- **MI4. Config data in the model.** Flag model members that hold config items or lookups derived only from config, and build them in `SharedGameConfig.OnLoaded()` instead. A `[Transient]` member is still serialized: to the client, and when the player actor clones the model against a newly activated config, where a reference to a removed item fails. A member the serializer skips is lost on that clone and keeps per player what the config can hold once. Also flag persisted `MetaRef<>` members to items designers may remove; store the key or `MetaConfigId<>` and resolve with `TryGetValue` / `TryGetItem`, handling a missing item.
