@@ -35,7 +35,7 @@ func init() {
 
 	cmd := &cobra.Command{
 		Use:   "search QUERY [--keywords KEYWORDS]",
-		Short: "Search documentation with a free-form query and --keywords (machine use only)",
+		Short: "Search documentation with a free-form query and optional --keywords (machine use only)",
 		Long: renderLong(&o, `
 			Submit an end-user search, plus pre-extracted keywords, to the
 			llm-docs service and print the response.
@@ -88,8 +88,8 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 	})
 	if err != nil {
 		if len(o.keywords) == 0 {
-			if cliErr := missingKeywordsError(err); cliErr != nil {
-				return cliErr
+			if keywordsErr := missingKeywordsError(err); keywordsErr != nil {
+				return keywordsErr
 			}
 		}
 		return client.wrapError(err, "search documentation")
@@ -101,9 +101,9 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 // missingKeywordsError returns nil unless err is a service rejecting a search
 // for lacking keywords, which services that predate server-side keyword
 // extraction do.
-func missingKeywordsError(err error) *clierrors.CLIError {
+func missingKeywordsError(err error) error {
 	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.InvalidArgument || !strings.Contains(st.Message(), "keywords") {
+	if !ok || st.Code() != codes.InvalidArgument || !strings.Contains(st.Message(), "parameter: keywords") {
 		return nil
 	}
 	return clierrors.New("This llm-docs service requires --keywords").

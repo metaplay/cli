@@ -12,6 +12,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	clierrors "github.com/metaplay/cli/internal/errors"
 )
 
 func TestLLMDocsSearchOptsPrepare(t *testing.T) {
@@ -71,9 +73,10 @@ func TestLLMDocsSearchOptsPrepare(t *testing.T) {
 
 func TestMissingKeywordsError(t *testing.T) {
 	t.Run("older service rejecting a search without keywords", func(t *testing.T) {
-		cliErr := missingKeywordsError(status.Error(codes.InvalidArgument, "missing required parameter: keywords"))
-		if cliErr == nil {
-			t.Fatal("expected an error, got nil")
+		err := missingKeywordsError(status.Error(codes.InvalidArgument, "missing required parameter: keywords"))
+		cliErr, ok := clierrors.AsCLIError(err)
+		if !ok {
+			t.Fatalf("expected *CLIError, got %T", err)
 		}
 		if !strings.Contains(cliErr.Suggestion, "--keywords") {
 			t.Errorf("suggestion does not mention --keywords: %q", cliErr.Suggestion)
@@ -88,12 +91,13 @@ func TestMissingKeywordsError(t *testing.T) {
 		err  error
 	}{
 		{"other invalid argument", status.Error(codes.InvalidArgument, "missing required parameter: query")},
+		{"newer service, no search terms", status.Error(codes.InvalidArgument, `no searchable terms in query or keywords. Example: {"query": "how do I add a guild", "keywords": ["guild", "GuildActor"]}`)},
 		{"other status code", status.Error(codes.Unavailable, "keywords service down")},
 		{"not a gRPC error", errors.New("missing required parameter: keywords")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if cliErr := missingKeywordsError(tc.err); cliErr != nil {
-				t.Errorf("expected nil, got %v", cliErr)
+			if err := missingKeywordsError(tc.err); err != nil {
+				t.Errorf("expected nil, got %v", err)
 			}
 		})
 	}
