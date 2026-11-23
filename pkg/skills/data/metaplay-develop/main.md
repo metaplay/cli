@@ -2,7 +2,18 @@
 
 Day-to-day work on a Metaplay SDK project: designing and implementing new features, refactoring and debugging existing code, running the stack locally, setting up a new project or a custom LiveOps Dashboard, triaging per-player incidents, and upgrading the SDK to a newer release. A Metaplay project blends server-side game logic, a game client, designer-tunable game configs, and a LiveOps Dashboard. Most features touch more than one of these layers, and the SDK has strong opinions about how state, logic, and configuration are structured.
 
-This skill is about *how to work* in a Metaplay project. For SDK API references, concepts, and "how do I…" questions, pair it with the `metaplay-docs` skill, which is about *what the SDK provides* and general guidance on how to use the SDK. SDK doc comments link each type's guide as `<seealso href="https://docs.metaplay.io/<path>"/>`. You may read the guide with `metaplay llm-docs read <url>`.
+This skill is about *how to work* in a Metaplay project. The docs say *what the SDK provides* and the intended way to use it.
+
+## Finding docs
+
+Read the docs page for an SDK feature before building on it. The page gives the intended pattern and its limits; the SDK source shows only the API.
+
+```bash
+metaplay llm-docs search "<the question, in full>" --keywords "k1,k2,k3"
+metaplay llm-docs read docs/<path>   # or a https://docs.metaplay.io/ URL
+```
+
+Pass the question as a full sentence, and 3 to 7 keywords: SDK type names, feature names and distinctive terms (`EntityAsk`, `game config`, `scan job`). `search` returns the pages worth reading. SDK doc comments link each type's guide as `<seealso href="https://docs.metaplay.io/<path>"/>`; open it with `read`. For grep and glob over the docs, SDK source and samples, load `metaplay-docs`.
 
 The skill itself is a dispatcher: pick the matching sub-skill below for the task at hand. Most feature work pairs `game-logic` (write-time playbook) with `code-review` (post-implementation verification).
 
