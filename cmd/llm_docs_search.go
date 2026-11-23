@@ -8,10 +8,15 @@ import (
 	"context"
 	"strings"
 
+	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	clierrors "github.com/metaplay/cli/internal/errors"
 	"github.com/metaplay/cli/pkg/llmdocsclient"
-	"github.com/spf13/cobra"
 )
+
+const llmDocsKeywordsSuggestion = "Pass the query's keywords as a comma-separated list, eg, --keywords guilds,social,multiplayer"
 
 type llmDocsSearchOpts struct {
 	UsePositionalArgs
@@ -29,11 +34,15 @@ func init() {
 	args.AddStringArgument(&o.argQuery, "QUERY", "Original free-form user query.")
 
 	cmd := &cobra.Command{
-		Use:   "search QUERY --keywords KEYWORDS",
+		Use:   "search QUERY [--keywords KEYWORDS]",
 		Short: "Search documentation with a free-form query and --keywords (machine use only)",
 		Long: renderLong(&o, `
 			Submit an end-user search, plus pre-extracted keywords, to the
 			llm-docs service and print the response.
+
+			Always pass --keywords: identifiers, feature names and distinctive
+			terms rank better than keywords the service derives from the
+			query, and older services reject a search without them.
 
 			Intended for machine consumption (e.g. AI coding agents); the
 			output format is not stable for human-driven workflows.
@@ -50,24 +59,15 @@ func init() {
 	llmDocsCmd.AddCommand(cmd)
 
 	flags := cmd.Flags()
-	flags.StringVarP(&o.flagKeywords, "keywords", "k", "", "Required: Comma-separated list of pre-extracted keywords for the query")
+	flags.StringVarP(&o.flagKeywords, "keywords", "k", "", "Comma-separated list of pre-extracted keywords for the query (recommended)")
 }
 
 func (o *llmDocsSearchOpts) Prepare(cmd *cobra.Command, args []string) error {
-	// Keep error message brief for AI agents.
-	if o.flagKeywords == "" {
-		return clierrors.New("Missing required flag --keywords").
-			WithSuggestion("Pass the query's keywords as a comma-separated list, eg, --keywords guilds,social,multiplayer")
-	}
 	for k := range strings.SplitSeq(o.flagKeywords, ",") {
 		k = strings.TrimSpace(k)
 		if k != "" {
 			o.keywords = append(o.keywords, k)
 		}
-	}
-	if len(o.keywords) == 0 {
-		return clierrors.New("--keywords must contain at least one non-empty keyword").
-			WithSuggestion("Pass the query's keywords as a comma-separated list, eg, --keywords guilds,social,multiplayer")
 	}
 	return nil
 }
@@ -87,8 +87,26 @@ func (o *llmDocsSearchOpts) Run(cmd *cobra.Command) error {
 		Keywords: o.keywords,
 	})
 	if err != nil {
+		if len(o.keywords) == 0 {
+			if cliErr := missingKeywordsError(err); cliErr != nil {
+				return cliErr
+			}
+		}
 		return client.wrapError(err, "search documentation")
 	}
 	printLLMDocsContent(resp.Content)
 	return nil
+}
+
+// missingKeywordsError returns nil unless err is a service rejecting a search
+// for lacking keywords, which services that predate server-side keyword
+// extraction do.
+func missingKeywordsError(err error) *clierrors.CLIError {
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument || !strings.Contains(st.Message(), "keywords") {
+		return nil
+	}
+	return clierrors.New("This llm-docs service requires --keywords").
+		WithDetails(st.Message()).
+		WithSuggestion(llmDocsKeywordsSuggestion)
 }
