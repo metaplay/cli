@@ -80,7 +80,7 @@ Verify completeness: count `[ModelAction(` attribute usages and compare against 
 - **D2. No floating point in action logic.** `Execute` methods and their helpers must not use `float` / `double` types or floating-point math. These diverge across platforms and cause desyncs. Use `F32` (16.16 fixed-point) or `F64` (32.32 fixed-point) instead.
 
 - **D3. Collection type restrictions.**
-  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`: non-deterministic iteration order causes desyncs. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
+  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`, because their non-deterministic iteration order causes desyncs. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
   - **Performance**: avoid `SortedSet<>` and `SortedDictionary<,>`; they work but perform poorly. Prefer `OrderedSet<>` and `MetaDictionary<,>`.
 
 - **D4. Use MetaTime and MetaDuration.** Time-related values in action parameters and logic should use `MetaTime` (timestamps) and `MetaDuration` (time spans) instead of raw integers, `DateTime`, or `TimeSpan`.
@@ -95,7 +95,7 @@ Verify completeness: count `[ModelAction(` attribute usages and compare against 
 
 - **PS3. Logging discipline.**
   - Use the model's `Log.Debug()` sparingly for action logging.
-  - `Information` level is only acceptable in infrequent actions for significant lifecycle events (e.g. level up, first purchase). Frequently invoked actions must not log at `Information` level in their normal code path: excessive log volume in production.
+  - `Information` level is only acceptable in infrequent actions for significant lifecycle events (e.g. level up, first purchase). Frequently invoked actions must not log at `Information` level in their normal code path, because the log volume in production would be excessive.
   - **Never use `DebugLog`** (the static helper). Temporary local testing only. Must not appear in committed code.
 
 - **PS4. Be careful with unsynchronized server actions.** `PlayerUnsynchronizedServerAction` (and equivalents) may only modify `[NoChecksum]` fields or invoke callbacks. Often a synchronized server action or a regular client action is more appropriate. Unsynchronized server actions are for latency-sensitive operations that don't affect game logic directly.
@@ -144,7 +144,7 @@ Verify completeness: count `[GameConfigEntry]` attribute usages and compare agai
 - **TS2. No floating point.** Config items must not use `float` / `double` types or floating-point math: non-deterministic across platforms. Use `F32` (16.16 fixed-point) or `F64` (32.32 fixed-point) instead.
 
 - **TS3. Collection type restrictions.**
-  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`: non-deterministic iteration order. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
+  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`, because their iteration order is non-deterministic. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
   - **Performance**: avoid `SortedSet<>` and `SortedDictionary<,>`; they work but perform poorly. Prefer `OrderedSet<>` and `MetaDictionary<,>`.
 
 #### Config design
@@ -153,7 +153,7 @@ Verify completeness: count `[GameConfigEntry]` attribute usages and compare agai
 
 - **CD2. Immutability.** Config item fields must have private setters (`{ get; private set; }`), never public setters. Collection properties should use `IReadOnlyList<>` instead of `List<>` or arrays to prevent accidental mutation of shared config data.
 
-- **CD3. No post-build mutation.** Code outside the config build pipeline (i.e. outside `PostLoad()`, `[MetaOnDeserialized]`, and custom build steps) must never mutate GameConfig instances. After configs are built, they are shared immutable data. Scan usages of config types in game logic, actions, and server code. Any code that assigns to a config field or mutates a config object is a bug. Computing derived data inside `PostLoad()` / `[MetaOnDeserialized]` is fine.
+- **CD3. No post-build mutation.** Code outside the config build pipeline (i.e. outside `PostLoad()`, `SharedGameConfig.OnLoaded()`, `[MetaOnDeserialized]`, and custom build steps) must never mutate GameConfig instances. After configs are built, they are shared immutable data. Scan usages of config types in game logic, actions, and server code. Any code that assigns to a config field or mutates a config object is a bug. Computing derived data there is fine: per-item data in `PostLoad()` or `[MetaOnDeserialized]`, lookups across items or libraries in `OnLoaded()`.
 
 - **CD4. No unnecessary initialization at declaration.** Config item fields should generally not be initialized at declaration (e.g. `= new List<int>()`). Contents come from the config build pipeline, and defaults like empty lists usually don't make sense. Exception: `GameConfigKeyValue` (global config) fields may have meaningful defaults.
 
@@ -179,7 +179,7 @@ Entity model types: `PlayerModel` (most common), `GuildModel`, and custom multip
 
 Grep for:
 
-- Classes inheriting from `PlayerModelBase`: most common.
+- Classes inheriting from `PlayerModelBase` (the most common case).
 - Classes inheriting from `GuildModelBase`.
 - Any other `*ModelBase` classes for custom multiplayer entity models.
 - `PlayerModel` and `GuildModel` partial class declarations.
@@ -217,7 +217,7 @@ Verify completeness: grep for `[MetaMember]` and `[MetaSerializable]` across the
 #### General model state
 
 - **MS1. Collection type restrictions.**
-  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`: non-deterministic iteration order causes desyncs. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
+  - **Determinism**: must not use `Dictionary<,>` or `HashSet<>`, because their non-deterministic iteration order causes desyncs. Use `MetaDictionary<,>` and `OrderedSet<>`. The only exception is a field explicitly marked `[MetaAllowNondeterministicCollection]`.
   - **Performance**: avoid `SortedSet<>` and `SortedDictionary<,>`; they work but perform poorly. Prefer `OrderedSet<>` and `MetaDictionary<,>`.
 
 - **MS2. No floating point in model state or logic.** Model members must not use `float` / `double` types. Floating-point math produces different results across platforms, causing desyncs. Use `F32` / `F64` (fixed-point) instead. Also check methods called from GameTick and fast-forward for floating-point operations.
@@ -242,4 +242,4 @@ Verify completeness: grep for `[MetaMember]` and `[MetaSerializable]` across the
 
 - **MI3. Model state must only be modified in Actions and GameTick.** Model members, including all transitive state in sub-models, must only be modified from within Action `Execute` methods (inside `if (commit)`) or GameTick. Any other code path that mutates model state (actor event handlers, API endpoints, session logic) will cause desyncs or bypass the action system's guarantees.
 
-- **MI4. Config data in the model.** Flag model members that hold config items or lookups derived only from config, and build them in `SharedGameConfig.OnLoaded()` instead. A `[Transient]` member is still serialized: to the client, and when the player actor clones the model against a newly activated config, where a reference to a removed item fails. A member the serializer skips is lost on that clone and keeps per player what the config can hold once. Also flag persisted `MetaRef<>` members to items designers may remove; store the key or `MetaConfigId<>` and resolve with `TryGetValue` / `TryGetItem`, handling a missing item.
+- **MI4. Config data in the model.** Flag model members that hold config items or lookups derived only from config, and build them in a `SharedGameConfig.OnLoaded()` override that calls `base.OnLoaded()` first. A `[Transient]` member is still serialized, both to the client and when the player actor clones the model against a newly activated config, where a reference to a removed item fails. A member the serializer skips is lost on that clone and keeps per player what the config can hold once. Also flag persisted `MetaRef<>` members to items designers may remove; store the key or `MetaConfigId<>` and resolve with `TryGetValue` / `TryGetItem`, handling a missing item.

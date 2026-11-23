@@ -12,7 +12,8 @@ Most feature work boils down to deciding where each piece of the feature lives w
 1. **Pin down the feature shape.** What state is involved, who owns it (single player, guild, server), what mutations are possible, and what's designer-tunable? The right SDK primitive (model member vs. action vs. config vs. server entity) follows directly from these answers. Sketch them before touching files.
 2. **Read what exists.** Grep the project for similar features and the SDK markers they use (`[ModelAction(`, `[GameConfigEntry]`, `EntityActor`, `MetaplayClient`). Local patterns are the most reliable guide to project conventions.
 3. **Read the docs page for each SDK feature you use.** The SDK has constraints (determinism, serialization, fast-forward, model size) that aren't obvious from type signatures alone. Find pages with `metaplay llm-docs search "<question>" --keywords "k1,k2,k3"` and open them with `metaplay llm-docs read docs/<path>`; the rules below name their page. SDK doc comments link each type's guide as `<seealso href="https://docs.metaplay.io/<path>"/>`, which `read` also opens.
-4. **Apply the design patterns below.** They cover the SDK contracts most likely to bite. After implementation, verify against `metaplay-develop-code-review` for the full rule checklist.
+4. **Plan the client release.** Shared code (models, actions, configs) runs on the client too. Tell the user when a change needs a client release alongside the server deploy.
+5. **Apply the design patterns below.** They cover the SDK contracts most likely to bite. After implementation, verify against `metaplay-develop-code-review` for the full rule checklist.
 
 ## Actions
 
@@ -32,7 +33,7 @@ Most feature work boils down to deciding where each piece of the feature lives w
   - `GameConfigKeyValue<T>` ("global config"): singleton config data that isn't referred to by id, including small "nameless" arrays.
 - **One config item refers to another with `MetaRef<TInfo>` or `MetaConfigId<TInfo>`**, not a string or a bare id. The config build then fails on a reference to a missing item. Docs: `docs/feature-cookbooks/game-configs/game-config-item-references.md`.
 - **Validate designer-edited data at build time.** Override `BuildTimeValidate(GameConfigValidationResult validationResult)` on `SharedGameConfig`, call `base.BuildTimeValidate(validationResult)`, and report each bad row with `validationResult.Error(sheetName, configKey, message, columnHint)` (or `Warning`), so the build report names the sheet, row and column. Docs: `docs/feature-cookbooks/game-configs/deep-dive-custom-game-config-build-pipelines.md`.
-- **Data derived only from config lives on the config.** Build lookups (offers by category, items by tag) in `protected override void OnLoaded()` on `SharedGameConfig` and read them through `GameConfig`. Keep them out of the model, even as `[Transient]`: that attribute only skips persistence, and when the active config changes the player actor clones the model through serialization against the new config, where a removed item fails to resolve. A static field keeps the config that was active when it was filled. Docs: `docs/game-logic/utilities/deep-dive-data-serialization.md`.
+- **Data derived only from config lives on the config.** Build lookups (items by tag, levels by chapter) in `protected override void OnLoaded()` on `SharedGameConfig`, calling `base.OnLoaded()` first because the SDK builds its own derived data there. Read them through `GameConfig`. Keep them out of the model, even as `[Transient]`. That attribute only skips persistence, and when the active config changes the player actor clones the model through serialization against the new config, where a removed item fails to resolve. A static field keeps the config that was active when it was filled. Docs: `docs/game-logic/utilities/deep-dive-data-serialization.md`.
 
 ### GameConfigLibrary in C#
 
@@ -80,7 +81,7 @@ public class SharedGameConfig : SharedGameConfigBase
 - **Persisted state outlives config items.** Designers remove items, and a persisted `MetaRef<TInfo>` to a removed item fails to deserialize unless its key gets an alias. For items that may go away, store the key type or `MetaConfigId<TInfo>`, resolve it at use with `TryGetValue` or `TryGetItem`, and decide what a missing item means (skip it or drop it). Docs: `docs/feature-cookbooks/game-configs/renaming-config-items.md`.
 - **Keep the model small.** The actor loads the whole model, and the server sends all of it except `[ServerOnly]` members to the client at every login. The connection caps one message at 1 MB compressed by default, and an oversized player model is the usual way to hit it. `[ServerOnly]` keeps data off the client but not out of the persisted model.
 - **A collection in the model needs a bound the player's own play sets.** Cap or prune it (recent history, active quests).
-- **Data that grows with other players' activity or over the player's lifetime goes in a database table** (received gifts, messages, reactions, follower lists, full history). Use a custom table: a class implementing `IPersistedItem`, one row per item, written by the server and read on request with a limit through `MetaDatabase`. The model keeps at most counts or totals. A new table or column needs a migration: `dotnet ef migrations add <Name>` in `Backend/Server`. Docs: `docs/game-server-programming/how-to-guides/working-with-the-database.md`. The server side (handlers, queries) is in `metaplay-develop-server-logic`.
+- **Data that grows with other players' activity or over the player's lifetime goes in a database table** (received gifts, messages, follower lists, full history). Keep one row per item in a custom table, written by the server and read on request with a limit. The model keeps at most counts or totals. The table class, queries and migration are in `metaplay-develop-server-logic`.
 
 ## Deterministic data types
 
@@ -102,8 +103,6 @@ Two commands cover the routine local validation loop for code changes:
 These are the canonical paths; `Backend/SharedCode.Tests` and `Backend/Server.Tests` are the conventional locations for user-authored unit tests in a Metaplay project.
 
 For running the full local stack (server + dashboard + Unity client) as part of the inner-loop, see the `metaplay-develop-local-development` sub-skill.
-
-Shared code (models, actions, configs) runs on the client too. Tell the user when a change needs a client release alongside the server deploy.
 
 ## After implementation: review
 
