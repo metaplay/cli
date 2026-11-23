@@ -235,7 +235,7 @@ Verify completeness: grep for `[MetaMember]` and `[MetaSerializable]` across the
 
 #### Model invariants
 
-- **MI1 — Unbounded collection growth**: Look for collections (lists, dictionaries) in the model that grow over the player's lifetime but are never pruned. E.g. a history log that appends forever, or completed quest records that accumulate indefinitely. Causes increasing memory usage and slower serialization over time.
+- **MI1 — Unbounded collection growth**: Look for collections (lists, dictionaries) in the model that grow over the player's lifetime or with other players' activity: a history log that appends forever, received gifts or messages, follower lists. The whole model is loaded with the actor and sent to the client at login, so growth costs memory and login traffic and eventually hits the 1 MB message limit. A cap or pruning fixes collections the player's own play bounds. Anything else moves to a custom `IPersistedItem` table read on request with a limit, with only totals left in the model; marking it `[ServerOnly]` or capping it at a large number does not fix it.
 
 - **MI2 — Correct [ServerOnly] and [NoChecksum] usage**: Fields marked `[ServerOnly]` are not sent to the client and must not be read in client-executed code paths. Fields marked `[NoChecksum]` are excluded from checksum validation — only use this for fields that are intentionally allowed to differ between client and server.
 

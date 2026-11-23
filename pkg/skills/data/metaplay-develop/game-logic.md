@@ -74,7 +74,9 @@ public class SharedGameConfig : SharedGameConfigBase
 - **Event-driven, not polled** — `GameTick` should not scan state each tick to see if anything needs doing; store "next event time" values and only act when `CurrentTime >= nextEventTime`.
 - **Fast-forward computes analytically** — `GameFastForwardTime` must produce the same result as running `GameTick` for the elapsed duration, but without iterating tick-by-tick. Entities can be offline for weeks.
 - **Only actions and `GameTick` mutate model state** — never mutate from API endpoints, session handlers, or listeners.
-- **Bound growing collections** — any collection that appends over a player's lifetime (history logs, completed quests) needs a pruning strategy.
+- **Keep the model small.** The actor loads the whole model, and the server sends all of it except `[ServerOnly]` members to the client at every login. The connection caps one message at 1 MB compressed by default, and an oversized player model is the usual way to hit it. `[ServerOnly]` keeps data off the client but not out of the persisted model.
+- **A collection in the model needs a bound the player's own play sets.** Cap or prune it (recent history, active quests).
+- **Data that grows with other players' activity or over the player's lifetime goes in a database table** (received gifts, messages, reactions, follower lists, full history). Use a custom table: a class implementing `IPersistedItem`, one row per item, written by the server and read on request with a limit through `MetaDatabase`. The model keeps at most counts or totals. A new table or column needs a migration: `dotnet ef migrations add <Name>` in `Backend/Server`. Docs: `docs/game-server-programming/how-to-guides/working-with-the-database.md`.
 
 ## Deterministic data types
 
