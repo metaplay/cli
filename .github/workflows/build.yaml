@@ -90,8 +90,7 @@ jobs:
 
       # Keyed on the installed Go version and on both go.mod and go.sum, which decide what the
       # caches hold. No restore-keys: an older entry would be restored and then saved again under
-      # the new key, carrying modules the project no longer uses. publish-release.yaml restores
-      # this entry with a copy of this key and path list, so change both files together.
+      # the new key, carrying modules the project no longer uses.
       - name: Restore Go caches
         id: go-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -101,8 +100,10 @@ jobs:
             ${{ steps.go-cache-paths.outputs.gocache }}
           key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}
 
+      # -count=1: the restored cache holds the test results of the run that saved it, and without
+      # this flag Go would report unchanged packages as "(cached)" instead of running their tests.
       - name: Run unit tests
-        run: go test ./...
+        run: go test -count=1 ./...
 
       # Report the self-update tests individually. Several of them need an ACL the runner may not
       # be able to express, in which case they skip — and a skip is invisible without -v, so this
@@ -110,8 +111,7 @@ jobs:
       - name: Report self-update test results
         run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'
 
-      # Saved after the tests so the build cache also holds the compiled test packages. It holds
-      # the test results too, so later runs report unchanged packages as "(cached)".
+      # Saved after the tests so the build cache also holds the compiled test packages.
       - name: Save Go caches
         if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
