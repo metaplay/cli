@@ -54,8 +54,10 @@ jobs:
       - name: Build CLI
         run: go build .
 
+      # -count=1: setup-go restores a cache that holds the test results of the run that saved it,
+      # and without this flag Go would report unchanged packages as "(cached)" without running them.
       - name: Run unit tests
-        run: go test ./...
+        run: go test -count=1 ./...
 
   # The self-update path is Windows-specific: the binary swap, the ACL probe in
   # internal/version/update_windows.go and the path handling in internal/pathutil/windows.go are
@@ -71,17 +73,52 @@ jobs:
           show-progress: false # suppress the noisy progress status output
           persist-credentials: false # keep the token out of .git/config
 
+      # setup-go's own cache is off because it saves from every ref. A pull request that changes
+      # go.mod would save a ~700 MB entry that only that pull request can read. The steps below
+      # restore on every ref and save only from main, so pull requests reuse main's entry instead.
       - name: Set up Go
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
           check-latest: true # newest patch of that line, not an older one cached on the runner
+          cache: false
 
+      - name: Locate Go caches
+        id: go-cache-paths
+        run: |
+          "gomodcache=$(go env GOMODCACHE)" >> $env:GITHUB_OUTPUT
+          "gocache=$(go env GOCACHE)" >> $env:GITHUB_OUTPUT
+
+      # Keyed on the installed Go version and on both go.mod and go.sum, which decide what the
+      # caches hold. No restore-keys: an older entry would be restored and then saved again under
+      # the new key, carrying modules the project no longer uses.
+      - name: Restore Go caches
+        id: go-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.gomodcache }}
+            ${{ steps.go-cache-paths.outputs.gocache }}
+          key: go-${{ runner.os }}-${{ runner.arch }}-${{ steps.setup-go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}
+
+      # -count=1: the restored cache holds the test results of the run that saved it, and without
+      # this flag Go would report unchanged packages as "(cached)" instead of running their tests.
       - name: Run unit tests
-        run: go test ./...
+        run: go test -count=1 ./...
 
       # Report the self-update tests individually. Several of them need an ACL the runner may not
       # be able to express, in which case they skip — and a skip is invisible without -v, so this
       # job would look like it covered them when it did not.
       - name: Report self-update test results
         run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'
+
+      # Saved after the tests so the build cache also holds the compiled test packages.
+      - name: Save Go caches
+        if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.go-cache-paths.outputs.gomodcache }}
+            ${{ steps.go-cache-paths.outputs.gocache }}
+          key: ${{ steps.go-cache.outputs.cache-primary-key }}
