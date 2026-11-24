@@ -25,11 +25,10 @@ jobs:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
 
-      # No Go cache: the release builds from a clean module download. The only entry it could
-      # restore is the one build.yaml's test-windows job saves after running the tests, and
-      # dependency test code could have changed module sources in it. Go does not check extracted
-      # sources against go.sum at build time, so such a change would reach the published binaries.
-      # The build cache would not help either: GoReleaser builds six targets with -trimpath.
+      # No Go cache: the only entry this job could restore is the one build.yaml's test-windows job
+      # saves after running the tests, and dependency test code could have changed module sources
+      # in it. Go does not check extracted sources against go.sum at build time, so such a change
+      # would reach the published binaries.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
