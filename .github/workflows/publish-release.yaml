@@ -25,9 +25,7 @@ jobs:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
 
-      # Restore only: a release runs from a tag, and an entry saved there could be read by nothing
-      # but that tag's own runs. The test-windows job in build.yaml saves this entry from main,
-      # and tag runs can read main's entries. See that job for why setup-go's cache is off.
+      # See the test-windows job in build.yaml for why setup-go's cache is off.
       - name: Set up Go
         id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -42,6 +40,9 @@ jobs:
           "gomodcache=$(go env GOMODCACHE)" >> $env:GITHUB_OUTPUT
           "gocache=$(go env GOCACHE)" >> $env:GITHUB_OUTPUT
 
+      # Restore only: a release runs from a tag, and an entry saved there could be read by nothing
+      # but that tag's own runs. The test-windows job in build.yaml saves this entry from main,
+      # and tag runs can read main's entries.
       - name: Restore Go caches
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
