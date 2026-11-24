@@ -28,11 +28,16 @@ jobs:
           fetch-depth: 0 # Tags must be available for GoReleaser, so fetch the full commit history
           show-progress: false # suppress the noisy progress status output
 
+      # No Go cache: this job would share its entry with build.yaml's Linux build job, which saves
+      # it after running the tests, and dependency test code could have changed module sources in
+      # it. Go does not check extracted sources against go.sum at build time, so such a change
+      # would reach the published binaries.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: .go-version
           check-latest: true # newest patch of that line, not an older one cached on the runner
+          cache: false
 
       # Resolve tag for the release. Writes the output into env variables NEXT_DEV_TAG and LATEST_RELEASE_TAG (in GITHUB_ENV).
       - name: Resolve tag for release

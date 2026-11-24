@@ -54,8 +54,10 @@ jobs:
       - name: Build CLI
         run: go build .
 
+      # -count=1: setup-go restores a cache that holds the test results of the run that saved it,
+      # and without this flag Go would report unchanged packages as "(cached)" without running them.
       - name: Run unit tests
-        run: go test ./...
+        run: go test -count=1 ./...
 
   # The self-update path is Windows-specific: the binary swap, the ACL probe in
   # internal/version/update_windows.go and the path handling in internal/pathutil/windows.go are
