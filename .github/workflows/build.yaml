@@ -72,9 +72,8 @@ jobs:
           persist-credentials: false # keep the token out of .git/config
 
       # setup-go's own cache is off because it saves from every ref. A pull request that changes
-      # go.mod would save a ~700 MB entry that only that pull request can read, and those entries
-      # filled the repository's 10 GB cache limit. The steps below restore on every ref and save
-      # only from main, so pull requests reuse main's entry instead of writing their own.
+      # go.mod would save a ~700 MB entry that only that pull request can read. The steps below
+      # restore on every ref and save only from main, so pull requests reuse main's entry instead.
       - name: Set up Go
         id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -91,7 +90,8 @@ jobs:
 
       # Keyed on the installed Go version and on both go.mod and go.sum, which decide what the
       # caches hold. No restore-keys: an older entry would be restored and then saved again under
-      # the new key, carrying modules the project no longer uses.
+      # the new key, carrying modules the project no longer uses. publish-release.yaml restores
+      # this entry with a copy of this key and path list, so change both files together.
       - name: Restore Go caches
         id: go-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -110,7 +110,8 @@ jobs:
       - name: Report self-update test results
         run: go test ./internal/version/ ./internal/pathutil/ ./cmd/ -count=1 -v -run 'Replaceable|Leftover|ForDisplay|UpdateTempPaths|ReplaceFailure|NotWritableDetails'
 
-      # Saved after the tests so the build cache holds the test binaries too.
+      # Saved after the tests so the build cache also holds the compiled test packages. It holds
+      # the test results too, so later runs report unchanged packages as "(cached)".
       - name: Save Go caches
         if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
