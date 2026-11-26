@@ -46,6 +46,7 @@ func TestEmbedded_SubSkillsLoaded(t *testing.T) {
 		"main":              true,
 		"code-review":       true,
 		"game-logic":        true,
+		"server-logic":      true,
 		"incident-analysis": true,
 		"update-sdk":        true,
 		"local-development": true,

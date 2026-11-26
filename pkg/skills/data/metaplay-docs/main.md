@@ -1,6 +1,6 @@
 # Metaplay docs
 
-The `metaplay` CLI exposes a remote documentation service designed for AI coding agents. Treat it like a read-only filesystem covering the Metaplay SDK source, sample projects, the full docs site, blog posts, and the CLI reference — searchable from the shell.
+The `metaplay` CLI exposes a remote documentation service designed for AI coding agents. Treat it like a read-only filesystem covering the Metaplay SDK source, sample projects, the full docs site, blog posts, and the CLI reference, searchable from the shell.
 
 {{subskills}}
 
@@ -10,7 +10,7 @@ All commands live under `metaplay llm-docs` and print plain text to stdout.
 
 | Command | Use it to... |
 |---|---|
-| `search QUERY --keywords k1,k2,...` | Submit a natural-language question plus pre-extracted keywords and get back a catalog of relevant entry points to follow up on. |
+| `search QUERY [--keywords k1,k2,...]` | Submit a natural-language question, plus keywords you extract, and get back a catalog of relevant entry points to follow up on. Keywords are optional but rank better, and older services require them. |
 | `read PATH` | Fetch a single file by path (e.g. `index.md`, `docs/cloud-deployments/getting-started`, `MetaplaySDK/version.yaml`). The server tries the exact path first, then the path with `.md` appended. |
 | `ripgrep PATTERN [flags]` | Full ripgrep against the payload. Supports `-i`, `-F`, `-n`, `-l`, `-c`, `-C`/`-B`/`-A`, `--multiline`, `--type`, `--glob`, `--path`. `--glob` follows `rg -g`: without a slash it matches the file name at any depth; with a slash it matches the full payload path, regardless of `--path` (e.g. `**/Server/**/*.cs`). A leading `!` excludes. |
 | `glob PATTERN [--path SUBDIR]` | List paths matching a glob, relative to `--path`. Directory parts may appear anywhere (e.g. `**/*.md`, `MetaplaySDK/entrypoint/*`, `docs/**`, `**/entrypoint/*`). Matching directories are listed too unless the last segment is `**`; a trailing `/` lists directories only. |
@@ -20,37 +20,37 @@ All commands live under `metaplay llm-docs` and print plain text to stdout.
 
 The remote payload is organized into top-level subtrees, each with its own `index.md`:
 
-- `docs/` — full SDK documentation (markdown)
-- `MetaplaySDK/` — SDK source: `Backend/`, `Client/`, `Frontend/`, `Plugins/`, plus `version.yaml`
-- `samples/` — sample projects, e.g. `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`, `CollectibleCardGame/`, `TableStakes/`. The set varies by SDK version; `samples/index.md` lists the ones available.
-- `website/` — Metaplay blog posts and customer case studies
-- `cli/` — `metaplay` CLI command reference
+- `docs/`: full SDK documentation (markdown)
+- `MetaplaySDK/`: SDK source, split into `Backend/`, `Client/`, `Frontend/`, `Plugins/`, plus `version.yaml`
+- `samples/`: sample projects, e.g. `HelloWorld/`, `HelloNFT/`, `Idler/`, `Wordle/`, `orca/` (merge-2 game), `trashdash-sample/`, `CollectibleCardGame/`, `TableStakes/`. The set varies by SDK version; `samples/index.md` lists the ones available.
+- `website/`: Metaplay blog posts and customer case studies
+- `cli/`: `metaplay` CLI command reference
 
 ## Workflow
 
-**Rule: `search` is always the first call.** Even if you think you already know the right file or symbol, run `search` first — it's the canonical entry point and returns the catalog you should use to decide what to `read`, `ripgrep`, or `glob` next. Those commands are follow-ups, not alternatives.
+**Rule: `search` is always the first call.** Even if you think you already know the right file or symbol, run `search` first. It's the canonical entry point and returns the catalog you should use to decide what to `read`, `ripgrep`, or `glob` next. Those commands are follow-ups, not alternatives.
 
-1. `search` — first call, every time.
-2. `read` — open specific files `search` pointed at, or a per-subtree `index.md` to explore further.
-3. `ripgrep` — hunt symbols, class references, or literal/regex matches. Scope aggressively with `--type cs` / `--type md` / `--path MetaplaySDK/Backend`; the payload is large.
-4. `glob` — enumerate files when you want a list of paths rather than content.
+1. `search`: first call, every time.
+2. `read`: open specific files `search` pointed at, or a per-subtree `index.md` to explore further.
+3. `ripgrep`: hunt symbols, class references, or literal/regex matches. Scope aggressively with `--type cs` / `--type md` / `--path MetaplaySDK/Backend`; the payload is large.
+4. `glob`: enumerate files when you want a list of paths rather than content.
 
-Loop steps 2–4 as you narrow down.
+Loop steps 2 to 4 as you narrow down.
 
 ## Calling notes
 
 - A `<seealso href="https://docs.metaplay.io/<path>"/>` in an SDK doc comment is a link to the documentation: read it with `metaplay llm-docs read <url>`.
-- `search` mechanics: pass the user's question verbatim as `QUERY`, and extract 3–7 informative keywords yourself. `--keywords` is comma-separated; quote the whole value if any keyword contains spaces: `--keywords "guild actor,members,social"`.
-- Cite sources to the user as payload-relative paths (e.g. `docs/game-logic/player-actor.md`, `MetaplaySDK/Backend/Server/Player/PlayerActorBase.cs`). They can open any such path with `metaplay llm-docs read <path>`.
+- `search` mechanics: pass the user's question verbatim as `QUERY`, and extract 3 to 7 informative keywords yourself: SDK type names, feature names and distinctive terms (`GuildActor`, `game config`, `kube-secret`), not filler words. `--keywords` is comma-separated; quote the whole value if any keyword contains spaces: `--keywords "guild actor,members,social"`.
+- Cite sources to the user as payload-relative paths (e.g. `docs/game-server-programming/how-to-guides/working-with-the-database.md`, `MetaplaySDK/Backend/Server/Player/PlayerActorBase.cs`). They can open any such path with `metaplay llm-docs read <path>`.
 - Summarize the output of these commands rather than pasting it raw, unless the user asked for it verbatim.
 - Authentication: the CLI reuses the user's `metaplay auth` session if present. Unauthenticated calls still work for public content.
-- `NotFound` usually means a bad path — run `metaplay llm-docs read index.md` for the root catalog. A "path is a directory" error means you passed a directory to `read`; list it with `glob "*" --path DIR`. Only a few directories have an `index.md`. `Unavailable` means network/service trouble, not a bad query.
+- `NotFound` usually means a bad path. Run `metaplay llm-docs read index.md` for the root catalog. A "path is a directory" error means you passed a directory to `read`; list it with `glob "*" --path DIR`. Only a few directories have an `index.md`. `Unavailable` means network/service trouble, not a bad query.
 - The CLI sends the project's SDK version, and the service answers from the closest SDK version it serves. Don't report a version mismatch based on `info`. To see the version that answered, run `metaplay llm-docs read MetaplaySDK/version.yaml`.
 
 ## Examples
 
 ```bash
-# Broad feature question — user wants guilds with social + competitive aspects.
+# Broad feature question: user wants guilds with social + competitive aspects.
 metaplay llm-docs search \
   "How do I add guilds to my game so players can join, chat, and compete on a shared leaderboard?" \
   --keywords "guilds,guild actor,membership,invites,chat,leaderboards,social,multiplayer"
@@ -65,9 +65,9 @@ metaplay llm-docs search \
   "What's the best pattern for a game config with typed ids, references between entries, and build-time validation?" \
   --keywords "game config,StringId,MetaRef,ConfigKey,build-time validation,shared code,typed ids,deterministic"
 
-# Persisted-state migration question — comes up whenever PlayerModel evolves.
+# Persisted-state migration question: comes up whenever PlayerModel evolves.
 metaplay llm-docs search \
-  "I added a new field to PlayerModel and existing players fail to load — how do I write a schema migration so old saves keep working?" \
+  "I added a new field to PlayerModel and existing players fail to load. How do I write a schema migration so old saves keep working?" \
   --keywords "PlayerModel,schema version,entity migration,MigrateFromV1,MetaMember,persisted state,backward compatibility,serialization"
 
 # Read a specific doc page.
