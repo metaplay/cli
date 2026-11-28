@@ -35,7 +35,7 @@ require (
 	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.45.0
-	github.com/tidwall/sjson v1.2.10
+	github.com/tidwall/sjson v1.2.11
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.50.0
@@ -206,7 +206,7 @@ require (
 	github.com/spf13/cast v1.8.0 // indirect
 	github.com/tetratelabs/wabin v0.0.0-20230304001439-f6f874872834 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
-	github.com/tidwall/gjson v1.20.4 // indirect
+	github.com/tidwall/gjson v1.20.5 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.3.0 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
